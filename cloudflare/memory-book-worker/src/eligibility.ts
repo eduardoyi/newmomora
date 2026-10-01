@@ -13,6 +13,7 @@ import { getAgeInYearsAtDate } from '../../../supabase/functions/_shared/age.ts'
 import { getMilestoneById } from '../../../supabase/functions/_shared/memory-milestones.ts';
 import type {
   MemoryFeature,
+  MemoryMilestoneFeature,
   PhotoOrientation,
   PhotoOrientationInfo,
   TaggedMemberFeature,
@@ -22,6 +23,20 @@ import type { DbFamilyMemberRow, DbMediaRow, DbMemoryRow, DbMilestoneRow } from 
 const PHOTO_CONTENT_TYPE_PREFIX = 'image/';
 const VIDEO_CONTENT_TYPE_PREFIX = 'video/';
 const TEXT_EXCERPT_MAX_CHARS = 120;
+
+/** A milestone feature that also carries the bridge's milestone `status`
+ * (the shared `MemoryMilestoneFeature` predates it). Structurally a
+ * `MemoryMilestoneFeature`, so it flows through the shared prompt builders
+ * unchanged; `firsts.ts` reads `status` for its confirmation bonus. */
+export interface MilestoneFeatureWithStatus extends MemoryMilestoneFeature {
+  status?: string | null;
+}
+
+/** `MemoryFeature` whose milestones carry `status`. Assignable to
+ * `MemoryFeature`. */
+export type MemoryFeatureWithStatus = Omit<MemoryFeature, 'milestones'> & {
+  milestones: MilestoneFeatureWithStatus[];
+};
 
 export interface EligibilityResult {
   eligible: boolean;
@@ -93,7 +108,7 @@ export function buildMemoryFeature(
   milestoneRows: DbMilestoneRow[],
   engagementCount: number,
   taggedMembers: TaggedMemberFeature[] = [],
-): MemoryFeature {
+): MemoryFeatureWithStatus {
   const photoCount = media.filter((m) => m.content_type.startsWith(PHOTO_CONTENT_TYPE_PREFIX)).length;
   const videoCount = media.filter((m) => m.content_type.startsWith(VIDEO_CONTENT_TYPE_PREFIX)).length;
   const content = memory.content?.trim() ?? '';
@@ -120,6 +135,9 @@ export function buildMemoryFeature(
       name: getMilestoneById(m.milestone_id)?.name ?? m.milestone_id,
       detail: m.detail,
       outOfBand: m.out_of_band,
+      // Omitted (not `undefined`-keyed) when the bridge sent no status, so a
+      // feature built from an older bridge row is shaped exactly as before.
+      ...(m.status !== undefined ? { status: m.status } : {}),
     })),
     birthdayAgeTurned: birthdayRow?.detail ? Number(birthdayRow.detail) : null,
     taggedToChild: taggedMemberIds.includes(childId),

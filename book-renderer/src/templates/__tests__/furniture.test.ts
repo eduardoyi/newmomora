@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ALL_FURNITURE, FURNITURE_LANGUAGES, getFurniture, getLanguage, numberWord } from '../furniture';
-import { formatIndexDate, formatLongDate, formatPortraitDate, localizeMonthLabel } from '../common/formatDate';
+import { formatIndexDate, formatLongDate, formatPortraitDate, localizeMonthLabel, parseSingleMonthLabel } from '../common/formatDate';
 
 /** Replaces every function value with a stable marker so two objects can be
  * compared structurally (key paths + leaf *shape*, not function identity). */
@@ -36,7 +36,6 @@ describe('furniture — table completeness', () => {
       expect(f.dedication.signature.length).toBeGreaterThan(0);
       expect(f.dedication.scanInstruction.length).toBeGreaterThan(0);
       expect(f.scanToWatch.length).toBeGreaterThan(0);
-      expect(f.listenToIt.length).toBeGreaterThan(0);
       expect(f.firsts.kicker.length).toBeGreaterThan(0);
       expect(f.closing.headline.length).toBeGreaterThan(0);
       expect(f.closing.memoryCountLine(10, 'Year One', null).length).toBeGreaterThan(0);
@@ -69,7 +68,8 @@ describe('furniture — Spanish strings match the design canvas verbatim', () =>
   it('scan-mark microcopy', () => {
     const es = getFurniture('es');
     expect(es.scanToWatch).toBe('escanea para verlo');
-    expect(es.listenToIt).toBe('escúchalo');
+    // Audio marks are badge-only now (no "escúchalo" script word) — see AudioNote.
+    expect('listenToIt' in es).toBe(false);
   });
 
   it('dedication scan-instruction covers both video and audio (print-polish round, owner-approved copy)', () => {
@@ -198,6 +198,32 @@ describe('localizeMonthLabel — backbone month-section eyebrow/title (English-o
     }
   });
 
+  it('localizes the cross-year range "Month YYYY – Month YYYY" (worker formatMonthRangeLabel shape) for es', () => {
+    expect(localizeMonthLabel('December 2025 – January 2026', 'es')).toBe('diciembre 2025 – enero 2026');
+    expect(localizeMonthLabel('September 2024 – March 2025', 'es')).toBe('septiembre 2024 – marzo 2025');
+  });
+
+  it('leaves the cross-year range unchanged for en', () => {
+    expect(localizeMonthLabel('December 2025 – January 2026', 'en')).toBe('December 2025 – January 2026');
+  });
+
+  it('localizes every shape x language (single / same-year / cross-year)', () => {
+    const cases: Array<[string, { en: string; es: string }]> = [
+      ['March 2025', { en: 'March 2025', es: 'marzo 2025' }],
+      ['March–May 2025', { en: 'March–May 2025', es: 'marzo–mayo 2025' }],
+      ['November 2025 – February 2026', { en: 'November 2025 – February 2026', es: 'noviembre 2025 – febrero 2026' }],
+    ];
+    for (const [input, expected] of cases) {
+      expect(localizeMonthLabel(input, 'en')).toBe(expected.en);
+      expect(localizeMonthLabel(input, 'es')).toBe(expected.es);
+    }
+  });
+
+  it('never garbles a cross-year lookalike whose words are not month names', () => {
+    expect(localizeMonthLabel('Whenever 2025 – January 2026', 'es')).toBe('Whenever 2025 – January 2026');
+    expect(localizeMonthLabel('December 2025 – Whenever 2026', 'es')).toBe('December 2025 – Whenever 2026');
+  });
+
   it('never touches genuine editorial text that only happens to contain a real word', () => {
     // Real backbone/themed titles and kickers from the outline generator —
     // none of these match the exact "Month[–Month] YYYY" shape, so the
@@ -209,5 +235,72 @@ describe('localizeMonthLabel — backbone month-section eyebrow/title (English-o
 
   it('never garbles a string that merely looks close to the pattern but is not a real month name', () => {
     expect(localizeMonthLabel('Whenever 2024', 'es')).toBe('Whenever 2024');
+  });
+});
+
+describe('parseSingleMonthLabel — lone "Month YYYY" only', () => {
+  it('parses a single English month label', () => {
+    expect(parseSingleMonthLabel('December 2025')).toEqual({ monthIndex: 11, year: 2025 });
+    expect(parseSingleMonthLabel('January 2026')).toEqual({ monthIndex: 0, year: 2026 });
+  });
+
+  it('returns null for same-year and cross-year ranges (no single month-end to age against)', () => {
+    expect(parseSingleMonthLabel('October–November 2024')).toBeNull();
+    expect(parseSingleMonthLabel('December 2025 – January 2026')).toBeNull();
+  });
+
+  it('returns null for editorial text and already-localized labels', () => {
+    expect(parseSingleMonthLabel('El mes en que cumpliste dos')).toBeNull();
+    expect(parseSingleMonthLabel('diciembre 2025')).toBeNull();
+  });
+});
+
+describe('furniture — multi-year (everything scope) strings', () => {
+  it('chapter titles and kickers, es', () => {
+    const es = getFurniture('es').chapter;
+    const titles = ['primer', 'segundo', 'tercer', 'cuarto', 'quinto', 'sexto', 'séptimo', 'octavo', 'noveno', 'décimo'];
+    titles.forEach((w, i) => expect(es.title(i + 1)).toBe(`Tu ${w} año`));
+    expect(es.title(11)).toBe('Tu 11.º año');
+    expect(es.title(14)).toBe('Tu 14.º año');
+    const kickers = ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez'];
+    kickers.forEach((w, i) => expect(es.kicker(i + 1)).toBe(`capítulo ${w}`));
+    expect(es.kicker(11)).toBe('capítulo 11');
+  });
+
+  it('chapter titles and kickers, en', () => {
+    const en = getFurniture('en').chapter;
+    const words = ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+    words.forEach((w, i) => expect(en.title(i + 1)).toBe(`Year ${w}`));
+    expect(en.title(11)).toBe('Year 11');
+    words.forEach((w, i) => expect(en.kicker(i + 1)).toBe(`chapter ${w.toLowerCase()}`));
+    expect(en.kicker(11)).toBe('chapter 11');
+  });
+
+  it('through-the-years multi-year variant', () => {
+    expect(getFurniture('es').throughTheYearsMultiYear).toEqual({
+      kicker: 'los años en retratos',
+      titleLines: ['Cómo cambiaste', 'con los años'],
+    });
+    expect(getFurniture('en').throughTheYearsMultiYear).toEqual({
+      kicker: 'the years in portraits',
+      titleLines: ['How you changed', 'over the years'],
+    });
+  });
+
+  it('closing multi-year headline and count line (range and single-year)', () => {
+    const es = getFurniture('es').closing.multiYear;
+    expect(es.headline).toBe('Y la historia continúa.');
+    expect(es.memoryCountLine(487, '2022', '2026')).toBe('Este libro recoge 487 recuerdos, de 2022 a 2026.');
+    expect(es.memoryCountLine(12, '2025', '2025')).toBe('Este libro recoge 12 recuerdos, de 2025.');
+    const en = getFurniture('en').closing.multiYear;
+    expect(en.headline).toBe('And the story continues.');
+    expect(en.memoryCountLine(487, '2022', '2026')).toBe('This book holds 487 memories, from 2022 to 2026.');
+    expect(en.memoryCountLine(12, '2025', '2025')).toBe('This book holds 12 memories, in 2025.');
+  });
+
+  it('single-year closing / through-the-years strings are unchanged', () => {
+    expect(getFurniture('en').closing.headline).toBe('See you next year.');
+    expect(getFurniture('en').throughTheYears.titleLines).toEqual(['How you changed', 'in twelve months']);
+    expect(getFurniture('es').closing.memoryCountLine(3, 'Everything', null)).toBe('Este libro recoge 3 recuerdos de Everything.');
   });
 });

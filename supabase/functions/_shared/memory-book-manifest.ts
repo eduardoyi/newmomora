@@ -224,11 +224,12 @@ export function mergeCandidateMemoryIds(
 
 // ── Manifest scope shape ────────────────────────────────────────────────
 
-export type ManifestScopeKind = 'age-year' | 'calendar-year' | 'custom';
+export type ManifestScopeKind = 'age-year' | 'calendar-year' | 'everything' | 'custom';
 
 export function mapScopeKind(outlineScopeType: string): ManifestScopeKind {
   if (outlineScopeType === 'age-year') return 'age-year';
   if (outlineScopeType === 'calendar-year') return 'calendar-year';
+  if (outlineScopeType === 'everything') return 'everything';
   return 'custom';
 }
 

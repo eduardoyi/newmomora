@@ -1897,13 +1897,12 @@ describe('fitBook — page-cap enforcement + overflow reporting (final-fix-round
     });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1', 'mem-2', 'mem-3'] })]);
 
-    // Cap of 1, not 2 — round-22 renumbering: these 3 short text-only
-    // memories sweep into a single quote-collection spread (totalPages 2,
-    // one lower than pre-round-22 since this fixture has no cover/
-    // dedication front matter), which would fit under a cap of 2 with
-    // nothing to cut. A cap of 1 keeps the test's original intent: over cap
-    // even at the collection's minimum footprint, nothing safe to omit.
-    const { capacity } = fitBook(outline, manifest, { maxPages: 1 });
+    // Cap of 0 — these 3 short text-only memories sweep into a single
+    // quote-collection (Phase 2d: ONE page now, previously a 2-page spread
+    // that needed cap 1), which would fit under any cap >= 1 with nothing to
+    // cut. A cap of 0 keeps the test's original intent: over cap even at the
+    // collection's minimum footprint, nothing safe to omit.
+    const { capacity } = fitBook(outline, manifest, { maxPages: 0 });
     expect(capacity.overCap).toBe(true);
     expect(capacity.omittedMemoryIds).toHaveLength(0); // no photo-only memory existed to safely cut
   });
@@ -2339,7 +2338,7 @@ describe('partitionQuoteRun', () => {
 });
 
 describe('fitBook — quote-collection spread (acceptance-review follow-up, item 1)', () => {
-  it('groups 3+ adjacent short text-only entries into ONE quote-collection spread instead of one page each', () => {
+  it('groups 3 adjacent short text-only entries into ONE single-page quote-collection (Phase 2d: 1-3 entries are one page, not a spread) instead of one page each', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ text: 'Short quote one.', assets: [] }),
       'mem-2': makeMemory({ text: 'Short quote two.', assets: [] }),
@@ -2351,7 +2350,7 @@ describe('fitBook — quote-collection spread (acceptance-review follow-up, item
     expect(gaps).toHaveLength(0);
     expect(document.pages).toHaveLength(1);
     expect(document.pages[0].templateId).toBe('quote-collection');
-    expect(document.pages[0].isSpread).toBe(true);
+    expect(document.pages[0].isSpread).toBe(false); // Phase 2d: 3 entries = ONE page
     const entries = document.pages[0].slots.filter((s) => s.kind === 'quote-entry');
     expect(entries).toHaveLength(3);
     expect(document.pages[0].slots.map((s) => (s.content as { text: string }).text)).toEqual([

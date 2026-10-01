@@ -72,7 +72,15 @@ export function AnchorMedia({ page, manifest, bookSlug, showGuides }: TemplatePr
     classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall' &&
     // Round-16 follow-up: a wrapping (e.g. 2-line special) title leaves no
     // clear column — the page uses the ordinary below-header layout instead.
-    tallSoloCanSitBesideHeader(SAFE_BOX_MM, sectionHeader?.title ?? null, sectionHeader?.special ?? false);
+    // Phase 2d: also refused when the column the image WOULD get intersects
+    // the (non-wrapping but wide) title's modeled box — see the predicate.
+    tallSoloCanSitBesideHeader(
+      SAFE_BOX_MM,
+      sectionHeader?.title ?? null,
+      sectionHeader?.special ?? false,
+      photoSlots[0].content.assetAspectRatio,
+      Boolean(photoSlots[0].content.qr),
+    );
   const canvasTopMm = isTallSoloBesideHeader ? 0 : headerReserve;
   const canvasHeightMm = isTallSoloBesideHeader ? SAFE_BOX_MM - FOOTER_RESERVE_MM : contentHeight;
 

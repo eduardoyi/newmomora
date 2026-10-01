@@ -21,7 +21,13 @@ import {
   type OutlineSkeletonSummaryInput,
   type ParsedOutlineResponse,
 } from '../../../supabase/functions/_shared/memory-book-outline.ts';
-import { buildMemoryFeature, buildTaggedMemberFeatures, computeMemoryEligibility, isPrintable } from './eligibility';
+import {
+  buildMemoryFeature,
+  buildTaggedMemberFeatures,
+  computeMemoryEligibility,
+  isPrintable,
+  type MemoryFeatureWithStatus,
+} from './eligibility';
 import {
   emotionCandidatesToUnified,
   peoplePairCandidatesToUnified,
@@ -33,11 +39,26 @@ import {
 } from './candidates';
 import {
   buildBackboneSegments,
+  buildQuarterBlockSegments,
   buildSpecialSegmentTitlesByMonth,
   computeAgeYearBirthdayMonths,
   flagSpecialBackboneSegments,
   suppressSurvivingBirthdaySpecialTitles,
 } from './backbone';
+import { chapterIndexOfMonth, computeBirthdayMonthsFromDob, resolveChapters, type AgeYearChapter } from './chapters';
+import { gateFirstsMilestones, selectMultiYearFirsts } from './firsts';
+import {
+  admitThemedSpreads,
+  capThemedSpreadsPerChapter,
+  chapterIndexOfGap,
+  computeMedianDate,
+  computeThemedSpreadBudget,
+  findAnchorSegmentIndex,
+  isTimeAnchoredCandidate,
+  paceThemedSpreads,
+  reassignDissolvedSpreadMembers,
+} from './pacing';
+import { samplePortraitsForMultiYear } from './portraits';
 import {
   buildReadingOrder,
   dissolveSmallThemedSpreads,
@@ -70,6 +91,23 @@ export interface OutlineResult {
 
 const MIN_SPREAD_SIZE = 3;
 
+/**
+ * Home chapter of a themed spread (chapter mode): the chapter holding the
+ * most members; a tie goes to the chapter of the lower-median member (by
+ * date, then id), or -- if that chapter is not among the tied ones -- the
+ * tied chapter closest to it (lower index on a further tie).
+ */
+function pickHomeChapter(members: Array<{ memoryId: string; date: string; chapter: number }>): number {
+  const counts = new Map<number, number>();
+  for (const m of members) counts.set(m.chapter, (counts.get(m.chapter) ?? 0) + 1);
+  const best = Math.max(...counts.values());
+  const tied = [...counts.entries()].filter(([, n]) => n === best).map(([chapter]) => chapter).sort((a, b) => a - b);
+  if (tied.length === 1) return tied[0];
+  const sorted = [...members].sort((a, b) => a.date.localeCompare(b.date) || a.memoryId.localeCompare(b.memoryId));
+  const medianChapter = sorted[Math.floor((sorted.length - 1) / 2)].chapter;
+  return [...tied].sort((a, b) => Math.abs(a - medianChapter) - Math.abs(b - medianChapter) || a - b)[0];
+}
+
 export async function runOutlineStage(env: Env, context: GenerationContextResponse): Promise<OutlineResult> {
   const violations: OutlineIntegrityViolation[] = [];
   const childId = context.child?.id ?? null;
@@ -95,7 +133,8 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   }
   const familyMembersById = new Map(context.familyMembers.map((m) => [m.id, m]));
 
-  const features = new Map<string, MemoryFeature>();
+  const isEverything = context.book.scopeKind === 'everything';
+  const features = new Map<string, MemoryFeatureWithStatus>();
   const excludedMemoryIds: Array<{ memoryId: string; elementId: string; reason: string }> = [];
   let taggedToChildCount = 0;
   let untaggedInWindowCount = 0;
@@ -126,7 +165,22 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   const backboneInput = [...features.values()]
     .filter((f) => isPrintable(f))
     .map((f) => ({ id: f.id, date: f.date, printable: true }));
-  const backboneSegments = buildBackboneSegments(backboneInput);
+  // Everything (multi-year): one chapter per age-year (only when >= 2 are
+  // non-empty -- "chapter mode") and quarter-block backbone segments that
+  // never cross a chapter. Every other scope keeps today's call exactly.
+  const childDateOfBirth = context.child?.dateOfBirth ?? null;
+  const chapters: AgeYearChapter[] = isEverything
+    ? resolveChapters(childDateOfBirth, backboneInput.map((m) => m.date.slice(0, 7)))
+    : [];
+  // Everything: fixed calendar-aligned 3-month blocks (per chapter in chapter
+  // mode), clipped to the window -- phase 2b fix A. Other scopes unchanged.
+  const backboneSegments = isEverything
+    ? buildQuarterBlockSegments(backboneInput, {
+      chapters: chapters.length > 0 ? chapters : undefined,
+      firstMonth: context.book.windowStart.slice(0, 7),
+      lastMonth: subtractOneDay(context.book.windowEndExclusive).slice(0, 7),
+    })
+    : buildBackboneSegments(backboneInput);
   const defaultBackboneByMemory = new Map<string, string>();
   for (const segment of backboneSegments) {
     for (const id of segment.memoryIds) defaultBackboneByMemory.set(id, `backbone:${segment.id}`);
@@ -141,6 +195,10 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   }
   const birthdayMonthToAge = isAgeYear
     ? computeAgeYearBirthdayMonths(true, ageYear, context.book.windowStart, context.book.windowEndExclusive)
+    : isEverything
+    // Deterministic from the DOB (never from whether a birthday-milestone
+    // memory happens to exist), like the age-year path.
+    ? computeBirthdayMonthsFromDob(childDateOfBirth, context.book.windowStart, context.book.windowEndExclusive)
     : (() => {
       const map = new Map<string, number>();
       for (const f of features.values()) {
@@ -175,15 +233,34 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   ];
 
   // ── Firsts (non-birthday milestones) ─────────────────────────────────────
-  const firstsMemoryIds = [...features.values()]
-    .filter((f) => f.milestones.length > 0)
-    .map((f) => f.id);
+  // Phase 2e owner rule (ALL scopes): a memory is a "first" only with explicit
+  // evidence -- a parent-`confirmed` milestone row, or first-time language in
+  // the memory's own text. Everything else stays in its backbone section.
+  // Everything: then capped to the most meaningful few, chronological (D5);
+  // year books keep every qualifying milestone memory.
+  const memoryTextById = new Map(context.memories.map((m) => [m.id, m.content]));
+  const gatedFirstsFeatures: MemoryFeatureWithStatus[] = [];
+  for (const f of features.values()) {
+    const gated = gateFirstsMilestones(f.milestones, memoryTextById.get(f.id));
+    if (gated.length > 0) gatedFirstsFeatures.push({ ...f, milestones: gated });
+  }
+  const firstsMemoryIds = isEverything
+    ? selectMultiYearFirsts(gatedFirstsFeatures)
+    : gatedFirstsFeatures.map((f) => f.id);
+  const firstsMemoryIdSet = new Set(firstsMemoryIds);
+  // `memoryId::milestoneId` of every milestone row that may be listed as a first.
+  const firstsMilestoneKeys = gatedFirstsFeatures
+    .filter((f) => firstsMemoryIdSet.has(f.id))
+    .flatMap((f) => f.milestones.map((m) => `${f.id}::${m.milestoneId}`));
   const firstsCount = firstsMemoryIds.length;
   const firstsPresent = firstsCount >= FIRSTS_MIN_MILESTONES;
 
   // ── birthday spreads (data-driven: any memory with a birthday milestone) ─
+  // Everything emits NO birthday-N spreads (the renderer's fitter drops them,
+  // so their members would never be laid out); those memories stay in their
+  // backbone month, which is flagged deterministically above.
   const birthdayMemoryIdsByAge = new Map<number, string[]>();
-  for (const f of features.values()) {
+  for (const f of isEverything ? [] : features.values()) {
     if (f.birthdayAgeTurned === null) continue;
     const list = birthdayMemoryIdsByAge.get(f.birthdayAgeTurned) ?? [];
     list.push(f.id);
@@ -199,13 +276,23 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     backboneSegments,
     firstsCount,
     birthdaySpreads: [...birthdayMemoryIdsByAge.entries()].map(([ageTurned, ids]) => ({ ageTurned, memoryCount: ids.length })),
-    throughTheYearsCount: context.portraitVersions.length,
+    throughTheYearsCount: isEverything
+      ? samplePortraitsForMultiYear(
+        context.portraitVersions
+          .filter((v) => v.reference_date && v.illustrated_profile_key)
+          .map((v) => ({ date: v.reference_date as string })),
+      ).length
+      : context.portraitVersions.length,
     specialSegments: originalSpecialFlags,
     configuredLanguage: context.configuredLanguage,
     languageEvidenceCaptions: context.languageEvidenceCaptions,
+    firstsMemoryIds,
+    firstsMilestoneKeys,
+    ...(isEverything ? { multiYear: true } : {}),
+    ...(chapters.length > 0 ? { chapters } : {}),
   };
 
-  const systemPrompt = buildOutlineSystemPrompt();
+  const systemPrompt = buildOutlineSystemPrompt({ multiYear: isEverything });
   const userPrompt = buildOutlineUserPrompt(skeleton, candidates, features);
   const requestBody = buildOutlineRequestBody(systemPrompt, userPrompt, DEFAULT_OUTLINE_MODEL);
   const { content, usage } = await callOpenAiChat(env, requestBody);
@@ -219,9 +306,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   const wideOrientationMemoryIds = new Set(
     [...features.values()].filter((f) => f.photoOrientation?.orientation === 'wide').map((f) => f.id),
   );
-  const validMilestoneKeys = new Set(
-    [...features.values()].flatMap((f) => f.milestones.map((m) => `${f.id}::${m.milestoneId}`)),
-  );
+  const validMilestoneKeys = new Set(firstsMilestoneKeys);
 
   let parsedRaw: unknown = {};
   try {
@@ -276,7 +361,108 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     MIN_SPREAD_SIZE,
   );
 
-  const finalPlacement = birthdayDissolve.placementByMemory;
+  let finalPlacement = birthdayDissolve.placementByMemory;
+
+  // ── Everything: pace, admit (budget + spill) and chapter-cap themed spreads ─
+  // Anchor each surviving spread by its members' median month, spread them
+  // across the backbone, admit within the page budget (floor(min(eligible,
+  // pageBudget)/15)), then cap per chapter. Dissolved members go back to their
+  // default backbone segment. The placed gap replaces the AI's own
+  // insert_after_segment_index.
+  const placedGapBySpreadId = new Map<string, number>();
+  const budgetDissolved: Array<{ id: string; reason: string }> = [];
+  const chapterDissolved: Array<{ id: string; detail: string }> = [];
+  if (isEverything) {
+    const survivingSpreads = new Map<string, string[]>();
+    for (const spread of parsed.spreads) {
+      if (themedDissolve.dissolvedSpreadIds.includes(spread.candidateId)) continue;
+      if (survivingSpreads.has(spread.candidateId)) continue;
+      const members = [...finalPlacement.entries()]
+        .filter(([, spreadId]) => spreadId === spread.candidateId)
+        .map(([memoryId]) => memoryId)
+        .sort();
+      if (members.length > 0) survivingSpreads.set(spread.candidateId, members);
+    }
+
+    const segmentChapterIndices = backboneSegments.map((s) => s.chapterIndex ?? 0);
+    const lastValidIndex = backboneSegments.length - 1;
+    const chapterMode = chapters.length > 0;
+
+    // Chapter mode (phase 2b fix 3): membership is chapter-blind, so pull each
+    // spread back into one HOME chapter before placing it. Members outside it
+    // return to their own default backbone segment; a spread left with fewer
+    // than MIN_SPREAD_SIZE members dissolves entirely.
+    const homeChapterBySpreadId = new Map<string, number>();
+    if (chapterMode) {
+      const memberChapter = (memoryId: string) => chapterIndexOfMonth(chapters, features.get(memoryId)!.date.slice(0, 7));
+      const releasedMembers = new Map<string, string[]>();
+      for (const [id, members] of [...survivingSpreads.entries()]) {
+        const home = pickHomeChapter(members.map((memoryId) => ({ memoryId, date: features.get(memoryId)!.date, chapter: memberChapter(memoryId) })));
+        const inHome = members.filter((memoryId) => memberChapter(memoryId) === home);
+        const outOfHome = members.filter((memoryId) => memberChapter(memoryId) !== home);
+        if (inHome.length < MIN_SPREAD_SIZE) {
+          releasedMembers.set(id, members);
+          survivingSpreads.delete(id);
+          chapterDissolved.push({ id, detail: `${id}: dissolved` });
+          continue;
+        }
+        homeChapterBySpreadId.set(id, home);
+        if (outOfHome.length > 0) {
+          releasedMembers.set(id, outOfHome);
+          survivingSpreads.set(id, inHome);
+          chapterDissolved.push({ id, detail: `${id}: ${outOfHome.length} moved` });
+        }
+      }
+      finalPlacement = reassignDissolvedSpreadMembers(finalPlacement, releasedMembers, defaultBackboneByMemory);
+    }
+
+    const chapterGapRange = (chapterIndex: number) => {
+      const indices = segmentChapterIndices.flatMap((c, i) => (c === chapterIndex ? [i] : []));
+      return indices.length > 0 ? { min: indices[0], max: indices[indices.length - 1] } : { min: 0, max: -1 };
+    };
+    const pacingCandidates = [...survivingSpreads.entries()].map(([id, members]) => {
+      const medianMonth = computeMedianDate(members.map((memoryId) => features.get(memoryId)!.date)).slice(0, 7);
+      return { id, idealGapIndex: findAnchorSegmentIndex(medianMonth, backboneSegments), anchored: isTimeAnchoredCandidate(id) };
+    });
+    // paceThemedSpreads is a year-book heuristic that drags spreads to the
+    // first uncovered gap -- far from their members in a multi-year book -- so
+    // chapter mode skips it and clamps each spread into its home chapter.
+    const pacedGapById = chapterMode ? new Map<string, number>() : paceThemedSpreads(backboneSegments.length, pacingCandidates);
+    const admission = admitThemedSpreads(
+      pacingCandidates.map((c) => ({
+        id: c.id,
+        memberCount: survivingSpreads.get(c.id)!.length,
+        anchorGap: pacedGapById.get(c.id) ?? c.idealGapIndex,
+        ...(chapterMode ? { gapRange: chapterGapRange(homeChapterBySpreadId.get(c.id)!) } : {}),
+      })),
+      lastValidIndex,
+      computeThemedSpreadBudget(features.size, context.book.pageBudget),
+    );
+
+    const dissolvedMembers = new Map<string, string[]>();
+    for (const id of admission.dissolvedIds) {
+      dissolvedMembers.set(id, survivingSpreads.get(id) ?? []);
+      budgetDissolved.push({ id, reason: 'budget_or_spill' });
+    }
+    let keptPlacements = [...admission.placedGapById.entries()];
+    if (chapters.length > 0) {
+      const capped = capThemedSpreadsPerChapter(
+        keptPlacements.map(([id, gap]) => ({
+          id,
+          memberCount: survivingSpreads.get(id)!.length,
+          chapterIndex: chapterIndexOfGap(gap, segmentChapterIndices),
+        })),
+      );
+      for (const id of capped.dissolvedIds) {
+        dissolvedMembers.set(id, survivingSpreads.get(id) ?? []);
+        budgetDissolved.push({ id, reason: 'chapter_cap' });
+      }
+      const keptIds = new Set(capped.keptIds);
+      keptPlacements = keptPlacements.filter(([id]) => keptIds.has(id));
+    }
+    for (const [id, gap] of keptPlacements) placedGapBySpreadId.set(id, gap);
+    finalPlacement = reassignDissolvedSpreadMembers(finalPlacement, dissolvedMembers, defaultBackboneByMemory);
+  }
 
   // ── rebuild final section membership from the resolved placement ────────
   const finalBySpread = new Map<string, string[]>();
@@ -313,6 +499,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   const themedSpreads: ReadingOrderThemedSpreadInput[] = [];
   for (const spread of parsed.spreads) {
     if (themedDissolve.dissolvedSpreadIds.includes(spread.candidateId)) continue;
+    if (isEverything && !placedGapBySpreadId.has(spread.candidateId)) continue;
     const memoryIds = finalBySpread.get(spread.candidateId) ?? [];
     if (memoryIds.length === 0) continue;
     themedSpreads.push({
@@ -322,7 +509,9 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
       titleMode: spread.titleMode,
       titleSourceMemoryId: spread.titleSourceMemoryId,
       memoryIds,
-      insertAfterFinalSegmentIndex: Math.min(Math.max(spread.insertAfterSegmentIndex, -1), finalBackboneSegments.length - 1),
+      insertAfterFinalSegmentIndex: isEverything
+        ? placedGapBySpreadId.get(spread.candidateId)!
+        : Math.min(Math.max(spread.insertAfterSegmentIndex, -1), finalBackboneSegments.length - 1),
       rationale: spread.rationale,
       kicker: spread.kicker,
     });
@@ -341,11 +530,15 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     backboneRationale,
     specialSegmentTitles,
     highlightedMemoryIds: new Set(parsed.backboneHighlights.flatMap((h) => h.memoryIds)),
+    ...(isEverything ? { multiYear: true } : {}),
+    ...(chapters.length > 0 ? { chapters } : {}),
   });
 
   violations.push(
     ...reassignments.map((r) => ({ kind: 'single_placement_reassignment', detail: `${r.memoryId}: kept in ${r.keptIn}` })),
     ...themedDissolve.dissolvedSpreadIds.map((id) => ({ kind: 'themed_spread_dissolved', detail: id })),
+    ...chapterDissolved.map((d) => ({ kind: 'themed_spread_out_of_chapter', detail: d.detail })),
+    ...budgetDissolved.map((d) => ({ kind: 'themed_spread_dissolved_budget', detail: `${d.id}: ${d.reason}` })),
     ...birthdayDissolve.dissolvedAges.map((age) => ({ kind: 'birthday_spread_dissolved', detail: String(age) })),
     ...excludedMemoryIds.map((e) => ({ kind: 'memory_excluded', detail: `${e.memoryId}: ${e.reason}` })),
   );

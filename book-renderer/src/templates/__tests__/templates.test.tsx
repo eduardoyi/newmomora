@@ -6,7 +6,7 @@ import { makeAsset, makeElement, makeManifest, makeMemory, makeOutline } from '.
 import { TemplateRenderer } from '../index';
 import { FooterIndex } from '../common/FooterIndex';
 import { Folio } from '../common/Folio';
-import { illustratedIlloWidthMm, illustratedIlloFitHeightMm, canvasPxToTrimMm } from '../mm';
+import { illustratedIlloWidthMm, illustratedIlloFitHeightMm, canvasPxToTrimMm, getSafeInsetPct } from '../mm';
 import type { BookManifest } from '../../model/types';
 
 function renderPage(manifest: BookManifest, outline: ReturnType<typeof makeOutline>, pageIndex = 0) {
@@ -295,7 +295,7 @@ describe('template snapshots', () => {
     expect(descriptiveHtml).not.toContain('spread-title__attribution');
   });
 
-  it('AudioNote never prints the transcription, only the parent caption and the scan mark (furniture follows journal language)', () => {
+  it('AudioNote never prints the transcription, only the parent caption and the scan mark — badge-only like a video mark, no script word or URL line', () => {
     const esManifest = makeManifest(
       { 'mem-audio': makeMemory({ type: 'audio', text: 'Singing happy birthday.', assets: [] }) },
       { language: 'es' },
@@ -306,15 +306,16 @@ describe('template snapshots', () => {
     const { page, html: esHtml } = renderPage(esManifest, outline);
     expect(page.templateId).toBe('audio-note');
     expect(esHtml).toContain('Singing happy birthday.');
-    expect(esHtml).toContain('escúchalo');
+    expect(esHtml).not.toContain('escúchalo');
+    expect(esHtml).not.toContain('momora.co/e/');
+    expect(esHtml).not.toContain('audio-note__mark-text');
     expect(esHtml).not.toContain('footer-index');
 
-    // No `language` on the manifest -> defaults to "en" furniture, never Spanish.
     const enManifest = makeManifest({
       'mem-audio': makeMemory({ type: 'audio', text: 'Singing happy birthday.', assets: [] }),
     });
     const { html: enHtml } = renderPage(enManifest, outline);
-    expect(enHtml).toContain('listen to it');
+    expect(enHtml).not.toContain('listen to it');
     expect(enHtml).not.toContain('escúchalo');
   });
 
@@ -371,6 +372,73 @@ describe('template snapshots', () => {
       <TemplateRenderer page={document.pages[1]} manifest={manifest} bookSlug="test-book" showGuides={false} />,
     );
     expect(html).toContain('She said her first word today: dada!');
+  });
+
+  it('TextPage: a section header sits inside the SafeArea (never at the bleed origin, where the eyebrow is trimmed off at print)', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ text: 'A short note from a quiet day.', assets: [] }),
+    });
+    const outline = makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', title: 'December 2024', subtitle: 'The quiet month', memoryIds: ['mem-1'] }),
+    ]);
+    const { document } = fitBook(outline, manifest);
+    const page = document.pages.find((p) => p.templateId === 'text-page' && p.params.sectionHeader);
+    expect(page).toBeTruthy();
+    const html = renderToStaticMarkup(
+      <TemplateRenderer page={page!} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+    const safeStart = html.indexOf('class="safe-area"');
+    expect(safeStart).toBeGreaterThan(-1);
+    // The header's <h2> must render after the safe-area opens, and the
+    // safe-area must close after the header (i.e. it is a descendant).
+    const h2 = html.indexOf('<h2');
+    expect(h2).toBeGreaterThan(safeStart);
+    const safeInner = html.slice(safeStart, html.indexOf('data-testid="text-page"'));
+    expect(safeInner).toContain('<h2');
+    expect(safeInner).toContain('The quiet month'); // kicker
+    // Same inset the other header-capable templates use.
+    const { x, y } = getSafeInsetPct(false);
+    expect(html).toContain(`top:${y}%`);
+    expect(html).toContain(`left:${x}%`);
+  });
+
+  it('TextPage: a single entry of <= 120 chars is a pull quote (centred, large lavender opening mark, date kicker BELOW the quote since Phase 2d); body text verbatim', () => {
+    const text = 'She said the moon was following our car.';
+    const manifest = makeManifest({ 'mem-1': makeMemory({ date: '2024-12-05', text, assets: [] }) });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { page, html } = renderPage(manifest, outline);
+    expect(page.templateId).toBe('text-page');
+    expect(html).toContain('text-page__quote');
+    expect(html).toContain('text-page__quote-mark');
+    expect(html).toContain(text);
+    expect(html).not.toContain('text-page__body');
+    // Phase 2d: the quote leads and the date kicker follows it (same order as the quote-collection).
+    expect(html.indexOf('text-page__quote-mark')).toBeLessThan(html.indexOf('text-page__quote"'));
+    expect(html.indexOf('text-page__quote"')).toBeLessThan(html.indexOf('text-page__date'));
+  });
+
+  it('TextPage: a single entry over 120 chars keeps the body typography (no pull quote)', () => {
+    const text = 'x'.repeat(10) + ' ' + 'A slightly longer note about the whole afternoon, which runs past the pull-quote limit by a comfortable margin. '.repeat(1);
+    expect(text.length).toBeGreaterThan(120);
+    const manifest = makeManifest({ 'mem-1': makeMemory({ text, assets: [] }) });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { html } = renderPage(manifest, outline);
+    expect(html).toContain('text-page__body');
+    expect(html).not.toContain('text-page__quote');
+    expect(html).toContain(text);
+    // 200+ chars would add a drop cap; this one is shorter, so none.
+    expect(html).not.toContain('text-page__body--dropcap');
+  });
+
+  it('TextPage: a lone story of 200+ chars starting on a letter gets the lavender drop cap; one starting on a dash does not', () => {
+    const body = 'a long afternoon in the garden, with the bee and the pebbles and the yellow bucket. '.repeat(4);
+    const run = (text: string) => {
+      const manifest = makeManifest({ 'mem-1': makeMemory({ text, assets: [] }) });
+      const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+      return renderPage(manifest, outline).html;
+    };
+    expect(run(`We spent ${body}`)).toContain('text-page__body--dropcap');
+    expect(run(`\u2014Mama, ${body}`)).not.toContain('text-page__body--dropcap');
   });
 
   it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix; full-bleed "photo" voice removed 2026-08-31, so this is now the only photo-bearing voice)', () => {
@@ -765,5 +833,151 @@ describe('AnchorMedia solo-video scan-group placement (owner review round 9, ite
     const { html } = renderPage(manifest, outline, 1);
     expect(html).not.toContain('photo-tile__meta--left');
     expect(html).not.toContain('photo-tile__meta--right');
+  });
+});
+
+describe('multi-year (everything scope) Closing + ThroughTheYears furniture', () => {
+  const closingOutline = () =>
+    makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+      makeElement({ id: 'closing', kind: 'closing' }),
+    ]);
+  const renderClosing = (manifest: BookManifest, extraParams: Record<string, unknown> = {}) => {
+    const { document } = fitBook(closingOutline(), manifest);
+    const page = document.pages.find((p) => p.templateId === 'closing')!;
+    expect(page).toBeTruthy();
+    return {
+      page,
+      html: renderToStaticMarkup(
+        <TemplateRenderer page={{ ...page, params: { ...page.params, ...extraParams } }} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+      ),
+    };
+  };
+  const scope = (kind: string, label = 'Everything') => ({ kind, label, start: '2022-10-23', end: '2026-09-30' });
+
+  it('Closing, everything scope: es headline + years from scope.start/end (no English label leak)', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'es', scope: scope('everything') });
+    const { page, html } = renderClosing(manifest);
+    const n = Number(page.params.memoryCount);
+    expect(html).toContain('Y la historia continúa.');
+    expect(html).toContain(`Este libro recoge ${n} recuerdos, de 2022 a 2026.`);
+    expect(html).not.toContain('Everything');
+    expect(html).not.toContain('Hasta el año que viene.');
+    expect(html).toMatchSnapshot();
+  });
+
+  it('Closing, everything scope: en headline + years', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en', scope: scope('everything') });
+    const { page, html } = renderClosing(manifest);
+    expect(html).toContain('And the story continues.');
+    expect(html).toContain(`This book holds ${Number(page.params.memoryCount)} memories, from 2022 to 2026.`);
+    expect(html).toMatchSnapshot();
+  });
+
+  it('Closing, everything scope: closingTitle / closingLine edits still override', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en', scope: scope('everything') });
+    const { html } = renderClosing(manifest, { closingTitle: 'Custom title', closingLine: 'Custom line' });
+    expect(html).toContain('Custom title');
+    expect(html).toContain('Custom line');
+    expect(html).not.toContain('And the story continues.');
+    expect(html).not.toContain('This book holds');
+  });
+
+  it('Closing, age-year and legacy custom scope: unchanged furniture', () => {
+    const ageYear = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en' });
+    const a = renderClosing(ageYear);
+    expect(a.html).toContain('See you next year.');
+    expect(a.html).toContain(`This book holds ${Number(a.page.params.memoryCount)} memories from your first year.`);
+    expect(a.html).not.toContain('story continues');
+
+    const custom = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'es', scope: scope('custom') });
+    const c = renderClosing(custom);
+    expect(c.html).toContain('Hasta el año que viene.');
+    expect(c.html).toContain(`Este libro recoge ${Number(c.page.params.memoryCount)} recuerdos de Everything.`);
+    expect(c.html).not.toContain('historia continúa');
+  });
+
+  const portraits = [
+    { file: 'p1.jpg', date: '2023-06-01', ageLabel: '8 months' },
+    { file: 'p2.jpg', date: '2025-06-01', ageLabel: '2 years 8 months' },
+  ];
+  const renderTty = (manifest: BookManifest, params: Record<string, unknown> = {}) => {
+    const outline = makeOutline([makeElement({ id: 'tty', kind: 'through-the-years' })]);
+    const { document } = fitBook(outline, manifest);
+    const page = document.pages[0];
+    return renderToStaticMarkup(
+      <TemplateRenderer page={{ ...page, params: { ...page.params, ...params } }} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+  };
+
+  it('ThroughTheYears, everything scope: multi-year kicker + title lines (es/en)', () => {
+    const es = renderTty(makeManifest({}, { language: 'es', portraits, scope: scope('everything') }));
+    expect(es).toContain('los años en retratos');
+    expect(es).toContain('con los años');
+    expect(es).not.toContain('en doce meses');
+    expect(es).toMatchSnapshot();
+    const en = renderTty(makeManifest({}, { language: 'en', portraits, scope: scope('everything') }));
+    expect(en).toContain('the years in portraits');
+    expect(en).toContain('over the years');
+    expect(en).not.toContain('in twelve months');
+    expect(en).toMatchSnapshot();
+  });
+
+  it('ThroughTheYears, everything scope: ttyKicker / ttyTitle edits still win', () => {
+    const html = renderTty(makeManifest({}, { language: 'en', portraits, scope: scope('everything') }), {
+      ttyKicker: 'my kicker',
+      ttyTitle: 'Line one\nLine two',
+    });
+    expect(html).toContain('my kicker');
+    expect(html).toContain('Line one');
+    expect(html).toContain('Line two');
+    expect(html).not.toContain('the years in portraits');
+    expect(html).not.toContain('over the years');
+  });
+
+  it('ThroughTheYears, age-year and legacy custom scope: unchanged 12-month furniture', () => {
+    for (const manifest of [
+      makeManifest({}, { language: 'es', portraits }),
+      makeManifest({}, { language: 'es', portraits, scope: scope('custom') }),
+    ]) {
+      const html = renderTty(manifest);
+      expect(html).toContain('un año en retratos');
+      expect(html).toContain('en doce meses');
+      expect(html).not.toContain('los años en retratos');
+    }
+    const en = renderTty(makeManifest({}, { language: 'en', portraits }));
+    expect(en).toContain('through the years');
+    expect(en).toContain('in twelve months');
+  });
+  it('QuoteCollection: 1-3 entries on a single (non-spread) page carry the furniture title; a quotesTitle param overrides it; verbatim text; es/en defaults', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ date: '2025-03-01', text: 'Uno, verbatim "quoted" - Enzo', assets: [] }),
+      'mem-2': makeMemory({ date: '2025-03-02', text: 'Dos.', assets: [] }),
+      'mem-3': makeMemory({ date: '2025-03-03', text: 'Tres.', assets: [] }),
+    });
+    (manifest as { language: string }).language = 'es';
+    const slots = ['mem-1', 'mem-2', 'mem-3'].map((id, i) => ({
+      id: `q${i}`,
+      kind: 'quote-entry' as const,
+      content: { kind: 'quote-entry' as const, memoryId: id, date: manifest.memories[id].date, text: manifest.memories[id].text as string, illustration: null },
+    }));
+    const base = {
+      id: 'p', sourceElementId: 'backbone:x', templateId: 'quote-collection' as const, params: {}, slots,
+      isSpread: false, isEvenPage: true, pageNumbers: [4], blankReason: null,
+    };
+    const render = (params: Record<string, unknown>, isSpread = false) =>
+      renderToStaticMarkup(
+        <TemplateRenderer page={{ ...(base as object), params, isSpread, pageNumbers: isSpread ? [4, 5] : [4] } as never} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+      );
+    const single = render({});
+    expect(single).toContain('Cosas que dijiste');
+    expect(single).toContain('data-spread="false"');
+    expect(single).toContain('Uno, verbatim &quot;quoted&quot; - Enzo');
+    expect((single.match(/quote-collection__mark/g) ?? []).length).toBe(3);
+    expect(render({ quotesTitle: 'Lo que decias' })).toContain('Lo que decias');
+    expect(render({ sectionHeader: { kicker: 'Marzo 2025', title: 'Marzo', special: false } })).not.toContain('Cosas que dijiste');
+    expect(render({}, true)).toContain('data-spread="true"');
+    (manifest as { language: string }).language = 'en';
+    expect(render({})).toContain('Things you said');
   });
 });

@@ -818,10 +818,13 @@ Deno.test('subtractOneDay handles plain, month, and year boundaries', () => {
   assertEquals(subtractOneDay('2024-01-01'), '2023-12-31');
 });
 
-Deno.test('mapScopeKind maps custom-range to custom, passes through the rest', () => {
+Deno.test('mapScopeKind maps all four kinds: everything is its own kind, custom-range and unknown fall to custom', () => {
   assertEquals(mapScopeKind('age-year'), 'age-year');
   assertEquals(mapScopeKind('calendar-year'), 'calendar-year');
+  assertEquals(mapScopeKind('everything'), 'everything');
   assertEquals(mapScopeKind('custom-range'), 'custom');
+  assertEquals(mapScopeKind('custom'), 'custom');
+  assertEquals(mapScopeKind('something-else'), 'custom');
 });
 
 Deno.test('buildManifestScope derives an inclusive end from the exclusive window', () => {

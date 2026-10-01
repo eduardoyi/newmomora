@@ -66,7 +66,7 @@ const MONTH_NAME_TO_INDEX: Record<string, number> = MONTHS_FULL.en.reduce<Record
 
 /**
  * Localizes a backbone (month) section's auto-generated "Month YYYY" /
- * "Month–Month YYYY" label — the outline's own date-range formatter always
+ * "Month–Month YYYY" / cross-year "Month YYYY – Month YYYY" label — the outline's own date-range formatter always
  * emits these in English regardless of `manifest.language` (a known
  * upstream-pipeline gap, same shape as `ordinals.ts`'s `extractYearOrdinal`:
  * parse the English label back into structure, then re-render it in the
@@ -76,11 +76,27 @@ const MONTH_NAME_TO_INDEX: Record<string, number> = MONTHS_FULL.en.reduce<Record
  * (`element.title`, e.g. "December 2024") — both come from the same
  * upstream formatter and share the same bug.
  *
- * Anything that doesn't match this exact "Month[–Month] YYYY" shape (a real
+ * Anything that doesn't match one of these exact shapes (a real
  * editorial title/kicker, e.g. "El mes en que cumpliste dos") is returned
  * completely untouched — this never risks garbling free-form text.
  */
 export function localizeMonthLabel(label: string, lang: Language): string {
+  // Shapes emitted by `formatMonthRangeLabel` (cloudflare/memory-book-worker/
+  // src/backbone.ts): "Month YYYY", "Month–Month YYYY" (same year, unspaced
+  // en dash), and "Month YYYY – Month YYYY" (cross-year, spaced en dash).
+  // The dash class also tolerates a hyphen / em dash and the spacing around
+  // it so a hand-edited label still localizes; the separator's own spacing
+  // is preserved per shape.
+  const crossYear = label.match(/^([A-Za-z]+)\s+(\d{4})(\s*[–—-]\s*)([A-Za-z]+)\s+(\d{4})$/);
+  if (crossYear) {
+    const [, startName, startYear, sep, endName, endYear] = crossYear;
+    const startIdx = MONTH_NAME_TO_INDEX[startName.toLowerCase()];
+    const endIdx = MONTH_NAME_TO_INDEX[endName.toLowerCase()];
+    if (startIdx == null || endIdx == null) return label; // not actually month names — leave it alone
+    if (lang === 'en') return label; // already the right language
+    const months = MONTHS_FULL[lang];
+    return `${months[startIdx]} ${startYear}${sep}${months[endIdx]} ${endYear}`;
+  }
   const match = label.match(/^([A-Za-z]+)(?:[–-]([A-Za-z]+))?\s+(\d{4})$/);
   if (!match) return label;
   const [, startName, endName, year] = match;

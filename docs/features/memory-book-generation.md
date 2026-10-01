@@ -15,7 +15,7 @@ DEPLOYED at shop.usemomora.com. Checkout (5c) is shipped, deployed, and
 canary-proven end to end (see docs/features/memory-book-orders.md). Check
 [plans/memory-book-5b-web-preview.md](../../plans/memory-book-5b-web-preview.md)
 and the relevant source directly for anything this summary doesn't cover.
-**Last updated:** 2026-09-17
+**Last updated:** 2026-10-01
 **PRD reference:** none yet (Memory Book is a new premium product, not in the
 original PRD) — canonical product doc is
 [docs/plans/memory-book.md](../plans/memory-book.md), specifically
@@ -195,7 +195,7 @@ Shipped (part C):
 | Function | Role |
 |---|---|
 | `generate-memory-book` | Dispatcher, `verify_jwt = true`. JWT + owner/manager role check, `ready`/fresh-`generating` short-circuits, service-role CAS claim to `generating` with a fresh attempt UUID, HMAC dispatch of `{ bookId, attemptId }` to the Worker's `/dispatch`. |
-| `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. |
+| `workflow-memory-book-bridge` | Signed HMAC bridge, `verify_jwt = false`, Worker-only. Operations: `load_generation_context`, `ensure_share_tokens`, `publish`, `fail`, `reconcile`. `load_generation_context` pages and id-chunks every read and reconciles row counts — see [Generation context integrity](#generation-context-integrity-phase-0). |
 | `cloudflare/memory-book-worker` (`MemoryBookWorkflow`) | Own Wrangler deployment (own `wrangler.jsonc`/`package.json`, Node 22), sibling to `memory-illustration-worker`. Curates the outline (ported from `supabase/scripts/eval-memory-book-outline.ts`'s pure functions + the shared `_shared/memory-book-outline.ts` builders/parser), runs the shared cover-verify vision pass against R2 preview thumbnails, assembles `book_document` via `_shared/memory-book-manifest.ts`'s builders, and publishes through the bridge's CAS. |
 | `memory-book-edits` | V5b v1 edit surface, `verify_jwt = true`. Ops `save_edit`/`picker_pool` — see [Edit surface (v1)](#edit-surface-v1). |
 
@@ -206,6 +206,169 @@ this task's scope excluded schema changes) are in
 [TECH_SPEC §4.22](../TECH_SPEC.md#422-memory-book-generation-v5a-part-c).
 See [docs/durable-ai-generation-workflows.md](../durable-ai-generation-workflows.md)
 for the general pattern this follows.
+
+### Generation context integrity (Phase 0)
+
+Added 2026-10-01 after the first `everything` book printed with no photos,
+tags, milestones or engagement (plan:
+[docs/plans/memory-book-everything-fixes.md](../plans/memory-book-everything-fixes.md)).
+Root cause: `load_generation_context` passed every in-window memory id to five
+PostgREST GETs via `.in('memory_id', ids)`; ~776 uuids exceed the gateway's
+URL limit, and the unchecked errors were swallowed as `[]`. Not
+`everything`-specific — any window of roughly 400+ memories was exposed. The
+contract now:
+
+- **Paging + chunking** via `supabase/functions/_shared/paged-query.ts`
+  (`fetchAll`: 1000-row pages, optional dedupe key; `byMemoryIds`: id chunks
+  with per-chunk paging, chunk size a required parameter). The film bridge
+  uses the same helpers at 200 ids per chunk; the Memory Book bridge uses
+  **150**. Helpers THROW on any page error (`PagedQueryError`, code only, no
+  row content) — never `?? []`. Chunks run sequentially, no fan-out.
+- **Stable sort keys** (offset paging needs them): `memories`
+  `memory_date, id`; `memory_media` `id`; `memory_family_members`
+  `memory_id, family_member_id` (no `id` column); `memory_milestones` `id`
+  (dismissed rows excluded); `memory_likes` `memory_id, user_id` (composite
+  PK, no `id`); `memory_comments` `id`. Dedupe keys cover a row repeated
+  across a page boundary under concurrent inserts.
+- **Every query checks its error**: family, child, family members, portrait
+  versions, language-evidence sample, the `everything` earliest/latest window
+  queries (previously an error there became the empty-window sentinel and a
+  misleading `NO_ELIGIBLE_MEMORIES`), and all counts.
+- **Count reconciliation tripwire.** Before loading, head-only exact counts
+  (`{ count: 'exact', head: true }`, no id list) are taken for `memories`
+  (family + window) and for `memory_media` / `memory_family_members` /
+  `memory_milestones` through a `memories!inner(family_id)` embed filtered on
+  the same family + window (milestones also `status <> 'dismissed'`). Each of
+  those three tables has exactly ONE foreign key to `memories`, so the embed
+  is unambiguous (no PGRST201). After loading, the bridge fails only when
+  **loaded < expected-before** (inserts between count and load can only raise
+  the loaded side, so loaded > expected passes). On a shortfall it re-counts
+  and reloads **once**, then fails. This replaces the rejected "zero tags"
+  heuristic, which false-positives on families that don't tag (untagged
+  memories are first-class). Logs carry counts and step names only.
+- **Error classes** (the Worker retries every 5xx 3× in-call × 4 step
+  attempts, so deterministic failures must not be 5xx):
+
+  | Condition | Response | Worker behaviour |
+  |---|---|---|
+  | Real PostgREST/network error on any read or count | `500 context_load_failed` | retryable |
+  | `child_id` set but the child row is missing (would otherwise mean "every memory eligible") | `422 context_invalid` | non-retryable → `CONTEXT_LOAD_FAILED` |
+  | Count shortfall still present after the one in-bridge reload | `422 context_invalid` | non-retryable → `CONTEXT_LOAD_FAILED` |
+
+- **`ensure_share_tokens`** chunks and pages its existing-token read the same
+  way (150 ids, ordered by `token`), and dedupes input ids. The read →
+  insert-missing step is a loop of up to 3 passes: a unique violation
+  (`23505`, partial unique index `media_share_tokens_active_memory_key`)
+  means an active token appeared since the read (a concurrent or retried
+  call), which counts as success for those rows — the bulk insert is atomic
+  so nothing was written; the loop re-reads and mints only what is still
+  missing. Any other insert error, or a failed read, is a 500.
+- **Worker guards** (`cloudflare/memory-book-worker/src/workflow.ts`): the
+  load and publish steps' timeouts are 120 s (were 30 s). The load step
+  measures the context's UTF-8 size before returning (the runtime caps step
+  output around 1 MiB), logs only `memory_book_context_size`, and above
+  900 KB throws `NonRetryableError('CONTEXT_TOO_LARGE: <bytes>')` →
+  `CONTEXT_TOO_LARGE`. Every custom error class sets `this.name`, and
+  `errorCode(error, stage)` maps by `CODE:` message prefix first, then
+  `instanceof`/name, then a step timeout attributed by stage: load →
+  `CONTEXT_LOAD_FAILED`, outline + cover-verify → `OUTLINE_GENERATION_FAILED`,
+  dimensions → `DIMENSION_MEASUREMENT_FAILED`, publish →
+  `MANIFEST_BUILD_FAILED`. A publish-step timeout is an ambiguous publish
+  outcome, so the Worker reconciles before failing.
+
+**Extending:** any new Memory Book read keyed on an id list must go through
+`byMemoryIds` (or a nested `!inner` embed filter) with a stable sort key and
+an error check — never a bare `.in('memory_id', ids)`.
+
+## Multi-year (Everything) books
+
+> Updated by Phase 2c (2026-10-01, see changelog): balance now spans ordinary ∪ Tier C candidates, kept memories show at most 2 photos (spread-out pick), and Firsts are compacted. Where the text below describes the earlier Tier A/B1 ladder, the changelog row is authoritative.
+
+Added 2026-10-01 (Phase 2 of [docs/plans/memory-book-everything-fixes.md](../plans/memory-book-everything-fixes.md);
+spec: [docs/plans/memory-book-everything-phase2.md](../plans/memory-book-everything-phase2.md)). **Status: code-complete, not
+deployed. `everything` is still paused for everyone except the owner family** (`PAUSED_SCOPE_KINDS` in
+`generate-memory-book`; the `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` secret exempts family ids). The pause is removed in
+Phase 3.3, after the dogfood run and owner review.
+
+Every rule below applies to `everything` ONLY. Year, calendar-year, custom-range and already-stored books take the
+identical legacy path (characterization goldens in `book-renderer/src/model/__tests__/fitter.golden.test.ts` and
+`cloudflare/memory-book-worker/test/outline.golden.test.ts` pin that).
+
+- **Scope identity.** `ManifestScopeKind` / `outline.scope.type` gain the value `'everything'` (was `'custom'`). Stored
+  pre-change docs still say `'custom'` and keep the old furniture ("Hasta el año que viene", "doce meses"). The fitter's
+  multi-year mode is gated on the presence of `chapter` outline elements, not on the scope kind.
+- **D2 window start.** `supabase/functions/_shared/memory-book-scope-window.ts` (`resolveEverythingWindow`) opens the
+  window at the first eligible memory on or after the child's DOB (eligible = untagged, or tagged to the child). Bridge
+  `buildGenerationContext` and `memory-book-edits` `resolveScopeWindow` both call it (one helper, so the picker pool equals
+  the generated window). Query errors throw `ScopeWindowError`, never the empty-window sentinel.
+- **Chapters (D3).** One `chapter` element per age-year (`worker src/chapters.ts`, month-aligned: the month containing the
+  Nth birthday is the LAST month of chapter N; Feb-29 safe via `addYears`). Rendered with the existing `spread-title`
+  template (kicker "capítulo uno" / title "Tu primer año", subtitle = the month range of its content), so
+  `sectionTitle:` / `eyebrow:` edits already apply. Chapters with no printable months are dropped; chapter mode needs >= 2
+  non-empty chapters, and no DOB means no chapters. Empty chapters dissolve in the fitter, and the audit flags a chapter
+  title page with no content pages as `section-title-orphan`.
+- **Quarter-capped backbone.** `buildBackboneSegments` (options `maxSpanMonths: 3`, `chapterOfMonth`) never merges more than
+  a 3-month calendar span (gap months count) and never crosses a chapter; the cap wins over the 3-printable minimum.
+  Birthday / birth months are flagged deterministically from DOB (`computeBirthdayMonthsFromDob`) and **no `birthday-N`
+  spreads are emitted** (see "Known defects"); those memories stay in their backbone month.
+- **Firsts cap (D5).** `worker src/firsts.ts`: at most 6 memories (`FIRSTS_MAX_MEMORIES_MULTI_YEAR`), the earliest holder of
+  each non-birthday milestone, scored (confirmed +2, not out-of-band +1, has photo/video +2, then engagement, then date),
+  returned chronologically. Prompt rows and `validMilestoneKeys` are restricted to the capped set. Default title "Big and
+  small victories". Phase 2e: candidates are first gated to explicit evidence (confirmed row or first-time text, `hasExplicitFirstLanguage`) —
+  see the 2026-10-01 Phase 2e changelog row; the same gate applies to year books.
+- **Themed pacing + budget (2.4).** `worker src/pacing.ts` ports the eval CLI's `paceThemedSpreads` / `admitThemedSpreads`.
+  Spreads are anchored by the median date of their members to a backbone gap (the AI's `insert_after_segment_index` is
+  ignored), no two are adjacent, total <= `floor(min(eligible, pageBudget) / 15)` (8 at 122 pages), and **<= 2 per
+  chapter**. Dissolved members return to their backbone segment (`themed_spread_dissolved_budget` violations).
+- **Portrait sampling (D4).** `worker src/portraits.ts` (`samplePortraitsForMultiYear`): <= 6 portraits, one per ~6 months,
+  always including the first and last, evenly spread in time. ThroughTheYears uses `Furniture.throughTheYearsMultiYear`
+  ("Cómo cambiaste con los años" / "How you changed over the years").
+- **Closing + prompt (D6).** `Furniture.closing.multiYear` ("Y la historia continúa." + "Este libro recoge N recuerdos, de
+  Y0 a Y1."), years from `manifest.scope.start/end`. `buildOutlineSystemPrompt({ multiYear: true })` adds a MULTI-YEAR BOOK
+  block; the user prompt gets a CHAPTERS block and chapter-tagged BACKBONE SEGMENT lines. Default (year) prompts are
+  byte-identical.
+- **Chapter-mode fitter budgeting (D1).** `fitBook` enters chapter mode iff the outline has >= 2 usable `chapter` elements.
+  `planChapterDemotions` computes the whole ordered omission list with no layout, and `fitBook` then
+  exponentially + binary searches the prefix length that satisfies the cap (then probes k-1 / k-2 for parity noise): ~15-25
+  full fits instead of one per omission (`FitOptions.onRunFit` is the test hook). Selection per step:
+  1. Tier A: the chapter with the highest keep-rate (`kept/total`; ties -> larger chapter, lower index) among chapters
+     with a candidate above BOTH the month floor (2) and the chapter floor (`min(total_c, 12)`); within it the kind by the
+     existing keep-rate parity rule, then lowest `rank`.
+  2. Tier B1 relaxes the chapter floor; Tier B2 relaxes the month floor too.
+  3. **Tier C** (chapter mode only, `ENABLE_TIER_C_CAPTIONED_DEMOTION = true`, `FitOptions.tierCCaptionedDemotion` test
+     override): captioned photo/video memories (never hero / panorama / milestone / quote-title sources) become demotable,
+     ranked by engagement then shorter text first.
+  4. **Tie-break** among equal `rank`: highest remaining fraction of the memory's calendar month, then highest remaining
+     count, then memory id (replaces earliest-first date order, which was the incident behaviour).
+  5. If the full plan still leaves the book over the cap it is returned `overCap`, as in the legacy loop.
+- **Audit.** `book-renderer/scripts/audit-layout.mts` runs `auditBookDocument` and prints violation counts by check,
+  fit-pass count, total omitted, Tier C engagement and per-chapter pages / kept-total / keep-rate / months at floor / months
+  empty (ids and counts only, no memory text). The seam check feeds the worker's REAL outline + manifest to it: run
+  `SEAM_OUT=<file> npx vitest run -c vitest.seam.config.ts` in `cloudflare/memory-book-worker` (writes a `book_document`
+  export from the synthetic 4-year context in `test/outline.everything.test.ts`; `SEAM_MIX=realistic|photoHeavy` picks
+  a lighter text-only/illustrated mix), then `npx vite-node scripts/audit-layout.mts -- <file>` in `book-renderer`.
+
+**Pending owner items (not decided by code):** copy review of every new es/en string (chapter titles/kickers,
+through-the-years, closing, Firsts default title); confirmation of Tier C (it can drop CAPTIONED photos, which the
+legacy path never does) after the dogfood run; the themed-spread survival risk (a themed spread must win single placement
+against a quarter-sized backbone segment and then survive the page cap, so the real count may land well below 8); the
+dogfood run itself (Enzo 4y, Mara 2y: 0 violations and <= 122 pages is only provable on real data).
+
+**Known risks.** A very dense book (about 600 eligible memories over 48 months with a large illustrated/text-only share)
+can exhaust Tiers A/B1 and reach B2 / Tier C's final stage, which relaxes the month floor and can leave a month with zero
+pages (`month-continuity`). On the synthetic seam fixture this appears at 28% illustrated (3 violations) and above, and
+disappears at 17% illustrated (0 violations, 122 pages). Re-check on the dogfood books.
+
+**Formerly known defects — FIXED in Phase 2d (2026-10-01).** (1) The fitter now lays out `kind: 'birthday'` elements
+(previously never laid out). (2) ~~The fitter reads the worker's `firstsWarmNames` key~~ — REVERTED in Phase 2e (the
+fitter never renders AI warm names; see the owner rule below). Everything books still never emit birthday spreads (birthday months are flagged
+segments instead). See the changelog rows of 2026-10-01.
+
+**Extending:** new multi-year behaviour belongs behind the `chapter`-element gate (fitter) or `scopeKind === 'everything'`
+(worker, furniture) so year books stay byte-identical; re-run the golden tests, never `-u` them. Do not add a chapter
+title string without both `es` and `en` in `furniture.ts`. If you change the cap-demotion pools, keep
+`planChapterDemotions` layout-free (that is what keeps the fit count logarithmic). The page-count-aware themed admission
+mentioned under "Common extension patterns" is still the better long-term replacement for the fixed `/15` budget.
 
 ## In-app scope picker (5a.5)
 
@@ -531,9 +694,18 @@ the resolved scope window, never widening past it (a caller can't use these
 to see photos outside the book's own curation boundary). `memberId` (a
 `family_members.id` uuid) narrows the pool to memories tagged with that
 member via the `memory_family_members` join table (migration
-`20260524201500_initial_schema.sql`) — resolved as a separate lookup before
-the media query; a member tagged on zero memories short-circuits to an
-empty, exhausted page without querying `memory_media` at all. All three are
+`20260524201500_initial_schema.sql`) — as a nested inner embed on the media
+query itself: `memories!inner(memory_date, family_id,
+memory_family_members!inner(family_member_id))` plus
+`.eq('memories.memory_family_members.family_member_id', memberId)`. There is
+no member-tag pre-lookup and no `.in()` id list (the old pre-lookup was
+itself unpaged against `max_rows` and then fed `.in()`, which broke for a
+child tagged on hundreds of memories); the global order/offset-cursor
+semantics are unchanged. A member tagged on zero in-scope memories simply
+yields an empty page. `resolveScopeWindow` now throws the exported
+`ScopeWindowError` when an `everything` earliest/latest query errors, which
+`picker_pool` answers with a 500 `internal_error` instead of resolving an
+empty window. All three are
 optional and additive to the existing contract — an older client that never
 sends them gets the unfiltered behavior unchanged. The picker client
 (`PickerSheet.tsx`) resets its cursor and re-fetches from scratch whenever
@@ -729,6 +901,17 @@ deferred seam, not built by 5a.5.
   keys, and the caller-controlled edit VALUE is deliberately never logged
   either (it's the one field a caller fully controls; treat it like memory
   text for logging purposes even though it isn't stored in `memories`).
+- **`everything` is paused server-side.** `generate-memory-book` refuses any
+  scope in `PAUSED_SCOPE_KINDS` (currently `everything`) with 409
+  `SCOPE_PAUSED`, parking the row `failed`. The
+  `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` Edge Function secret
+  (comma-separated family ids, entries trimmed; unset/empty/malformed =
+  nobody) exempts listed families, so the owner can verify fixes on real data
+  while the app picker still offers the option. Remove the kind from the set
+  once the multi-year layout rules land (plan Phase 2).
+- **Never add an unbounded `.in('memory_id', ids)`** to a Memory Book path —
+  see [Generation context integrity](#generation-context-integrity-phase-0).
+  Deterministic data problems must be 4xx from the bridge, never 5xx.
 
 ## Dependencies
 
@@ -833,6 +1016,26 @@ table's types added).
   `ensure_share_tokens` reuse-vs-mint, `load_generation_context`'s
   superseded/404/happy-path (including the `everything`-scope window
   resolution and the `scope_end_date` inclusive→exclusive conversion).
+  Phase 0 additions (the stub now supports `.range()` slicing, `.in()`
+  length recording, per-table error injection and head-count responses):
+  >1000 memories paged fully; every `.in()` ≤150 ids; each errored query →
+  500 `context_load_failed` (never an empty success, including the
+  language-evidence and `everything` window queries); count shortfall →
+  exactly one reload then 422 `context_invalid`; a shortfall the reload
+  resolves succeeds; loaded > expected passes; non-tagging families pass;
+  `age_year` book with a missing child → 422; the count-query select strings
+  (head-only, `memories!inner`); `ensure_share_tokens` chunking, duplicate
+  ids, and the `23505` conflict re-read loop.
+- `supabase/functions/_shared/paged-query.test.ts` — Deno: `fetchAll`
+  paging/exactly-full page/dedupe/error throw, `byMemoryIds` chunking,
+  sequencing, empty ids, bad chunk size. The film bridge's tests are
+  unchanged and cover its use of the helpers.
+- `memory-book-edits` tests: `picker_pool` person-filter embed shape (the
+  stub is filter-blind, so it asserts the query shape, not row filtering)
+  and `ScopeWindowError` → 500. `generate-memory-book` tests: allowlisted
+  family dispatches, others still 409, malformed value = nobody. Worker
+  tests: context size guard, `errorCode` mapping by name/prefix/timeout
+  stage, publish-timeout → reconcile.
 - `cloudflare/memory-book-worker/test/*.test.ts` — Vitest
   (`@cloudflare/vitest-pool-workers`): `crypto`, `eligibility`,
   `candidates`, `backbone`, `reading-order` (unit tests of the ported pure
@@ -902,6 +1105,14 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-10-01 | **Everything UN-PAUSED for all families** after owner review of dogfood round 5 (Enzo eff5e883: 122pp, 101 kept, chapter keep-rates .165–.171, 0 violations; Mara 04ec905c: 122pp, 117 kept, .365/.366, 0 violations). `generate-memory-book` `PAUSED_SCOPE_KINDS` is now an empty set (mechanism kept; injectable `pausedScopeKinds` dependency for tests); the owner allowlist secret is unset. Owner signed off the multi-year copy strings and Tier C captioned demotion. |
+| 2026-10-01 | **Phase 2e — Firsts need explicit evidence; AudioNote divider removed** — see docs/plans/memory-book-everything-phase2d.md (fix c reverted). OWNER RULE: the book never asserts a "first" unless the parent's own memory text says it or a parent confirmed the milestone. (1) Renderer: Phase 2d fix c is REVERTED — `fitter.ts` no longer reads `firstsWarmNames` (type field kept, never read for display); a Firsts memory shows the parent's own verbatim text (or the legacy contract `firstsEntries` caption, which the worker never emits). (2) Worker, ALL scopes (year books AND Everything): a memory is a Firsts member only if its milestone row `status === 'confirmed'` OR its own text matches `hasExplicitFirstLanguage` (`src/firsts.ts`: es primer/primera/primeros/primeras, en first, pt primeiro/primeira/primeiros/primeiras; case/diacritic-insensitive, word-boundary; no inference from ids/photos/dates/AI), via `gateFirstsMilestones` in `outline.ts`; the Everything cap/selection (`selectMultiYearFirsts`) runs on the gated rows only. Non-qualifying memories fall back to their normal backbone/themed section (their manifest `milestones` still protect them from page-cap demotion, unchanged). The prompt's FIRSTS MILESTONES rows list only gated `memoryId::milestoneId` keys (new optional `firstsMilestoneKeys` on `OutlineSkeletonSummaryInput`, `_shared/memory-book-outline.ts`); zero qualifying memories = no `firsts` element and no FIRSTS block. This deliberately changes year-book output (worker `test/outline.golden.test.ts`, whose synthetic rows carry no status and lorem text, loses its firsts element: orchestrator-updated, never `-u`). Residual: the MEMORIES table still prints every milestone name per memory and the system prompt still asks for warm names (output is ignored/filtered); trimming those would change every prompt hash. (3) Renderer: `AudioNote` no longer draws a hairline between stacked audio entries (`.audio-note__entry--ruled` removed). |
+| 2026-10-01 | **Everything Phase 2d (dogfood round 3 feedback + known defects)** — see docs/plans/memory-book-everything-phase2d.md. ALL books: (a) `tallSoloCanSitBesideHeader` (templates/layout/anchorMediaLayout.ts) now refuses beside-header placement when the tall-solo column would intersect the modeled title box (unwrapped range titles overlapped) — template and audit share the predicate; (b) the fitter lays out `kind: 'birthday'` elements (previously silently dropped) like a themed spread, title localized from the age ('Cuando cumpliste dos años' / 'When you turned two') unless a real/edited title exists; (c) the fitter reads the worker's `firstsWarmNames` key (as well as `firstsEntries`), so AI warm names reach existing books; (d) illustrated stories only fall through to single-page 'both' mode when the stack fits (`illustratedBothModeFits`), otherwise split with swap/blank, and a leading parity blank is hoisted before section openers; (e) quote collections: ≤3 entries → ONE page (`isSpread:false`), 4–6 → spread (floor(n/2) left), 7 → spread + page; pooled chapter collections carry `params.quotesTitle` (furniture 'Cosas que dijiste' / 'Things you said'), sourceElementId `<chapterId>:quotes`, editable via the generic `sectionTitle:<chapterId>:quotes` key (no server change). Owner-approved redesign: QuoteCollection bands with a large lavender quote mark, size-by-length serif (32→18pt, common shrink factor via `templates/common/quoteFit.ts`), alternating indent, lavender rule + long-form date in lavender.ink, NO dividers; TextPage pull quote up to 46pt with rule + date below; long text pages get a lavender drop cap (≥200 chars, starts with a letter). Everything only: multi-month birthday sections get period wording in the prompt FLAGGED line + multi-year block ('Cuando cumpliste…'), single-month keep 'El mes en que…'. fitter.golden updated deliberately (16 cases: text/quote markup, overlap page, audit baseline, one-page quote collection shift). |
+| 2026-10-01 | **Everything Phase 2c (dogfood round 2, owner decisions)** — chapter mode only, year books unchanged. (1) Balance fix: `planChapterDemotions` picks the chapter by keep-rate across ordinary ∪ Tier C candidates at levels L1 (full section + chapter floor) / L2 (section floor 1 + chapter floor), ordinary before Tier C within the chosen chapter; B1/B2 only once that union is empty (previously Tier A balanced ordinary-only, so caption-heavy late chapters ran dry and every later cut hit early chapters; B1 also ran before Tier C and broke chapter floors). Firsts members count in their chapter's totals. (2) Photo cap (owner chose this over cost-aware demotion, to keep big-event memories): `CHAPTER_MAX_ASSETS_PER_MEMORY = 2`, spread-out pick assets[0] + assets[floor(n/2)], user-edited (`editedFromFile`) assets preferred; layout + page cost use the capped manifest (cover/dedication/portraits keep the full one); `summarizeAssetCoverage` + audit-layout report hidden-by-cap separately from loss. (3) Compact Firsts: illustrated members paired on `illustrated-digest` singles (milestone exclusion lifted for firsts), photo members paired on anchor-media; 4 members → 3–4 pages (a lone illustration + photo can't share an existing template). Real books: Enzo 73→95 kept, chapter keep-rates .06–.21 → .157–.159; Mara 91→117, .10/.45 → .365/.366; both 122pp. |
+| 2026-10-01 | **Everything Phase 2b (dogfood round 1)** — see docs/plans/memory-book-everything-phase2b.md. ALL books: (1) `isSoloPhotoGroup` no longer pairs long-text or audio groups (level-3 pairing had turned two media memories into a caption-only text page, dropping both media); (2) a multi-asset memory laid out as panorama/full-bleed contributes only the chosen asset, the rest continue as a normal group (previously assets[1..] were silently dropped — real year books lost 2–4 photos; the odd-parity demote rung could blank a whole page); (4) TextPage pull-quote design for a lone ≤120-char entry, centred text otherwise; (5) AudioNote QR + badge only (removed the 'escúchalo' word and the fabricated `momora.co/e/` placeholder URL + `shortCode` param); new audits `media-memory-without-media`, `unrenderable-slots`, `title-then-empty`; audit crop-loss honours the user-chosen-photo waiver. Everything only: fixed calendar-aligned 3-month backbone blocks per chapter (worker `buildQuarterBlockSegments`); chapter-mode per-SECTION floors (backbone 2→1, themed 3); text-only memories join Tier C (shortest first); refill pass after the prefix search (fills to the cap); per-chapter quote pooling (≥3 eligible → quote-collection at chapter end); themed spreads restricted to a plurality home chapter, placed within it, `paceThemedSpreads` skipped in chapter mode (`themed_spread_out_of_chapter` violations). fitter.golden updated deliberately (13 cases: text/audio markup + pages shifted by restored media). |
+| 2026-10-01 | **Phase 2 — multi-year (Everything) rules** (code-complete, not deployed; `everything` still paused except the owner family; spec `docs/plans/memory-book-everything-phase2.md`). New scope value `'everything'` in manifest/outline; D2 DOB-aware window via the shared `_shared/memory-book-scope-window.ts` (bridge + `memory-book-edits`); age-year `chapter` elements + quarter-capped backbone + no birthday spreads; Firsts cap 6; themed pacing/budget (<= 8, <= 2 per chapter); portrait sampling (<= 6); multi-year ThroughTheYears/Closing copy and outline prompt; chapter-mode fitter budgeting (equal keep-rate per chapter, time-spread tie-break, bisection fit search, Tier C captioned demotion behind `ENABLE_TIER_C_CAPTIONED_DEMOTION`); `audit-layout.mts` now runs the integrity audit and prints chapter stats. Pending owner: copy review, Tier C confirmation, dogfood run. See [Multi-year (Everything) books](#multi-year-everything-books). |
+| 2026-10-01 | **Phase 0 — generation context integrity** (code-complete, not yet deployed; plan `docs/plans/memory-book-everything-fixes.md`). `workflow-memory-book-bridge` `load_generation_context` now pages the memories query and loads media/tags/milestones/likes/comments in sequential 150-id chunks via the new `_shared/paged-query.ts` (extracted from the film bridge, which keeps 200), with stable sort keys and deduping; every query's error is checked; head-only count reconciliation before loading (`memories!inner` embeds) with one reload on a shortfall; real query errors → 500 `context_load_failed` (retryable), null child / persistent shortfall → 422 `context_invalid` (non-retryable). `ensure_share_tokens` chunks its read and treats a `23505` active-token conflict as success via a re-read loop. `memory-book-edits` `picker_pool` person filter is a nested inner embed (no member-tag pre-lookup, no `.in()`); `resolveScopeWindow` errors → 500. Worker: load/publish step timeouts 30 s → 120 s, UTF-8 context size guard (> 900 KB → `CONTEXT_TOO_LARGE`), error classes set `name`, `errorCode` maps by `CODE:` prefix / name / stage-attributed step timeout, publish timeout → reconcile. `generate-memory-book`: `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` lets listed families bypass the `everything` pause. Live verification (plan 0.8) is pending. See [Generation context integrity](#generation-context-integrity-phase-0). |
+| 2026-10-01 | **Phase 1 — layout fixes** (renderer only, code-complete, not yet deployed; plan `docs/plans/memory-book-everything-fixes.md`). (1.1) `TextPage.tsx` now renders its `SectionHeader` inside `<SafeArea isSpread={false}>` like every other header-capable template (it was bare in the page frame: `SectionHeader` is absolute top:0/left:0, so on a text page the header sat at the bleed origin and trim cut its eyebrow line off). Verified against real `page.pdf` output (print.html build + Puppeteer, rasterized before/after), not DOM. Preview (`memory-book-web`) and the Fly print worker must redeploy together (parity rule). (1.3) `localizeMonthLabel` now also localizes the worker's cross-year range label `Month YYYY – Month YYYY` (`diciembre 2025 – enero 2026`); single and same-year shapes unchanged; tests cover every shape x language. (1.2/1.4) New offline audit `book-renderer/scripts/audit-layout.mts` (`npm run audit:layout -- <export.json>`): runs `fitBookForPrint` over an exported book (`{id, scopeLabel, scopeKind, coverAssetKey, bookDocument, edits}`) and reports template histogram, section headers on `text-page`, lone short-caption (<120 chars) text pages, and header pages whose template lacks SafeArea — ids/counts/page numbers only, never memory text or names. Extend it by adding templates to its `HEADER_POSITIONING` table. |
 | 2026-09-17 | Picker redesign (owner-approved brief), app-side only: the original scope-status row list is replaced by a book-cover shelf. `app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders a 2-column grid of `src/components/memory-books/book-cover-tile.tsx` tiles (ready/generating/failed, a real cover photo via the new `memory_books.cover_asset_key` column or a deterministic wash fallback) when any book exists, else a personalized empty state (a random real photo of the child via `fetchExampleCoverAssetKey`). A fixed "Create a book" CTA opens `create-book-sheet.tsx` (a short SUGGESTIONS list from the new pure `pickSuggestedScopes` helper, plus an expandable grouped list — calendar-year scopes are never suggested, only ever a deliberate pick); a failed tile opens `retry-book-sheet.tsx`; both flows show an in-screen toast (`book-toast.tsx`). `useMemoryBooks`/`memory-books.ts` extended (not rewritten) for the new column plus `exampleCoverAssetKey`; the underlying scope math, polling, dispatch-error surface, and role gating are unchanged. Also added: `PushRouteData`'s `'memory-book'` route in `src/hooks/useNotifications.ts`, deep-linking a book-ready/failed push to the shelf. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract and its deviations. |
 | 2026-09-15 | 5a.5 shipped: in-app scope picker, app-side only (no server/schema change). "Memory Books" row on the child profile screen (`app/(app)/family/[id]/index.tsx`, near the portrait timeline) opens `app/(app)/family/[id]/memory-books.tsx`, listing age-year/calendar-year/Everything scopes via `src/utils/memory-book-scope.ts` (a documented, byte-for-byte duplicate of the server's `addYears`/Julian-Day-Number date math — the Expo app cannot import Deno Edge Function modules). Thin scopes (< 30 eligible memories, one query per scope via `src/services/memory-books.ts#countEligibleMemoriesForScope`, approximating the Workflow's own tagged-or-untagged eligibility) show the locked "N memories in this period — books need about 30" copy instead of a Generate button. An existing `memory_books` row for a scope takes over its row (`src/hooks/useMemoryBooks.ts`): `queued`/`generating` → a ~3-minute progress state (polled every 4s while active), `ready` → "View your book" (`Linking.openURL` to `shop.usemomora.com/b/<id>` — the signed-link handoff stays a deferred seam), `failed` → the failure reason + Retry (inserts a fresh row, per the locked design). The one-active-per-scope `23505` conflict is handled by refetching, never an error wall. Viewers (non-owner/manager) see only scopes with an existing book, never the generation affordance. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract, its documented deviations (calendar-year ordering/no-DOB fallback, the `isPrintable` eligibility divergence, and staying English-only since the app has no i18n system yet), and its test list. `docs/plans/memory-book.md` §5a.5 marked shipped. |
 | 2026-09-09 | Owner-approved editing-UX round (4 items, all client + `memory-book-edits` `picker_pool` only): (1) picker dates under each thumbnail + a date-range filter (`dateStart`/`dateEnd`, always intersected with the scope window, never widened past it) + a person filter (`memberId`, via `memory_family_members`) — fetched client-side against `family_members` for the roster, no new response field; (2) `PickerSheet`'s "Load more" button gains an `IntersectionObserver` sentinel as the primary infinite-scroll trigger, one `fetchLockRef` guarding every caller against a double-fire; (3) duplicate-photo badges (`book/duplicateAssets.ts`) on every slot whose rendered asset file occupies 2+ photo slots across the book, clicking one cycles to the next other occurrence; (4) after an image edit saves, the viewer auto-navigates to the slot's (possibly new) page and, if it lost the `full-bleed`/`panorama-spread` treatment on refit (`book/reflowNotice.ts`'s `computeReflowResult`), the Saved/Undo toast grows one extra sentence rather than stacking a second toast. `docs/TECH_SPEC.md` intentionally NOT touched in this change (it already carried unrelated in-progress edits at the time). |

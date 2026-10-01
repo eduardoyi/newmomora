@@ -32,9 +32,12 @@ export function ThroughTheYears({ page, manifest, bookSlug, showGuides }: Templa
   // and split on `\n` here, capped to the same two lines the layout
   // reserves space for — extra lines beyond the second are dropped rather
   // than silently overflowing the header block.
-  const kicker = typeof page.params.ttyKicker === 'string' ? page.params.ttyKicker : furniture.throughTheYears.kicker;
+  // Multi-year ("everything") books use the "over the years" variant; every
+  // other scope kind (incl. legacy `custom`) keeps the 12-month strings.
+  const tty = manifest.scope.kind === 'everything' ? furniture.throughTheYearsMultiYear : furniture.throughTheYears;
+  const kicker = typeof page.params.ttyKicker === 'string' ? page.params.ttyKicker : tty.kicker;
   const ttyTitleOverride = typeof page.params.ttyTitle === 'string' ? page.params.ttyTitle : null;
-  const titleLines: [string, string] = ttyTitleOverride !== null ? splitTitleLines(ttyTitleOverride) : furniture.throughTheYears.titleLines;
+  const titleLines: [string, string] = ttyTitleOverride !== null ? splitTitleLines(ttyTitleOverride) : tty.titleLines;
   const ageLabelFor = (p: ManifestPortrait) =>
     localizedAgeLabel({ ageLabel: p.ageLabel, date: p.date, dateOfBirth: manifest.child.dateOfBirth }, lang);
 

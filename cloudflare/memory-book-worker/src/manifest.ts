@@ -52,6 +52,7 @@ import {
   type ManifestScope,
   type ManifestTaggedMember,
 } from '../../../supabase/functions/_shared/memory-book-manifest.ts';
+import { samplePortraitsForMultiYear } from './portraits';
 import type {
   DbFamilyMemberRow,
   DbMediaRow,
@@ -225,7 +226,7 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
     });
   }
 
-  const portraits: ManifestPortrait[] = [];
+  let portraits: ManifestPortrait[] = [];
   const childDateOfBirth = context.child?.dateOfBirth ?? null;
   for (const version of context.portraitVersions) {
     if (!version.reference_date || !version.illustrated_profile_key) continue;
@@ -238,6 +239,12 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
       }),
     );
   }
+
+  // Multi-year ("everything") books: a long-lived child can have 17+ portrait
+  // versions; the ThroughTheYears spread shows <= 6, evenly spread in time,
+  // always including the first and last (the last also feeds the cover).
+  // Year books are untouched.
+  if (context.book.scopeKind === 'everything') portraits = samplePortraitsForMultiYear(portraits);
 
   const scope: ManifestScope = buildManifestScope(
     scopeKindToOutlineType(context.book.scopeKind),
@@ -266,5 +273,6 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
 function scopeKindToOutlineType(scopeKind: GenerationContextResponse['book']['scopeKind']): string {
   if (scopeKind === 'age_year') return 'age-year';
   if (scopeKind === 'calendar_year') return 'calendar-year';
+  if (scopeKind === 'everything') return 'everything';
   return 'custom';
 }

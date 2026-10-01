@@ -162,15 +162,39 @@ export type OutlineElementKind =
   | 'backbone'
   | 'themed'
   | 'firsts'
-  | 'closing';
+  /**
+   * Year-book birthday spread (`birthday-N`, worker emits one per age with >= 3
+   * memories carrying that birthday milestone; their memories are removed from
+   * the backbone). Laid out like a themed spread — a localized `spread-title`
+   * opener plus its members. Never emitted for multi-year (Everything) books.
+   */
+  | 'birthday'
+  | 'closing'
+  /**
+   * Multi-year (Everything) chapter opener — one per age-year, emitted by the
+   * worker only for books with >=2 non-empty chapters. Rendered as an ordinary
+   * `spread-title` page; its presence (>=2 elements of this kind) also switches
+   * the fitter into chapter-mode page-cap budgeting. See `OutlineElement.chapter`.
+   */
+  | 'chapter';
 
 export type SpreadType = 'topic' | 'people-pair' | 'emotion';
 export type TitleMode = 'quote' | 'descriptive';
+
+/** Month-aligned span of one age-year chapter (inclusive 'YYYY-MM' bounds; the birthday month is the LAST month of its chapter). */
+export interface OutlineChapterMeta {
+  /** 1-based age year (chapter 1 = first year of life). */
+  ageYear: number;
+  startMonth: string;
+  endMonth: string;
+}
 
 export interface OutlineElement {
   id: string;
   kind: OutlineElementKind;
   title: string;
+  /** Present only on `kind: 'chapter'` elements. */
+  chapter?: OutlineChapterMeta;
   /** Present on some backbone segments (e.g. birth-month date range). */
   subtitle?: string;
   memoryIds: string[];
@@ -202,6 +226,13 @@ export interface OutlineElement {
    * own verbatim memory text is used instead (never fabricated).
    */
   firstsEntries?: OutlineFirstsEntry[];
+  /**
+   * The key the memory-book worker stores on a `firsts` element
+   * (`reading-order.ts`: `firstsWarmNames`). DELIBERATELY NEVER READ FOR
+   * DISPLAY (Phase 2e owner rule): the book never asserts a "first" in
+   * AI-written wording. Kept only so stored outlines type-check.
+   */
+  firstsWarmNames?: OutlineFirstsEntry[];
 }
 
 /** See `OutlineElement.firstsEntries`. */
@@ -452,8 +483,6 @@ export interface AudioNoteContent {
   kind: 'audio-note';
   memoryId: string;
   date: string;
-  /** Phase 2 wires the real short URL; phase 1 renders a neutral short-code placeholder. */
-  shortCode: string;
   /** Round-19: see `PhotoSlotContent.shareToken` — the scan mark IS the
    * page for an audio-note, so this is `null` only for a memory that
    * predates tokens (falls back to the static placeholder mark). */
@@ -604,6 +633,18 @@ export interface FitOptions {
   spineMm?: number;
   /** Overrides `PHYSICAL.maxPrintablePages` — mainly for tests. */
   maxPages?: number;
+  /**
+   * Test hook: called once per full deterministic `runFit` pass `fitBook`
+   * performs (pairing escalation + cap-demotion search), so tests can assert
+   * the chapter-mode prefix search stays ~logarithmic instead of
+   * one-fit-per-omission.
+   */
+  onRunFit?: () => void;
+  /**
+   * Test override for `ENABLE_TIER_C_CAPTIONED_DEMOTION` (chapter-mode
+   * budgeting only; no effect on any other book). Defaults to the constant.
+   */
+  tierCCaptionedDemotion?: boolean;
 }
 
 /**

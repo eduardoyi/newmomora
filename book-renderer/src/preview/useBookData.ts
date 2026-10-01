@@ -58,7 +58,7 @@ export function useBook(slug: string | null) {
         const manifest = parseManifest(manifestRaw);
         const outline = parseOutline(outlineRaw);
         const fit = fitBook(outline, manifest);
-        const violations = auditBookDocument(fit.document, outline, manifest);
+        const violations = auditBookDocument(fit.document, outline, manifest, { omittedMemoryIds: fit.capacity.omittedMemoryIds });
         setBook({ manifest, outline, fit, violations });
       })
       .catch((e) => {

@@ -41,6 +41,8 @@ export interface FitBookForPrintInput {
   edits?: MemoryBookEditsShape;
   /** Forwarded to `fitBook`'s `FitOptions.spineMm` — required by the CLI/render-worker callers (a real Prodigi-quoted width), but left optional here so the fitter's own default applies for a caller that only wants the page count (spine width doesn't affect interior pagination, only the cover-wrap page's own width). */
   spineMm?: number;
+  /** Forwarded to `fitBook`'s `FitOptions.onRunFit` (diagnostics only — the audit script counts full fit passes). */
+  onRunFit?: () => void;
 }
 
 export interface FitBookForPrintResult {
@@ -71,7 +73,10 @@ export function fitBookForPrint(input: FitBookForPrintInput): FitBookForPrintRes
   // PrintApp.tsx's in-browser render. `edits` is `{}` for a plain/unedited
   // fit (both stages are then pure deep-clone no-ops).
   const pre = applyPreFit(input.outline, input.manifest, edits);
-  const fit = fitBook(pre.outline, pre.manifest, input.spineMm !== undefined ? { spineMm: input.spineMm } : {});
+  const fit = fitBook(pre.outline, pre.manifest, {
+    ...(input.spineMm !== undefined ? { spineMm: input.spineMm } : {}),
+    ...(input.onRunFit ? { onRunFit: input.onRunFit } : {}),
+  });
   const post = applyPostFit(fit.document, edits);
   const document_ = post.document;
 

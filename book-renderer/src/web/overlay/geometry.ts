@@ -99,6 +99,8 @@ export function resolveTextAnchor(page: BookPage, target: string): TextAnchorPla
       return { strategy: 'selector', selector: '.spread-title__descriptive, .spread-title__quote', approximate: false };
     }
     if (page.params.sectionHeader) return { strategy: 'section-title' };
+    // Pooled quote-collection (Phase 2d): its title renders as the page's own section-style `<h2>`.
+    if (page.templateId === 'quote-collection' && typeof page.params.quotesTitle === 'string') return { strategy: 'section-title' };
     return null;
   }
   if (target.startsWith(EYEBROW_PREFIX)) {

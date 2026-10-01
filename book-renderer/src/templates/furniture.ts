@@ -35,6 +35,24 @@ export function numberWord(n: number, lang: Language): string {
 
 export interface Furniture {
   throughTheYears: { kicker: string; titleLines: [string, string] };
+  /**
+   * Multi-year ("everything" scope) variant of `throughTheYears` — the
+   * single-year strings say "a year in portraits" / "in twelve months",
+   * which is wrong for a book spanning several years. Picked by
+   * `ThroughTheYears.tsx` only when `manifest.scope.kind === 'everything'`.
+   */
+  throughTheYearsMultiYear: { kicker: string; titleLines: [string, string] };
+  /**
+   * Chapter-opener furniture for multi-year (everything-scope) books: one
+   * `spread-title` page per age-year. `n` is the 1-based chapter number
+   * (age-year). Spelled-out words for 1-10, digits past that.
+   */
+  chapter: {
+    /** es "capítulo uno" / en "chapter one"; digits past ten ("capítulo 11"). */
+    kicker: (n: number) => string;
+    /** es "Tu primer año" / en "Year One"; n>=11 "Tu 11.º año" / "Year 11". */
+    title: (n: number) => string;
+  };
   dedication: {
     greeting: (childName: string) => string;
     signature: string;
@@ -71,9 +89,13 @@ export interface Furniture {
    * scratch.
    */
   scanToWatch: string;
-  /** The single Caveat word on an audio-note page. */
-  listenToIt: string;
   firsts: { kicker: string };
+  /**
+   * Pooled quote-collection page/spread title ("the things you said") — the
+   * template falls back to this when the fitter passes no `params.quotesTitle`
+   * (a pooled collection carries no section header of its own).
+   */
+  quotes: { title: string };
   closing: {
     headline: string;
     /**
@@ -85,7 +107,21 @@ export interface Furniture {
      * tercer año"); otherwise falls back to the neutral scope-label form.
      */
     memoryCountLine: (count: number, scopeLabel: string, yearOrdinal: number | null) => string;
+    /**
+     * Multi-year ("everything" scope) closing — used by `Closing.tsx` only
+     * when `manifest.scope.kind === 'everything'`. Years are 4-digit
+     * strings sliced from `manifest.scope.start/end`; when they are equal
+     * the span collapses to a single year ("de 2025" / "in 2025").
+     */
+    multiYear: {
+      headline: string;
+      memoryCountLine: (count: number, startYear: string, endYear: string) => string;
+    };
   };
+}
+
+function capitalize(word: string): string {
+  return word.length > 0 ? word[0].toUpperCase() + word.slice(1) : word;
 }
 
 const FURNITURE: Record<Language, Furniture> = {
@@ -93,6 +129,14 @@ const FURNITURE: Record<Language, Furniture> = {
     throughTheYears: {
       kicker: 'un año en retratos',
       titleLines: ['Cómo cambiaste', 'en doce meses'],
+    },
+    throughTheYearsMultiYear: {
+      kicker: 'los años en retratos',
+      titleLines: ['Cómo cambiaste', 'con los años'],
+    },
+    chapter: {
+      kicker: (n) => `capítulo ${numberWord(n, 'es')}`,
+      title: (n) => `Tu ${ordinalWord(n, 'es')} año`,
     },
     dedication: {
       greeting: (childName) => `Para ${childName},`,
@@ -107,18 +151,31 @@ const FURNITURE: Record<Language, Furniture> = {
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'es')} momentos` : `${childName}, ${dateStr}`,
     scanToWatch: 'escanea para verlo',
-    listenToIt: 'escúchalo',
     firsts: { kicker: 'primeras veces' },
+    quotes: { title: 'Cosas que dijiste' },
     closing: {
       headline: 'Hasta el año que viene.',
       memoryCountLine: (count, scopeLabel, yearOrdinal) =>
         `Este libro recoge ${count} recuerdos de ${yearOrdinal ? `tu ${ordinalWord(yearOrdinal, 'es')} año` : scopeLabel}.`,
+      multiYear: {
+        headline: 'Y la historia continúa.',
+        memoryCountLine: (count, startYear, endYear) =>
+          `Este libro recoge ${count} recuerdos, ${startYear === endYear ? `de ${startYear}` : `de ${startYear} a ${endYear}`}.`,
+      },
     },
   },
   en: {
     throughTheYears: {
       kicker: 'through the years',
       titleLines: ['How you changed', 'in twelve months'],
+    },
+    throughTheYearsMultiYear: {
+      kicker: 'the years in portraits',
+      titleLines: ['How you changed', 'over the years'],
+    },
+    chapter: {
+      kicker: (n) => `chapter ${numberWord(n, 'en')}`,
+      title: (n) => `Year ${capitalize(numberWord(n, 'en'))}`,
     },
     dedication: {
       greeting: (childName) => `For ${childName},`,
@@ -129,12 +186,19 @@ const FURNITURE: Record<Language, Furniture> = {
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'en')} moments` : `${childName}, ${dateStr}`,
     scanToWatch: 'scan to watch it',
-    listenToIt: 'listen to it',
     firsts: { kicker: 'firsts' },
+    quotes: { title: 'Things you said' },
     closing: {
       headline: 'See you next year.',
       memoryCountLine: (count, scopeLabel, yearOrdinal) =>
         `This book holds ${count} memories from ${yearOrdinal ? `your ${ordinalWord(yearOrdinal, 'en')} year` : scopeLabel}.`,
+      multiYear: {
+        headline: 'And the story continues.',
+        // Owner copy table only gives the range form; the single-year form
+        // ("in 2025") is this module's own choice.
+        memoryCountLine: (count, startYear, endYear) =>
+          `This book holds ${count} memories, ${startYear === endYear ? `in ${startYear}` : `from ${startYear} to ${endYear}`}.`,
+      },
     },
   },
 };

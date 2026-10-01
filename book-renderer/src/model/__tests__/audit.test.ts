@@ -126,6 +126,53 @@ describe('auditBookDocument — (b) section-title orphans', () => {
   });
 });
 
+describe('auditBookDocument — (b) section-title orphans: multi-year chapter openers', () => {
+  const chapter = (n: number) =>
+    makeElement({ id: `chapter:${n}`, kind: 'chapter', title: `Year ${n}`, chapter: { ageYear: n, startMonth: '2021-02', endMonth: '2022-02' } });
+  const chapterTitle = (n: number) => emptyPage({ id: `chapter:${n}:title`, sourceElementId: `chapter:${n}`, templateId: 'spread-title' });
+  const content = (id: string, source: string) => emptyPage({ id, sourceElementId: source, templateId: 'anchor-media' });
+
+  it('flags a chapter title page with no content pages before the next chapter', () => {
+    const outline = makeOutline([chapter(1), chapter(2), makeElement({ id: 'backbone:b', kind: 'backbone', memoryIds: ['m'] })]);
+    const document = docWith([chapterTitle(1), chapterTitle(2), content('b:0', 'backbone:b')]);
+
+    const orphans = auditBookDocument(document, outline, makeManifest({})).filter((v) => v.check === 'section-title-orphan');
+    expect(orphans.map((v) => v.elementId)).toEqual(['chapter:1']);
+  });
+
+  it('flags a trailing chapter title directly followed by the closing (a parity blank is not content)', () => {
+    const outline = makeOutline([chapter(1), makeElement({ id: 'closing', kind: 'closing', memoryIds: [] })]);
+    const document = docWith([
+      chapterTitle(1),
+      emptyPage({ id: 'blank', sourceElementId: 'x', templateId: 'blank', blankReason: 'parity:full-bleed' }),
+      emptyPage({ id: 'closing', sourceElementId: 'closing', templateId: 'closing' }),
+    ]);
+
+    const orphans = auditBookDocument(document, outline, makeManifest({})).filter((v) => v.check === 'section-title-orphan');
+    expect(orphans.map((v) => v.elementId)).toEqual(['chapter:1']);
+  });
+
+  it('passes when every chapter title has a content page behind it (a themed spread inside the chapter counts)', () => {
+    const outline = makeOutline([chapter(1), chapter(2)]);
+    const document = docWith([
+      chapterTitle(1),
+      content('b:0', 'backbone:a'),
+      chapterTitle(2),
+      emptyPage({ id: 'topic:x:title', sourceElementId: 'topic:x', templateId: 'spread-title' }),
+      content('topic:x:0', 'topic:x'),
+    ]);
+
+    expect(auditBookDocument(document, outline, makeManifest({})).filter((v) => v.check === 'section-title-orphan')).toHaveLength(0);
+  });
+
+  it('ignores a spread-title that is not a chapter element (no effect on books without chapters)', () => {
+    const outline = makeOutline([makeElement({ id: 'backbone:a', kind: 'backbone', memoryIds: [] })]);
+    const document = docWith([emptyPage({ id: 'stray', sourceElementId: 'not-in-outline', templateId: 'spread-title' })]);
+
+    expect(auditBookDocument(document, outline, makeManifest({})).filter((v) => v.check === 'section-title-orphan')).toHaveLength(0);
+  });
+});
+
 describe('auditBookDocument — (d) blank-page accounting', () => {
   it('flags a blank page with no blankReason', () => {
     const document = docWith([emptyPage({ id: 'p1', sourceElementId: 'x', templateId: 'blank' })]);

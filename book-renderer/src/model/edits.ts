@@ -531,6 +531,12 @@ function applySectionHeaderField(document: BookDocument, elementId: string, fiel
   let applied = false;
   for (const page of document.pages) {
     if (page.sourceElementId !== elementId) continue;
+    // A pooled quote-collection (Phase 2d) carries its title as `quotesTitle`
+    // under its own `<chapter id>:quotes` element id — there is no eyebrow.
+    if (page.templateId === 'quote-collection' && field === 'title' && typeof page.params.quotesTitle === 'string') {
+      page.params.quotesTitle = value;
+      applied = true;
+    }
     if (page.templateId === 'spread-title') {
       page.params[field] = value;
       applied = true;

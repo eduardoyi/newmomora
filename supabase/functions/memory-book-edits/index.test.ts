@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertStrictEquals } from 'jsr:@std/assert@1';
+import { assertEquals, assertExists, assertRejects, assertStrictEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { TEXT_TARGET_PATTERN,
   collectManifestAssetFiles,
@@ -10,6 +10,7 @@ import { TEXT_TARGET_PATTERN,
   type MemoryBookEditsDependencies,
   normalizeEdits,
   resolveScopeWindow,
+  ScopeWindowError,
 } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -38,6 +39,7 @@ function readyBook(overrides: Record<string, unknown> = {}) {
   return {
     id: BOOK_ID,
     family_id: FAMILY_ID,
+    child_id: null,
     status: 'ready',
     scope_kind: 'custom_range',
     scope_start_date: '2026-01-01',
@@ -55,6 +57,18 @@ function readyBook(overrides: Record<string, unknown> = {}) {
 // own branching against a given DB response shape, not PostgREST's actual
 // filter semantics (which is Postgres/PostgREST's own property, not this
 // function's).
+interface MediaQueryLog {
+  select: string[];
+  eq: [string, unknown][];
+  in: [string, unknown][];
+  order: string[];
+  range: [number, number][];
+}
+
+function newMediaQueryLog(): MediaQueryLog {
+  return { select: [], eq: [], in: [], order: [], range: [] };
+}
+
 interface StubOptions {
   book?: Record<string, unknown> | null;
   bookError?: { message: string } | null;
@@ -65,12 +79,20 @@ interface StubOptions {
   editsRow?: Record<string, unknown> | null;
   editsError?: { message: string } | null;
   upsertError?: { message: string } | null;
-  memoriesEarliest?: { memory_date: string } | null;
+  /** Rows the `everything` first-eligible scan returns (id, memory_date,
+   * memory_family_members embed); the stub is filter-blind, so these are
+   * already "the rows on/after DOB, ascending". */
+  memoriesScan?: Array<Record<string, unknown>>;
+  memoriesScanError?: { message: string } | null;
   memoriesLatest?: { memory_date: string } | null;
-  /** picker_pool member filter (item 1): rows `memory_family_members`
-   * resolves for a given `family_member_id`. */
-  memberTagRows?: { memory_id: string }[];
-  memberTagError?: { message: string } | null;
+  memoriesLatestError?: { message: string } | null;
+  /** `family_members` DOB lookup used when the book has no frozen window. */
+  childRow?: { date_of_birth: string | null } | null;
+  childError?: { message: string } | null;
+  /** Records the query SHAPE `memory_media` receives (the stub is
+   * filter-blind, so picker_pool's select string / filters / range are
+   * otherwise invisible to assertions). */
+  mediaQueryLog?: MediaQueryLog;
   calls?: string[];
   onUpsert?: (payload: Record<string, unknown>) => void;
   /** save_edit's cover_asset_key recompute: `memory_books.update(...)`. */
@@ -104,32 +126,41 @@ function createStubClient(options: StubOptions = {}) {
         }
 
         if (table === 'memory_media') {
+          const log = options.mediaQueryLog;
           const chain = {
-            select: () => chain,
-            eq: () => chain,
+            select: (cols: string) => {
+              log?.select.push(cols);
+              return chain;
+            },
+            eq: (col: string, value: unknown) => {
+              log?.eq.push([col, value]);
+              return chain;
+            },
             gte: () => chain,
             lt: () => chain,
             like: () => chain,
-            in: () => chain,
-            order: () => chain,
+            in: (col: string, values: unknown) => {
+              log?.in.push([col, values]);
+              return chain;
+            },
+            order: (col: string) => {
+              log?.order.push(col);
+              return chain;
+            },
             maybeSingle: async () => ({ data: options.media ?? null, error: options.mediaError ?? null }),
-            range: async () => ({ data: options.mediaPool ?? [], error: options.mediaPoolError ?? null }),
+            range: async (from: number, to: number) => {
+              log?.range.push([from, to]);
+              return { data: options.mediaPool ?? [], error: options.mediaPoolError ?? null };
+            },
           };
           return chain;
         }
 
         if (table === 'memory_family_members') {
-          // picker_pool's member filter (item 1) awaits this chain
-          // directly -- no terminal `.maybeSingle()`/`.range()` call, same
-          // as the real `PostgrestFilterBuilder` -- so the chain itself
-          // must be thenable.
-          const chain = {
-            select: () => chain,
-            eq: () => chain,
-            then: (resolve: (result: { data: unknown; error: unknown }) => void) =>
-              resolve({ data: options.memberTagRows ?? [], error: options.memberTagError ?? null }),
-          };
-          return chain;
+          // picker_pool's member filter is a nested inner embed on
+          // `memory_media` -- a separate top-level `memory_family_members`
+          // lookup (the old unpaged tag-id fetch) must never happen again.
+          throw new Error('unexpected top-level memory_family_members lookup');
         }
 
         if (table === 'memory_book_edits') {
@@ -146,19 +177,29 @@ function createStubClient(options: StubOptions = {}) {
         }
 
         if (table === 'memories') {
-          let ascending = true;
+          // `everything` window resolution: the latest-date lookup
+          // (`.limit(1).maybeSingle()`) and the ascending tag-embed scan
+          // (`.range(...)`).
           const chain = {
             select: () => chain,
             eq: () => chain,
-            order: (_col: string, opts: { ascending: boolean }) => {
-              ascending = opts.ascending;
-              return chain;
-            },
+            gte: () => chain,
+            order: () => chain,
             limit: () => chain,
             maybeSingle: async () => ({
-              data: (ascending ? options.memoriesEarliest : options.memoriesLatest) ?? null,
-              error: null,
+              data: options.memoriesLatest ?? null,
+              error: options.memoriesLatestError ?? null,
             }),
+            range: async () => ({ data: options.memoriesScan ?? [], error: options.memoriesScanError ?? null }),
+          };
+          return chain;
+        }
+
+        if (table === 'family_members') {
+          const chain = {
+            select: () => chain,
+            eq: () => chain,
+            maybeSingle: async () => ({ data: options.childRow ?? null, error: options.childError ?? null }),
           };
           return chain;
         }
@@ -871,29 +912,156 @@ Deno.test('picker_pool: a well-formed dateStart/dateEnd range is accepted alongs
   assertEquals(body.items.length, 1);
 });
 
-Deno.test('picker_pool: memberId with zero tagged memories short-circuits to an empty, exhausted page without querying memory_media', async () => {
+Deno.test('picker_pool: memberId filter is a nested inner embed on memory_media (no separate tag lookup, no .in(memory_id))', async () => {
   const calls: string[] = [];
+  const mediaQueryLog = newMediaQueryLog();
   const response = await handleMemoryBookEdits(
-    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID, cursor: btoa('50'), limit: 25 }),
     baseDeps({
-      createServiceClient: createStubClient({ book: readyBook(), memberTagRows: [], calls }),
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        mediaPool: [poolRow()],
+        editsRow: null,
+        calls,
+        mediaQueryLog,
+      }),
     }),
   );
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body, { items: [], nextCursor: null });
-  assertEquals(calls.includes('memory_media'), false);
-  assertEquals(calls.includes('memory_family_members'), true);
+  assertEquals(body.items.length, 1);
+
+  // Query SHAPE: the membership join lives in the select string + a nested eq.
+  assertEquals(mediaQueryLog.select.length, 1);
+  assertStringIncludes(
+    mediaQueryLog.select[0],
+    'memories!inner(memory_date, family_id, memory_family_members!inner(family_member_id))',
+  );
+  assertEquals(
+    mediaQueryLog.eq.some(([col, v]) => col === 'memories.memory_family_members.family_member_id' && v === MEMBER_ID),
+    true,
+  );
+  assertEquals(
+    mediaQueryLog.eq.some(([col, v]) => col === 'memories.family_id' && v === FAMILY_ID),
+    true,
+  );
+  // No `.in('memory_id', ...)` id list, and no separate tag-table lookup.
+  assertEquals(mediaQueryLog.in, []);
+  assertEquals(calls.includes('memory_family_members'), false);
+  // Global ordering + offset cursor semantics are untouched.
+  assertEquals(mediaQueryLog.order, ['memories(memory_date)', 'id']);
+  assertEquals(mediaQueryLog.range, [[50, 74]]);
 });
 
-Deno.test('picker_pool: memberId with tagged memories proceeds to the normal media query', async () => {
-  const calls: string[] = [];
+Deno.test('picker_pool: without memberId the select keeps the plain memories embed and no tag filter', async () => {
+  const mediaQueryLog = newMediaQueryLog();
   const response = await handleMemoryBookEdits(
-    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
     baseDeps({
       createServiceClient: createStubClient({
         book: readyBook(),
-        memberTagRows: [{ memory_id: MEMORY_ID }],
+        mediaPool: [poolRow()],
+        editsRow: null,
+        mediaQueryLog,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(mediaQueryLog.select[0].includes('memory_family_members'), false);
+  assertEquals(mediaQueryLog.eq.some(([col]) => col.includes('memory_family_members')), false);
+  assertEquals(mediaQueryLog.in, []);
+});
+
+Deno.test('picker_pool: a member with 200+ tagged memories needs no id list (nothing for the URL limit to truncate)', async () => {
+  const pool = Array.from({ length: 200 }, (_, i) =>
+    poolRow({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      memory_id: `10000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      memories: { memory_date: '2026-03-01' },
+    }),
+  );
+  const mediaQueryLog = newMediaQueryLog();
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID, limit: 50 }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook(),
+        mediaPool: pool.slice(0, 50),
+        editsRow: null,
+        mediaQueryLog,
+        calls,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.items.length, 50);
+  assertEquals(body.nextCursor, btoa('50'));
+  assertEquals(mediaQueryLog.in, []);
+  assertEquals(calls.filter((t) => t === 'memory_media').length, 1);
+});
+
+Deno.test('picker_pool: a member with no tagged memories returns an empty, exhausted page', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({ book: readyBook(), mediaPool: [], editsRow: null }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { items: [], nextCursor: null });
+});
+
+Deno.test('picker_pool: a media query failure with a memberId surfaces as a 500', async () => {
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({ book: readyBook(), mediaPoolError: { message: 'boom' } }),
+    }),
+  );
+  assertEquals(response.status, 500);
+});
+
+Deno.test('picker_pool: an everything-scope window lookup error surfaces as a 500, not an empty pool', async () => {
+  for (const failing of [
+    { memoriesScanError: { message: 'boom' } },
+    { memoriesLatestError: { message: 'boom' } },
+    { childError: { message: 'boom' } },
+  ]) {
+    const mediaQueryLog = newMediaQueryLog();
+    const response = await handleMemoryBookEdits(
+      request({ op: 'picker_pool', bookId: BOOK_ID }),
+      baseDeps({
+        createServiceClient: createStubClient({
+          book: readyBook({ scope_kind: 'everything', child_id: MEMBER_ID, scope_start_date: null, scope_end_date: null }),
+          childRow: { date_of_birth: null },
+          memoriesLatest: { memory_date: '2026-02-10' },
+          memoriesScan: [{ id: 'm1', memory_date: '2024-01-01', memory_family_members: [] }],
+          ...failing,
+          mediaPool: [poolRow()],
+          mediaQueryLog,
+        }),
+      }),
+    );
+    assertEquals(response.status, 500, JSON.stringify(failing));
+    assertEquals((await response.json()).code, 'internal_error');
+    assertEquals(mediaQueryLog.select, []);
+  }
+});
+
+Deno.test('picker_pool: an everything book with a frozen outline.window uses it without touching memories', async () => {
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook({
+          scope_kind: 'everything',
+          scope_start_date: null,
+          scope_end_date: null,
+          book_document: { outline: { window: { start: '2024-02-03', endExclusive: '2026-09-01' } }, manifest: { memories: {} } },
+        }),
         mediaPool: [poolRow()],
         editsRow: null,
         calls,
@@ -901,19 +1069,29 @@ Deno.test('picker_pool: memberId with tagged memories proceeds to the normal med
     }),
   );
   assertEquals(response.status, 200);
-  const body = await response.json();
-  assertEquals(body.items.length, 1);
-  assertEquals(calls.includes('memory_media'), true);
+  assertEquals(calls.includes('memories'), false);
+  assertEquals(calls.includes('family_members'), false);
 });
 
-Deno.test('picker_pool: a member-tag lookup failure surfaces as a 500, same as the media query failing', async () => {
+Deno.test('picker_pool: an everything book without a frozen window falls back to the shared first-eligible resolution', async () => {
+  const calls: string[] = [];
   const response = await handleMemoryBookEdits(
-    request({ op: 'picker_pool', bookId: BOOK_ID, memberId: MEMBER_ID }),
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
     baseDeps({
-      createServiceClient: createStubClient({ book: readyBook(), memberTagError: { message: 'boom' } }),
+      createServiceClient: createStubClient({
+        book: readyBook({ scope_kind: 'everything', child_id: MEMBER_ID, scope_start_date: null, scope_end_date: null }),
+        childRow: { date_of_birth: '2024-01-01' },
+        memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
+        memoriesLatest: { memory_date: '2026-02-10' },
+        mediaPool: [poolRow()],
+        editsRow: null,
+        calls,
+      }),
     }),
   );
-  assertEquals(response.status, 500);
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes('memories'), true);
+  assertEquals(calls.includes('family_members'), true);
 });
 
 // ── intersectDateWindow (direct) ──────────────────────────────────────────
@@ -995,23 +1173,141 @@ Deno.test('resolveScopeWindow: custom_range uses the frozen dates with an inclus
   assertEquals(window, { start: '2026-01-01', endExclusive: '2026-02-01' });
 });
 
-Deno.test('resolveScopeWindow: everything resolves to the family\'s live min/max memory_date', async () => {
+const EVERYTHING_BOOK = {
+  family_id: FAMILY_ID,
+  child_id: MEMBER_ID,
+  scope_kind: 'everything' as const,
+  scope_start_date: null,
+  scope_end_date: null,
+};
+
+Deno.test('resolveScopeWindow: everything without a frozen window resolves via the shared first-eligible helper', async () => {
   const window = await resolveScopeWindow(
     createStubClient({
-      memoriesEarliest: { memory_date: '2024-05-01' },
+      childRow: { date_of_birth: '2024-01-01' },
+      memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
       memoriesLatest: { memory_date: '2026-02-10' },
     })(),
-    { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+    EVERYTHING_BOOK,
   );
   assertEquals(window, { start: '2024-05-01', endExclusive: '2026-02-11' });
 });
 
+Deno.test('resolveScopeWindow: everything skips a first memory tagged only to another member', async () => {
+  const window = await resolveScopeWindow(
+    createStubClient({
+      childRow: { date_of_birth: null },
+      memoriesScan: [
+        { id: 'm1', memory_date: '2024-01-01', memory_family_members: [{ family_member_id: 'someone-else' }] },
+        { id: 'm2', memory_date: '2024-03-03', memory_family_members: [{ family_member_id: MEMBER_ID }] },
+      ],
+      memoriesLatest: { memory_date: '2024-03-03' },
+    })(),
+    EVERYTHING_BOOK,
+  );
+  assertEquals(window, { start: '2024-03-03', endExclusive: '2024-03-04' });
+});
+
+Deno.test('resolveScopeWindow: everything with a null child_id skips the DOB lookup entirely', async () => {
+  const calls: string[] = [];
+  const window = await resolveScopeWindow(
+    createStubClient({
+      calls,
+      memoriesScan: [{ id: 'm1', memory_date: '2024-01-01', memory_family_members: [] }],
+      memoriesLatest: { memory_date: '2024-01-01' },
+    })(),
+    { ...EVERYTHING_BOOK, child_id: null },
+  );
+  assertEquals(window, { start: '2024-01-01', endExclusive: '2024-01-02' });
+  assertEquals(calls.includes('family_members'), false);
+});
+
 Deno.test('resolveScopeWindow: everything with zero memories collapses to the empty-window sentinel', async () => {
   const window = await resolveScopeWindow(
-    createStubClient({ memoriesEarliest: null, memoriesLatest: null })(),
-    { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+    createStubClient({ childRow: { date_of_birth: null }, memoriesLatest: null })(),
+    EVERYTHING_BOOK,
   );
   assertEquals(window.start, window.endExclusive);
+});
+
+Deno.test('resolveScopeWindow: everything prefers the book\'s frozen outline.window (the picker pool equals the generated window)', async () => {
+  const calls: string[] = [];
+  const window = await resolveScopeWindow(createStubClient({ calls })(), {
+    ...EVERYTHING_BOOK,
+    book_document: { outline: { window: { start: '2024-02-03', endExclusive: '2026-09-01', label: 'Everything' } } },
+  });
+  assertEquals(window, { start: '2024-02-03', endExclusive: '2026-09-01' });
+  assertEquals(calls, [], 'no DB read when a valid frozen window exists');
+});
+
+Deno.test('resolveScopeWindow: a malformed frozen window falls back to re-deriving it', async () => {
+  const stub = () =>
+    createStubClient({
+      childRow: { date_of_birth: null },
+      memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
+      memoriesLatest: { memory_date: '2024-06-01' },
+    })();
+  for (const outlineWindow of [
+    { start: '2024-02-30', endExclusive: '2026-09-01' }, // calendrically bogus
+    { start: '2026-09-01', endExclusive: '2024-02-03' }, // inverted
+    { start: '2024-02-03' }, // missing end
+    'nope',
+    null,
+  ]) {
+    const window = await resolveScopeWindow(stub(), {
+      ...EVERYTHING_BOOK,
+      book_document: { outline: { window: outlineWindow } },
+    });
+    assertEquals(window, { start: '2024-05-01', endExclusive: '2024-06-02' });
+  }
+});
+
+Deno.test('resolveScopeWindow: a frozen window is ignored for non-everything kinds', async () => {
+  const window = await resolveScopeWindow(createStubClient()(), {
+    family_id: FAMILY_ID,
+    scope_kind: 'age_year',
+    scope_start_date: '2025-01-01',
+    scope_end_date: '2025-12-31',
+    book_document: { outline: { window: { start: '2020-01-01', endExclusive: '2021-01-01' } } },
+  });
+  assertEquals(window, { start: '2025-01-01', endExclusive: '2026-01-01' });
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the DOB lookup errors (never "no DOB")', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({ childError: { message: 'boom' }, memoriesLatest: { memory_date: '2026-02-10' } })(),
+        EVERYTHING_BOOK,
+      ),
+    ScopeWindowError,
+  );
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the first-eligible scan errors (never the empty sentinel)', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({
+          childRow: { date_of_birth: null },
+          memoriesScanError: { message: 'boom' },
+          memoriesLatest: { memory_date: '2026-02-10' },
+        })(),
+        EVERYTHING_BOOK,
+      ),
+    ScopeWindowError,
+  );
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the latest lookup errors', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({ childRow: { date_of_birth: null }, memoriesLatestError: { message: 'boom' } })(),
+        EVERYTHING_BOOK,
+      ),
+    ScopeWindowError,
+  );
 });
 
 // ── measureOriginalDimensions (direct) ────────────────────────────────────

@@ -35,9 +35,19 @@ import { PHYSICAL } from './types';
 import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import { localizeMonthLabel, parseSingleMonthLabel, lastDayOfMonthIso } from '../templates/common/formatDate';
-import { getFurniture, getLanguage } from '../templates/furniture';
+import { getFurniture, getLanguage, numberWord, type Language } from '../templates/furniture';
 import { ageAtDate, formatAgeChip } from '../templates/age';
-import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm, printableCaption } from '../templates/mm';
+import {
+  illustratedIlloFitHeightMm,
+  illustratedStackTopMm,
+  illustratedCaptionHeightEstimateMm,
+  ILLUSTRATED_STACK_GAP_MM,
+  ILLUSTRATED_FOLIO_CLEARANCE_MM,
+  SAFE_BOX_MM,
+  SECTION_HEADER_RESERVE_MM,
+  footerReserveMm,
+  printableCaption,
+} from '../templates/mm';
 import { anchorPairMeetsMinSize } from '../templates/layout/anchorMediaLayout';
 import { resolveElementMemories } from './loader';
 
@@ -80,6 +90,17 @@ const QUOTE_ENTRY_MAX_CHARS = 200;
 const QUOTE_COLLECTION_MIN = 3;
 /** The collection's own page-budget ceiling per spread — a longer run splits into several spreads (see `partitionQuoteRun`). */
 const QUOTE_COLLECTION_MAX = 6;
+/**
+ * Phase 2d: a collection of this many entries or fewer is ONE ordinary page
+ * (`isSpread: false`, no even-start requirement); more (4-6) is a 2-page
+ * spread. See `quoteCollectionIsSinglePage`.
+ */
+const QUOTE_SINGLE_PAGE_MAX = 3;
+
+/** A `quote-collection` unit of <= `QUOTE_SINGLE_PAGE_MAX` entries is a single page; 4-6 entries are a spread. */
+function quoteCollectionIsSinglePage(entryCount: number): boolean {
+  return entryCount <= QUOTE_SINGLE_PAGE_MAX;
+}
 /**
  * Illustrated-story pairing (acceptance-review follow-up): two ADJACENT
  * short illustrated stories share a facing spread with alternating
@@ -255,6 +276,36 @@ const AUDIO_NOTE_MAX_PER_PAGE = 2;
  * omissions must spread fairly across the book (see `tightenToPageCap`).
  */
 const MIN_MEMORIES_PER_MONTH = 2;
+/**
+ * Chapter-mode (multi-year Everything books) per-chapter keep floor, in
+ * memories: `min(total_c, CHAPTER_FLOOR_MEMORIES)`. Page-cap budgeting only
+ * cuts a chapter below it once every chapter is at its floor (Tier B1+).
+ */
+const CHAPTER_FLOOR_MEMORIES = 12;
+/**
+ * Chapter-mode per-SECTION keep floors (Phase 2b fix A / fix 6). The floor is
+ * keyed by the outline element (a backbone quarter block, or a themed spread),
+ * not by calendar month: with ~3-month sections a per-month floor let
+ * structure dominate the budget. Each backbone section keeps at least
+ * `min(total, 2)` memories, a themed spread `min(total, 3)`; relaxation goes
+ * to 1, and to 0 only as the very last resort.
+ */
+const SECTION_FLOOR_BACKBONE = 2;
+const SECTION_FLOOR_THEMED = 3;
+/** A themed spread that ends a chapter-mode fit with fewer kept memories than this dissolves its title page (fix 6). */
+const THEMED_MIN_KEPT_MEMORIES = 2;
+/** Chapter-mode refill (fix C): maximum `runFit` attempts spent restoring omitted memories after the prefix search. */
+const REFILL_MAX_ATTEMPTS = 40;
+/**
+ * Chapter-mode Tier C (last resort): allow demoting CAPTIONED photo/video
+ * memories (never hero/panorama/milestone/quote-title sources) once every
+ * other demotion tier is exhausted and the book is still over the cap. Real
+ * Everything data has few photo-only/digest-eligible memories relative to
+ * its ~490 with assets, so the ordinary pools alone may not reach the cap.
+ * PENDING OWNER CONFIRMATION after the dogfood run; `false` restores the
+ * pre-Tier-C behaviour (the book is returned `overCap`). Chapter mode only.
+ */
+export const ENABLE_TIER_C_CAPTIONED_DEMOTION = true;
 /**
  * Prodigi's layflat binding valid range (round-5 item 7: "18-122"). The
  * even-page-count enforcement only applies within this printable range —
@@ -600,7 +651,10 @@ function unitParityMeta(
     return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'panorama-spread' };
   }
   if (unit.kind === 'quote-collection') {
-    return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' };
+    // Phase 2d: 1-3 entries are one ordinary page (no even-start requirement; not a swap target — assembly never marks it swappable); 4-6 are a spread.
+    return quoteCollectionIsSinglePage(unit.items.length)
+      ? { span: 1, needsEven: false, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' }
+      : { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' };
   }
   if (unit.kind === 'illustrated-digest') {
     // Owner round-12 extension: the SINGLE-page variant is an ordinary
@@ -816,7 +870,13 @@ export function reorderUnitsForParity(
       // ONE page instead (task 1's fitted-height cap keeps that safe).
       // Modeling that here keeps the sim in sync: a de-split render is a
       // plain 1-page single with no even-landing requirement, span 1.
-      if (meta.predictedTemplateId === 'illustrated-story' && meta.span === 2 && !meta.isPairFirst) {
+      //
+      // Phase 2d fix 3d: ...but ONLY when that "both" render actually fits
+      // the safe box (`illustratedBothModeFits`, the audit's own formula). A
+      // long story whose stack cannot fit commits to the split in assembly
+      // (swap, else a blank), so it falls through to the last-resort
+      // "assembly will insert a blank (or swap)" model below instead.
+      if (meta.predictedTemplateId === 'illustrated-story' && meta.span === 2 && !meta.isPairFirst && deSplitFits(arr[i], sim)) {
         finalizeUnit(arr[i], 'illustrated-story');
         parityEven = !parityEven; // a de-split "both" mode render is always a plain 1-page single (odd span)
         continue;
@@ -869,7 +929,9 @@ export function reorderUnitsForParity(
   // same no-blank dissolve every other stuck digest uses — so the
   // invariant holds no matter what the parity pass above did to get here.
   for (let i = 1; i < arr.length; i += 1) {
-    if (arr[i].kind === 'illustrated-digest' && arr[i - 1].kind === 'illustrated-digest') {
+    const cur = arr[i];
+    const prev = arr[i - 1];
+    if (cur.kind === 'illustrated-digest' && prev.kind === 'illustrated-digest' && !(cur.compact && prev.compact)) {
       const dissolved = dissolveDigestUnit(arr[i] as Extract<ContentUnit, { kind: 'illustrated-digest' }>);
       arr.splice(i, 1, ...dissolved);
       // `arr[i]` is now the first dissolved (plain 'group') item, never
@@ -879,6 +941,13 @@ export function reorderUnitsForParity(
     }
   }
   return arr;
+}
+
+/** Phase 2d: whether a solo illustrated unit's single-page ("both") render fits the safe box, given the sim's pending-header state (see `illustratedBothModeFits`). */
+function deSplitFits(unit: ContentUnit, sim: ReorderSimState): boolean {
+  if (unit.kind !== 'group' || unit.group.memories.length !== 1) return true;
+  const { id, memory } = unit.group.memories[0];
+  return illustratedBothModeFits(memory, sim.headerPending, predictIllustratedStagger(id));
 }
 
 /**
@@ -909,6 +978,24 @@ function illustratedStoryNeedsSplit(memory: ManifestMemory, hasSectionHeader: bo
   if (!memory.illustration) return false;
   const heightMm = illustratedIlloFitHeightMm(len, hasSectionHeader, stagger, memory.illustration.aspectRatio);
   return heightMm < ILLUSTRATED_SPLIT_MIN_ILLO_HEIGHT_MM;
+}
+
+/**
+ * Whether a single-page ("both" mode) illustrated-story stack fits the safe
+ * box above the folio clearance — the SAME three pure functions the template
+ * renders with and `auditBookDocument`'s `illustrated-stack-overflow` check
+ * (i) recomputes with, so the fitter's decision can never drift from the
+ * audit. A memory with no illustration has no stack to overflow.
+ */
+function illustratedBothModeFits(memory: ManifestMemory, hasSectionHeader: boolean, stagger: boolean): boolean {
+  if (!memory.illustration) return true;
+  const len = captionOf(memory).length;
+  const stackBottomMm =
+    illustratedStackTopMm(hasSectionHeader, stagger) +
+    illustratedCaptionHeightEstimateMm(len, stagger) +
+    ILLUSTRATED_STACK_GAP_MM +
+    illustratedIlloFitHeightMm(len, hasSectionHeader, stagger, memory.illustration.aspectRatio);
+  return stackBottomMm <= SAFE_BOX_MM - ILLUSTRATED_FOLIO_CLEARANCE_MM + 1e-6;
 }
 
 /**
@@ -1177,11 +1264,6 @@ function findNearestBreak(text: string, mid: number, pattern: RegExp): number | 
   return best;
 }
 
-/** Fabricates a short, stable placeholder "short code" until phase 2 wires the real momora.co/e/<token> URL. */
-function placeholderShortCode(memoryId: string): string {
-  return memoryId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase().padEnd(4, 'X');
-}
-
 // ---------------------------------------------------------------------------
 // Per-group template scoring. Each scorer returns a 0..1 fit quality, or
 // `null` if the template is infeasible for this content at all. Evaluated
@@ -1234,9 +1316,21 @@ function toGroup(memories: ResolvedMemory[]): MemoryGroup {
   return { memories, photoAssets, hasLongText, totalTextChars };
 }
 
-/** A group the pairing pass may combine with an adjacent one: exactly one memory, exactly one photo. */
+/**
+ * A group the pairing pass may combine with an adjacent one: exactly one
+ * memory, exactly one photo — and never one carrying long text or an audio
+ * memory. Phase 2b fix 1: a merged group with long text scores `text-page`
+ * (whose slots are text-only), silently dropping BOTH memories' media; an
+ * audio memory is owned by the audio-note composition. Such groups keep their
+ * own page.
+ */
 function isSoloPhotoGroup(group: MemoryGroup): boolean {
-  return group.memories.length === 1 && group.photoAssets.length === 1;
+  return (
+    group.memories.length === 1 &&
+    group.photoAssets.length === 1 &&
+    !group.hasLongText &&
+    !isAudioMemory(group.memories[0].memory)
+  );
 }
 
 /**
@@ -1669,7 +1763,6 @@ function buildSlotsForTemplate(
           kind: 'audio-note',
           memoryId: id,
           date: memory.date,
-          shortCode: placeholderShortCode(id),
           shareToken: memory.shareToken ?? null,
         };
         slots.push({ id: nextSlotId('audio'), kind: 'audio-note', content });
@@ -2132,6 +2225,11 @@ export function partitionPortraits(n: number): number[] {
  * `QUOTE_COLLECTION_MAX` instead of 3) — only ever called on a run already
  * known to be >= `QUOTE_COLLECTION_MIN`, so every resulting group size
  * lands in [3, 6]: 7 -> [4,3], 13 -> [5,4,4], 17 -> [6,6,5].
+ *
+ * Phase 2d: a group of 3 (the only single-page size this ever yields) is ONE
+ * page; 4-6 is a 2-page spread (4 = 2+2, 5 = 2+3, 6 = 3+3 — the template
+ * splits the entries, the title on the left page). See
+ * `quoteCollectionIsSinglePage`.
  */
 export function partitionQuoteRun(n: number): number[] {
   if (n <= 0) return [];
@@ -2248,6 +2346,34 @@ function buildSpreadTitlePage(element: OutlineElement): BookPage {
   });
 }
 
+/**
+ * Chapter opener (multi-year Everything books): the SAME single `spread-title`
+ * page a themed spread uses — kicker/title come from chapter furniture (the
+ * worker's `element.title` is an English fallback, so the title is localized
+ * from `chapter.ageYear`), subtitle is the (localized) month range of the
+ * chapter's actual content. `sourceElementId` is the chapter element so the
+ * ordinary `sectionTitle:<id>` / `eyebrow:<id>` edits apply.
+ */
+function buildChapterTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
+  const lang = getLanguage(manifest);
+  const chapterFurniture = getFurniture(lang).chapter;
+  const ageYear = element.chapter?.ageYear;
+  return emptyPage({
+    id: `${element.id}:title`,
+    sourceElementId: element.id,
+    templateId: 'spread-title',
+    params: {
+      title: ageYear != null ? chapterFurniture.title(ageYear) : element.title,
+      subtitle: element.subtitle ? localizeMonthLabel(element.subtitle, lang) : null,
+      kicker: ageYear != null ? chapterFurniture.kicker(ageYear) : (element.kicker ?? null),
+      titleMode: 'descriptive',
+      titleSourceMemoryId: null,
+      spreadType: null,
+      momentCount: 0,
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Content pages: backbone/themed/firsts memory groups fit to a template.
 // ---------------------------------------------------------------------------
@@ -2286,7 +2412,20 @@ interface ContentPagesState {
 type ContentUnit =
   | { kind: 'group'; group: MemoryGroup }
   | { kind: 'panorama'; item: ResolvedMemory }
-  | { kind: 'quote-collection'; items: ResolvedMemory[] }
+  /**
+   * `pooled` (chapter-mode quote pooling, Phase 2b fix 4): a collection built
+   * from a whole chapter's one-liners and appended after its last section —
+   * unlike an in-section run it has no exact chronological position, so it may
+   * trade places with a preceding flexible single to land even instead of
+   * paying a parity blank, and it never carries the section header.
+   */
+  /**
+   * `pooledSourceId` (pooled only): the stable `sourceElementId` the page is
+   * emitted under (`<chapter id>:quotes`), so `sectionTitle:<id>` /
+   * `eyebrow:<id>` edits target the pooled collection's own title and never
+   * the host backbone section's.
+   */
+  | { kind: 'quote-collection'; items: ResolvedMemory[]; pooled?: boolean; pooledSourceId?: string }
   /**
    * `variant: 'spread'` — exactly 4 entries, 2-page spread, even-start
    * required (same as before). `variant: 'single'` — exactly 2 entries,
@@ -2295,7 +2434,13 @@ type ContentUnit =
    * template; `BookPage.isSpread` is what the template/audit read to know
    * which basis (spread vs single full-page) governs the mm->% math.
    */
-  | { kind: 'illustrated-digest'; items: ResolvedMemory[]; variant: 'spread' | 'single' };
+  /**
+   * `compact` (chapter-mode firsts, Phase 2c): a digest single built by
+   * `buildFirstsUnits`. Adjacent compact digests are the whole point of the
+   * compact firsts layout, so the "never two digest units back to back" pacing
+   * backstop in `reorderUnitsForParity` leaves them alone.
+   */
+  | { kind: 'illustrated-digest'; items: ResolvedMemory[]; variant: 'spread' | 'single'; compact?: boolean };
 
 /**
  * Splits an ordered run of memories into alternating 'quote' (a maximal
@@ -2561,14 +2706,93 @@ function buildContentUnits(
       (isExplicitCandidate || isWideHero) && asset !== null && isTrustedPanoramaCandidate(asset) && state.panoramaBudgetUsed < quota;
     if (qualifies) {
       flushRun();
-      units.push({ kind: 'panorama', item });
+      // Phase 2b fix 2: the panorama/full-bleed unit takes ONLY the chosen
+      // (first) asset — it used to carry the whole memory, so the normal
+      // panorama path printed `assets[0]` and silently dropped the rest, and
+      // the demote rung dumped every asset on an anchor-media page that can
+      // only draw 1-2 slots. The memory's REMAINING assets go back into the
+      // run buffer as an ordinary group (laid out on the pages that follow).
+      // The caption (and milestones/illustration) stay with the chosen
+      // asset's unit — exactly where they lived before — so the continuation
+      // carries none of them and the text prints exactly once.
+      const [, ...restAssets] = item.memory.assets;
+      units.push({ kind: 'panorama', item: { id: item.id, memory: { ...item.memory, assets: [asset] } } });
       state.panoramaBudgetUsed += 1;
+      if (restAssets.length > 0) {
+        runBuffer.push({
+          id: item.id,
+          memory: { ...item.memory, assets: restAssets, text: null, illustration: null, milestones: [] },
+        });
+      }
     } else {
       runBuffer.push(item);
     }
   }
   flushRun();
   return units;
+}
+
+/**
+ * Firsts-digest eligibility (chapter-mode compact firsts): `isDigestEligibleMemory`'s
+ * illustration / length / square-ish-art rules WITHOUT its milestone exclusion
+ * (every firsts member holds a milestone by definition), and only for a memory
+ * with no photo/video of its own (media-bearing firsts keep their real media
+ * pages).
+ */
+function isFirstsDigestEligible(memory: ManifestMemory): boolean {
+  if (!memory.illustration || memory.assets.length > 0) return false;
+  const len = captionOf(memory).length;
+  if (len === 0 || len > DIGEST_ENTRY_MAX_CHARS) return false;
+  const aspect = memory.illustration.aspectRatio;
+  return aspect >= DIGEST_ASPECT_MIN && aspect <= DIGEST_ASPECT_MAX;
+}
+
+/**
+ * Compact firsts layout (Phase 2c, chapter mode only). A multi-year book's
+ * firsts section used to cost a title page plus one page per member (4 members
+ * -> 5 pages, 6 -> 7). Existing templates only:
+ *   - illustrated members (no media of their own, short text, square-ish art)
+ *     are paired two per `illustrated-digest` SINGLE page; an odd one out stays
+ *     an ordinary illustrated page. Singles, not 4-entry spreads: a spread
+ *     must start on an even page, the page after the section's title page is
+ *     odd, and two singles cost exactly what a spread would;
+ *   - every other member (photo/video, long text...) goes through the normal
+ *     chunker with cross-memory pairing forced on (`pairSoloGroups` level 3),
+ *     so two photo members share one `anchor-media` page.
+ * Resulting section cost (title page + content): all-illustrated n members =
+ * 1 + ceil(n/2); photo members add ceil(p/2) pages; an odd illustrated
+ * remainder and an odd photo remainder each cost a page of their own (no
+ * template composes a lone illustration with a photo). Units are merged back
+ * into chronological order of their first member (an illustrated 'second' half
+ * stays glued to its 'first'). Panorama / hero splicing is skipped: a
+ * panorama spread is the opposite of compact.
+ */
+function buildFirstsUnits(memories: ResolvedMemory[]): ContentUnit[] {
+  const pool = memories.filter(({ memory }) => isFirstsDigestEligible(memory));
+  const paired = pool.length - (pool.length % 2);
+  const digestIds = new Set(pool.slice(0, paired).map(({ id }) => id));
+  const digestUnits: ContentUnit[] = [];
+  for (let i = 0; i < paired; i += 2) {
+    digestUnits.push({ kind: 'illustrated-digest', items: pool.slice(i, i + 2), variant: 'single', compact: true });
+  }
+  const normalUnits: ContentUnit[] = chunkMemories(
+    memories.filter(({ id }) => !digestIds.has(id)),
+    MAX_PAIRING_LEVEL,
+  ).map((group): ContentUnit => ({ kind: 'group', group }));
+
+  const dateOf = (unit: ContentUnit): string => (unit.kind === 'illustrated-digest' ? unit.items[0].memory.date : unit.kind === 'group' ? unit.group.memories[0].memory.date : '');
+  const merged: ContentUnit[] = [];
+  let d = 0;
+  let lastNormalDate = '';
+  for (const unit of normalUnits) {
+    const glued = unit.kind === 'group' && unit.group.illustratedPairRole === 'second';
+    const key = glued ? lastNormalDate : dateOf(unit);
+    while (d < digestUnits.length && dateOf(digestUnits[d]) < key) merged.push(digestUnits[d++]);
+    merged.push(unit);
+    if (!glued) lastNormalDate = key;
+  }
+  while (d < digestUnits.length) merged.push(digestUnits[d++]);
+  return merged;
 }
 
 /**
@@ -2608,6 +2832,17 @@ function buildContentPages(
    * whatever the parent originally wrote. Absent for every other section.
    */
   captionOverrides: ReadonlyMap<string, string> = EMPTY_STRING_MAP,
+  /**
+   * Chapter-mode quote pooling (Phase 2b fix 4): the chapter's pooled
+   * quote-eligible memories, printed as `pooled` quote-collection unit(s) at
+   * the END of this (the chapter's last backbone) section. Their own sections
+   * skipped them via `omittedIds`.
+   */
+  pooledQuoteTail: readonly ResolvedMemory[] = [],
+  /** Stable `sourceElementId` for the pooled quote page(s) (see `ContentUnit`'s `pooledSourceId`). */
+  pooledQuoteSourceId?: string,
+  /** Chapter-mode firsts section: the compact layout (see `buildFirstsUnits`). */
+  compactFirsts = false,
 ): BookPage[] {
   const resolvedMemories = resolveMemoriesInOrder(manifest, element, omittedIds);
   const memories: ResolvedMemory[] =
@@ -2617,9 +2852,9 @@ function buildContentPages(
           const warmName = captionOverrides.get(id);
           return warmName ? { id, memory: { ...memory, text: warmName } } : { id, memory };
         });
-  if (memories.length === 0) return [];
+  if (memories.length === 0 && pooledQuoteTail.length === 0) return [];
 
-  const builtUnits = buildContentUnits(memories, element, outline, state, pairingLevel);
+  const builtUnits = compactFirsts ? buildFirstsUnits(memories) : buildContentUnits(memories, element, outline, state, pairingLevel);
   // Owner round-6: reorder units so parity lands naturally (see
   // `reorderUnitsForParity`) — computed against the REAL parity at this
   // section's first content page, i.e. everything already in the document.
@@ -2633,12 +2868,22 @@ function buildContentPages(
   // follows it, which the old `isFirstUnit`-only heuristic mispredicted).
   // Seeded from the REAL running `state` at this exact point in assembly —
   // see `ReorderSimState`'s own doc comment for why this can never drift.
-  const units = reorderUnitsForParity(builtUnits, currentPageParity(outerPages) === 'even', element, outline, {
+  const reorderedUnits = reorderUnitsForParity(builtUnits, currentPageParity(outerPages) === 'even', element, outline, {
     contentPageCount: state.contentPageCount,
     fullBleedBudget: state.fullBleedBudget,
     lastTemplateId: state.lastTemplateId,
     headerPending: sectionHeader != null,
   });
+  // Pooled chapter quotes go after everything else (appended AFTER the reorder
+  // pass: assembly's own `ensureEvenLanding` swap/blank handles their parity).
+  const units: ContentUnit[] = [...reorderedUnits];
+  if (pooledQuoteTail.length >= QUOTE_COLLECTION_MIN) {
+    let offset = 0;
+    for (const size of partitionQuoteRun(pooledQuoteTail.length)) {
+      units.push({ kind: 'quote-collection', items: pooledQuoteTail.slice(offset, offset + size), pooled: true, pooledSourceId: pooledQuoteSourceId });
+      offset += size;
+    }
+  }
   const pages: BookPage[] = [];
   let headerPending = sectionHeader;
   // Round-4 item 3 ("empty pages littering the flow"): before falling back
@@ -2809,20 +3054,37 @@ function buildContentPages(
       // the composition itself. Parity-forced the same way panorama is
       // (item 8) — it's a spread too, and never swaps for the same reason
       // (its entries' chronological position must stay exact).
-      const reswap = ensureEvenLanding(index, 'parity:quote-collection', false);
+      //
+      // Phase 2d: 1-3 entries are ONE ordinary page (`isSpread: false`, no
+      // even-start requirement, so no parity dance and never a swap target);
+      // 4-6 stay a 2-page spread (the template puts the title on the left
+      // page: 4 = 2+2, 5 = 2+3, 6 = 3+3).
+      const singlePage = quoteCollectionIsSinglePage(unit.items.length);
+      const reswap = singlePage ? null : ensureEvenLanding(index, 'parity:quote-collection', Boolean(unit.pooled));
       const pageParams: TemplateParams = {};
-      if (headerPending) {
+      if (headerPending && !unit.pooled) {
         pageParams.sectionHeader = headerPending;
         headerPending = null;
+      } else if (unit.pooled) {
+        // A pooled collection has no section of its own, so it carries its
+        // own title as `params.quotesTitle` (furniture default, localized;
+        // the template renders it as a section-style title) — deliberately
+        // NOT a `sectionHeader`. It is emitted under its own stable
+        // `sourceElementId` (`<chapter id>:quotes`), so a
+        // `sectionTitle:<chapter id>:quotes` edit (`applySectionHeaderField`
+        // writes `quotesTitle` on quote-collection pages) retitles exactly
+        // the chapter's pooled collection(s) and never the backbone section
+        // it is appended to.
+        pageParams.quotesTitle = getFurniture(getLanguage(manifest)).quotes.title;
       }
       pages.push(
         emptyPage({
           id: `${element.id}:${index}:quotes`,
-          sourceElementId: element.id,
+          sourceElementId: (unit.pooled && unit.pooledSourceId) || element.id,
           templateId: 'quote-collection',
           params: pageParams,
           slots: buildQuoteCollectionSlots(unit.items),
-          isSpread: true,
+          isSpread: !singlePage,
         }),
       );
       if (reswap) {
@@ -3025,7 +3287,20 @@ function buildContentPages(
       // — the SAME "a smaller/plainer composition is an acceptable trade,
       // a blank page is not" principle round-9 item 2b already established
       // for full-bleed.
-      (currentPageParity([...outerPages, ...pages]) === 'even' || lastSwappablePageIndex === pages.length - 1)
+      //
+      // Phase 2d fix 3d (`illustrated-stack-overflow`): that fall-through is
+      // only valid when the single-page "both" composition actually FITS the
+      // safe box. A long story (about 500+ chars; ~400 under a section header)
+      // cannot share a page with its drawing at all — the caption alone is
+      // taller than the box — so "both" overflowed into the folio zone
+      // (Everything books at caps 126/130/140, and a year-book exhausted-cap
+      // case). When the stack cannot fit, the split is committed regardless:
+      // `ensureEvenLanding` below still tries the local swap first and pays a
+      // parity blank only as the true last resort — a blank page is a lesser
+      // defect than an illustration stamped over the folio.
+      (currentPageParity([...outerPages, ...pages]) === 'even' ||
+        lastSwappablePageIndex === pages.length - 1 ||
+        !illustratedBothModeFits(soloMemory, Boolean(params.sectionHeader), Boolean(params.stagger)))
     ) {
       // Round-5 item 6: text stands alone; the illustration moves to the
       // facing page, bleeding through the outer trim and foot — either the
@@ -3356,6 +3631,56 @@ function describeGapReason(group: MemoryGroup): string {
  * veces" / "firsts", localized) rather than outline-authored, since firsts
  * is the one themed-style section whose eyebrow is chrome, not AI copy.
  */
+/** The worker's English placeholder title for a `birthday-N` element ("Birthday -- turns 2"). */
+const BIRTHDAY_PLACEHOLDER_TITLE = /^Birthday\s*--\s*turns\s+(\d+)$/i;
+
+/**
+ * Age turned for a `birthday` element: from its id (`birthday-2`), else from
+ * the worker's placeholder title; `null` when neither parses.
+ */
+function birthdayAgeOf(element: OutlineElement): number | null {
+  const fromId = element.id.match(/^birthday-(\d+)$/);
+  if (fromId) return Number(fromId[1]);
+  const fromTitle = element.title.match(BIRTHDAY_PLACEHOLDER_TITLE);
+  return fromTitle ? Number(fromTitle[1]) : null;
+}
+
+/**
+ * Localized `birthday` section title/kicker. Period wording ("Cuando
+ * cumpliste dos años" / "When you turned two") — never the single-month
+ * "El mes en que cumpliste…" (a birthday section is not a month). A title
+ * the worker did not generate from its placeholder (a real/edited editorial
+ * title) is kept verbatim; with no parsable age the element title is used.
+ */
+export function birthdayTitleFor(element: OutlineElement, lang: Language): { title: string; kicker: string } {
+  const kicker = lang === 'es' ? 'cumpleaños' : 'birthday';
+  const age = birthdayAgeOf(element);
+  const isPlaceholder = BIRTHDAY_PLACEHOLDER_TITLE.test(element.title.trim());
+  if (age === null || (!isPlaceholder && element.title.trim() !== '')) return { title: element.title, kicker };
+  if (lang === 'es') {
+    return { title: `Cuando cumpliste ${age === 1 ? 'un' : numberWord(age, 'es')} ${age === 1 ? 'año' : 'años'}`, kicker };
+  }
+  return { title: `When you turned ${numberWord(age, 'en')}`, kicker };
+}
+
+function buildBirthdayTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
+  const { title, kicker } = birthdayTitleFor(element, getLanguage(manifest));
+  return emptyPage({
+    id: `${element.id}:title`,
+    sourceElementId: element.id,
+    templateId: 'spread-title',
+    params: {
+      title,
+      subtitle: element.subtitle ?? null,
+      kicker: element.kicker ?? kicker,
+      titleMode: 'descriptive',
+      titleSourceMemoryId: null,
+      spreadType: null,
+      momentCount: element.memoryIds.length,
+    },
+  });
+}
+
 function buildFirstsTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
   const furniture = getFurniture(getLanguage(manifest));
   return emptyPage({
@@ -3644,15 +3969,476 @@ function demotionGapReason(kind: DemotionKind, cap: number, rank: number): strin
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chapter mode (multi-year Everything books): proportional per-chapter
+// page-cap budgeting. Gated on the outline carrying >=2 `chapter` elements —
+// only the Everything worker emits them, so year / calendar-year / legacy
+// `custom` books never reach any of this and keep the loop above unchanged.
+//
+// Policy: equalise the KEEP-RATE across chapters. Equal keep-rate means each
+// chapter keeps the same fraction of its memories, i.e. a page budget
+// proportional to its eligible-memory count. The pick order depends only on
+// pools, counts and omitted ids — never on layout — so `planChapterDemotions`
+// computes the FULL ordered omission list up front (no `runFit`), and
+// `fitBook` binary-searches how long a prefix of it the cap needs.
+// ---------------------------------------------------------------------------
+
+interface ChapterSpan {
+  elementId: string;
+  ageYear: number;
+  startMonth: string;
+  endMonth: string;
+}
+
+/** Chapter elements that carry usable month bounds, in chronological order. */
+function chapterSpansOf(outline: BookOutline): ChapterSpan[] {
+  const spans: ChapterSpan[] = [];
+  for (const element of outline.elements) {
+    if (element.kind !== 'chapter') continue;
+    const meta = element.chapter;
+    if (!meta || typeof meta.startMonth !== 'string' || typeof meta.endMonth !== 'string') continue;
+    spans.push({ elementId: element.id, ageYear: meta.ageYear, startMonth: meta.startMonth, endMonth: meta.endMonth });
+  }
+  return spans.sort((a, b) => a.startMonth.localeCompare(b.startMonth) || a.ageYear - b.ageYear);
+}
+
+/** Chapter mode iff the outline has at least two usable chapter elements. Anything less is laid out exactly like a book with no chapters. */
+export function isChapterMode(outline: BookOutline): boolean {
+  return chapterSpansOf(outline).length >= 2;
+}
+
+/**
+ * Index of the chapter a calendar month ('YYYY-MM') belongs to: the last
+ * chapter that has started by that month — so months before chapter 1 clamp
+ * to chapter 1 and months after the last chapter's end clamp to the last.
+ */
+function chapterIndexForMonth(spans: readonly ChapterSpan[], month: string): number {
+  let index = 0;
+  for (let i = 0; i < spans.length; i++) {
+    if (spans[i].startMonth <= month) index = i;
+  }
+  return index;
+}
+
+export type ChapterDemotionTier = 'A' | 'B1' | 'B2' | 'C';
+
+/** `text` = a text-only memory demoted by Tier C (Phase 2b fix B). */
+export type ChapterDemotionKind = DemotionKind | 'text';
+
+export interface ChapterDemotion {
+  id: string;
+  elementId: string;
+  kind: ChapterDemotionKind;
+  rank: number;
+  chapterIndex: number;
+  /** 1-based age year of the chapter (for gap reasons). */
+  ageYear: number;
+  tier: ChapterDemotionTier;
+}
+
+interface PlanCandidate extends Omit<DemotionCandidate, 'kind'> {
+  kind: ChapterDemotionKind;
+  chapterIndex: number;
+  /** Printable caption length — Tier C ranks shorter text first. */
+  textLength: number;
+}
+
+/**
+ * Tier C pool (chapter mode, last resort): CAPTIONED photo/video memories —
+ * never a hero/panorama nominee, a milestone holder, or a quote-title source.
+ * Disjoint from the ordinary pools (those are caption-less or illustrated).
+ *
+ * Phase 2b fix B: the pool also holds TEXT-ONLY memories (no photo/video, no
+ * illustration, not an audio note) under the same protections. Before this a
+ * one-liner could be a section's only surviving memory because nothing text
+ * was ever demotable. They rank with the rest of the pool — engagement
+ * ascending, then SHORTER text first (one-liners go first), then spread/id.
+ */
+function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookManifest): Array<Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }> {
+  const protectedIds = new Set<string>([...(outline.panoramaCandidates ?? []), ...(outline.heroCandidates ?? [])]);
+  const candidates: Array<Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }> = [];
+  for (const element of outline.elements) {
+    if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
+    for (const { id, memory } of resolveMemoriesInOrder(manifest, element)) {
+      if (protectedIds.has(id)) continue;
+      if (memory.illustration) continue; // illustrated memories are the `illustrated` pool's business
+      if ((memory.milestones ?? []).length > 0) continue;
+      if (element.titleSourceMemoryId === id) continue;
+      let kind: ChapterDemotionKind;
+      if (memory.assets.length > 0) {
+        if (!captionOf(memory)) continue;
+        kind = photoOnlyKind(memory);
+      } else {
+        if (isAudioMemory(memory) || !captionOf(memory)) continue; // an audio note owns its composition; nothing printable otherwise
+        kind = 'text';
+      }
+      const highlighted = isHighlight(element, outline, id);
+      candidates.push({
+        id,
+        elementId: element.id,
+        kind,
+        month: memory.date.slice(0, 7),
+        rank: memory.engagement * 10 + (highlighted ? 5 : 0),
+      });
+    }
+  }
+  return candidates;
+}
+
+/** How far a section's keep floor is relaxed at a given stage (see `planChapterDemotions`). */
+type SectionFloorLevel = 'full' | 'one' | 'none';
+
+/**
+ * The complete, ordered list of page-cap omissions for a chapter-mode book —
+ * pure (pools, counts and omitted ids only; no layout, no `runFit`).
+ * `fitBook` takes the shortest prefix that fits.
+ *
+ * Floors are per SECTION (Phase 2b fix A / 6): a backbone element keeps at
+ * least `min(total, 2)` memories, a themed element `min(total, 3)`; relaxation
+ * goes to 1 and only at the very end to 0. The chapter floor is
+ * `min(total_c, CHAPTER_FLOOR_MEMORIES)`; a chapter's total includes its
+ * firsts members (never demotable, but they are kept memories of that
+ * chapter, so they dilute its keep-rate and count toward its floor).
+ *
+ * Phase 2c balance fix. The old ladder balanced keep-rates only over the
+ * ORDINARY pools (Tier A), so once a chapter's ordinary pool emptied (later
+ * chapters are caption-heavy: their cuttable memories sit in Tier C) every
+ * further cut landed on the earlier chapters; and the chapter floor was
+ * relaxed (B1) BEFORE Tier C ran, violating chapter floors while Tier C
+ * candidates remained. Now a step is chosen like this:
+ *   1. Candidates at level L1 (full section floor + chapter floor) or L2
+ *      (section floor 1 + chapter floor) from BOTH pools (ordinary and
+ *      Tier C) form the union.
+ *   2. Non-empty union: the chapter is the one with the highest keep-rate
+ *      among chapters that appear in it (ties: larger total, lower index);
+ *      the level is the first of L1/L2 that offers a candidate in that
+ *      chapter; within the chapter ordinary comes before Tier C. Inside a
+ *      pool the old rules are unchanged: ordinary = kind by keep-rate
+ *      parity (`pickHighestKeepRateKind`, global totals) then lowest rank;
+ *      Tier C = lowest rank, then shorter text; rank ties break on time
+ *      spread (the SECTION with the highest remaining fraction, then the
+ *      highest remaining count, then memory id ascending — ids are random
+ *      uuids, so the last tie is not date-biased).
+ *   3. Empty union: only now is the chapter floor given up — B1 (section
+ *      floor 1, chapter floor relaxed), then B2 (section floor 0, the
+ *      very last resort) — each over both pools with the same chapter pick.
+ * Plan tiers: 'A' = ordinary candidate with the chapter floor honoured (L1
+ * or L2), 'C' = Tier C candidate (captioned photo/video or text-only) at any
+ * level, 'B1'/'B2' = ordinary candidate with the chapter floor relaxed /
+ * section floor 0.
+ *
+ * `options.tierCAfterB2` is a measuring/revert switch restoring the plan
+ * text's literal "ordinary first" semantic: the whole ladder above runs over
+ * the ordinary pool alone (L1/L2, B1, B2) and Tier C is consulted only when
+ * no ordinary candidate remains at all, then with the same ladder.
+ */
+export function planChapterDemotions(
+  outline: BookOutline,
+  manifest: BookManifest,
+  options: { tierC?: boolean; tierCAfterB2?: boolean } = {},
+): ChapterDemotion[] {
+  const spans = chapterSpansOf(outline);
+  if (spans.length < 2) return [];
+  const tierCEnabled = options.tierC ?? ENABLE_TIER_C_CAPTIONED_DEMOTION;
+  const chapterOfMonth = (month: string) => chapterIndexForMonth(spans, month);
+
+  // Population: every resolved backbone/themed memory (protected ones included —
+  // like `backboneThemedKindTotals` they count toward the denominators).
+  const chapterTotal = spans.map(() => 0);
+  const chapterOmitted = spans.map(() => 0);
+  const sectionTotal = new Map<string, number>();
+  const sectionOmitted = new Map<string, number>();
+  const sectionIsThemed = new Map<string, boolean>();
+  for (const element of outline.elements) {
+    if (element.kind === 'firsts') {
+      // Never demotable and in no backbone section, but kept memories of their own chapter (Phase 2c).
+      for (const { memory } of resolveMemoriesInOrder(manifest, element)) chapterTotal[chapterOfMonth(memory.date.slice(0, 7))]++;
+      continue;
+    }
+    if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
+    sectionIsThemed.set(element.id, element.kind === 'themed');
+    for (const { memory } of resolveMemoriesInOrder(manifest, element)) {
+      chapterTotal[chapterOfMonth(memory.date.slice(0, 7))]++;
+      sectionTotal.set(element.id, (sectionTotal.get(element.id) ?? 0) + 1);
+    }
+  }
+  const chapterFloor = chapterTotal.map((t) => Math.min(t, CHAPTER_FLOOR_MEMORIES));
+
+  const toPlan = (c: Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }): PlanCandidate => ({
+    ...c,
+    chapterIndex: chapterOfMonth(c.month),
+    textLength: captionOf(manifest.memories[c.id]).length,
+  });
+  const ordinaryPool = [...gatherDemotionCandidates(outline, manifest), ...gatherIllustratedDemotionCandidates(outline, manifest)].map(toPlan);
+  const tierCPool = tierCEnabled ? gatherCaptionedDemotionCandidates(outline, manifest).map(toPlan) : [];
+
+  const kindTotals = backboneThemedKindTotals(outline, manifest);
+  const omittedByKind: Record<DemotionKind, number> = { photo: 0, video: 0, illustrated: 0 };
+  const omitted = new Set<string>();
+  const plan: ChapterDemotion[] = [];
+
+  const sectionRemaining = (elementId: string) => (sectionTotal.get(elementId) ?? 0) - (sectionOmitted.get(elementId) ?? 0);
+  const sectionFraction = (elementId: string) => {
+    const total = sectionTotal.get(elementId) ?? 0;
+    return total > 0 ? sectionRemaining(elementId) / total : 0;
+  };
+  const sectionFloor = (elementId: string, level: SectionFloorLevel) => {
+    if (level === 'none') return 0;
+    const base = level === 'one' ? 1 : sectionIsThemed.get(elementId) ? SECTION_FLOOR_THEMED : SECTION_FLOOR_BACKBONE;
+    return Math.min(sectionTotal.get(elementId) ?? 0, base);
+  };
+  const keepRate = (chapterIndex: number) =>
+    chapterTotal[chapterIndex] > 0 ? (chapterTotal[chapterIndex] - chapterOmitted[chapterIndex]) / chapterTotal[chapterIndex] : -Infinity;
+
+  /** Rank, then (Tier C only) shorter text, then section time spread, then id. Negative = `a` goes first. */
+  const compare = (a: PlanCandidate, b: PlanCandidate, tierC: boolean): number => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (tierC && a.textLength !== b.textLength) return a.textLength - b.textLength;
+    const fa = sectionFraction(a.elementId);
+    const fb = sectionFraction(b.elementId);
+    if (fa !== fb) return fb - fa;
+    const ra = sectionRemaining(a.elementId);
+    const rb = sectionRemaining(b.elementId);
+    if (ra !== rb) return rb - ra;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  };
+
+  /** Highest keep-rate among the chapters appearing in `list` (ties: larger total, then lower index). */
+  const bestChapterOf = (list: readonly PlanCandidate[]): number => {
+    let best = -1;
+    for (const c of list) {
+      const ci = c.chapterIndex;
+      if (best === -1) {
+        best = ci;
+        continue;
+      }
+      const rate = keepRate(ci);
+      const bestRate = keepRate(best);
+      if (rate > bestRate || (rate === bestRate && (chapterTotal[ci] > chapterTotal[best] || (chapterTotal[ci] === chapterTotal[best] && ci < best)))) best = ci;
+    }
+    return best;
+  };
+
+  /** Within one chapter: ordinary kind by keep-rate parity then lowest rank, or (Tier C) lowest rank then shorter text. */
+  const pickInChapter = (ordinary: PlanCandidate[], tierC: PlanCandidate[], chapter: number): { chosen: PlanCandidate; isTierC: boolean } => {
+    const ord = ordinary.filter((c) => c.chapterIndex === chapter);
+    if (ord.length > 0) {
+      const kinds = KIND_TIEBREAK_ORDER.filter((k) => ord.some((c) => c.kind === k));
+      const kind = pickHighestKeepRateKind(kinds, kindTotals, omittedByKind);
+      const inKind = ord.filter((c) => c.kind === kind);
+      return { chosen: inKind.reduce((best, c) => (compare(c, best, false) < 0 ? c : best)), isTierC: false };
+    }
+    const cc = tierC.filter((c) => c.chapterIndex === chapter);
+    return { chosen: cc.reduce((best, c) => (compare(c, best, true) < 0 ? c : best)), isTierC: true };
+  };
+
+  // A stage = (section floor level, whether the chapter floor binds). A
+  // candidate is eligible while its SECTION still has more than the stage's
+  // floor remaining (so the cut leaves at least the floor).
+  type Stage = { tier: Exclude<ChapterDemotionTier, 'C'>; ok: (c: PlanCandidate) => boolean };
+  const stage = (tier: Stage['tier'], level: SectionFloorLevel, chapterFloorBinds: boolean): Stage => ({
+    tier,
+    ok: (c) =>
+      sectionRemaining(c.elementId) > sectionFloor(c.elementId, level) &&
+      (!chapterFloorBinds || chapterTotal[c.chapterIndex] - chapterOmitted[c.chapterIndex] > chapterFloor[c.chapterIndex]),
+  });
+  // L1 / L2: the balanced levels (chapter floor honoured). Then, only when no
+  // chapter offers anything at either, the chapter floor is given up (B1), and
+  // last of all the section floor (B2).
+  const balanced = [stage('A', 'full', true), stage('A', 'one', true)];
+  const late = [stage('B1', 'one', false), stage('B2', 'none', false)];
+
+  /** One step over the allowed pools; null when no candidate is left at any level. */
+  const selectStep = (useOrdinary: boolean, useTierC: boolean): { chosen: PlanCandidate; isTierC: boolean; tier: ChapterDemotionTier } | null => {
+    const at = (st: Stage) => ({
+      ord: useOrdinary ? ordinaryPool.filter((c) => !omitted.has(c.id) && st.ok(c)) : [],
+      cc: useTierC ? tierCPool.filter((c) => !omitted.has(c.id) && st.ok(c)) : [],
+    });
+    const levels = balanced.map(at);
+    const union = levels.flatMap((l) => [...l.ord, ...l.cc]);
+    if (union.length > 0) {
+      const chapter = bestChapterOf(union);
+      const li = levels.findIndex((l) => [...l.ord, ...l.cc].some((c) => c.chapterIndex === chapter));
+      const { chosen, isTierC } = pickInChapter(levels[li].ord, levels[li].cc, chapter);
+      return { chosen, isTierC, tier: isTierC ? 'C' : balanced[li].tier };
+    }
+    for (const st of late) {
+      const { ord, cc } = at(st);
+      if (ord.length + cc.length === 0) continue;
+      const { chosen, isTierC } = pickInChapter(ord, cc, bestChapterOf([...ord, ...cc]));
+      return { chosen, isTierC, tier: isTierC ? 'C' : st.tier };
+    }
+    return null;
+  };
+
+  for (;;) {
+    const step = options.tierCAfterB2
+      ? (selectStep(true, false) ?? (tierCEnabled ? selectStep(false, true) : null))
+      : selectStep(true, tierCEnabled);
+    if (!step) break;
+    const { chosen, isTierC, tier } = step;
+    omitted.add(chosen.id);
+    chapterOmitted[chosen.chapterIndex]++;
+    sectionOmitted.set(chosen.elementId, (sectionOmitted.get(chosen.elementId) ?? 0) + 1);
+    if (!isTierC) omittedByKind[chosen.kind as DemotionKind]++;
+    plan.push({
+      id: chosen.id,
+      elementId: chosen.elementId,
+      kind: chosen.kind,
+      rank: chosen.rank,
+      chapterIndex: chosen.chapterIndex,
+      ageYear: spans[chosen.chapterIndex].ageYear,
+      tier,
+    });
+  }
+  return plan;
+}
+
+/** Chapter-aware gap text, one per omission (the preview's gaps panel shows which chapter/tier a memory was cut from). */
+function chapterDemotionGapReason(d: ChapterDemotion, cap: number): string {
+  const how: Record<ChapterDemotionTier, string> = {
+    A: 'chosen to keep every chapter at a similar keep-rate',
+    B1: 'chapter floor relaxed (every chapter was at its floor)',
+    B2: 'chapter and section floors relaxed (nothing else left to cut)',
+    C: 'captioned photo/video or text-only memory, taken once its chapter\'s ordinary pool was exhausted to keep every chapter at a similar keep-rate',
+  };
+  const what = d.tier === 'C' ? (d.kind === 'text' ? 'text-only' : `captioned ${d.kind}`) : d.kind;
+  return `Omitted (${what}) to respect the ${cap}-page cap (chapter ${d.ageYear}, rank ${d.rank}, ${how[d.tier]}).`;
+}
+
+// ---------------------------------------------------------------------------
+// Chapter-mode photo cap (Phase 2c, owner decision "B"). A multi-year Everything
+// book has far more media than 122 pages can hold; a memory with many assets
+// would otherwise spend several pages on one moment. In chapter mode every
+// memory shows AT MOST `CHAPTER_MAX_ASSETS_PER_MEMORY` photo/video assets, a
+// spread-out pick: n <= 2 -> all; otherwise the first and the middle one
+// (`asset[0]` and `asset[floor(n/2)]`), in original order. A USER-CHOSEN asset
+// (`editedFromFile` set by `applyPreFit`'s image replacement) always stays
+// shown: it takes a slot ahead of the spread pick.
+// ---------------------------------------------------------------------------
+
+export const CHAPTER_MAX_ASSETS_PER_MEMORY = 2;
+
+/** Indexes (ascending) of the assets a memory shows in chapter mode. */
+export function shownAssetIndexes(assets: readonly ManifestAsset[]): number[] {
+  const n = assets.length;
+  if (n <= CHAPTER_MAX_ASSETS_PER_MEMORY) return assets.map((_, i) => i);
+  const priority: number[] = [];
+  assets.forEach((asset, i) => {
+    if (asset.editedFromFile) priority.push(i);
+  });
+  priority.push(0, Math.floor(n / 2));
+  return [...new Set(priority)].slice(0, CHAPTER_MAX_ASSETS_PER_MEMORY).sort((a, b) => a - b);
+}
+
+/** The assets a memory shows in chapter mode (see `shownAssetIndexes`). */
+export function shownAssetsOf(assets: readonly ManifestAsset[]): ManifestAsset[] {
+  return shownAssetIndexes(assets).map((i) => assets[i]);
+}
+
+const cappedManifestCache = new WeakMap<BookManifest, BookManifest>();
+
+/**
+ * A manifest whose memories carry only their shown assets (see above); the
+ * same object is returned when nothing needs capping. Memoized per manifest
+ * (a fit calls this once per `runFit`). Exported for the audit/reporting.
+ */
+export function capManifestAssetsForChapterMode(manifest: BookManifest): BookManifest {
+  const cached = cappedManifestCache.get(manifest);
+  if (cached) return cached;
+  let memories: BookManifest['memories'] | null = null;
+  for (const [id, memory] of Object.entries(manifest.memories)) {
+    if (memory.assets.length <= CHAPTER_MAX_ASSETS_PER_MEMORY) continue;
+    memories ??= { ...manifest.memories };
+    memories[id] = { ...memory, assets: shownAssetsOf(memory.assets) };
+  }
+  const capped = memories ? { ...manifest, memories } : manifest;
+  cappedManifestCache.set(manifest, capped);
+  return capped;
+}
+
+/**
+ * Chapter-mode quote pooling (Phase 2b fix 4). Walks the outline in order: a
+ * chapter's backbone sections are every backbone element between its chapter
+ * opener and the next one. When the chapter's non-omitted `isQuoteEligible`
+ * memories number at least `QUOTE_COLLECTION_MIN` they are pooled — returned
+ * under the id of the chapter's LAST backbone element (the quote collection
+ * prints right after that section) and listed in `pooledIds` so the sections
+ * skip them. Fewer than the minimum: nothing is pooled for that chapter.
+ */
+function planChapterQuotePools(
+  outline: BookOutline,
+  manifest: BookManifest,
+  omittedIds: ReadonlySet<string>,
+): { afterElement: Map<string, { items: ResolvedMemory[]; sourceId: string }>; pooledIds: Set<string> } {
+  const afterElement = new Map<string, { items: ResolvedMemory[]; sourceId: string }>();
+  const pooledIds = new Set<string>();
+  let backbones: OutlineElement[] = [];
+  let chapterId: string | null = null;
+  const flush = () => {
+    if (backbones.length > 0) {
+      const pooled: ResolvedMemory[] = [];
+      for (const section of backbones) {
+        for (const resolved of resolveMemoriesInOrder(manifest, section, omittedIds)) {
+          if (section.titleSourceMemoryId === resolved.id) continue; // the section's own title source stays in its section
+          if (isQuoteEligible(resolved.memory)) pooled.push(resolved);
+        }
+      }
+      if (pooled.length >= QUOTE_COLLECTION_MIN) {
+        const lastBackboneId = backbones[backbones.length - 1].id;
+        // Stable id for edits: `sectionTitle:<chapter id>:quotes` (see `ContentUnit`'s `pooledSourceId`).
+        afterElement.set(lastBackboneId, { items: pooled, sourceId: `${chapterId ?? lastBackboneId}:quotes` });
+        for (const { id } of pooled) pooledIds.add(id);
+      }
+    }
+    backbones = [];
+  };
+  for (const element of outline.elements) {
+    if (element.kind === 'chapter') {
+      flush();
+      chapterId = element.id;
+    } else if (element.kind === 'backbone') backbones.push(element);
+  }
+  flush();
+  return { afterElement, pooledIds };
+}
+
+/** A blank the parity machinery inserted (reason `parity:*`, closing-total excluded). */
+function isParityBlank(page: BookPage | undefined): page is BookPage {
+  return Boolean(page && page.templateId === 'blank' && page.blankReason?.startsWith('parity:') && page.blankReason !== 'parity:closing-total');
+}
+
+/**
+ * Phase 2d fix 3d: a section opener (chapter / themed / firsts / birthday
+ * `spread-title`) is pushed before its content, so when the content's FIRST
+ * page needs the opposite parity (a long illustrated story's text half must
+ * land even) the parity blank ends up right after the title — a title facing
+ * a blank (audit `title-then-empty`) and, mid-section, an avoidable blank.
+ * Moving that one blank BEFORE the title leaves every later page exactly
+ * where it was (same page count, same parities) and puts the title on a
+ * recto with a blank verso — the classic opener convention.
+ */
+function hoistLeadingParityBlank(contentPages: BookPage[]): BookPage | null {
+  return isParityBlank(contentPages[0]) ? contentPages.shift()! : null;
+}
+
 /** One full deterministic fit at a given pairing level / omission set — no cap awareness of its own. */
 function runFit(
   outline: BookOutline,
-  manifest: BookManifest,
+  fullManifest: BookManifest,
   options: FitOptions,
   pairingLevel: PairingLevel,
   omittedIds: ReadonlySet<string>,
 ): { document: BookDocument; gaps: LayoutGap[] } {
   slotCounter = 0; // deterministic ids across repeated fits in tests/preview refits
+  options.onRunFit?.();
+  const chapterMode = isChapterMode(outline);
+  // Phase 2c photo cap (chapter mode only): content sections lay out against
+  // the capped manifest (<= CHAPTER_MAX_ASSETS_PER_MEMORY assets per memory),
+  // so grouping, chunking, panorama choice and page cost all see the cap.
+  // The cover / dedication / portraits keep the full manifest: they are not
+  // memory pages and the cover may legitimately pick any asset.
+  const manifest = chapterMode ? capManifestAssetsForChapterMode(fullManifest) : fullManifest;
   const scoreThreshold = options.scoreThreshold ?? DEFAULT_SCORE_THRESHOLD;
   const gaps: LayoutGap[] = [];
   const pages: BookPage[] = [];
@@ -3664,23 +4450,95 @@ function runFit(
     contentPageCount: 0,
   };
 
+  // Chapter openers (multi-year Everything books). The title page is pushed
+  // eagerly; once the NEXT chapter (or the closing / end of the outline) is
+  // reached, a title with nothing behind it dissolves — the same
+  // dissolve-if-empty guard themed/firsts titles have (page-cap demotion can
+  // empty a whole chapter). Checked by page count rather than by predicted
+  // memories, so a retained memory that happens to lay out to zero pages
+  // cannot leave an orphan either.
+  let pendingChapter: { titleIndex: number; priorLastTemplateId: TemplateId | null } | null = null;
+  const settlePendingChapter = () => {
+    if (pendingChapter && pages.length === pendingChapter.titleIndex + 1) {
+      pages.pop();
+      state.lastTemplateId = pendingChapter.priorLastTemplateId;
+    }
+    pendingChapter = null;
+  };
+
+  // Chapter mode only (Phase 2b fix 4): quote-eligible memories are POOLED per
+  // chapter — with ~3-month sections an adjacent run of 3 never happens, so
+  // the per-element splice never fired. They leave their sections and print as
+  // one quote-collection (split by `partitionQuoteRun`) after the chapter's
+  // last backbone section; a chapter with fewer than `QUOTE_COLLECTION_MIN`
+  // leaves them in place (the TextPage pull-quote design handles those).
+  const quotePool = chapterMode ? planChapterQuotePools(outline, manifest, omittedIds) : null;
+  const omittedForSections: ReadonlySet<string> = quotePool && quotePool.pooledIds.size > 0 ? new Set([...omittedIds, ...quotePool.pooledIds]) : omittedIds;
+
   for (const element of outline.elements) {
     switch (element.kind) {
       case 'cover':
-        pages.push(...buildCoverPages(element, manifest, outline, options));
+        pages.push(...buildCoverPages(element, fullManifest, outline, options));
         continue;
       case 'title':
-        pages.push(...buildDedicationPages(element, manifest, outline));
+        pages.push(...buildDedicationPages(element, fullManifest, outline));
         state.lastTemplateId = 'dedication';
         continue;
       case 'through-the-years':
-        pages.push(...buildThroughTheYearsPage(element, manifest));
+        pages.push(...buildThroughTheYearsPage(element, fullManifest));
         state.lastTemplateId = 'through-the-years';
         continue;
       case 'closing':
         // Deferred until the loop finishes so the dynamic page-count line
         // can read the real total (see below).
+        settlePendingChapter();
         continue;
+      case 'chapter': {
+        // Gated: a lone chapter element (or none) never renders anything —
+        // such a book is laid out exactly like one without it.
+        if (!chapterMode) continue;
+        settlePendingChapter();
+        const priorLastTemplateId = state.lastTemplateId;
+        const titlePage = buildChapterTitlePage(element, manifest);
+        state.lastTemplateId = titlePage.templateId;
+        pages.push(titlePage);
+        pendingChapter = { titleIndex: pages.length - 1, priorLastTemplateId };
+        continue;
+      }
+      case 'birthday': {
+        // Phase 2d fix 3b: the worker's `birthday-N` elements (year books with
+        // >= 3 memories carrying the same birthday milestone; their memories
+        // are REMOVED from the backbone) used to hit no case here and were
+        // never printed. Laid out like a themed spread: an own-page
+        // `spread-title` opener (localized from the age — the worker only
+        // sends the English placeholder "Birthday -- turns N"), then the
+        // members through the ordinary content-page machinery. Same
+        // dissolve-if-empty guard as themed/firsts. Birthday members are
+        // never page-cap demotion candidates (see `gatherDemotionCandidates`).
+        const titlePage = buildBirthdayTitlePage(element, manifest);
+        const priorLastTemplateId = state.lastTemplateId;
+        state.lastTemplateId = titlePage.templateId;
+        const contentPages = buildContentPages(
+          element,
+          manifest,
+          outline,
+          gaps,
+          state,
+          scoreThreshold,
+          null,
+          pairingLevel,
+          omittedIds,
+          [...pages, titlePage],
+        );
+        if (contentPages.length === 0) {
+          state.lastTemplateId = priorLastTemplateId; // the title never actually happened
+          continue;
+        }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
+        pages.push(titlePage, ...contentPages);
+        continue;
+      }
       case 'themed': {
         // Round-5 item 2b (root cause of Mara's "Retratos con Mirian"
         // rendering with zero member pages): every member of a themed
@@ -3691,6 +4549,14 @@ function runFit(
         // page, so its own parity math is correct either way), then only
         // commit the title if there's real content to follow. See also
         // `auditBookDocument` check (b), a permanent regression backstop.
+        // Phase 2b fix 6 (chapter mode): a themed spread squeezed below
+        // `THEMED_MIN_KEPT_MEMORIES` kept memories dissolves its TITLE page —
+        // a title facing a single memory reads as a broken spread. The
+        // remaining memory (if any) still prints, just without the title.
+        if (chapterMode && resolveMemoriesInOrder(manifest, element, omittedIds).length < THEMED_MIN_KEPT_MEMORIES) {
+          pages.push(...buildContentPages(element, manifest, outline, gaps, state, scoreThreshold, null, pairingLevel, omittedIds, pages));
+          continue;
+        }
         const titlePage = buildSpreadTitlePage(element);
         const priorLastTemplateId = state.lastTemplateId;
         state.lastTemplateId = titlePage.templateId;
@@ -3710,6 +4576,8 @@ function runFit(
           state.lastTemplateId = priorLastTemplateId; // the title never actually happened
           continue;
         }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
         pages.push(titlePage, ...contentPages);
         continue;
       }
@@ -3758,7 +4626,29 @@ function runFit(
           title: localizeMonthLabel(element.title, lang),
           special: Boolean(element.subtitle),
         };
-        const contentPages = buildContentPages(element, manifest, outline, gaps, state, scoreThreshold, header, pairingLevel, omittedIds, pages);
+        const contentPages = buildContentPages(
+          element,
+          manifest,
+          outline,
+          gaps,
+          state,
+          scoreThreshold,
+          header,
+          pairingLevel,
+          omittedForSections,
+          pages,
+          EMPTY_STRING_MAP,
+          // The chapter's pooled quote collection(s) print at the end of its LAST backbone section.
+          quotePool?.afterElement.get(element.id)?.items ?? [],
+          quotePool?.afterElement.get(element.id)?.sourceId,
+        );
+        if (pendingChapter && pages.length === pendingChapter.titleIndex + 1) {
+          const leadBlank = hoistLeadingParityBlank(contentPages);
+          if (leadBlank) {
+            pages.splice(pendingChapter.titleIndex, 0, leadBlank);
+            pendingChapter.titleIndex += 1;
+          }
+        }
         pages.push(...contentPages);
         continue;
       }
@@ -3771,6 +4661,9 @@ function runFit(
         // (outline.json `firstsEntries`, still arriving) uses that as its
         // footer caption instead of its own raw text (see
         // `buildFirstsTitlePage` and the caption-override map below).
+        // Phase 2e: the worker's stored `firstsWarmNames` key is deliberately
+        // NEVER read for display (the Phase 2d fix-c read was reverted) — AI
+        // wording must not assert a "first" on the page.
         // Round-5 item 2b: same dissolve-if-empty guard as 'themed' above —
         // firsts memories are never demoted (see the comment on
         // `EMPTY_ID_SET` below), but an upstream outline-integrity
@@ -3793,11 +4686,16 @@ function runFit(
           EMPTY_ID_SET,
           [...pages, titlePage],
           warmNames,
+          [],
+          undefined,
+          chapterMode,
         );
         if (contentPages.length === 0) {
           state.lastTemplateId = priorLastTemplateId;
           continue;
         }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
         pages.push(titlePage, ...contentPages);
         continue;
       }
@@ -3805,6 +4703,7 @@ function runFit(
         continue;
     }
   }
+  settlePendingChapter();
 
   // Closing is built last so its memory count reflects everything actually printed.
   const closingElement = outline.elements.find((e) => e.kind === 'closing');
@@ -3896,7 +4795,86 @@ export function fitBook(outline: BookOutline, manifest: BookManifest, options: F
   // month continuity).
   const omittedIds = new Set<string>();
   const omittedGaps: LayoutGap[] = [];
-  if (result.document.totalPages > cap) {
+  const chapterMode = isChapterMode(outline);
+  if (chapterMode && result.document.totalPages > cap) {
+    // Chapter mode (multi-year Everything): the omission ORDER is computed
+    // up front (`planChapterDemotions` — pure, no layout), then only the
+    // prefix length that gets the book under the cap is searched for:
+    // exponential bracket + bisection, ~log2(n) fits instead of one per
+    // omission. Page count is not strictly monotone in the prefix length
+    // (parity blanks / reflow noise), so the two prefixes just below the
+    // winner are probed too and the shortest that fits wins.
+    const plan = planChapterDemotions(outline, manifest, { tierC: options.tierCCaptionedDemotion });
+    const fits = new Map<number, { document: BookDocument; gaps: LayoutGap[] }>();
+    const fitAt = (k: number) => {
+      let fit = fits.get(k);
+      if (!fit) {
+        fit = runFit(outline, manifest, options, pairingLevel, new Set(plan.slice(0, k).map((d) => d.id)));
+        fits.set(k, fit);
+      }
+      return fit;
+    };
+    const fitsCap = (k: number) => fitAt(k).document.totalPages <= cap;
+
+    let chosenK = plan.length; // over-cap fallback: every omission the plan has
+    if (plan.length > 0) {
+      let lo = 0; // known not to fit (the un-omitted fit above)
+      let hi = -1; // smallest k known to fit
+      let probe = Math.min(plan.length, Math.max(1, result.document.totalPages - cap));
+      for (;;) {
+        if (fitsCap(probe)) {
+          hi = probe;
+          break;
+        }
+        lo = probe;
+        if (probe === plan.length) break;
+        probe = Math.min(plan.length, probe * 2);
+      }
+      if (hi !== -1) {
+        while (hi - lo > 1) {
+          const mid = lo + Math.floor((hi - lo) / 2);
+          if (fitsCap(mid)) hi = mid;
+          else lo = mid;
+        }
+        let best = hi;
+        for (const back of [1, 2]) {
+          const candidate = hi - back;
+          if (candidate >= 1 && candidate < best && fitsCap(candidate)) best = candidate;
+        }
+        chosenK = best;
+      }
+    }
+    result = plan.length > 0 ? fitAt(chosenK) : result;
+    let omittedPlan = plan.slice(0, chosenK);
+
+    // Refill (Phase 2b fix C). Page count is NOT monotone in the prefix
+    // length (a memory omitted at the margin can free a whole panorama /
+    // full-bleed quota cliff — one omission freed 6 pages in a real book), so
+    // the shortest fitting prefix can land well under the cap. Walk the
+    // omitted memories in REVERSE plan order (the least expendable first) and
+    // restore each one that still fits, one `runFit` per attempt, until the cap
+    // is reached, the list ends, or the attempt budget is spent.
+    if (plan.length > 0 && result.document.totalPages < cap) {
+      const stillOmitted = new Set(omittedPlan.map((d) => d.id));
+      let attempts = 0;
+      for (let i = omittedPlan.length - 1; i >= 0 && attempts < REFILL_MAX_ATTEMPTS && result.document.totalPages < cap; i--) {
+        const trial = new Set(stillOmitted);
+        trial.delete(omittedPlan[i].id);
+        attempts++;
+        const trialFit = runFit(outline, manifest, options, pairingLevel, trial);
+        if (trialFit.document.totalPages <= cap) {
+          result = trialFit;
+          stillOmitted.delete(omittedPlan[i].id);
+        }
+      }
+      omittedPlan = omittedPlan.filter((d) => stillOmitted.has(d.id));
+    }
+
+    for (const d of omittedPlan) {
+      omittedIds.add(d.id);
+      omittedGaps.push({ elementId: d.elementId, reason: chapterDemotionGapReason(d, cap), memoryIds: [d.id] });
+    }
+  } else if (result.document.totalPages > cap) {
     const pools: Record<DemotionKind, DemotionCandidate[]> = { photo: [], video: [], illustrated: [] };
     for (const c of gatherDemotionCandidates(outline, manifest)) pools[c.kind].push(c);
     for (const c of gatherIllustratedDemotionCandidates(outline, manifest)) pools.illustrated.push(c);

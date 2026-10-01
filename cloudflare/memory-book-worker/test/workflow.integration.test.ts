@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowEvent, WorkflowStep } from 'cloudflare:workers';
-import { MemoryBookWorkflow } from '../src/workflow';
+import { CONTEXT_MAX_BYTES, MemoryBookWorkflow } from '../src/workflow';
 import type { GenerationContextResponse, WorkflowDispatchPayload } from '../src/types';
 
 const BOOK_ID = '50abcc52-5c0d-4b7b-86d4-1b3a0a661112';
@@ -169,6 +169,31 @@ function workflowWithEnv(env: Env): MemoryBookWorkflow {
 }
 
 describe('MemoryBookWorkflow', () => {
+  it('publishes outline.scope.type "everything" (and manifest scope kind) for an Everything book', async () => {
+    const context = baseContext();
+    const everythingContext: GenerationContextResponse = {
+      ...context,
+      book: { ...context.book, scopeKind: 'everything', scopeLabel: 'Everything' },
+    };
+    const { env, fetchMock, bridgeCalls } = createEnv({ bridgeResponses: { load_generation_context: everythingContext } });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(env).run(
+      { payload: { bookId: BOOK_ID, attemptId: ATTEMPT_ID } } as WorkflowEvent<WorkflowDispatchPayload>,
+      fakeStep(),
+    );
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+
+    const document = bridgeCalls.find((c) => c.operation === 'publish')!.body.bookDocument as {
+      outline: { scope: { type: string }; elements: Array<{ kind: string }> };
+      manifest: { scope: { kind: string } };
+    };
+    expect(document.outline.scope).toEqual({ type: 'everything' });
+    expect(document.manifest.scope.kind).toBe('everything');
+    // A single age-year of memories is not chapter mode: no chapter elements.
+    expect(document.outline.elements.some((e) => e.kind === 'chapter')).toBe(false);
+  });
+
   it('reaches ready and publishes a book_document with a valid outline + manifest', async () => {
     const { env, fetchMock, bridgeCalls } = createEnv();
     vi.stubGlobal('fetch', fetchMock);
@@ -190,6 +215,9 @@ describe('MemoryBookWorkflow', () => {
     expect(document.outline.coverCandidates).toEqual([MEMORY_2]);
     expect((document.manifest.memories as Record<string, unknown>)[MEMORY_1]).toBeDefined();
     expect((document.manifest.memories as Record<string, unknown>)[MEMORY_2]).toBeDefined();
+
+    // Year books keep their own scope type.
+    expect(document.outline.scope).toEqual({ type: 'age-year' });
 
     // Never send bridge calls out of order relative to the CAS discipline:
     // context load happens before publish.
@@ -341,5 +369,246 @@ describe('MemoryBookWorkflow', () => {
     const memory = document.manifest.memories[MEMORY_VIDEO];
     expect(memory.assets).toEqual([expect.objectContaining({ kind: 'video-poster' })]);
     expect(memory.shareToken).toBe('tok-video-canary');
+  });
+});
+
+/** A step whose named step throws `error` INSTEAD of running its callback --
+ * simulating what `run()`'s catch sees after Workflows exhausts retries and
+ * serializes the error (plain Error: class identity lost, name/message kept). */
+function failingStep(failAt: string, error: Error, timeouts: Array<{ name: string; timeout: unknown }> = []): WorkflowStep {
+  return {
+    do: (async (name: string, config: { timeout?: unknown }, callback: () => Promise<unknown>) => {
+      timeouts.push({ name, timeout: config.timeout });
+      if (name === failAt) throw error;
+      return await callback();
+    }) as WorkflowStep['do'],
+  } as unknown as WorkflowStep;
+}
+
+function plainError(name: string, message: string): Error {
+  const error = new Error(message);
+  error.name = name;
+  return error;
+}
+
+function runWorkflow(env: Env, step: WorkflowStep) {
+  return workflowWithEnv(env).run(
+    { payload: { bookId: BOOK_ID, attemptId: ATTEMPT_ID } } as WorkflowEvent<WorkflowDispatchPayload>,
+    step,
+  );
+}
+
+function contextWithMemoryContent(content: string): GenerationContextResponse {
+  const base = baseContext();
+  return { ...base, memories: [{ ...base.memories[0], content }, ...base.memories.slice(1)] };
+}
+
+describe('MemoryBookWorkflow step timeouts', () => {
+  it('gives the load and publish steps 120s', async () => {
+    const { env, fetchMock } = createEnv();
+    vi.stubGlobal('fetch', fetchMock);
+    const timeouts: Array<{ name: string; timeout: unknown }> = [];
+    const result = await runWorkflow(env, failingStep('none', new Error('unused'), timeouts));
+    expect(result.status).toBe('ready');
+    expect(timeouts.find((t) => t.name === 'load generation context')?.timeout).toBe('120 seconds');
+    expect(timeouts.find((t) => t.name === 'build manifest and publish')?.timeout).toBe('120 seconds');
+  });
+});
+
+describe('MemoryBookWorkflow context size guard', () => {
+  async function runWithContext(context: GenerationContextResponse) {
+    const { env, fetchMock, bridgeCalls } = createEnv({ bridgeResponses: { load_generation_context: context } });
+    vi.stubGlobal('fetch', fetchMock);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const result = await runWorkflow(env, fakeStep());
+      return { result, bridgeCalls, logCalls: logSpy.mock.calls };
+    } finally {
+      logSpy.mockRestore();
+    }
+  }
+
+  it('fails CONTEXT_TOO_LARGE above 900 KB of UTF-8 bytes (not chars) and logs only the number', async () => {
+    // 'é' is 2 bytes in UTF-8: 500k chars = ~1,000,000 bytes > 900 * 1024.
+    const content = 'é'.repeat(500_000);
+    expect(content.length).toBeLessThan(CONTEXT_MAX_BYTES);
+    const { result, bridgeCalls, logCalls } = await runWithContext(contextWithMemoryContent(content));
+
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: 'CONTEXT_TOO_LARGE' });
+    expect(bridgeCalls.find((c) => c.operation === 'fail')?.body.failureReason).toBe('CONTEXT_TOO_LARGE');
+    // No OpenAI spend / no publish.
+    expect(bridgeCalls.some((c) => c.operation === 'publish')).toBe(false);
+    const sizeLog = logCalls.find((c) => c[0] === 'memory_book_context_size');
+    expect(sizeLog?.[1]).toEqual({ bookId: BOOK_ID, attemptId: ATTEMPT_ID, contextBytes: expect.any(Number) });
+    expect(JSON.stringify(logCalls)).not.toContain('éééé');
+  });
+
+  it('does not fire below the threshold', async () => {
+    const { result, logCalls } = await runWithContext(contextWithMemoryContent('a'.repeat(CONTEXT_MAX_BYTES - 50_000)));
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+    const sizeLog = logCalls.find((c) => c[0] === 'memory_book_context_size');
+    expect((sizeLog?.[1] as { contextBytes: number }).contextBytes).toBeLessThan(CONTEXT_MAX_BYTES);
+  });
+
+  it('is not re-wrapped into a retryable ContextLoadError (guard throws NonRetryableError from the step callback)', async () => {
+    const { env, fetchMock } = createEnv({
+      bridgeResponses: { load_generation_context: contextWithMemoryContent('é'.repeat(500_000)) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let thrown: unknown;
+    const step = {
+      do: (async (_name: string, _config: unknown, callback: () => Promise<unknown>) => {
+        try {
+          return await callback();
+        } catch (error) {
+          thrown ??= error;
+          throw error;
+        }
+      }) as WorkflowStep['do'],
+    } as unknown as WorkflowStep;
+    await runWorkflow(env, step);
+    expect((thrown as Error).name).toBe('NonRetryableError');
+    expect((thrown as Error).message).toMatch(/^CONTEXT_TOO_LARGE: \d+$/);
+  });
+});
+
+describe('MemoryBookWorkflow errorCode mapping (plain Error objects, no instanceof)', () => {
+  const cases: Array<{ label: string; failAt: string; error: Error; code: string; reconcile?: string }> = [
+    { label: 'NoEligibleMemoriesError name', failAt: 'load generation context', error: plainError('NoEligibleMemoriesError', 'x'), code: 'NO_ELIGIBLE_MEMORIES' },
+    { label: 'ContextLoadError name', failAt: 'load generation context', error: plainError('ContextLoadError', 'x'), code: 'CONTEXT_LOAD_FAILED' },
+    { label: 'NonRetryableError name', failAt: 'load generation context', error: plainError('NonRetryableError', 'BRIDGE_REJECTED'), code: 'CONTEXT_LOAD_FAILED' },
+    { label: 'BridgeError name', failAt: 'load generation context', error: plainError('BridgeError', 'BRIDGE_REJECTED'), code: 'CONTEXT_LOAD_FAILED' },
+    { label: 'CONTEXT_TOO_LARGE: message prefix on a NonRetryableError-named error', failAt: 'load generation context', error: plainError('NonRetryableError', 'CONTEXT_TOO_LARGE: 1234567'), code: 'CONTEXT_TOO_LARGE' },
+    { label: 'CONTEXT_TOO_LARGE: message prefix on a bare Error', failAt: 'load generation context', error: plainError('Error', 'CONTEXT_TOO_LARGE: 1234567'), code: 'CONTEXT_TOO_LARGE' },
+    { label: 'OutlineStageError name', failAt: 'curate outline', error: plainError('OutlineStageError', 'x'), code: 'OUTLINE_GENERATION_FAILED' },
+    { label: 'DimensionMeasurementError name', failAt: 'measure original photo dimensions', error: plainError('DimensionMeasurementError', 'x'), code: 'DIMENSION_MEASUREMENT_FAILED' },
+    { label: 'ManifestStageError name (reconciles first)', failAt: 'build manifest and publish', error: plainError('ManifestStageError', 'x'), code: 'MANIFEST_BUILD_FAILED', reconcile: 'failed' },
+    { label: 'unrecognised error', failAt: 'curate outline', error: plainError('Error', 'boom'), code: 'UNKNOWN_ERROR' },
+  ];
+
+  for (const c of cases) {
+    it(`maps ${c.label} -> ${c.code}`, async () => {
+      const { env, fetchMock, bridgeCalls } = createEnv(
+        c.reconcile ? { bridgeResponses: { reconcile: { outcome: c.reconcile } } } : {},
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const result = await runWorkflow(env, failingStep(c.failAt, c.error));
+      expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: c.code });
+      expect(bridgeCalls.find((b) => b.operation === 'fail')?.body.failureReason).toBe(c.code);
+    });
+  }
+
+  it('our custom error classes carry their own name (thrown from real step callbacks)', async () => {
+    const { env, fetchMock } = createEnv({ bridgeResponses: { load_generation_context: { ...baseContext(), memories: [] } } });
+    vi.stubGlobal('fetch', fetchMock);
+    let thrown: unknown;
+    const step = {
+      do: (async (_n: string, _c: unknown, callback: () => Promise<unknown>) => await callback()) as WorkflowStep['do'],
+    } as unknown as WorkflowStep;
+    // NoEligibleMemoriesError is thrown in run() itself; verify via result and BridgeError name directly.
+    expect(await runWorkflow(env, step)).toEqual({ bookId: BOOK_ID, status: 'failed', code: 'NO_ELIGIBLE_MEMORIES' });
+    const { BridgeError } = await import('../src/bridge');
+    thrown = new BridgeError('BRIDGE_REJECTED', false);
+    expect((thrown as Error).name).toBe('BridgeError');
+  });
+});
+
+describe('MemoryBookWorkflow step-timeout mapping', () => {
+  const timeoutError = () => plainError('WorkflowTimeoutError', 'Execution timed out after 120000ms');
+  const cases: Array<{ failAt: string; code: string; reconcile?: string }> = [
+    { failAt: 'load generation context', code: 'CONTEXT_LOAD_FAILED' },
+    { failAt: 'curate outline', code: 'OUTLINE_GENERATION_FAILED' },
+    { failAt: 'verify cover candidates', code: 'OUTLINE_GENERATION_FAILED' },
+    { failAt: 'measure original photo dimensions', code: 'DIMENSION_MEASUREMENT_FAILED' },
+    { failAt: 'build manifest and publish', code: 'MANIFEST_BUILD_FAILED', reconcile: 'failed' },
+  ];
+
+  for (const c of cases) {
+    it(`maps a WorkflowTimeoutError in "${c.failAt}" -> ${c.code}`, async () => {
+      const { env, fetchMock, bridgeCalls } = createEnv(c.reconcile ? { bridgeResponses: { reconcile: { outcome: c.reconcile } } } : {});
+      vi.stubGlobal('fetch', fetchMock);
+      const result = await runWorkflow(env, failingStep(c.failAt, timeoutError()));
+      expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: c.code });
+      expect(bridgeCalls.find((b) => b.operation === 'fail')?.body.failureReason).toBe(c.code);
+    });
+  }
+
+  it('matches on message alone when the error name is not preserved', async () => {
+    const { env, fetchMock } = createEnv();
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await runWorkflow(env, failingStep('curate outline', plainError('Error', 'Execution timed out after 300000ms')));
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: 'OUTLINE_GENERATION_FAILED' });
+  });
+
+  it('a publish-step timeout reconciles first (the publish may have landed) and honours a succeeded outcome', async () => {
+    const { env, fetchMock, bridgeCalls } = createEnv({ bridgeResponses: { reconcile: { outcome: 'succeeded' } } });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await runWorkflow(env, failingStep('build manifest and publish', timeoutError()));
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+    expect(bridgeCalls.some((b) => b.operation === 'reconcile')).toBe(true);
+    expect(bridgeCalls.some((b) => b.operation === 'fail')).toBe(false);
+  });
+});
+
+describe('MemoryBookWorkflow bridge 422 (context_invalid)', () => {
+  it('is non-retryable: a single bridge call, no step retry, ends CONTEXT_LOAD_FAILED', async () => {
+    const { env, fetchMock, bridgeCalls } = createEnv();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (url.includes('api.openai.com')) return new Response('{}', { status: 200 });
+      bridgeCalls.push({ operation: body.operation, body });
+      if (body.operation === 'load_generation_context') {
+        return new Response(JSON.stringify({ error: 'context_invalid' }), { status: 422 });
+      }
+      if (body.operation === 'fail') return new Response(JSON.stringify({ failed: true }), { status: 200 });
+      return new Response('{}', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    let thrown: unknown;
+    const step = {
+      do: (async (_n: string, _c: unknown, callback: () => Promise<unknown>) => {
+        try {
+          return await callback();
+        } catch (error) {
+          thrown ??= error;
+          throw error;
+        }
+      }) as WorkflowStep['do'],
+    } as unknown as WorkflowStep;
+
+    const result = await runWorkflow(env, step);
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: 'CONTEXT_LOAD_FAILED' });
+    // NonRetryableError is what makes the Workflows runtime skip its retry loop.
+    expect((thrown as Error).name).toBe('NonRetryableError');
+    // callBridgeWithRetry did not retry in-process either: exactly one load call.
+    expect(bridgeCalls.filter((c) => c.operation === 'load_generation_context')).toHaveLength(1);
+    expect(bridgeCalls.find((c) => c.operation === 'fail')?.body.failureReason).toBe('CONTEXT_LOAD_FAILED');
+  });
+
+  it('a 5xx load failure stays retryable (ContextLoadError, not NonRetryableError)', async () => {
+    const { env, fetchMock, bridgeCalls } = createEnv();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      bridgeCalls.push({ operation: body.operation, body });
+      if (body.operation === 'load_generation_context') return new Response('{}', { status: 500 });
+      return new Response(JSON.stringify({ failed: true }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    let thrown: unknown;
+    const step = {
+      do: (async (_n: string, _c: unknown, callback: () => Promise<unknown>) => {
+        try {
+          return await callback();
+        } catch (error) {
+          thrown ??= error;
+          throw error;
+        }
+      }) as WorkflowStep['do'],
+    } as unknown as WorkflowStep;
+    const result = await runWorkflow(env, step);
+    expect((thrown as Error).name).toBe('ContextLoadError');
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'failed', code: 'CONTEXT_LOAD_FAILED' });
   });
 });

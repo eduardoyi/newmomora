@@ -49,9 +49,19 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
+import {
+  addDaysToDateOnly,
+  EMPTY_WINDOW_SENTINEL,
+  resolveEverythingWindow,
+  ScopeWindowError,
+} from '../_shared/memory-book-scope-window.ts';
 import { createPresignedGetUrls } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
+
+// Kept exported from here so existing importers/tests of `ScopeWindowError`
+// (now defined in the shared window module) keep working.
+export { ScopeWindowError };
 
 // ── Edit shapes (Design Decision 6) ─────────────────────────────────────
 
@@ -546,6 +556,7 @@ function coverRecordsEqual(a: ImageEditRecord | undefined, b: ImageEditRecord | 
 interface BookRow {
   id: string;
   family_id: string;
+  child_id: string | null;
   status: string;
   scope_kind: 'age_year' | 'calendar_year' | 'everything' | 'custom_range';
   scope_start_date: string | null;
@@ -708,51 +719,59 @@ async function handleSaveEdit(
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 50;
-// No memory can ever match a window before/at its own start (a strict
-// gte/lt pair) -- same sentinel `workflow-memory-book-bridge` uses so an
-// 'everything' family with zero memories yields an empty result via the
-// SAME query path, rather than a malformed date reaching Postgres.
-const EMPTY_WINDOW_SENTINEL = '0001-01-01';
-
-function addDaysToDateOnly(dateStr: string, days: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const utcMs = Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000;
-  const dt = new Date(utcMs);
-  const pad = (n: number, width: number) => String(n).padStart(width, '0');
-  return `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1, 2)}-${pad(dt.getUTCDate(), 2)}`;
+/** `book_document.outline.window` as frozen at generation time, when it is a
+ * well-formed `{ start, endExclusive }` pair of calendar dates with
+ * start <= endExclusive; otherwise null. */
+function readFrozenWindow(bookDocument: unknown): { start: string; endExclusive: string } | null {
+  if (!isPlainObject(bookDocument)) return null;
+  const outline = bookDocument.outline;
+  if (!isPlainObject(outline)) return null;
+  const frozen = outline.window;
+  if (!isPlainObject(frozen)) return null;
+  const { start, endExclusive } = frozen;
+  if (!isValidDateOnly(start) || !isValidDateOnly(endExclusive)) return null;
+  if (start > endExclusive) return null;
+  return { start, endExclusive };
 }
 
 /** Same scope-window resolution as
  * `workflow-memory-book-bridge/index.ts`'s `handleLoadGenerationContext`
  * (frozen `scope_start_date`/`scope_end_date` for every kind but
- * `everything`, which resolves to the family's live min/max `memory_date`
- * instead) -- the picker's pool must cover exactly the memories the book
- * itself was/would be curated from, not a different window. */
+ * `everything`) -- the picker's pool must cover exactly the memories the book
+ * itself was/would be curated from, not a different window.
+ *
+ * For `everything` the book's own frozen `book_document.outline.window` wins
+ * when present and valid, which guarantees the pool equals the generated
+ * window even if memories were added/removed since. Without one (a book
+ * that predates the field, or a malformed document) the window is
+ * re-derived with the shared `resolveEverythingWindow` -- the same code the
+ * bridge runs at generation time. */
 export async function resolveScopeWindow(
   supabase: SupabaseClient,
-  book: Pick<BookRow, 'family_id' | 'scope_kind' | 'scope_start_date' | 'scope_end_date'>,
+  book: Pick<BookRow, 'family_id' | 'scope_kind' | 'scope_start_date' | 'scope_end_date'>
+    & Partial<Pick<BookRow, 'child_id' | 'book_document'>>,
 ): Promise<{ start: string; endExclusive: string }> {
   if (book.scope_kind === 'everything') {
-    const [{ data: earliest }, { data: latest }] = await Promise.all([
-      supabase
-        .from('memories')
-        .select('memory_date')
-        .eq('family_id', book.family_id)
-        .order('memory_date', { ascending: true })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from('memories')
-        .select('memory_date')
-        .eq('family_id', book.family_id)
-        .order('memory_date', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
-    return {
-      start: earliest?.memory_date ?? EMPTY_WINDOW_SENTINEL,
-      endExclusive: latest?.memory_date ? addDaysToDateOnly(latest.memory_date, 1) : EMPTY_WINDOW_SENTINEL,
-    };
+    const frozen = readFrozenWindow(book.book_document);
+    if (frozen) return frozen;
+
+    const childId = book.child_id ?? null;
+    let childDateOfBirth: string | null = null;
+    if (childId) {
+      // An error here must NOT collapse into "no DOB" (a different window).
+      const { data, error } = await supabase
+        .from('family_members')
+        .select('date_of_birth')
+        .eq('id', childId)
+        .maybeSingle();
+      if (error) throw new ScopeWindowError('child_dob_query_failed');
+      childDateOfBirth = (data as { date_of_birth: string | null } | null)?.date_of_birth ?? null;
+    }
+    return await resolveEverythingWindow(supabase, {
+      familyId: book.family_id,
+      childId,
+      childDateOfBirth,
+    });
   }
   return {
     start: book.scope_start_date ?? EMPTY_WINDOW_SENTINEL,
@@ -934,47 +953,49 @@ async function handlePickerPool(
     memberId = memberIdInput;
   }
 
-  const scopeWindow = await resolveScopeWindow(supabase, book);
+  let scopeWindow: { start: string; endExclusive: string };
+  try {
+    scopeWindow = await resolveScopeWindow(supabase, book);
+  } catch (err) {
+    if (!(err instanceof ScopeWindowError)) throw err;
+    console.error('memory-book-edits picker_pool scope window lookup failed', err.message);
+    return errorResponse('Failed to load photo pool', 500, 'internal_error');
+  }
   const window = intersectDateWindow(scopeWindow, dateStart, dateEnd);
 
   // Item 1: the person filter goes through `memory_family_members` (the
-  // memory<->family_member tag join, migration 20260524201500) -- resolve
-  // the tagged memory ids FIRST, then narrow the media query by them. A
-  // member tagged on zero memories short-circuits to an empty, exhausted
-  // page rather than sending an empty `.in()` filter through to
-  // PostgREST (some versions treat `in.()` as "no filter" rather than
-  // "match nothing" -- not worth relying on either way).
-  let memberMemoryIds: string[] | null = null;
-  if (memberId) {
-    const { data: tagRows, error: tagError } = await supabase
-      .from('memory_family_members')
-      .select('memory_id')
-      .eq('family_member_id', memberId);
-    if (tagError) {
-      console.error('memory-book-edits picker_pool member-tag lookup failed', tagError.message);
-      return errorResponse('Failed to load photo pool', 500, 'internal_error');
-    }
-    memberMemoryIds = ((tagRows ?? []) as { memory_id: string }[]).map((row) => row.memory_id);
-    if (memberMemoryIds.length === 0) {
-      return jsonResponse({ items: [], nextCursor: null } satisfies PickerPoolResponse);
-    }
-  }
+  // memory<->family_member tag join, migration 20260524201500). It is a
+  // NESTED INNER EMBED filtered on `family_member_id`, so Postgres does the
+  // membership join itself. (The previous design resolved the member's
+  // tagged memory ids across ALL time with an unpaged lookup -- capped at
+  // PostgREST's max_rows=1000 -- and passed them to `.in('memory_id', ...)`,
+  // which silently breaks once the id list outgrows the gateway URL limit
+  // for a child with hundreds of tagged memories.) `memory_media` has one FK
+  // to `memories` and `memory_family_members` has one FK to `memories`
+  // (PK `(memory_id, family_member_id)` => at most one matching tag row per
+  // memory, so no duplicated media rows), so neither embed is ambiguous
+  // (no PGRST201). A member tagged on zero memories simply yields zero rows
+  // -> `{ items: [], nextCursor: null }`, so the former early-return (an
+  // extra query) is no longer needed.
+  const memoriesEmbed = memberId
+    ? 'memories!inner(memory_date, family_id, memory_family_members!inner(family_member_id))'
+    : 'memories!inner(memory_date, family_id)';
 
-  // `.in()` (a FILTER) must be chained before `.order()`/`.range()`
-  // (TRANSFORMS) -- supabase-js's builder narrows to a type without filter
-  // methods once a transform is applied, so this can't be tacked on after
-  // the fact the way it's applied conditionally here.
+  // Filters (`.eq`/`.gte`/`.lt`/`.like`) must be chained before
+  // `.order()`/`.range()` (TRANSFORMS) -- supabase-js's builder narrows to a
+  // type without filter methods once a transform is applied, so this can't
+  // be tacked on after the fact the way it's applied conditionally here.
   let filterQuery = supabase
     .from('memory_media')
     .select(
-      'id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, memories!inner(memory_date, family_id)',
+      `id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, ${memoriesEmbed}`,
     )
     .eq('memories.family_id', book.family_id)
     .gte('memories.memory_date', window.start)
     .lt('memories.memory_date', window.endExclusive)
     .like('content_type', 'image/%');
-  if (memberMemoryIds) {
-    filterQuery = filterQuery.in('memory_id', memberMemoryIds);
+  if (memberId) {
+    filterQuery = filterQuery.eq('memories.memory_family_members.family_member_id', memberId);
   }
   const { data: rows, error } = await filterQuery
     // Chronological pool (owner-reported live, 2026-09-09): ordering by an
@@ -1062,7 +1083,7 @@ export async function handleMemoryBookEdits(
   const supabase = dependencies.createServiceClient();
   const { data: book, error: bookError } = await supabase
     .from('memory_books')
-    .select('id, family_id, status, scope_kind, scope_start_date, scope_end_date, book_document')
+    .select('id, family_id, child_id, status, scope_kind, scope_start_date, scope_end_date, book_document')
     .eq('id', body.bookId)
     .maybeSingle<BookRow>();
   if (bookError) {

@@ -75,6 +75,10 @@ export interface DbMilestoneRow {
   milestone_id: string;
   detail: string | null;
   out_of_band: boolean;
+  /** 'candidate' | 'confirmed' | ... (dismissed rows are filtered out by the
+   * bridge). Optional/additive: an older bridge omits it -> treated as a
+   * plain candidate. */
+  status?: string | null;
 }
 
 export interface DbFamilyMemberRow {
