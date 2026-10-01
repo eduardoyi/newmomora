@@ -98,8 +98,48 @@ export async function unlinkFamilyMemberAccount(
   return { error: error ? mapError(error) : null };
 }
 
+/**
+ * Owner/manager links an already-joined account to a person ("this is me",
+ * set for them). Replaces the account's previous link; never steals a person
+ * held by another account (`member_already_linked`). Not billing-gated.
+ */
+export async function linkFamilyMemberAccount(
+  familyId: string,
+  userId: string,
+  memberId: string,
+): Promise<{ error: RelationshipServiceError | null }> {
+  const { error } = await supabase.rpc('link_family_member_account', {
+    p_family_id: familyId,
+    p_user_id: userId,
+    p_member_id: memberId,
+  });
+  return { error: error ? mapError(error) : null };
+}
+
 export function isAlreadyLinkedError(error: RelationshipServiceError | null): boolean {
   return Boolean(error && (error.code === '23505' || error.message.includes('member_already_linked')));
+}
+
+/** The list changed under the manager: the person/account is gone or no longer linkable. */
+export function isLinkRejectedError(error: RelationshipServiceError | null): boolean {
+  return Boolean(
+    error && ['member_not_linkable', 'member_not_in_family', 'account_not_in_family'].some((token) => error.message.includes(token)),
+  );
+}
+
+/** Alert copy for a failed manager link (docs/plans/manager-account-linking.md §4.4). */
+export function linkAccountErrorAlert(error: unknown): { title: string; message: string } {
+  const serviceError = error as RelationshipServiceError | null;
+  if (isAlreadyLinkedError(serviceError)) {
+    return {
+      title: 'Already taken',
+      message: 'Someone else already says this is them. Unlink them on that person’s page first.',
+    };
+  }
+  if (isLinkRejectedError(serviceError)) {
+    return { title: 'Could not link', message: 'That didn’t work. The list has been refreshed.' };
+  }
+  return { title: 'Could not link', message: 'Please try again.' };
 }
 
 export type SuggestRelationshipsResult =

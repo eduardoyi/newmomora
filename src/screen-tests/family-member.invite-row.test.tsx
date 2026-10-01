@@ -1,11 +1,13 @@
 // "Family sharing" row on person detail (docs/plans/invite-for-person.md D7).
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Alert } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import ViewFamilyMemberScreen from '../../app/(app)/family/[id]';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
+import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { useMemberMemories } from '@/hooks/useMemories';
@@ -27,6 +29,7 @@ jest.mock('@/components/report-sheet', () => ({ ReportSheet: () => null }));
 
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyInvites', () => ({ useFamilyInvites: jest.fn() }));
+jest.mock('@/hooks/useFamilyMemberProfiles', () => ({ useFamilyMemberProfiles: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
 jest.mock('@/hooks/useFamilyRelationships', () => ({ useFamilyRelationships: jest.fn() }));
 jest.mock('@/hooks/useMemories', () => ({ useMemberMemories: jest.fn() }));
@@ -49,6 +52,7 @@ jest.mock('@/hooks/useContentSafety', () => ({
 
 const mockedUseFamily = useFamily as jest.Mock;
 const mockedUseFamilyInvites = useFamilyInvites as jest.Mock;
+const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.Mock;
 const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
 const mockedUseFamilyRelationships = useFamilyRelationships as jest.Mock;
 const mockedUseMemberMemories = useMemberMemories as jest.Mock;
@@ -71,7 +75,9 @@ function makeInvite(over: Record<string, unknown> = {}) {
 function setup(options: {
   role?: string;
   relationship?: string | null;
-  links?: { familyMemberId: string | null }[];
+  links?: { userId?: string; familyMemberId: string | null }[];
+  profiles?: { user_id: string; name: string; role: string | null; is_active_member: boolean }[];
+  linkAccount?: jest.Mock;
   invites?: ReturnType<typeof makeInvite>[];
   isLoadingLinks?: boolean;
 } = {}) {
@@ -106,8 +112,10 @@ function setup(options: {
     linkMe: jest.fn(),
     isLinking: false,
     unlinkAccount: jest.fn(),
+    linkAccount: options.linkAccount ?? jest.fn().mockResolvedValue(undefined),
     requestSuggestions: jest.fn(),
   });
+  mockedUseFamilyMemberProfiles.mockReturnValue({ profiles: options.profiles ?? [], isLoading: false });
   mockedUseFamilyInvites.mockReturnValue({ invites: options.invites ?? [], isLoading: false });
 }
 
@@ -224,5 +232,112 @@ describe('person detail -- invite row', () => {
       ],
     });
     expect(visibleRows(renderScreen())).toEqual(['family-member-invite']);
+  });
+});
+
+describe('person detail -- link their account row', () => {
+  const OWNER = { user_id: 'user-1', name: 'Rosa', role: 'owner', is_active_member: true };
+  const VIEWER = { user_id: 'user-3', name: 'Ana', role: 'viewer', is_active_member: true };
+  const FORMER = { user_id: 'user-9', name: 'Gone', role: null, is_active_member: false };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsTargetReported.mockReturnValue(false);
+    mockedUsePortraitVersions.mockReturnValue({ versions: [] });
+    mockedUseMemberMemories.mockReturnValue({
+      memories: [],
+      fetchNextPage: jest.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    });
+  });
+
+  it('shows the row when an active member has no link, alongside the invite row', () => {
+    setup({ profiles: [OWNER, VIEWER] });
+    const screen = renderScreen();
+
+    expect(screen.getByText('Already on Momora? Link their account')).toBeTruthy();
+    expect(screen.getByTestId('family-member-invite')).toBeTruthy();
+  });
+
+  it('keeps the row next to a live invite status row', () => {
+    setup({ profiles: [VIEWER], invites: [makeInvite()] });
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('family-member-invite-pending')).toBeTruthy();
+    expect(screen.getByTestId('family-member-link-account')).toBeTruthy();
+  });
+
+  it('hides the row when every active member is already linked, or only former members are unlinked', () => {
+    setup({
+      profiles: [OWNER, VIEWER, FORMER],
+      links: [
+        { userId: 'user-1', familyMemberId: 'member-9' },
+        { userId: 'user-3', familyMemberId: 'member-8' },
+      ],
+    });
+    expect(renderScreen().queryByTestId('family-member-link-account')).toBeNull();
+  });
+
+  it('counts an account that only said "not in the list" as unlinked', () => {
+    setup({ profiles: [VIEWER], links: [{ userId: 'user-3', familyMemberId: null }] });
+    expect(renderScreen().getByTestId('family-member-link-account')).toBeTruthy();
+  });
+
+  it('is gated like the invite block: nothing for a viewer, a child, a claimed person or a hidden profile', () => {
+    setup({ role: 'viewer', profiles: [VIEWER] });
+    expect(renderScreen().queryByTestId('family-member-link-account')).toBeNull();
+
+    setup({ relationship: 'child', profiles: [VIEWER] });
+    expect(renderScreen().queryByTestId('family-member-link-account')).toBeNull();
+
+    setup({ profiles: [VIEWER], links: [{ userId: 'user-9', familyMemberId: 'member-1' }] });
+    expect(renderScreen().queryByTestId('family-member-link-account')).toBeNull();
+
+    setup({ profiles: [VIEWER] });
+    mockIsTargetReported.mockImplementation((type) => type === 'family_member_profile');
+    expect(renderScreen().queryByTestId('family-member-link-account')).toBeNull();
+  });
+
+  it('opens a picker of unlinked active accounts and links the chosen one to this person', async () => {
+    const linkAccount = jest.fn().mockResolvedValue(undefined);
+    setup({
+      profiles: [OWNER, VIEWER, FORMER],
+      links: [{ userId: 'user-1', familyMemberId: 'member-9' }],
+      linkAccount,
+    });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('family-member-link-account'));
+
+    expect(screen.getByText('Which account is Grandma Ana?')).toBeTruthy();
+    expect(screen.queryByTestId('link-account-option-user-1')).toBeNull();
+    expect(screen.queryByTestId('link-account-option-user-9')).toBeNull();
+    expect(screen.getByText('Viewer')).toBeTruthy();
+
+    fireEvent.press(screen.getByTestId('link-account-option-user-3'));
+
+    await waitFor(() => {
+      expect(linkAccount).toHaveBeenCalledWith({ userId: 'user-3', memberId: 'member-1' });
+    });
+    expect(screen.queryByTestId('link-person-sheet')).toBeNull();
+  });
+
+  it('explains when someone else already holds the person', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const linkAccount = jest.fn().mockRejectedValue({ message: 'member_already_linked', code: '23505' });
+    setup({ profiles: [VIEWER], linkAccount });
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByTestId('family-member-link-account'));
+    fireEvent.press(screen.getByTestId('link-account-option-user-3'));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith(
+        'Already taken',
+        'Someone else already says this is them. Unlink them on that person’s page first.',
+      );
+    });
+    alertSpy.mockRestore();
   });
 });

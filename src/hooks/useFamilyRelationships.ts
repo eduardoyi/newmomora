@@ -13,6 +13,7 @@ import {
 import {
   fetchMembershipLinks,
   fetchPendingSuggestions,
+  linkFamilyMemberAccount,
   requestRelationshipSuggestions,
   resolveSuggestions,
   setMyFamilyMember,
@@ -130,6 +131,16 @@ export function useFamilyRelationships(members: FamilyMember[]) {
     onSettled: invalidate,
   });
 
+  // Owner/manager links another account to a person (manager-account-linking).
+  const linkAccountMutation = useMutation({
+    mutationFn: async (input: { userId: string; memberId: string }) => {
+      if (!familyId) throw new Error('No active family');
+      const { error } = await linkFamilyMemberAccount(familyId, input.userId, input.memberId);
+      if (error) throw error;
+    },
+    onSettled: invalidate,
+  });
+
   /** Fire-and-forget, at most once per family per mount; the server throttles. */
   const requestSuggestions = useCallback(() => {
     if (!familyId || !canEdit || requestedRef.current === familyId) return;
@@ -157,6 +168,8 @@ export function useFamilyRelationships(members: FamilyMember[]) {
     linkMe: linkMutation.mutateAsync,
     isLinking: linkMutation.isPending,
     unlinkAccount: unlinkMutation.mutateAsync,
+    linkAccount: linkAccountMutation.mutateAsync,
+    isLinkingAccount: linkAccountMutation.isPending,
     requestSuggestions,
   };
 }

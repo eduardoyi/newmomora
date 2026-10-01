@@ -9,8 +9,12 @@ import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { sharingApprovalsRoute, sharingInviteRoute, sharingPendingInvitesRoute } from '@/lib/routes';
 import { removeMember, updateMemberRole } from '@/services/family';
+
+const mockIsTargetReported = jest.fn((_type: string, _id?: string | null) => false);
 
 jest.mock('expo-router', () => ({
   router: {
@@ -37,13 +41,21 @@ jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
   useFamilyMemberProfiles: jest.fn(),
 }));
 
+jest.mock('@/hooks/useFamilyMembers', () => ({
+  useFamilyMembers: jest.fn(),
+}));
+
+jest.mock('@/hooks/useFamilyRelationships', () => ({
+  useFamilyRelationships: jest.fn(),
+}));
+
 jest.mock('@/hooks/useContentSafety', () => ({
   useContentSafety: () => ({
     isLoading: false,
     isError: false,
     isReporting: false,
     isUpdatingBlock: false,
-    isTargetReported: () => false,
+    isTargetReported: (type: string, id?: string | null) => mockIsTargetReported(type, id),
     hasActiveReport: () => false,
     getBlockForUser: () => undefined,
     isUserBlocked: () => false,
@@ -64,6 +76,8 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.MockedFunc
   typeof useFamilyMemberProfiles
 >;
 const mockedUseFamilyInvites = useFamilyInvites as jest.MockedFunction<typeof useFamilyInvites>;
+const mockedUseFamilyMembers = useFamilyMembers as jest.Mock;
+const mockedUseFamilyRelationships = useFamilyRelationships as jest.Mock;
 const mockedUpdateMemberRole = updateMemberRole as jest.MockedFunction<typeof updateMemberRole>;
 const mockedRemoveMember = removeMember as jest.MockedFunction<typeof removeMember>;
 
@@ -159,9 +173,33 @@ function setFamily(role: string, userId = 'user-1') {
   } as never);
 }
 
+const people = [
+  { id: 'person-ana', name: 'Grandma Ana', relationship: 'grandparent', date_of_birth: '1950-01-01' },
+  { id: 'person-bo', name: 'Uncle Bo', relationship: 'aunt_uncle', date_of_birth: '1975-01-01' },
+  { id: 'person-kid', name: 'Kiddo', relationship: 'child', date_of_birth: '2021-01-01' },
+  { id: 'person-rex', name: 'Rex', relationship: 'pet', date_of_birth: null },
+];
+
+const mockLinkAccount = jest.fn();
+const mockUnlinkAccount = jest.fn();
+
+function setLinks(links: { userId: string; familyMemberId: string | null }[], isLoadingLinks = false) {
+  mockedUseFamilyRelationships.mockReturnValue({
+    links: links.map((link) => ({ notInList: false, ...link })),
+    isLoadingLinks,
+    linkAccount: mockLinkAccount,
+    unlinkAccount: mockUnlinkAccount,
+  });
+}
+
 describe('Family members screen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIsTargetReported.mockReturnValue(false);
+    mockLinkAccount.mockResolvedValue(undefined);
+    mockUnlinkAccount.mockResolvedValue(undefined);
+    mockedUseFamilyMembers.mockReturnValue({ members: people });
+    setLinks([]);
     setInvites();
     mockedUseFamilyMemberProfiles.mockReturnValue({
       profiles: [ownerProfile, managerProfile, viewerProfile],
@@ -202,9 +240,12 @@ describe('Family members screen', () => {
 
     const { getByTestId, queryByTestId } = renderScreen();
 
-    // Own row (the owner) is inert -- tapping it does nothing.
+    // Own row (the owner) offers link actions only -- no role/remove actions.
     fireEvent.press(getByTestId('member-row-user-1'));
     expect(queryByTestId('member-action-remove')).toBeNull();
+    expect(queryByTestId('member-action-promote')).toBeNull();
+    expect(getByTestId('member-action-link')).toBeTruthy();
+    fireEvent.press(getByTestId('member-action-cancel'));
 
     // Manager row is actionable -- offers "Make viewer".
     fireEvent.press(getByTestId('member-row-user-2'));
@@ -223,9 +264,11 @@ describe('Family members screen', () => {
 
     fireEvent.press(getByTestId('member-row-user-1'));
     expect(queryByTestId('member-action-remove')).toBeNull();
+    fireEvent.press(getByTestId('member-action-cancel'));
 
     fireEvent.press(getByTestId('member-row-user-2'));
     expect(queryByTestId('member-action-remove')).toBeNull();
+    fireEvent.press(getByTestId('member-action-cancel'));
 
     fireEvent.press(getByTestId('member-row-user-3'));
     expect(getByTestId('member-action-promote')).toBeTruthy();
@@ -406,6 +449,221 @@ describe('Family members screen', () => {
       expect(mockedUseFamilyInvites).toHaveBeenCalledWith('family-1', { enabled: false });
       expect(queryByTestId('members-approvals')).toBeNull();
       expect(queryByTestId('members-pending-invites')).toBeNull();
+    });
+  });
+
+  describe('manager-linked "this is me"', () => {
+    it('shows the linked person next to the role', () => {
+      setFamily('manager', 'user-2');
+      setLinks([{ userId: 'user-3', familyMemberId: 'person-ana' }]);
+
+      const { getByText } = renderScreen();
+
+      expect(getByText('Viewer · Grandma Ana')).toBeTruthy();
+      expect(getByText('Owner')).toBeTruthy();
+    });
+
+    it('leaves the role alone when the linked profile is content-safety hidden', () => {
+      setFamily('manager', 'user-2');
+      setLinks([{ userId: 'user-3', familyMemberId: 'person-ana' }]);
+      mockIsTargetReported.mockImplementation((type) => type === 'family_member_profile');
+
+      const { queryByText, getByText } = renderScreen();
+
+      expect(queryByText(/Grandma Ana/)).toBeNull();
+      expect(getByText('Viewer')).toBeTruthy();
+    });
+
+    it('makes the owner row and own row tappable for an owner with link-only actions', () => {
+      setFamily('owner', 'user-1');
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-1'));
+      expect(getByTestId('member-action-link')).toBeTruthy();
+      expect(queryByTestId('member-action-promote')).toBeNull();
+      expect(queryByTestId('member-action-demote')).toBeNull();
+      expect(queryByTestId('member-action-remove')).toBeNull();
+    });
+
+    it('makes the owner row tappable for a manager with link-only actions', () => {
+      setFamily('manager', 'user-2');
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-1'));
+      expect(getByTestId('member-action-link')).toBeTruthy();
+      expect(queryByTestId('member-action-remove')).toBeNull();
+    });
+
+    it('offers no link actions to a viewer, and own/other rows stay inert for them', () => {
+      setFamily('viewer', 'user-3');
+      setLinks([{ userId: 'user-1', familyMemberId: 'person-ana' }]);
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      expect(queryByTestId('member-action-link')).toBeNull();
+      fireEvent.press(getByTestId('member-row-user-1'));
+      expect(queryByTestId('member-action-link')).toBeNull();
+      expect(queryByTestId('member-action-change-person')).toBeNull();
+      expect(queryByTestId('member-action-unlink-person')).toBeNull();
+    });
+
+    it('does not offer link actions while the links are still loading', () => {
+      setFamily('owner', 'user-1');
+      setLinks([], true);
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      expect(queryByTestId('member-action-link')).toBeNull();
+      expect(getByTestId('member-action-promote')).toBeTruthy();
+    });
+
+    it('offers "Link to a person…" for an unlinked account and links the chosen person', async () => {
+      setFamily('manager', 'user-2');
+      setLinks([{ userId: 'user-1', familyMemberId: 'person-bo' }]);
+
+      const { getByTestId, queryByTestId, getByText } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      expect(queryByTestId('member-action-change-person')).toBeNull();
+      expect(queryByTestId('member-action-unlink-person')).toBeNull();
+      fireEvent.press(getByTestId('member-action-link'));
+
+      // Picker: eligible people only (no kid, pet or person held by another account).
+      expect(getByText('Who is Ana?')).toBeTruthy();
+      expect(getByTestId('link-person-option-person-ana')).toBeTruthy();
+      expect(queryByTestId('link-person-option-person-bo')).toBeNull();
+      expect(queryByTestId('link-person-option-person-kid')).toBeNull();
+      expect(queryByTestId('link-person-option-person-rex')).toBeNull();
+
+      fireEvent.press(getByTestId('link-person-option-person-ana'));
+
+      await waitFor(() => {
+        expect(mockLinkAccount).toHaveBeenCalledWith({ userId: 'user-3', memberId: 'person-ana' });
+      });
+      expect(queryByTestId('link-person-sheet')).toBeNull();
+    });
+
+    it('offers "Change person…" and "Unlink person" for a linked account, with the current person selected', async () => {
+      setFamily('owner', 'user-1');
+      setLinks([{ userId: 'user-3', familyMemberId: 'person-ana' }]);
+
+      const { getByTestId, queryByTestId, getByText } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      expect(queryByTestId('member-action-link')).toBeNull();
+      expect(getByText('This is Grandma Ana')).toBeTruthy();
+      fireEvent.press(getByTestId('member-action-change-person'));
+
+      expect(getByTestId('link-person-option-person-ana').props.accessibilityState.selected).toBe(true);
+      expect(getByTestId('link-person-option-person-bo').props.accessibilityState.selected).toBe(false);
+
+      fireEvent.press(getByTestId('link-person-option-person-bo'));
+      await waitFor(() => {
+        expect(mockLinkAccount).toHaveBeenCalledWith({ userId: 'user-3', memberId: 'person-bo' });
+      });
+    });
+
+    it('does nothing when the current person is picked again', () => {
+      setFamily('owner', 'user-1');
+      setLinks([{ userId: 'user-3', familyMemberId: 'person-ana' }]);
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      fireEvent.press(getByTestId('member-action-change-person'));
+      fireEvent.press(getByTestId('link-person-option-person-ana'));
+
+      expect(mockLinkAccount).not.toHaveBeenCalled();
+      expect(queryByTestId('link-person-sheet')).toBeNull();
+    });
+
+    it('unlinks the account\'s person with a single tap', async () => {
+      setFamily('manager', 'user-2');
+      setLinks([{ userId: 'user-1', familyMemberId: 'person-bo' }]);
+
+      const { getByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-1'));
+      fireEvent.press(getByTestId('member-action-unlink-person'));
+
+      await waitFor(() => {
+        expect(mockUnlinkAccount).toHaveBeenCalledWith('person-bo');
+      });
+    });
+
+    it('can link the caller\'s own account', async () => {
+      setFamily('manager', 'user-2');
+
+      const { getByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-2'));
+      fireEvent.press(getByTestId('member-action-link'));
+      fireEvent.press(getByTestId('link-person-option-person-bo'));
+
+      await waitFor(() => {
+        expect(mockLinkAccount).toHaveBeenCalledWith({ userId: 'user-2', memberId: 'person-bo' });
+      });
+    });
+
+    it('maps member_already_linked to the "unlink them first" message', async () => {
+      const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+      setFamily('owner', 'user-1');
+      mockLinkAccount.mockRejectedValue({ message: 'member_already_linked', code: '23505' });
+
+      const { getByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      fireEvent.press(getByTestId('member-action-link'));
+      fireEvent.press(getByTestId('link-person-option-person-ana'));
+
+      await waitFor(() => {
+        expect(alertSpy).toHaveBeenCalledWith(
+          'Already taken',
+          'Someone else already says this is them. Unlink them on that person’s page first.',
+        );
+      });
+      alertSpy.mockRestore();
+    });
+
+    it.each(['member_not_linkable', 'member_not_in_family', 'account_not_in_family'])(
+      'maps %s to the refreshed-list message',
+      async (token) => {
+        const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+        setFamily('owner', 'user-1');
+        mockLinkAccount.mockRejectedValue({ message: token, code: '22023' });
+
+        const { getByTestId } = renderScreen();
+
+        fireEvent.press(getByTestId('member-row-user-3'));
+        fireEvent.press(getByTestId('member-action-link'));
+        fireEvent.press(getByTestId('link-person-option-person-ana'));
+
+        await waitFor(() => {
+          expect(alertSpy).toHaveBeenCalledWith('Could not link', 'That didn’t work. The list has been refreshed.');
+        });
+        alertSpy.mockRestore();
+      },
+    );
+
+    it('falls back to a generic retry message for unknown errors', async () => {
+      const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+      setFamily('owner', 'user-1');
+      mockLinkAccount.mockRejectedValue({ message: 'boom' });
+
+      const { getByTestId } = renderScreen();
+
+      fireEvent.press(getByTestId('member-row-user-3'));
+      fireEvent.press(getByTestId('member-action-link'));
+      fireEvent.press(getByTestId('link-person-option-person-ana'));
+
+      await waitFor(() => {
+        expect(alertSpy).toHaveBeenCalledWith('Could not link', 'Please try again.');
+      });
+      alertSpy.mockRestore();
     });
   });
 });

@@ -53,3 +53,17 @@ export function canManageMember(
     member.user_id !== actorUserId
   );
 }
+
+/**
+ * Whether the signed-in user may link (or change / unlink) `member`'s account
+ * to a person in the Family list (docs/plans/manager-account-linking.md L3).
+ * Identity metadata, not a role change: owner/manager may do it for any active
+ * member, including the owner and themselves. Mirrors the
+ * link_family_member_account RPC (has_family_role owner|manager).
+ */
+export function canLinkMemberAccount(
+  actorRole: string | null | undefined,
+  member: Pick<ManageableMember, 'is_active_member'>,
+): boolean {
+  return canEditFamilyContent(actorRole) && member.is_active_member;
+}

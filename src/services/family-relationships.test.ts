@@ -1,11 +1,18 @@
 import { supabase } from '@/lib/supabase';
-import { shouldOfferWhosWhoAfterJoin } from '@/services/family-relationships';
+import {
+  isAlreadyLinkedError,
+  isLinkRejectedError,
+  linkAccountErrorAlert,
+  linkFamilyMemberAccount,
+  shouldOfferWhosWhoAfterJoin,
+} from '@/services/family-relationships';
 
 jest.mock('@/lib/supabase', () => ({
-  supabase: { from: jest.fn() },
+  supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
 const mockedFrom = supabase.from as jest.Mock;
+const mockedRpc = supabase.rpc as jest.Mock;
 
 type Result = { data: unknown; error: unknown };
 
@@ -76,5 +83,51 @@ describe('shouldOfferWhosWhoAfterJoin', () => {
     });
 
     expect(await shouldOfferWhosWhoAfterJoin('fam', undefined)).toBe(true);
+  });
+});
+
+describe('linkFamilyMemberAccount', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('calls link_family_member_account with the family, account and person', async () => {
+    mockedRpc.mockResolvedValue({ error: null });
+
+    const result = await linkFamilyMemberAccount('fam-1', 'user-1', 'person-1');
+
+    expect(mockedRpc).toHaveBeenCalledWith('link_family_member_account', {
+      p_family_id: 'fam-1',
+      p_user_id: 'user-1',
+      p_member_id: 'person-1',
+    });
+    expect(result).toEqual({ error: null });
+  });
+
+  it('maps a server error to message + code', async () => {
+    mockedRpc.mockResolvedValue({ error: { message: 'member_already_linked', code: '23505', hint: 'x' } });
+
+    const result = await linkFamilyMemberAccount('fam-1', 'user-1', 'person-1');
+
+    expect(result.error).toEqual({ message: 'member_already_linked', code: '23505' });
+    expect(isAlreadyLinkedError(result.error)).toBe(true);
+  });
+});
+
+describe('manager link error mapping', () => {
+  it('recognises the rejection tokens by message', () => {
+    expect(isLinkRejectedError({ message: 'member_not_linkable', code: '22023' })).toBe(true);
+    expect(isLinkRejectedError({ message: 'member_not_in_family' })).toBe(true);
+    expect(isLinkRejectedError({ message: 'account_not_in_family' })).toBe(true);
+    expect(isLinkRejectedError({ message: 'Not authorized', code: '42501' })).toBe(false);
+    expect(isLinkRejectedError(null)).toBe(false);
+  });
+
+  it('picks the alert copy per token', () => {
+    expect(linkAccountErrorAlert({ message: 'member_already_linked', code: '23505' }).message).toBe(
+      'Someone else already says this is them. Unlink them on that person’s page first.',
+    );
+    expect(linkAccountErrorAlert({ message: 'account_not_in_family' }).message).toBe(
+      'That didn’t work. The list has been refreshed.',
+    );
+    expect(linkAccountErrorAlert(new Error('boom')).message).toBe('Please try again.');
   });
 });

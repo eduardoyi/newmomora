@@ -1,4 +1,4 @@
-import { canEditFamilyContent, canManageMember, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
+import { canEditFamilyContent, canLinkMemberAccount, canManageMember, isOwnerRole, isViewerRole, roleLabel } from '@/utils/roles';
 
 describe('canEditFamilyContent', () => {
   it('allows owner and manager', () => {
@@ -81,5 +81,28 @@ describe('canManageMember', () => {
 
   it('never allows acting on an already-former member', () => {
     expect(canManageMember('owner', 'user-1', formerMember)).toBe(false);
+  });
+});
+
+describe('canLinkMemberAccount', () => {
+  const active = { is_active_member: true };
+  const former = { is_active_member: false };
+
+  it('lets an owner or manager link any active member, including owner and self rows', () => {
+    // Unlike canManageMember, no owner/self exclusion: this is identity metadata.
+    expect(canLinkMemberAccount('owner', active)).toBe(true);
+    expect(canLinkMemberAccount('manager', active)).toBe(true);
+  });
+
+  it('never lets a viewer, unknown or missing role link anyone', () => {
+    expect(canLinkMemberAccount('viewer', active)).toBe(false);
+    expect(canLinkMemberAccount('something-else', active)).toBe(false);
+    expect(canLinkMemberAccount(null, active)).toBe(false);
+    expect(canLinkMemberAccount(undefined, active)).toBe(false);
+  });
+
+  it('never applies to a former member', () => {
+    expect(canLinkMemberAccount('owner', former)).toBe(false);
+    expect(canLinkMemberAccount('manager', former)).toBe(false);
   });
 });

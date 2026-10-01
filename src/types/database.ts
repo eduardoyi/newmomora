@@ -4860,6 +4860,10 @@ export type Database = {
         Args: { p_member_id: string }
         Returns: boolean
       }
+      link_family_member_account: {
+        Args: { p_family_id: string; p_member_id: string; p_user_id: string }
+        Returns: undefined
+      }
       looking_back_timezone_is_valid: {
         Args: { p_timezone: string }
         Returns: boolean

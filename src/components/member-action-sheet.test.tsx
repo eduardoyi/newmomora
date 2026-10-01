@@ -95,4 +95,72 @@ describe('MemberActionSheet', () => {
     fireEvent.press(getByTestId('member-action-cancel'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  describe('link actions', () => {
+    const base: MemberActionSheetProps = {
+      memberName: 'Ana',
+      memberRole: 'viewer',
+      onClose: jest.fn(),
+      onDemote: jest.fn(),
+      onPromote: jest.fn(),
+      onRemove: jest.fn(),
+      visible: true,
+    };
+
+    it('shows no link actions by default', () => {
+      const { queryByTestId } = renderSheet(base);
+
+      expect(queryByTestId('member-action-link')).toBeNull();
+      expect(queryByTestId('member-action-change-person')).toBeNull();
+      expect(queryByTestId('member-action-unlink-person')).toBeNull();
+    });
+
+    it('offers "Link to a person…" for an unlinked account', () => {
+      const onLinkPerson = jest.fn();
+      const { getByTestId, getByText, queryByTestId } = renderSheet({ ...base, onLinkPerson });
+
+      expect(getByText('Link to a person…')).toBeTruthy();
+      expect(queryByTestId('member-action-change-person')).toBeNull();
+      fireEvent.press(getByTestId('member-action-link'));
+      expect(onLinkPerson).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers "Change person…" and "Unlink person" for a linked account and names the person', () => {
+      const onChangePerson = jest.fn();
+      const onUnlinkPerson = jest.fn();
+      const { getByTestId, getByText, queryByTestId } = renderSheet({
+        ...base,
+        linkedPersonName: 'Grandma Ana',
+        onChangePerson,
+        onUnlinkPerson,
+      });
+
+      expect(getByText('This is Grandma Ana')).toBeTruthy();
+      expect(queryByTestId('member-action-link')).toBeNull();
+      fireEvent.press(getByTestId('member-action-change-person'));
+      fireEvent.press(getByTestId('member-action-unlink-person'));
+      expect(onChangePerson).toHaveBeenCalledTimes(1);
+      expect(onUnlinkPerson).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows link actions without role/remove actions when management is off', () => {
+      const { getByTestId, queryByTestId } = renderSheet({
+        ...base,
+        onLinkPerson: jest.fn(),
+        showManagementActions: false,
+      });
+
+      expect(getByTestId('member-action-link')).toBeTruthy();
+      expect(queryByTestId('member-action-promote')).toBeNull();
+      expect(queryByTestId('member-action-remove')).toBeNull();
+    });
+
+    it('keeps role and remove actions alongside link actions when management is on', () => {
+      const { getByTestId } = renderSheet({ ...base, onLinkPerson: jest.fn() });
+
+      expect(getByTestId('member-action-link')).toBeTruthy();
+      expect(getByTestId('member-action-promote')).toBeTruthy();
+      expect(getByTestId('member-action-remove')).toBeTruthy();
+    });
+  });
 });

@@ -18,6 +18,12 @@ export interface MemberActionSheetProps {
   onToggleBlock?: () => void;
   isBlocked?: boolean;
   showManagementActions?: boolean;
+  /** Name of the person this account is linked to ("this is me"), when linked. */
+  linkedPersonName?: string | null;
+  /** Owner/manager link actions (docs/plans/manager-account-linking.md). "Link to a person…" shows when unlinked, "Change person…" + "Unlink person" when linked. */
+  onLinkPerson?: () => void;
+  onChangePerson?: () => void;
+  onUnlinkPerson?: () => void;
   onClose: () => void;
 }
 
@@ -41,6 +47,10 @@ export function MemberActionSheet({
   onToggleBlock,
   isBlocked = false,
   showManagementActions = true,
+  linkedPersonName = null,
+  onLinkPerson,
+  onChangePerson,
+  onUnlinkPerson,
   onClose,
 }: MemberActionSheetProps) {
   const insets = useSafeAreaInsets();
@@ -48,6 +58,7 @@ export function MemberActionSheet({
   const roleActionLabel = isManager ? 'Make viewer' : 'Make manager';
   const roleActionTestID = isManager ? 'member-action-demote' : 'member-action-promote';
   const handleRoleAction = isManager ? onDemote : onPromote;
+  const hasLinkActions = Boolean(onLinkPerson || onChangePerson || onUnlinkPerson);
 
   return (
     <Modal animationType="fade" onRequestClose={onClose} transparent visible={visible}>
@@ -65,9 +76,51 @@ export function MemberActionSheet({
           <View style={styles.header}>
             <Text style={styles.name}>{memberName}</Text>
             <Text style={styles.roleLine}>{roleLabel(memberRole)}</Text>
+            {linkedPersonName ? (
+              <Text style={styles.roleLine} testID="member-action-linked-person">This is {linkedPersonName}</Text>
+            ) : null}
           </View>
+          {hasLinkActions ? (
+            <>
+              <View style={[styles.divider, styles.linkTopDivider]} />
+              {onLinkPerson ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onLinkPerson}
+                  style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                  testID="member-action-link"
+                >
+                  <Text style={styles.optionText}>Link to a person…</Text>
+                </Pressable>
+              ) : null}
+              {onChangePerson ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={onChangePerson}
+                  style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                  testID="member-action-change-person"
+                >
+                  <Text style={styles.optionText}>Change person…</Text>
+                </Pressable>
+              ) : null}
+              {onUnlinkPerson ? (
+                <>
+                  <View style={styles.divider} />
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={onUnlinkPerson}
+                    style={({ pressed }) => [styles.optionRow, pressed && styles.optionPressed]}
+                    testID="member-action-unlink-person"
+                  >
+                    <Text style={styles.optionText}>Unlink person</Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </>
+          ) : null}
           {showManagementActions ? (
             <>
+              {hasLinkActions ? <View style={styles.divider} /> : null}
               <Text style={styles.explanation}>{ROLE_EXPLANATION}</Text>
               <View style={styles.divider} />
               <Pressable
@@ -176,6 +229,9 @@ const styles = StyleSheet.create({
   divider: {
     backgroundColor: colors.border,
     height: 1,
+  },
+  linkTopDivider: {
+    marginTop: spacing.md,
   },
   optionRow: {
     alignItems: 'center',

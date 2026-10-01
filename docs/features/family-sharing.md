@@ -169,10 +169,33 @@ the exact same look instead of duplicating it.
 
 - **Affordance:** each member row is tappable (chevron) when the signed-in
   user's role passes `canManageMember` (`src/utils/roles.ts`) for that row —
-  owner/manager acting on any other **non-owner** member. The owner's own
-  row and the signed-in user's own row are always inert (no chevron, no
-  `onPress`) — there's no promote-to-owner and no self-service here; leaving
-  is the separate "Leave family" flow.
+  owner/manager acting on any other **non-owner** member — or
+  `canLinkMemberAccount` (owner/manager, any active member), or the row has
+  report/block safety actions. The owner's row and the signed-in user's own
+  row therefore *are* tappable for an owner/manager, but their sheet shows
+  only the link actions below (no role or remove actions): there's no
+  promote-to-owner and no self-service role change here; leaving is the
+  separate "Leave family" flow. Viewers' rows are unchanged (safety actions
+  only).
+- **Person link ("this is me", set by a manager):** a row's value reads
+  "Manager · Grandma Ana" when the account is linked to a person (the name is
+  omitted for a content-safety-hidden profile). The action sheet (shown only
+  once the links have loaded) adds "Link to a person…"
+  (`member-action-link`) when unlinked, or "Change person…"
+  (`member-action-change-person`) and "Unlink person"
+  (`member-action-unlink-person`, single tap) when linked. Link/Change open
+  `LinkPersonSheet` in people mode (`src/components/link-person-sheet.tsx`:
+  eligible people via `isInviteTargetEligible`, the account's current person
+  shown selected) and call `link_family_member_account` through
+  `useFamilyRelationships().linkAccount`. This is identity metadata, not a
+  role change, so it applies to the owner and the caller too; no notification
+  is sent. Errors: `member_already_linked` → "Someone else already says this
+  is them. Unlink them on that person's page first."; `member_not_linkable` /
+  `member_not_in_family` / `account_not_in_family` → "That didn't work. The
+  list has been refreshed." (the mutation invalidates links + members).
+  Pending invites aren't editable here (invite-for-person D9). See
+  [family-relationships.md](./family-relationships.md) and
+  [manager-account-linking](../plans/manager-account-linking.md).
 - **Action sheet:** tapping an actionable row opens `MemberActionSheet`
   (`src/components/member-action-sheet.tsx`) — an in-house `Modal` bottom
   sheet (same shape as `FamilyRosterSheet`), not `ActionSheetIOS`/`Alert`,

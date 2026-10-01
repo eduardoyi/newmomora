@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { LinkPersonSheet } from '@/components/link-person-sheet';
 import { MemberActionSheet } from '@/components/member-action-sheet';
 import { ReportSheet } from '@/components/report-sheet';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
@@ -10,13 +11,16 @@ import { colors, fonts, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { MemberChangedElsewhereError, useMemberManagement } from '@/hooks/useMemberManagement';
 import { sharingApprovalsRoute, sharingInviteRoute, sharingPendingInvitesRoute } from '@/lib/routes';
 import type { FamilyMemberProfile } from '@/services/family';
+import { linkAccountErrorAlert } from '@/services/family-relationships';
 import { isPendingInviteActive } from '@/utils/invites';
-import { canEditFamilyContent, canManageMember, roleLabel } from '@/utils/roles';
+import { canEditFamilyContent, canLinkMemberAccount, canManageMember, roleLabel } from '@/utils/roles';
 
 // Safety net for a blank `user_profiles.name` (WP6: S12A now collects the
 // owner's display name, but a legacy/edge-case row could still be blank --
@@ -50,6 +54,10 @@ export default function FamilyMembersScreen() {
   const { changeRole, removeMember: removeMemberMutation } = useMemberManagement(familyId);
   const canInvite = canEditFamilyContent(role);
   const contentSafety = useContentSafety();
+  // Manager-linked "this is me" (docs/plans/manager-account-linking.md): the
+  // person each account is linked to, and the people an account can be linked to.
+  const { members: familyPeople } = useFamilyMembers();
+  const relationships = useFamilyRelationships(familyPeople);
   // The invites query is manager+-only under RLS, so it is gated on role
   // rather than fired (and denied) for viewers.
   const { pendingInvites, redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
@@ -65,6 +73,20 @@ export default function FamilyMembersScreen() {
 
   const [manageTarget, setManageTarget] = useState<FamilyMemberProfile | null>(null);
   const [reportTarget, setReportTarget] = useState<FamilyMemberProfile | null>(null);
+  const [linkTarget, setLinkTarget] = useState<FamilyMemberProfile | null>(null);
+
+  const linkedMemberIdByUser = new Map(
+    relationships.links.filter((link) => link.familyMemberId).map((link) => [link.userId, link.familyMemberId as string]),
+  );
+  const linkedPersonFor = (userId: string) => {
+    const memberId = linkedMemberIdByUser.get(userId);
+    return memberId ? familyPeople.find((person) => person.id === memberId) ?? null : null;
+  };
+  // A reported (hidden) profile's name stays out of the row, like person detail.
+  const visibleLinkedPersonName = (userId: string): string | null => {
+    const person = linkedPersonFor(userId);
+    return person && !contentSafety.isTargetReported('family_member_profile', person.id) ? person.name : null;
+  };
 
   const activeMemberCount = profiles.filter((profile) => profile.is_active_member).length;
   const isManageTargetReported = Boolean(
@@ -74,6 +96,22 @@ export default function FamilyMembersScreen() {
   const hasManageTargetReport = Boolean(
     manageTarget?.membership_id &&
     contentSafety.hasActiveReport('household_member', manageTarget.membership_id),
+  );
+
+  // Link actions need the links loaded (so linked vs. unlinked is known) and
+  // an owner/manager caller acting on an active member.
+  const canShowLinkActions = Boolean(
+    manageTarget && !relationships.isLoadingLinks && canLinkMemberAccount(role, manageTarget),
+  );
+  const manageTargetLinkedMemberId = manageTarget ? linkedMemberIdByUser.get(manageTarget.user_id) ?? null : null;
+  const openLinkPicker = () => {
+    const target = manageTarget;
+    setManageTarget(null);
+    setLinkTarget(target);
+  };
+  const isLinkTargetReported = Boolean(
+    linkTarget?.membership_id &&
+    contentSafety.isTargetReported('household_member', linkTarget.membership_id),
   );
 
   const applyRoleChange = (profile: FamilyMemberProfile, nextRole: 'manager' | 'viewer') => {
@@ -89,6 +127,27 @@ export default function FamilyMembersScreen() {
         Alert.alert('Could not update role', `Could not change ${memberDisplayName(profile.name)}'s role. Please try again.`);
       }
     })();
+  };
+
+  const applyLink = (target: FamilyMemberProfile, memberId: string) => {
+    setLinkTarget(null);
+    void (async () => {
+      try {
+        await relationships.linkAccount({ userId: target.user_id, memberId });
+      } catch (error) {
+        const { title, message } = linkAccountErrorAlert(error);
+        Alert.alert(title, message);
+      }
+    })();
+  };
+
+  const applyUnlink = (target: FamilyMemberProfile) => {
+    const memberId = linkedMemberIdByUser.get(target.user_id);
+    setManageTarget(null);
+    if (!memberId) return;
+    void relationships.unlinkAccount(memberId).catch(() => {
+      Alert.alert('Could not unlink', 'Please try again.');
+    });
   };
 
   const handleRequestRemove = (profile: FamilyMemberProfile) => {
@@ -187,6 +246,8 @@ export default function FamilyMembersScreen() {
           )}
           {profiles.map((profile, index) => {
             const actionable = canManageMember(role, user?.id, profile);
+            const canLink = canLinkMemberAccount(role, profile);
+            const linkedPersonName = visibleLinkedPersonName(profile.user_id);
             const isBlocked = Boolean(contentSafety.getBlockForUser(profile.user_id));
             const hasSafetyActions = Boolean(
               profile.user_id !== user?.id && (
@@ -199,17 +260,21 @@ export default function FamilyMembersScreen() {
             return (
               <SettingsRow
                 accessibilityLabel={
-                  actionable || hasSafetyActions
+                  actionable || canLink || hasSafetyActions
                     ? `${actionable ? 'Manage' : 'Account actions for'} ${isReported ? 'reported household account' : memberDisplayName(profile.name)}`
                     : undefined
                 }
-                chevron={actionable || hasSafetyActions}
+                chevron={actionable || canLink || hasSafetyActions}
                 first={!canInvite && index === 0}
                 key={profile.user_id}
                 label={isReported ? 'Reported household account' : memberDisplayName(profile.name)}
-                onPress={actionable || hasSafetyActions ? () => setManageTarget(profile) : undefined}
+                onPress={actionable || canLink || hasSafetyActions ? () => setManageTarget(profile) : undefined}
                 testID={`member-row-${profile.user_id}`}
-                value={isBlocked ? 'Blocked' : profile.is_active_member ? roleLabel(profile.role) : 'Former member'}
+                value={isBlocked
+                  ? 'Blocked'
+                  : profile.is_active_member
+                    ? (linkedPersonName ? `${roleLabel(profile.role)} · ${linkedPersonName}` : roleLabel(profile.role))
+                    : 'Former member'}
               />
             );
           })}
@@ -239,8 +304,27 @@ export default function FamilyMembersScreen() {
           } : undefined}
           isBlocked={Boolean(manageTarget && contentSafety.getBlockForUser(manageTarget.user_id))}
           showManagementActions={Boolean(manageTarget && canManageMember(role, user?.id, manageTarget))}
+          linkedPersonName={manageTarget ? visibleLinkedPersonName(manageTarget.user_id) : null}
+          onLinkPerson={canShowLinkActions && !manageTargetLinkedMemberId ? openLinkPicker : undefined}
+          onChangePerson={canShowLinkActions && manageTargetLinkedMemberId ? openLinkPicker : undefined}
+          onUnlinkPerson={canShowLinkActions && manageTargetLinkedMemberId
+            ? () => manageTarget && applyUnlink(manageTarget)
+            : undefined}
           visible={Boolean(manageTarget)}
         />
+        {linkTarget ? (
+          <LinkPersonSheet
+            accountUserId={linkTarget.user_id}
+            isMemberHidden={(memberId) => contentSafety.isTargetReported('family_member_profile', memberId)}
+            links={relationships.links}
+            members={familyPeople}
+            mode="people"
+            onClose={() => setLinkTarget(null)}
+            onSelectPerson={(memberId) => applyLink(linkTarget, memberId)}
+            title={`Who is ${isLinkTargetReported ? 'this account' : memberDisplayName(linkTarget.name)}?`}
+            visible
+          />
+        ) : null}
         {reportTarget?.membership_id ? (
           <ReportSheet
             isSubmitting={contentSafety.isReporting}

@@ -1,0 +1,51 @@
+appId: com.memora.app
+---
+# Manager-linked "this is me" (docs/plans/manager-account-linking.md §5):
+# Settings -> Family members -> tap the signed-in owner/manager's own row ->
+# the sheet offers link actions only ("Link to a person…" or "Change
+# person…"/"Unlink person" when already linked) -> the people picker opens ->
+# cancel. Read-only on purpose: picking would write a link to the test
+# account. Needs a logged-in owner/manager. NOT executed as part of this
+# change -- authored lint-by-eye only against the testIDs in
+# app/(app)/sharing/members.tsx, src/components/member-action-sheet.tsx and
+# src/components/link-person-sheet.tsx.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-settings
+- tapOn:
+    id: settings-family-members
+- extendedWaitUntil:
+    visible:
+      id: "member-row-.*"
+    timeout: 15000
+# The first row is the owner's; for an owner/manager every active row is tappable.
+- tapOn:
+    id: "member-row-.*"
+- assertVisible:
+    id: "member-action-(link|change-person)"
+- runFlow:
+    when:
+      visible:
+        id: member-action-link
+    commands:
+      - tapOn:
+          id: member-action-link
+      - extendedWaitUntil:
+          visible:
+            id: link-person-sheet
+          timeout: 10000
+      - tapOn:
+          id: link-person-cancel
+- runFlow:
+    when:
+      visible:
+        id: member-action-change-person
+    commands:
+      - tapOn:
+          id: member-action-change-person
+      - extendedWaitUntil:
+          visible:
+            id: link-person-sheet
+          timeout: 10000
+      - tapOn:
+          id: link-person-cancel

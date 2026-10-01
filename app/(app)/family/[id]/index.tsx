@@ -20,10 +20,12 @@ import { CastCard } from '@/components/cast-card';
 import { ContentActionSheet } from '@/components/content-action-sheet';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
+import { LinkPersonSheet } from '@/components/link-person-sheet';
 import { ReportSheet } from '@/components/report-sheet';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
+import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { useContentSafety } from '@/hooks/useContentSafety';
@@ -48,7 +50,7 @@ import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-p
 import { canEditFamilyContent } from '@/utils/roles';
 import { isInviteTargetEligible, isLinkableMember, relationshipSubtitle } from '@/utils/family-relationships';
 import { formatInviteExpiry, liveInviteForMember } from '@/utils/invites';
-import { isAlreadyLinkedError } from '@/services/family-relationships';
+import { isAlreadyLinkedError, linkAccountErrorAlert } from '@/services/family-relationships';
 import { formatDisplayDate } from '@/utils/memories';
 
 // ── Thumbnail for the memories list ──────────────────────────────────────────
@@ -189,6 +191,8 @@ export default function ViewFamilyMemberScreen() {
   const relationships = useFamilyRelationships(members);
   // Only owners/managers can read invites (RLS), so viewers never fire this.
   const { invites, isLoading: isLoadingInvites } = useFamilyInvites(familyId, { enabled: canEdit });
+  // Joined accounts, for "Already on Momora? Link their account" (owner/manager only).
+  const { profiles } = useFamilyMemberProfiles(canEdit ? familyId : null);
   const { versions: portraitVersions } = usePortraitVersions(id);
   // Server-filtered to this member (Workstream A6) instead of paging in and
   // client-filtering the whole timeline.
@@ -197,6 +201,7 @@ export default function ViewFamilyMemberScreen() {
   const [deleteError, setDeleteError] = useState('');
   const [isPortraitFullScreen, setIsPortraitFullScreen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [isLinkAccountOpen, setIsLinkAccountOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<{
     type: ReportTargetType;
     id: string;
@@ -229,6 +234,23 @@ export default function ViewFamilyMemberScreen() {
           ? 'Someone else already picked this person — ask a family manager.'
           : 'Please try again.',
       );
+    }
+  };
+
+  // Active members with no link yet (the accounts "Link their account" offers).
+  const unlinkedAccounts = profiles
+    .filter((profile) => profile.is_active_member
+      && !relationships.links.some((link) => link.userId === profile.user_id && link.familyMemberId))
+    .map((profile) => ({ userId: profile.user_id, name: profile.name, role: profile.role }));
+
+  const handleLinkAccount = async (userId: string) => {
+    if (!member) return;
+    setIsLinkAccountOpen(false);
+    try {
+      await relationships.linkAccount({ userId, memberId: member.id });
+    } catch (error) {
+      const { title, message } = linkAccountErrorAlert(error);
+      Alert.alert(title, message);
     }
   };
 
@@ -502,6 +524,17 @@ export default function ViewFamilyMemberScreen() {
                 testID="family-member-invite"
               />
             )}
+            {/* Manager-linked "this is me" (docs/plans/manager-account-linking.md):
+                a joined account that hasn't picked a person yet. */}
+            {unlinkedAccounts.length > 0 ? (
+              <SettingsRow
+                accessibilityLabel={`Link ${member.name} to an account already on Momora`}
+                chevron
+                label="Already on Momora? Link their account"
+                onPress={() => setIsLinkAccountOpen(true)}
+                testID="family-member-link-account"
+              />
+            ) : null}
           </SettingsBlock>
         ) : null}
 
@@ -630,6 +663,16 @@ export default function ViewFamilyMemberScreen() {
         testID="family-profile-actions-sheet"
         visible={actionsOpen}
       />
+      {isLinkAccountOpen ? (
+        <LinkPersonSheet
+          accounts={unlinkedAccounts}
+          mode="accounts"
+          onClose={() => setIsLinkAccountOpen(false)}
+          onSelectAccount={(userId) => void handleLinkAccount(userId)}
+          title={`Which account is ${member.name}?`}
+          visible
+        />
+      ) : null}
       {reportTarget ? (
         <ReportSheet
           isSubmitting={contentSafety.isReporting}

@@ -25,6 +25,9 @@ jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
 jest.mock('@/hooks/useFamilyInvites', () => ({
   useFamilyInvites: () => ({ invites: [], isLoading: false }),
 }));
+jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
+  useFamilyMemberProfiles: () => ({ profiles: [], isLoading: false }),
+}));
 jest.mock('@/hooks/useFamilyRelationships', () => ({
   useFamilyRelationships: () => ({
     canEdit: false,
