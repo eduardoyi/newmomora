@@ -26,7 +26,7 @@ import { createServiceClient } from '../_shared/supabase-admin.ts';
 const DISPATCH_BATCH = 60;
 const CLEANUP_BATCH = 20;
 
-type Rpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
+type Rpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message: string; code?: string } | null }>;
 
 export interface SchedulerDeps {
   rpc: Rpc;
@@ -74,7 +74,8 @@ export function filmPushCopy(film: {
 
 async function rpcOrThrow(deps: SchedulerDeps, name: string, args: Record<string, unknown>): Promise<unknown> {
   const { data, error } = await deps.rpc(name, args);
-  if (error) throw new Error(`${name}_failed`);
+  // Only the stable code: PostgREST messages can echo row data.
+  if (error) throw new Error(`${name}_failed ${error.code ?? 'unknown'}`);
   return data;
 }
 

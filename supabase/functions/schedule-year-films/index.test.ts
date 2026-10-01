@@ -80,3 +80,16 @@ Deno.test('push copy per kind and language', () => {
   assertEquals(filmPushCopy({ kind: 'family_year', language: 'en', ageYear: null, scopeStart: '2026-01-01', childName: null }).body,
     "Your family's 2026, in one little film");
 });
+
+Deno.test('a failed RPC surfaces its stable error code but not its message', async () => {
+  const { d } = deps({
+    rpc: () => Promise.resolve({ data: null, error: { message: 'JWT issued at future', code: 'PGRST303' } }),
+  });
+  let message = '';
+  try {
+    await runScheduler(d);
+  } catch (error) {
+    message = error instanceof Error ? error.message : '';
+  }
+  assertEquals(message, 'year_film_due_failed PGRST303');
+});

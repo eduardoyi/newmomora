@@ -3,6 +3,7 @@ import {
   handleProcessVoiceMemoryWithDependencies,
   resolveVoiceFamilyId,
   type ProcessVoiceMemoryDependencies,
+  voiceFailureDetail,
 } from './index.ts';
 
 const FAMILY_ID = '11111111-1111-4111-8111-111111111111';
@@ -491,4 +492,15 @@ Deno.test('legacy voice family resolution refuses ambiguous memberships after a 
     getFamilyRole: async () => null,
   });
   assertEquals(result, { code: 'FAMILY_CONTEXT_REQUIRED' });
+});
+
+Deno.test('voiceFailureDetail logs status or code, never provider text', () => {
+  const transcription = new Error('OpenAI transcription failed (429): {"error":"rate limit for org-secret"}');
+  assertEquals(voiceFailureDetail(transcription, transcription.message), 'status_429');
+  const chat = new Error('OpenAI chat failed (500)');
+  assertEquals(voiceFailureDetail(chat, chat.message), 'status_500');
+  const db = Object.assign(new Error('JWT issued at future'), { code: 'PGRST303' });
+  assertEquals(voiceFailureDetail(db, db.message), 'code_PGRST303');
+  assertEquals(voiceFailureDetail({ code: 'not a safe code: Enzo' }, 'unknown'), 'object');
+  assertEquals(voiceFailureDetail(new TypeError('boom'), 'boom'), 'TypeError');
 });

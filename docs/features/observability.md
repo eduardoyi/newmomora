@@ -61,6 +61,19 @@ Deployed with Sentry (2026-09-27): all Edge Functions and every Worker —
 `momora-memory-illustration-worker`, `momora-kindle-frame`,
 `momora-memory-viewer`.
 
+## Known noise and log hygiene
+
+- `PGRST303` "JWT issued at future": PostgREST sometimes rejects the
+  service-role JWT because Supabase's own hosts' clocks drift (~1% of cron
+  runs, first seen 2026-09-27). `createServiceClient()`
+  (`_shared/supabase-admin.ts`) resends once after 1 s; the rejection happens
+  before the query runs, so the resend is safe for claim RPCs. If it still
+  shows up in Sentry, the drift is longer than 1 s.
+- `console.error` is captured, so log a **stable category plus a code**
+  (PostgREST/Postgres `error.code`, OpenAI HTTP status), not raw provider or
+  PostgREST messages — they can echo row data or transcripts. Logging
+  only a bare string (e.g. `'x failed'`) makes the Sentry issue undiagnosable.
+
 ## Adding a new Edge Function or Worker
 
 - Edge Function: use `serveWithSentry('<function-name>', handler)`, never bare

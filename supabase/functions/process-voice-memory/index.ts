@@ -413,23 +413,36 @@ export async function handleProcessVoiceMemoryWithDependencies(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown';
     // Do not log transcript/audio or member data. Error text may be provider
-    // supplied, so only log the stable category below.
-    console.error('process-voice-memory failed');
+    // supplied, so only log the stable category and HTTP status / error code.
+    const detail = voiceFailureDetail(error, message);
 
     if (message.includes('Missing OPENAI_API_KEY')) {
+      console.error('process-voice-memory failed', 'OPENAI_NOT_CONFIGURED');
       return errorResponse('Voice transcription is not configured', 503, 'OPENAI_NOT_CONFIGURED');
     }
 
     if (message.includes('OpenAI transcription failed')) {
+      console.error('process-voice-memory failed', 'TRANSCRIPTION_FAILED', detail);
       return errorResponse('Could not transcribe audio. Try recording again.', 502, 'TRANSCRIPTION_FAILED');
     }
 
     if (message.includes('OpenAI chat failed')) {
+      console.error('process-voice-memory failed', 'CLEANUP_FAILED', detail);
       return errorResponse('Could not clean up transcript. Try again.', 502, 'CLEANUP_FAILED');
     }
 
+    console.error('process-voice-memory failed', 'UNEXPECTED', detail);
     return errorResponse('Voice processing failed', 500, 'TRANSCRIPTION_FAILED');
   }
+}
+
+/** Loggable failure detail: OpenAI HTTP status, DB error code, or error class. */
+export function voiceFailureDetail(error: unknown, message: string): string {
+  const status = message.match(/^OpenAI (?:transcription|chat) failed \((\d{3})\)/)?.[1];
+  if (status) return `status_${status}`;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && /^[A-Z0-9_]{1,40}$/i.test(code)) return `code_${code}`;
+  return error instanceof Error ? error.name : typeof error;
 }
 
 export async function handleProcessVoiceMemory(req: Request): Promise<Response> {
