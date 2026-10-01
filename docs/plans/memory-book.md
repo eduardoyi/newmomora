@@ -85,7 +85,7 @@ The order flow starts with **who** (child / family) and **when**:
 |---|---|---|
 | Age year | birth → 1st birthday, 1st → 2nd, … | The hero option for baby books ("Year One"); derived from `family_members.date_of_birth` |
 | Calendar year | Jan 1 – Dec 31 | "One book per year" use case |
-| Everything | full archive | Cap total pages (see below) |
+| Everything | full archive, from the child's first eligible memory on/after DOB | One volume, hard cap 122pp, a curated best-of: one chapter per age-year, 3-month sections, keep-rate balanced across chapters (LIVE for all families since 2026-10-01; see [memory-book-everything-fixes.md](memory-book-everything-fixes.md) and [features/memory-book-generation.md](../features/memory-book-generation.md#multi-year-everything-books)) |
 | Custom range | arbitrary start/end dates | Power users, gifts |
 
 Rules:
@@ -97,6 +97,11 @@ Rules:
   ~40–60 pages; hard cap 122). When a scope has more material than the
   budget, curation gets *more selective* rather than the book getting
   longer — selection density is a quality feature, not a loss.
+- Everything on a multi-year archive is deliberately a **curated best-of**
+  (decided 2026-10-01): one volume, never multi-volume. Real result: a
+  4-year archive keeps ~1 memory in 6 (~17% per year), a 2-year archive
+  ~37%. Year / age-year books remain the complete record. The page budget
+  is split across age-years by keep-rate, not by raw memory count.
 - A family can order any number of books over time; scopes may overlap.
   Each order snapshots its own book document (§8).
 
@@ -152,6 +157,19 @@ Output per memory (one call, several axes):
    catalog act only as sanity filters and normalization targets for what the
    text already claims (multilingual text included — cues are semantic, not
    keyword-matched).
+
+**Explicit evidence is enforced, not just prompted (2026-10-01, owner
+rule):** a milestone — and therefore any "first" printed in a book — exists
+only when the parent's own text explicitly states it or a parent confirmed
+it. `analyze-memory` must return a verbatim `evidence` quote and a
+deterministic per-catalog-entry gate (`_shared/memory-milestone-evidence.ts`)
+drops claims whose quote is not in the text or lacks the first-time /
+achievement / event wording the entry requires. Existing candidate rows were
+cleaned (reversible backfill, `npm run eval:milestone-honesty`), and the book
+re-applies the rule at fit time to stored books (Firsts membership needs a
+confirmed milestone or explicit first-time text; AI-written "warm names" never
+render). See [../features/memory-analysis.md](../features/memory-analysis.md)
+and [milestone-catalog.md](milestone-catalog.md).
 
 **Date-aware occasion rules (decided 2026-08-17):** seasonal tags require
 calendar plausibility or explicit text evidence (a costume in March is not
@@ -235,6 +253,17 @@ acknowledge the overlap ("a beach day with abuela").
 Curation emits a **book outline** (ordered chapters/spreads with memory refs
 and rationale) that is independently reviewable before any layout exists —
 this is what V2 of the validation plan (§9) inspects.
+
+**Multi-year (Everything) books** curate and lay out differently — one
+chapter per age-year, fixed calendar-aligned 3-month backbone blocks,
+chapter-mode page-cap demotion balanced by keep-rate across chapters (with a
+captioned/text-only last-resort tier, ≤2 photos shown per kept memory), compact
+Firsts, per-chapter quote pooling, themed spreads confined to a home chapter
+(≤8 total, ≤2 per chapter), ≤6 sampled portraits, multi-year copy. All of it
+is gated on the presence of `chapter` outline elements so year books stay
+byte-identical. Canonical description:
+[features/memory-book-generation.md § Multi-year (Everything) books](../features/memory-book-generation.md#multi-year-everything-books);
+history and dogfood outcome: [memory-book-everything-fixes.md](memory-book-everything-fixes.md).
 
 ### Stage C — Layout
 
@@ -1028,8 +1057,11 @@ docs/features/memory-book-generation.md and TECH_SPEC):
 1. Final price point within $99–149 (decide after V4 sample in hand).
 2. ~~Prodigi vs Peecho~~ — RESOLVED 2026-08-29: Prodigi (API ergonomics,
    spine API, sandbox; V4 order placed with them).
-3. Page budget policy for very large scopes ("Everything" on a 3-year
-   archive): more selective vs. offer multiple volumes.
+3. ~~Page budget policy for very large scopes ("Everything" on a 3-year
+   archive)~~ — RESOLVED 2026-10-01: one volume, more selective (a curated
+   best-of, chapters per age-year, keep-rate balanced across chapters); no
+   multi-volume. See
+   [memory-book-everything-fixes.md](memory-book-everything-fixes.md).
 4. Illustration print strategy: upscale existing outputs vs. re-generate at
    print resolution for book-selected memories (cost model in
    `docs/COST_OPTIMIZATION.md` context).
@@ -1071,3 +1103,28 @@ docs/features/memory-book-generation.md and TECH_SPEC):
   loads a real exported book from `book-data/` for live UI diagnosis
   without Supabase auth; run `npx vite dev --config vite.web.config.ts
   --port 5199` and open `/web.html?fixture=<slug>`.
+- **Characterization goldens are deliberate-change-only.** Never run
+  `vitest -u` on `book-renderer/src/model/__tests__/fitter.golden.test.ts` or
+  `cloudflare/memory-book-worker/test/outline.golden.test.ts`; review the
+  diff and update once, on purpose, explaining every changed case (year-book
+  output should only move for an intended all-books fix).
+- **Media-loss lessons (all books).** Never pair a long-caption or audio
+  memory onto a text-only page, never lay a multi-asset memory out as a
+  panorama/full-bleed unit without returning its other assets to the run
+  buffer, and keep the audits `media-memory-without-media`,
+  `unrenderable-slots`, `title-then-empty` green. Audio QR marks are QR +
+  badge only (no label, no printed URL; any fake short code is a bug).
+- **Explicit-milestone rule.** Never assert a milestone/"first" in a book
+  (or anywhere) unless the parent's text says it or a parent confirmed it;
+  keep `worker/src/firsts.ts` and `book-renderer/src/model/explicitFirst.ts`
+  in parity and add a `MILESTONE_EVIDENCE_RULES` entry with every new catalog
+  entry.
+- **Preview and print deploy together.** `memory-book-web` (shop preview) and
+  the Fly print renderer must ship the same renderer build in the same
+  sitting; build the web bundle with the real `book-renderer/.env.local`,
+  PII-check every image, and make sure no order is mid-render before
+  swapping the Fly machine.
+- **The bridge must never send an unbounded id list.** Any Memory Book read
+  keyed on memory ids goes through `_shared/paged-query.ts` (`byMemoryIds`,
+  150-id chunks, stable sort key, error-checked) or a nested `!inner` embed;
+  a bare `.in('memory_id', ids)` silently emptied the first Everything book.

@@ -1,6 +1,6 @@
 # Memory Book — Everything-scope incident fixes
 
-Status: **DONE — Everything un-paused for all families 2026-10-01** after Phases 0, 1, 2, 2b, 2c, 2d, 2e and five dogfood rounds (owner approved round 5). Follow-ups: milestone detector over-tagging (upstream, analyze-memory); year-book merged multi-month birthday wording.
+Status: **DONE — Everything un-paused for all families 2026-10-01** (`c5c0eb2`) after Phases 0, 1, 2, 2b, 2c, 2d, 2e and five dogfood rounds (owner approved round 5). The follow-up "milestone detector over-tagging" is also DONE (`3cafc97`, merged `446f383`, see Outcome); the year-book merged multi-month birthday wording was fixed in the same change. See [Outcome](#outcome-2026-10-01) at the end.
 Related: [memory-book.md](memory-book.md) (§4 scope table, §10.3 open
 question now RESOLVED below), [../features/memory-book-generation.md](../features/memory-book-generation.md).
 
@@ -269,10 +269,10 @@ decision — whether to design pooling — still waits on Phase 0 regenerated da
 
 Concrete spec: [memory-book-everything-phase2.md](memory-book-everything-phase2.md) · dogfood round 1 fixes: [memory-book-everything-phase2b.md](memory-book-everything-phase2b.md) (implemented 2026-10-01)
 
-Status 2026-10-01: 2.1–2.8 [DONE — code-complete in the worktree, not deployed; `everything` stays paused except the owner
-family]. Seam check (worker output -> renderer fitter via `audit-layout.mts`): 4/4 chapters render, no chapter orphans, <= 122
+Status 2026-10-01: 2.1–2.8 [DONE — shipped (`dc3f456`; later refined by 2b/2c/2d/2e); historical note from the original
+implementation pass follows]. Seam check (worker output -> renderer fitter via `audit-layout.mts`): 4/4 chapters render, no chapter orphans, <= 122
 pages; a very dense/illustrated-heavy synthetic mix still ends with `month-continuity` violations (see feature doc "Known
-risks"). **Pending owner items:** (a) copy review of all new es/en strings, (b) confirm Tier C captioned demotion
+risks"). **Pending owner items (ALL RESOLVED at the round-5 sign-off: copy and Tier C approved):** (a) copy review of all new es/en strings, (b) confirm Tier C captioned demotion
 (`ENABLE_TIER_C_CAPTIONED_DEMOTION`) after the dogfood run, (c) themed-spread survival risk (single placement + page cap may
 leave far fewer than 8), (d) dogfood run (Enzo 4y, Mara 2y: 0 violations, <= 122 pages). Deploy order: renderer (web + Fly)
 -> bridge + edits -> worker.
@@ -299,7 +299,7 @@ leave far fewer than 8), (d) dogfood run (Enzo 4y, Mara 2y: 0 violations, <= 122
 2.8 Tests per item + fitter integrity audit (0 violations) on both dogfood
     Everything books.
 
-### Phase 3 — dogfood validation → re-enable
+### Phase 3 — dogfood validation → re-enable [DONE 2026-10-01]
 
 3.1 Generate Everything for Enzo (4y) and Mara (2y) via the Phase 0.7
     owner allowlist (pause stays on for everyone else).
@@ -312,3 +312,46 @@ leave far fewer than 8), (d) dogfood run (Enzo 4y, Mara 2y: 0 violations, <= 122
 
 Multi-volume books; custom-range scope; any change to already-ready
 books (they keep their documents; owners can regenerate).
+
+## Outcome (2026-10-01)
+
+Shipped in order: Phase 0 `72f60fc` (generation-context integrity, live-verified), Phase 1 `117b571`, Phase 2 `dc3f456`, 2b `589ec78`,
+2c `1d9f517`, 2d `bbbe05a`, age-spelled birthday titles `a938e41`, 2e `c7c374a`, un-pause `c5c0eb2`; merged to main as `12b4c87`.
+Specs: [phase2](memory-book-everything-phase2.md), [2b](memory-book-everything-phase2b.md), [2d](memory-book-everything-phase2d.md).
+
+### Dogfood rounds (Enzo 4 years, Mara 2 years; owner page-by-page review each round)
+
+| Round | Key finding | Fix |
+|---|---|---|
+| 1 (Enzo 118pp / 73 kept; Mara 122pp / 91 kept) | 48 one-month sections ate the budget so chapter keep-rates could not equalise; one-liners survived as a section's only memory; media lost to level-3 pairing (caption-only text page) and multi-asset panorama dropping assets; themed spreads mixed years; bare text pages; audio QR printed a fabricated `momora.co/e/` URL | 2b: calendar-aligned 3-month blocks, per-section floors, text-only memories demotable, refill pass, home-chapter themed spreads, pull-quote text page, audio QR + badge only, `isSoloPhotoGroup` / panorama one-asset fixes, new audits |
+| 2 (Enzo 122pp / 76 kept, chapter keep-rates 6–21%; Mara 122pp / 86 kept, 10% vs 45%; 0 lost photos) | Caption-heavy late chapters ran out of ordinary cuts so every later cut hit the earliest years; chapter floors were relaxed before Tier C ran; big-event memories cut for page cost | 2c: balance by keep-rate over ordinary ∪ Tier C, ≤2 photos shown per kept memory (owner choice over cost-aware demotion), compact Firsts. re-fit of the round-2 documents: Enzo 76 → 95 kept (~15.8%/yr), Mara 86 → 117 (~36.5%) |
+| 3 (Enzo 102 kept, .167–.173; Mara 114, .354/.359; 0 lost photos) | Balance/capacity goals met. "El mes en que cumpliste…" over multi-month sections; pooled quote spread too small/empty; tall solo photo overlapped a section header; worker `birthday-N` elements never laid out; illustrated-story overflow | 2d: period wording for multi-month birthdays, quote/text page redesign ("Cosas que dijiste"), `tallSoloCanSitBesideHeader`, fitter lays out birthday elements, `illustratedBothModeFits` |
+| 4 (Enzo 122pp / 95 kept, .157–.159; Mara 122pp / 125 kept, .387/.393; 0 violations both) | Birthday titles had bare digits — the model copied the prompt's example ("Cuando cumpliste 2"); owner review: Firsts asserted milestones the parent never stated (only 1 of 4 Enzo / 1 of 6 Mara Everything firsts had first-time language; Phase 2d had started rendering AI warm names); a divider line between stacked audio notes | `a938e41`: ages spelled out with the unit, never a bare digit. 2e `c7c374a`: Firsts need explicit evidence, AI warm names never render (2d fix c reverted), audio divider removed |
+| 5 (Enzo 122pp / 101 kept, .165–.171; Mara 122pp / 117 kept, .365/.366; 0 violations both) | Clean: titles spelled out ("Cuando cumpliste dos años"), every Firsts member explicit (Enzo 1, Mara 2) | Owner approved → Everything un-paused for all families (`c5c0eb2`) |
+
+Final numbers: Enzo 4 years → 101 memories (~17% per year), Mara 2 years → 117 (~37%), 122 pages, 0 audit violations. **Accepted
+product fact:** an Everything book is a curated best-of (about 1 memory in 6 for a 4-year archive); year books remain the complete
+record. Owner signed off the multi-year copy strings and Tier C captioned demotion.
+
+### Completed follow-ups
+
+- **Milestone honesty, upstream + books** (`3cafc97`, merge `446f383`): `analyze-memory` requires a verbatim `evidence` quote and a
+  deterministic per-catalog gate (`_shared/memory-milestone-evidence.ts`); existing `candidate` rows cleaned by
+  `npm run eval:milestone-honesty` — 13 of 25 dismissed on 2026-10-01, reversible via `npm run eval:milestone-honesty -- --rollback <file>
+  --apply` (rollback file in `supabase/scripts/eval-output/milestone-honesty/2026-10-01T16-22-34-413Z/`, gitignored); Firsts gated at fit
+  time (confirmed status or explicit first-time language) so already-ready books are corrected without regeneration (old manifests lack
+  `status`, so only explicit text keeps a member in Firsts until regenerated). Docs: [memory-analysis.md](../features/memory-analysis.md),
+  [milestone-catalog.md](milestone-catalog.md).
+- **Year-book merged multi-month birthday wording** (same commit): multi-month birthday sections use period wording in every scope.
+
+### Deploy / ops notes
+
+The Fly print renderer image went v9 → v15 on 2026-10-01 (single machine `78452e9f631718`). Preview (`memory-book-web`) and print (Fly)
+must deploy together; build the web bundle with the real `book-renderer/.env.local`, PII-check every image, and confirm no order is
+mid-render before swapping the machine. Year-film bridge was not redeployed with the shared `paged-query.ts` refactor (behaviour-identical;
+it picks it up on its next deploy).
+
+### Still open
+
+Dense illustrated-heavy synthetic mixes can still hit relaxed floors (`month-continuity`); not seen on the two real books. Time-aware
+(page-count-aware) themed-spread admission instead of the fixed `/15` budget remains a long-term improvement.

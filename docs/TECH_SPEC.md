@@ -3142,7 +3142,7 @@ row claims a freshly minted UUID as both `workflow_instance_id` and
 `generation_started_at` in the `WHERE` to prevent two concurrent
 stale-recovery claims), then HMAC-dispatches `{ bookId, attemptId }` to the
 Worker's `/dispatch`. *Response:* `{ success: true, status: 'ready' }` or
-`{ success: true, status: 'generating', queued: true, attemptId }`.
+`{ success: true, status: 'generating', queued: true, attemptId }`. *Scope pause:* a scope kind in `PAUSED_SCOPE_KINDS` (currently an empty set; `everything` was paused 2026-09-30 and un-paused 2026-10-01) is refused before claim/dispatch — row parked `failed` / `SCOPE_PAUSED`, `409 SCOPE_PAUSED`.
 *Deviation from the illustration/portrait precedent:* no
 `claim_memory_illustration_workflow_generation`-style RPC — this task's
 scope excluded schema changes, so the CAS is a plain service-role `UPDATE
@@ -3190,7 +3190,7 @@ and pages its read, dedupes ids, and on a `23505` unique violation (partial
 unique active-token index) re-reads and mints only the still-missing rows
 (up to 3 passes); other insert/read errors → 500.
 
-*Multi-year contract additions (2026-10-01, Phase 2; code-complete, not deployed):* the manifest scope kind / `book_document.outline.scope.type` gains the value `'everything'` (was `'custom'` for `scope_kind = 'everything'`; stored pre-change docs keep `'custom'`). `load_generation_context`'s `everything` window now starts at the first eligible memory on or after the child's DOB (`_shared/memory-book-scope-window.ts`, shared with `memory-book-edits`), and each `milestones[]` row additionally carries `status` (the worker treats a missing value as `'candidate'`). Outline elements gain the kind `chapter` (+ optional `chapter: { ageYear, startMonth, endMonth }`) for multi-year books only. Response shape and error semantics are otherwise unchanged. See [memory-book-generation.md](./features/memory-book-generation.md#multi-year-everything-books).
+*Multi-year contract additions (2026-10-01, Phase 2; deployed, live for all families):* the manifest scope kind / `book_document.outline.scope.type` gains the value `'everything'` (was `'custom'` for `scope_kind = 'everything'`; stored pre-change docs keep `'custom'`). `load_generation_context`'s `everything` window now starts at the first eligible memory on or after the child's DOB (`_shared/memory-book-scope-window.ts`, shared with `memory-book-edits`), and each `milestones[]` row additionally carries `status` (the worker treats a missing value as `'candidate'`). Outline elements gain the kind `chapter` (+ optional `chapter: { ageYear, startMonth, endMonth }`) for multi-year books only. Response shape and error semantics are otherwise unchanged. See [memory-book-generation.md](./features/memory-book-generation.md#multi-year-everything-books).
 
 *Ready push (memory-book shelf redesign):* `handlePublish`'s CAS `UPDATE`
 also selects back `id, family_id, child_id, scope_label, requested_by`;
@@ -3822,7 +3822,7 @@ per family, not per user). No style picker UI.
 | `CRON_SECRET` | Shared secret for cron-triggered functions |
 | `SENTRY_DSN` | Optional. Sentry `momora-edge-functions` DSN; when set, `_shared/sentry.ts` reports uncaught errors and `console.error` calls ([observability.md](./features/observability.md)) |
 | `EXPORT_EMAIL_BRIDGE_SECRET` | HMAC secret shared with the export Worker for `send-export-email` |
-| `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` | Optional. Comma-separated family ids (trimmed) exempt from `generate-memory-book`'s `PAUSED_SCOPE_KINDS` pause (currently `everything`, 409 `SCOPE_PAUSED` for everyone else). Unset/empty/malformed = nobody. |
+| `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` | Optional. Comma-separated family ids (trimmed) exempt from `generate-memory-book`'s `PAUSED_SCOPE_KINDS` pause (a paused kind returns 409 `SCOPE_PAUSED` for everyone else). `PAUSED_SCOPE_KINDS` is currently EMPTY — `everything` was un-paused for all families 2026-10-01 — so the secret is unset and only matters if a kind is paused again. Unset/empty/malformed = nobody. |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 S3 API access key |
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API secret |
