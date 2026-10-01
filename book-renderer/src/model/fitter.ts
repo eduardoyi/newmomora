@@ -256,6 +256,22 @@ const AUDIO_NOTE_MAX_PER_PAGE = 2;
  */
 const MIN_MEMORIES_PER_MONTH = 2;
 /**
+ * Chapter-mode (multi-year Everything books) per-chapter keep floor, in
+ * memories: `min(total_c, CHAPTER_FLOOR_MEMORIES)`. Page-cap budgeting only
+ * cuts a chapter below it once every chapter is at its floor (Tier B1+).
+ */
+const CHAPTER_FLOOR_MEMORIES = 12;
+/**
+ * Chapter-mode Tier C (last resort): allow demoting CAPTIONED photo/video
+ * memories (never hero/panorama/milestone/quote-title sources) once every
+ * other demotion tier is exhausted and the book is still over the cap. Real
+ * Everything data has few photo-only/digest-eligible memories relative to
+ * its ~490 with assets, so the ordinary pools alone may not reach the cap.
+ * PENDING OWNER CONFIRMATION after the dogfood run; `false` restores the
+ * pre-Tier-C behaviour (the book is returned `overCap`). Chapter mode only.
+ */
+export const ENABLE_TIER_C_CAPTIONED_DEMOTION = true;
+/**
  * Prodigi's layflat binding valid range (round-5 item 7: "18-122"). The
  * even-page-count enforcement only applies within this printable range —
  * a below-minimum page count is an out-of-range problem in its own right
@@ -2248,6 +2264,34 @@ function buildSpreadTitlePage(element: OutlineElement): BookPage {
   });
 }
 
+/**
+ * Chapter opener (multi-year Everything books): the SAME single `spread-title`
+ * page a themed spread uses — kicker/title come from chapter furniture (the
+ * worker's `element.title` is an English fallback, so the title is localized
+ * from `chapter.ageYear`), subtitle is the (localized) month range of the
+ * chapter's actual content. `sourceElementId` is the chapter element so the
+ * ordinary `sectionTitle:<id>` / `eyebrow:<id>` edits apply.
+ */
+function buildChapterTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
+  const lang = getLanguage(manifest);
+  const chapterFurniture = getFurniture(lang).chapter;
+  const ageYear = element.chapter?.ageYear;
+  return emptyPage({
+    id: `${element.id}:title`,
+    sourceElementId: element.id,
+    templateId: 'spread-title',
+    params: {
+      title: ageYear != null ? chapterFurniture.title(ageYear) : element.title,
+      subtitle: element.subtitle ? localizeMonthLabel(element.subtitle, lang) : null,
+      kicker: ageYear != null ? chapterFurniture.kicker(ageYear) : (element.kicker ?? null),
+      titleMode: 'descriptive',
+      titleSourceMemoryId: null,
+      spreadType: null,
+      momentCount: 0,
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Content pages: backbone/themed/firsts memory groups fit to a template.
 // ---------------------------------------------------------------------------
@@ -3644,6 +3688,297 @@ function demotionGapReason(kind: DemotionKind, cap: number, rank: number): strin
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chapter mode (multi-year Everything books): proportional per-chapter
+// page-cap budgeting. Gated on the outline carrying >=2 `chapter` elements —
+// only the Everything worker emits them, so year / calendar-year / legacy
+// `custom` books never reach any of this and keep the loop above unchanged.
+//
+// Policy: equalise the KEEP-RATE across chapters. Equal keep-rate means each
+// chapter keeps the same fraction of its memories, i.e. a page budget
+// proportional to its eligible-memory count. The pick order depends only on
+// pools, counts and omitted ids — never on layout — so `planChapterDemotions`
+// computes the FULL ordered omission list up front (no `runFit`), and
+// `fitBook` binary-searches how long a prefix of it the cap needs.
+// ---------------------------------------------------------------------------
+
+interface ChapterSpan {
+  elementId: string;
+  ageYear: number;
+  startMonth: string;
+  endMonth: string;
+}
+
+/** Chapter elements that carry usable month bounds, in chronological order. */
+function chapterSpansOf(outline: BookOutline): ChapterSpan[] {
+  const spans: ChapterSpan[] = [];
+  for (const element of outline.elements) {
+    if (element.kind !== 'chapter') continue;
+    const meta = element.chapter;
+    if (!meta || typeof meta.startMonth !== 'string' || typeof meta.endMonth !== 'string') continue;
+    spans.push({ elementId: element.id, ageYear: meta.ageYear, startMonth: meta.startMonth, endMonth: meta.endMonth });
+  }
+  return spans.sort((a, b) => a.startMonth.localeCompare(b.startMonth) || a.ageYear - b.ageYear);
+}
+
+/** Chapter mode iff the outline has at least two usable chapter elements. Anything less is laid out exactly like a book with no chapters. */
+function isChapterMode(outline: BookOutline): boolean {
+  return chapterSpansOf(outline).length >= 2;
+}
+
+/**
+ * Index of the chapter a calendar month ('YYYY-MM') belongs to: the last
+ * chapter that has started by that month — so months before chapter 1 clamp
+ * to chapter 1 and months after the last chapter's end clamp to the last.
+ */
+function chapterIndexForMonth(spans: readonly ChapterSpan[], month: string): number {
+  let index = 0;
+  for (let i = 0; i < spans.length; i++) {
+    if (spans[i].startMonth <= month) index = i;
+  }
+  return index;
+}
+
+export type ChapterDemotionTier = 'A' | 'B1' | 'B2' | 'C';
+
+export interface ChapterDemotion {
+  id: string;
+  elementId: string;
+  kind: DemotionKind;
+  rank: number;
+  chapterIndex: number;
+  /** 1-based age year of the chapter (for gap reasons). */
+  ageYear: number;
+  tier: ChapterDemotionTier;
+}
+
+interface PlanCandidate extends DemotionCandidate {
+  chapterIndex: number;
+  /** Printable caption length — Tier C ranks shorter text first. */
+  textLength: number;
+  isBackbone: boolean;
+}
+
+/**
+ * Tier C pool (chapter mode, last resort): CAPTIONED photo/video memories —
+ * never a hero/panorama nominee, a milestone holder, or a quote-title source.
+ * Disjoint from the ordinary pools (those are caption-less or illustrated).
+ */
+function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookManifest): DemotionCandidate[] {
+  const protectedIds = new Set<string>([...(outline.panoramaCandidates ?? []), ...(outline.heroCandidates ?? [])]);
+  const candidates: DemotionCandidate[] = [];
+  for (const element of outline.elements) {
+    if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
+    for (const { id, memory } of resolveMemoriesInOrder(manifest, element)) {
+      if (protectedIds.has(id)) continue;
+      if (memory.illustration) continue; // illustrated memories are the `illustrated` pool's business
+      if (memory.assets.length === 0 || !captionOf(memory)) continue;
+      if ((memory.milestones ?? []).length > 0) continue;
+      if (element.titleSourceMemoryId === id) continue;
+      const highlighted = isHighlight(element, outline, id);
+      candidates.push({
+        id,
+        elementId: element.id,
+        kind: photoOnlyKind(memory),
+        month: memory.date.slice(0, 7),
+        rank: memory.engagement * 10 + (highlighted ? 5 : 0),
+      });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * The complete, ordered list of page-cap omissions for a chapter-mode book —
+ * pure (pools, counts and omitted ids only; no layout, no `runFit`).
+ * `fitBook` takes the shortest prefix that fits.
+ *
+ * `options.tierCAfterB2` restores the plan text's literal stage order (A, B1, B2, then C) — kept as a
+ * measuring/revert switch; the default order is explained at `stages` below.
+ *
+ * Per step, the first stage with an eligible candidate wins:
+ *   Tier A  — candidates above BOTH the month floor and the chapter floor
+ *             (`min(total_c, CHAPTER_FLOOR_MEMORIES)`). Pick the chapter with
+ *             the highest keep-rate (ties: larger total, lower index), then
+ *             the kind via `pickHighestKeepRateKind` (global totals), then the
+ *             lowest rank.
+ *   Tier B1 — chapter floor relaxed, month floor kept.
+ *   Tier C  — (when enabled) captioned photo/video memories, ranked by
+ *             engagement then shorter text; chapter selection as above;
+ *             floors honoured first, then chapter floor relaxed.
+ *   Tier B2 — both floors relaxed (a month can empty), then Tier C likewise.
+ * Rank ties break on time spread: the month with the highest remaining
+ * fraction, then the highest remaining count, then memory id ascending (ids
+ * are random uuids, so the last tie is not date-biased).
+ */
+export function planChapterDemotions(
+  outline: BookOutline,
+  manifest: BookManifest,
+  options: { tierC?: boolean; tierCAfterB2?: boolean } = {},
+): ChapterDemotion[] {
+  const spans = chapterSpansOf(outline);
+  if (spans.length < 2) return [];
+  const tierCEnabled = options.tierC ?? ENABLE_TIER_C_CAPTIONED_DEMOTION;
+  const chapterOfMonth = (month: string) => chapterIndexForMonth(spans, month);
+
+  // Population: every resolved backbone/themed memory (protected ones included —
+  // like `backboneThemedKindTotals` they count toward the denominators).
+  const chapterTotal = spans.map(() => 0);
+  const chapterOmitted = spans.map(() => 0);
+  const monthOriginal = new Map<string, number>();
+  const monthOmitted = new Map<string, number>();
+  const backboneCounts = new Map<string, number>(); // month floor input (backbone-only, like the legacy floor)
+  const elementKindById = new Map<string, OutlineElement['kind']>();
+  for (const element of outline.elements) {
+    if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
+    elementKindById.set(element.id, element.kind);
+    for (const { memory } of resolveMemoriesInOrder(manifest, element)) {
+      const month = memory.date.slice(0, 7);
+      chapterTotal[chapterOfMonth(month)]++;
+      monthOriginal.set(month, (monthOriginal.get(month) ?? 0) + 1);
+      if (element.kind === 'backbone') backboneCounts.set(month, (backboneCounts.get(month) ?? 0) + 1);
+    }
+  }
+  const chapterFloor = chapterTotal.map((t) => Math.min(t, CHAPTER_FLOOR_MEMORIES));
+
+  const toPlan = (c: DemotionCandidate): PlanCandidate => ({
+    ...c,
+    chapterIndex: chapterOfMonth(c.month),
+    textLength: captionOf(manifest.memories[c.id]).length,
+    isBackbone: elementKindById.get(c.elementId) === 'backbone',
+  });
+  const ordinaryPool = [...gatherDemotionCandidates(outline, manifest), ...gatherIllustratedDemotionCandidates(outline, manifest)].map(toPlan);
+  const tierCPool = tierCEnabled ? gatherCaptionedDemotionCandidates(outline, manifest).map(toPlan) : [];
+
+  const kindTotals = backboneThemedKindTotals(outline, manifest);
+  const omittedByKind: Record<DemotionKind, number> = { photo: 0, video: 0, illustrated: 0 };
+  const omitted = new Set<string>();
+  const plan: ChapterDemotion[] = [];
+
+  const monthFraction = (month: string) => {
+    const original = monthOriginal.get(month) ?? 0;
+    return original > 0 ? (original - (monthOmitted.get(month) ?? 0)) / original : 0;
+  };
+  const monthRemaining = (month: string) => (monthOriginal.get(month) ?? 0) - (monthOmitted.get(month) ?? 0);
+  const keepRate = (chapterIndex: number) =>
+    chapterTotal[chapterIndex] > 0 ? (chapterTotal[chapterIndex] - chapterOmitted[chapterIndex]) / chapterTotal[chapterIndex] : -Infinity;
+
+  /** Rank, then (Tier C only) shorter text, then time spread, then id. Negative = `a` goes first. */
+  const compare = (a: PlanCandidate, b: PlanCandidate, tierC: boolean): number => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (tierC && a.textLength !== b.textLength) return a.textLength - b.textLength;
+    const fa = monthFraction(a.month);
+    const fb = monthFraction(b.month);
+    if (fa !== fb) return fb - fa;
+    const ra = monthRemaining(a.month);
+    const rb = monthRemaining(b.month);
+    if (ra !== rb) return rb - ra;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  };
+
+  const pickFrom = (eligible: PlanCandidate[], tierC: boolean): PlanCandidate => {
+    // Chapter: highest keep-rate among chapters offering a candidate.
+    let bestChapter = -1;
+    for (const c of eligible) {
+      const ci = c.chapterIndex;
+      if (bestChapter === -1) {
+        bestChapter = ci;
+        continue;
+      }
+      const rate = keepRate(ci);
+      const bestRate = keepRate(bestChapter);
+      if (rate > bestRate || (rate === bestRate && (chapterTotal[ci] > chapterTotal[bestChapter] || (chapterTotal[ci] === chapterTotal[bestChapter] && ci < bestChapter)))) {
+        bestChapter = ci;
+      }
+    }
+    let inChapter = eligible.filter((c) => c.chapterIndex === bestChapter);
+    if (!tierC) {
+      const kinds = KIND_TIEBREAK_ORDER.filter((k) => inChapter.some((c) => c.kind === k));
+      const kind = pickHighestKeepRateKind(kinds, kindTotals, omittedByKind);
+      inChapter = inChapter.filter((c) => c.kind === kind);
+    }
+    return inChapter.reduce((best, c) => (compare(c, best, tierC) < 0 ? c : best));
+  };
+
+  // A stage = (pool, month floor, whether the chapter floor binds). The
+  // month floor is the backbone calendar-month count a candidate must stay
+  // above after its own cut (`MIN_MEMORIES_PER_MONTH` normally); `null` means
+  // no month floor at all.
+  type Stage = { tier: ChapterDemotionTier; tierC: boolean; ok: (c: PlanCandidate) => boolean };
+  const stage = (tier: ChapterDemotionTier, tierC: boolean, monthFloor: number | null, chapterFloorBinds: boolean): Stage => ({
+    tier,
+    tierC,
+    ok: (c) =>
+      (monthFloor === null || (backboneCounts.get(c.month) ?? Infinity) > monthFloor) &&
+      (!chapterFloorBinds || chapterTotal[c.chapterIndex] - chapterOmitted[c.chapterIndex] > chapterFloor[c.chapterIndex]),
+  });
+
+  // Stages are tried in order at every step (eligibility only shrinks as
+  // omissions accrue, so they are consumed monotonically). Floors are given
+  // up in order of the damage they prevent: the chapter floor first, then the
+  // month floor — first down to ONE memory per month (the month still
+  // prints), and to none only as the very last resort (a month vanishes: the
+  // audit's month-continuity violation). Tier C (captioned photo/video) runs
+  // once every ordinary candidate that respects a given floor level is gone,
+  // BEFORE the next, more destructive floor level is given up. The plan text
+  // lists C after all of B2 and has no month-floor-1 level; see the report.
+  const A = stage('A', false, MIN_MEMORIES_PER_MONTH, true);
+  const B1 = stage('B1', false, MIN_MEMORIES_PER_MONTH, false);
+  const stages: Stage[] = options.tierCAfterB2
+    ? // The plan text's literal order: ordinary A, B1, B2 (no floors), then C.
+      [A, B1, stage('B2', false, null, false), ...(tierCEnabled ? [stage('C', true, MIN_MEMORIES_PER_MONTH, true), stage('C', true, MIN_MEMORIES_PER_MONTH, false), stage('C', true, null, false)] : [])]
+    : [
+        A,
+        B1,
+        ...(tierCEnabled ? [stage('C', true, MIN_MEMORIES_PER_MONTH, true), stage('C', true, MIN_MEMORIES_PER_MONTH, false)] : []),
+        stage('B2', false, 1, false),
+        ...(tierCEnabled ? [stage('C', true, 1, false)] : []),
+        stage('B2', false, null, false),
+        ...(tierCEnabled ? [stage('C', true, null, false)] : []),
+      ];
+
+  for (;;) {
+    let chosen: PlanCandidate | null = null;
+    let stage: Stage | null = null;
+    for (const candidateStage of stages) {
+      const pool = candidateStage.tierC ? tierCPool : ordinaryPool;
+      const eligible = pool.filter((c) => !omitted.has(c.id) && candidateStage.ok(c));
+      if (eligible.length === 0) continue;
+      chosen = pickFrom(eligible, candidateStage.tierC);
+      stage = candidateStage;
+      break;
+    }
+    if (!chosen || !stage) break;
+    omitted.add(chosen.id);
+    chapterOmitted[chosen.chapterIndex]++;
+    monthOmitted.set(chosen.month, (monthOmitted.get(chosen.month) ?? 0) + 1);
+    if (chosen.isBackbone) backboneCounts.set(chosen.month, (backboneCounts.get(chosen.month) ?? 0) - 1);
+    if (!stage.tierC) omittedByKind[chosen.kind]++;
+    plan.push({
+      id: chosen.id,
+      elementId: chosen.elementId,
+      kind: chosen.kind,
+      rank: chosen.rank,
+      chapterIndex: chosen.chapterIndex,
+      ageYear: spans[chosen.chapterIndex].ageYear,
+      tier: stage.tier,
+    });
+  }
+  return plan;
+}
+
+/** Chapter-aware gap text, one per omission (the preview's gaps panel shows which chapter/tier a memory was cut from). */
+function chapterDemotionGapReason(d: ChapterDemotion, cap: number): string {
+  const how: Record<ChapterDemotionTier, string> = {
+    A: 'chosen to keep every chapter at a similar keep-rate',
+    B1: 'chapter floor relaxed (every chapter was at its floor)',
+    B2: 'chapter and month floors relaxed (nothing else left to cut)',
+    C: 'last resort: captioned photo/video memory, after every other tier was exhausted',
+  };
+  const what = d.tier === 'C' ? `captioned ${d.kind}` : d.kind;
+  return `Omitted (${what}) to respect the ${cap}-page cap (chapter ${d.ageYear}, rank ${d.rank}, ${how[d.tier]}).`;
+}
+
 /** One full deterministic fit at a given pairing level / omission set — no cap awareness of its own. */
 function runFit(
   outline: BookOutline,
@@ -3653,6 +3988,8 @@ function runFit(
   omittedIds: ReadonlySet<string>,
 ): { document: BookDocument; gaps: LayoutGap[] } {
   slotCounter = 0; // deterministic ids across repeated fits in tests/preview refits
+  options.onRunFit?.();
+  const chapterMode = isChapterMode(outline);
   const scoreThreshold = options.scoreThreshold ?? DEFAULT_SCORE_THRESHOLD;
   const gaps: LayoutGap[] = [];
   const pages: BookPage[] = [];
@@ -3662,6 +3999,22 @@ function runFit(
     pendingCredit: null,
     panoramaBudgetUsed: 0,
     contentPageCount: 0,
+  };
+
+  // Chapter openers (multi-year Everything books). The title page is pushed
+  // eagerly; once the NEXT chapter (or the closing / end of the outline) is
+  // reached, a title with nothing behind it dissolves — the same
+  // dissolve-if-empty guard themed/firsts titles have (page-cap demotion can
+  // empty a whole chapter). Checked by page count rather than by predicted
+  // memories, so a retained memory that happens to lay out to zero pages
+  // cannot leave an orphan either.
+  let pendingChapter: { titleIndex: number; priorLastTemplateId: TemplateId | null } | null = null;
+  const settlePendingChapter = () => {
+    if (pendingChapter && pages.length === pendingChapter.titleIndex + 1) {
+      pages.pop();
+      state.lastTemplateId = pendingChapter.priorLastTemplateId;
+    }
+    pendingChapter = null;
   };
 
   for (const element of outline.elements) {
@@ -3680,7 +4033,20 @@ function runFit(
       case 'closing':
         // Deferred until the loop finishes so the dynamic page-count line
         // can read the real total (see below).
+        settlePendingChapter();
         continue;
+      case 'chapter': {
+        // Gated: a lone chapter element (or none) never renders anything —
+        // such a book is laid out exactly like one without it.
+        if (!chapterMode) continue;
+        settlePendingChapter();
+        const priorLastTemplateId = state.lastTemplateId;
+        const titlePage = buildChapterTitlePage(element, manifest);
+        state.lastTemplateId = titlePage.templateId;
+        pages.push(titlePage);
+        pendingChapter = { titleIndex: pages.length - 1, priorLastTemplateId };
+        continue;
+      }
       case 'themed': {
         // Round-5 item 2b (root cause of Mara's "Retratos con Mirian"
         // rendering with zero member pages): every member of a themed
@@ -3805,6 +4171,7 @@ function runFit(
         continue;
     }
   }
+  settlePendingChapter();
 
   // Closing is built last so its memory count reflects everything actually printed.
   const closingElement = outline.elements.find((e) => e.kind === 'closing');
@@ -3896,7 +4263,61 @@ export function fitBook(outline: BookOutline, manifest: BookManifest, options: F
   // month continuity).
   const omittedIds = new Set<string>();
   const omittedGaps: LayoutGap[] = [];
-  if (result.document.totalPages > cap) {
+  const chapterMode = isChapterMode(outline);
+  if (chapterMode && result.document.totalPages > cap) {
+    // Chapter mode (multi-year Everything): the omission ORDER is computed
+    // up front (`planChapterDemotions` — pure, no layout), then only the
+    // prefix length that gets the book under the cap is searched for:
+    // exponential bracket + bisection, ~log2(n) fits instead of one per
+    // omission. Page count is not strictly monotone in the prefix length
+    // (parity blanks / reflow noise), so the two prefixes just below the
+    // winner are probed too and the shortest that fits wins.
+    const plan = planChapterDemotions(outline, manifest, { tierC: options.tierCCaptionedDemotion });
+    const fits = new Map<number, { document: BookDocument; gaps: LayoutGap[] }>();
+    const fitAt = (k: number) => {
+      let fit = fits.get(k);
+      if (!fit) {
+        fit = runFit(outline, manifest, options, pairingLevel, new Set(plan.slice(0, k).map((d) => d.id)));
+        fits.set(k, fit);
+      }
+      return fit;
+    };
+    const fitsCap = (k: number) => fitAt(k).document.totalPages <= cap;
+
+    let chosenK = plan.length; // over-cap fallback: every omission the plan has
+    if (plan.length > 0) {
+      let lo = 0; // known not to fit (the un-omitted fit above)
+      let hi = -1; // smallest k known to fit
+      let probe = Math.min(plan.length, Math.max(1, result.document.totalPages - cap));
+      for (;;) {
+        if (fitsCap(probe)) {
+          hi = probe;
+          break;
+        }
+        lo = probe;
+        if (probe === plan.length) break;
+        probe = Math.min(plan.length, probe * 2);
+      }
+      if (hi !== -1) {
+        while (hi - lo > 1) {
+          const mid = lo + Math.floor((hi - lo) / 2);
+          if (fitsCap(mid)) hi = mid;
+          else lo = mid;
+        }
+        let best = hi;
+        for (const back of [1, 2]) {
+          const candidate = hi - back;
+          if (candidate >= 1 && candidate < best && fitsCap(candidate)) best = candidate;
+        }
+        chosenK = best;
+      }
+    }
+    result = plan.length > 0 ? fitAt(chosenK) : result;
+    for (const d of plan.slice(0, chosenK)) {
+      omittedIds.add(d.id);
+      omittedGaps.push({ elementId: d.elementId, reason: chapterDemotionGapReason(d, cap), memoryIds: [d.id] });
+    }
+  } else if (result.document.totalPages > cap) {
     const pools: Record<DemotionKind, DemotionCandidate[]> = { photo: [], video: [], illustrated: [] };
     for (const c of gatherDemotionCandidates(outline, manifest)) pools[c.kind].push(c);
     for (const c of gatherIllustratedDemotionCandidates(outline, manifest)) pools.illustrated.push(c);

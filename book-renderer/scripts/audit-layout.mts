@@ -3,7 +3,9 @@ import path from 'node:path';
 import { parseManifest, parseOutline } from '../src/model/loader';
 import { normalizeEditsShapeForClient } from '../src/web/book/normalizeEdits';
 import { fitBookForPrint } from './lib/fitBookForPrint';
-import type { BookPage } from '../src/model/types';
+import { auditBookDocument } from '../src/model/audit';
+import { planChapterDemotions } from '../src/model/fitter';
+import type { BookManifest, BookOutline, BookPage } from '../src/model/types';
 
 /**
  * Offline layout audit (memory-book everything-fixes plan, steps 1.2 + 1.4).
@@ -76,6 +78,111 @@ function hasHeader(page: BookPage): boolean {
   return page.params.sectionHeader != null;
 }
 
+/** Mirrors fitter.ts MIN_MEMORIES_PER_MONTH (the per-month demotion floor; not exported). */
+const MONTH_FLOOR = 2;
+
+interface ChapterStat {
+  chapterId: string;
+  ageYear: number;
+  pages: number;
+  memoriesTotal: number;
+  memoriesKept: number;
+  keepRate: number | null;
+  monthsAtFloor: number;
+  monthsEmpty: number;
+  months: number;
+}
+
+/**
+ * Chapter-mode stats (Everything books; null for a book with < 2 chapter
+ * elements). Ids/counts only. Memory population = backbone + themed members
+ * (exactly the fitter's budgeting population). A month is "at floor" when
+ * demotion hit it (omitted > 0) and <= MONTH_FLOOR memories remain; "empty"
+ * when it had memories and none remain.
+ */
+function chapterStats(
+  outline: BookOutline,
+  manifest: BookManifest,
+  pages: BookPage[],
+  omitted: Set<string>,
+): { chapters: ChapterStat[]; firstsPages: number; tierCPlanned: number; tierCOmitted: number; planOmissionsByTier: Record<string, number> } | null {
+  const spans = outline.elements
+    .filter((e) => e.kind === 'chapter' && e.chapter && typeof e.chapter.startMonth === 'string')
+    .map((e) => ({ id: e.id, ageYear: e.chapter!.ageYear, startMonth: e.chapter!.startMonth }))
+    .sort((a, b) => a.startMonth.localeCompare(b.startMonth) || a.ageYear - b.ageYear);
+  if (spans.length < 2) return null;
+  const chapterOfMonth = (month: string) => {
+    let idx = 0;
+    for (let i = 0; i < spans.length; i++) if (spans[i].startMonth <= month) idx = i;
+    return idx;
+  };
+
+  // Page -> chapter: walk outline order; a chapter/backbone/themed element belongs to the latest chapter opener.
+  const chapterOfElement = new Map<string, number>();
+  let current = -1;
+  for (const e of outline.elements) {
+    if (e.kind === 'chapter') current = spans.findIndex((s) => s.id === e.id);
+    else if (e.kind === 'backbone' || e.kind === 'themed') chapterOfElement.set(e.id, Math.max(current, 0));
+    if (e.kind === 'chapter') chapterOfElement.set(e.id, current);
+  }
+  const pagesBy = spans.map(() => 0);
+  let firstsPages = 0;
+  const firstsIds = new Set(outline.elements.filter((e) => e.kind === 'firsts').map((e) => e.id));
+  for (const p of pages) {
+    const n = p.pageNumbers?.length ?? 1;
+    const ci = chapterOfElement.get(p.sourceElementId);
+    if (ci != null) pagesBy[ci] += n;
+    else if (firstsIds.has(p.sourceElementId)) firstsPages += n;
+  }
+
+  const monthOriginal = spans.map(() => new Map<string, number>());
+  const monthOmitted = spans.map(() => new Map<string, number>());
+  const total = spans.map(() => 0);
+  const kept = spans.map(() => 0);
+  for (const e of outline.elements) {
+    if (e.kind !== 'backbone' && e.kind !== 'themed') continue;
+    for (const id of e.memoryIds) {
+      const m = manifest.memories[id];
+      if (!m) continue;
+      const month = m.date.slice(0, 7);
+      const ci = chapterOfMonth(month);
+      total[ci]++;
+      monthOriginal[ci].set(month, (monthOriginal[ci].get(month) ?? 0) + 1);
+      if (omitted.has(id)) monthOmitted[ci].set(month, (monthOmitted[ci].get(month) ?? 0) + 1);
+      else kept[ci]++;
+    }
+  }
+
+  const chapters: ChapterStat[] = spans.map((s, i) => {
+    let atFloor = 0;
+    let empty = 0;
+    for (const [month, orig] of monthOriginal[i]) {
+      const om = monthOmitted[i].get(month) ?? 0;
+      const remaining = orig - om;
+      if (remaining === 0) empty++;
+      else if (om > 0 && remaining <= MONTH_FLOOR) atFloor++;
+    }
+    return {
+      chapterId: s.id,
+      ageYear: s.ageYear,
+      pages: pagesBy[i],
+      memoriesTotal: total[i],
+      memoriesKept: kept[i],
+      keepRate: total[i] > 0 ? Math.round((kept[i] / total[i]) * 1000) / 1000 : null,
+      monthsAtFloor: atFloor,
+      monthsEmpty: empty,
+      months: monthOriginal[i].size,
+    };
+  });
+
+  // Tier C: which planned omissions came from the captioned-demotion tier, restricted to what the fit actually omitted.
+  const plan = planChapterDemotions(outline, manifest);
+  const planOmissionsByTier: Record<string, number> = {};
+  for (const d of plan) planOmissionsByTier[d.tier] = (planOmissionsByTier[d.tier] ?? 0) + 1;
+  const tierCOmitted = plan.filter((d) => d.tier === 'C' && omitted.has(d.id)).length;
+  return { chapters, firstsPages, tierCPlanned: planOmissionsByTier.C ?? 0, tierCOmitted, planOmissionsByTier };
+}
+
 interface ExportShape {
   id?: string;
   scopeKind?: string;
@@ -98,8 +205,16 @@ function auditBook(file: string) {
     focalPoints: Object.keys(edits.focalPoints ?? {}).length,
   };
 
-  const fit = fitBookForPrint({ outline, manifest, edits });
+  let fitCount = 0;
+  const fit = fitBookForPrint({ outline, manifest, edits, onRunFit: () => { fitCount++; } });
   const pages = fit.document.pages;
+
+  // Content-integrity audit (src/model/audit.ts) on the finished document — violation counts by check.
+  const violations = auditBookDocument(fit.document, outline, manifest);
+  const violationsByCheck: Record<string, number> = {};
+  for (const v of violations) violationsByCheck[v.check] = (violationsByCheck[v.check] ?? 0) + 1;
+  const omittedIds = new Set(fit.capacity.omittedMemoryIds);
+  const chapterMode = chapterStats(outline, manifest, pages, omittedIds);
 
   const templateHistogram: Record<string, number> = {};
   for (const p of pages) templateHistogram[p.templateId] = (templateHistogram[p.templateId] ?? 0) + 1;
@@ -150,6 +265,15 @@ function auditBook(file: string) {
     headerPagesWithoutSafeArea,
     fitCapacity: { cap: fit.capacity.cap, overCap: fit.capacity.overCap, omitted: fit.capacity.omittedMemoryIds.length },
     layoutGaps: fit.gaps.length,
+    integrity: {
+      total: violations.length,
+      byCheck: violationsByCheck,
+      // ids/page ids only — never message text (messages can embed content-derived detail)
+      items: violations.map((v) => ({ check: v.check, elementId: v.elementId ?? null, pageId: v.pageId ?? null })),
+    },
+    fitCount,
+    omittedTotal: omittedIds.size,
+    chapterMode,
   };
 }
 
@@ -170,6 +294,19 @@ function printTable(r: Report): void {
   for (const [t, v] of Object.entries(r.headerPagesByTemplate)) console.log(`  ${t.padEnd(20)} ${String(v.count).padStart(3)}  ${v.positioning}`);
   const bare = r.headerPagesWithoutSafeArea.filter((x) => x.positioning === 'bare-before-fix' || x.positioning === 'not-rendered');
   console.log(`header pages lacking SafeArea (bare-before-fix / not-rendered): ${bare.reduce((n, x) => n + x.count, 0)}`);
+  console.log(`integrity violations: ${r.integrity.total}${r.integrity.total ? '  ' + Object.entries(r.integrity.byCheck).map(([c, n]) => `${c}=${n}`).join(' ') : ''}`);
+  for (const v of r.integrity.items) console.log(`  ${v.check}  element ${v.elementId ?? '-'}  page ${v.pageId ?? '-'}`);
+  console.log(`fit passes (onRunFit): ${r.fitCount} | omitted memories: ${r.omittedTotal} | over cap: ${r.fitCapacity.overCap}`);
+  if (r.chapterMode) {
+    const c = r.chapterMode;
+    console.log(`chapter mode: ${c.chapters.length} chapters | firsts pages ${c.firstsPages} | Tier C engaged: ${c.tierCOmitted > 0 ? 'YES' : 'no'} (captioned omissions ${c.tierCOmitted}; plan by tier ${JSON.stringify(c.planOmissionsByTier)})`);
+    console.log('  chapter          pages  kept/total  keep-rate  months  at-floor  empty');
+    for (const ch of c.chapters) {
+      console.log(`  ${ch.chapterId.padEnd(15)} ${String(ch.pages).padStart(5)}  ${`${ch.memoriesKept}/${ch.memoriesTotal}`.padStart(10)}  ${String(ch.keepRate ?? '-').padStart(9)}  ${String(ch.months).padStart(6)}  ${String(ch.monthsAtFloor).padStart(8)}  ${String(ch.monthsEmpty).padStart(5)}`);
+    }
+  } else {
+    console.log('chapter mode: off (no chapter elements)');
+  }
 }
 
 const argv = process.argv.slice(2);

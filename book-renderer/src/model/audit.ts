@@ -189,6 +189,43 @@ function auditSectionTitleOrphans(document: BookDocument, outline: BookOutline):
       });
     }
   }
+  violations.push(...auditChapterTitleOrphans(document, outline));
+  return violations;
+}
+
+/**
+ * Multi-year chapter openers: a chapter's `spread-title` page must be
+ * followed by at least one real content page before the next chapter's title
+ * (or the closing / end of the book). Only iterates chapter elements, so
+ * books without them (year, calendar-year, legacy `custom`) are unaffected.
+ */
+function auditChapterTitleOrphans(document: BookDocument, outline: BookOutline): IntegrityViolation[] {
+  const chapterElements = new Map(outline.elements.filter((e) => e.kind === 'chapter').map((e) => [e.id, e]));
+  if (chapterElements.size === 0) return [];
+  const violations: IntegrityViolation[] = [];
+  const pages = document.pages;
+  const isChapterTitle = (page: BookPage) => page.templateId === 'spread-title' && chapterElements.has(page.sourceElementId);
+  for (let i = 0; i < pages.length; i++) {
+    if (!isChapterTitle(pages[i])) continue;
+    let hasContent = false;
+    for (let j = i + 1; j < pages.length; j++) {
+      const next = pages[j];
+      if (isChapterTitle(next) || next.templateId === 'closing') break;
+      if (next.templateId !== 'blank') {
+        hasContent = true;
+        break;
+      }
+    }
+    if (!hasContent) {
+      const element = chapterElements.get(pages[i].sourceElementId)!;
+      violations.push({
+        check: 'section-title-orphan',
+        elementId: element.id,
+        pageId: pages[i].id,
+        message: `Chapter "${element.title}" (${element.id}) has a title page but zero content pages behind it before the next chapter or the closing.`,
+      });
+    }
+  }
   return violations;
 }
 

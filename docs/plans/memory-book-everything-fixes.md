@@ -1,6 +1,6 @@
 # Memory Book — Everything-scope incident fixes
 
-Status: **Phase 0 DONE — deployed + live-verified 2026-10-01** (Phases 1–3 next) · Owner: Eduardo · Opened 2026-09-30
+Status: **Phase 0 DONE — deployed + live-verified 2026-10-01** · Phase 1 code-complete · **Phase 2 code-complete 2026-10-01 (not deployed; pending owner items below)** · Phase 3 next · Owner: Eduardo · Opened 2026-09-30
 Related: [memory-book.md](memory-book.md) (§4 scope table, §10.3 open
 question now RESOLVED below), [../features/memory-book-generation.md](../features/memory-book-generation.md).
 
@@ -266,6 +266,16 @@ decision — whether to design pooling — still waits on Phase 0 regenerated da
     pooling change (don't design against the corrupted sample).
 
 ### Phase 2 — multi-year rules (Everything only; D1–D6)
+
+Concrete spec: [memory-book-everything-phase2.md](memory-book-everything-phase2.md)
+
+Status 2026-10-01: 2.1–2.8 [DONE — code-complete in the worktree, not deployed; `everything` stays paused except the owner
+family]. Seam check (worker output -> renderer fitter via `audit-layout.mts`): 4/4 chapters render, no chapter orphans, <= 122
+pages; a very dense/illustrated-heavy synthetic mix still ends with `month-continuity` violations (see feature doc "Known
+risks"). **Pending owner items:** (a) copy review of all new es/en strings, (b) confirm Tier C captioned demotion
+(`ENABLE_TIER_C_CAPTIONED_DEMOTION`) after the dogfood run, (c) themed-spread survival risk (single placement + page cap may
+leave far fewer than 8), (d) dogfood run (Enzo 4y, Mara 2y: 0 violations, <= 122 pages). Deploy order: renderer (web + Fly)
+-> bridge + edits -> worker.
 
 2.1 D2 window start (bridge `everything` branch: DOB-aware; the
     `memory-book-edits` `resolveScopeWindow` duplicate must agree — share

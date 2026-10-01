@@ -3105,6 +3105,8 @@ and pages its read, dedupes ids, and on a `23505` unique violation (partial
 unique active-token index) re-reads and mints only the still-missing rows
 (up to 3 passes); other insert/read errors → 500.
 
+*Multi-year contract additions (2026-10-01, Phase 2; code-complete, not deployed):* the manifest scope kind / `book_document.outline.scope.type` gains the value `'everything'` (was `'custom'` for `scope_kind = 'everything'`; stored pre-change docs keep `'custom'`). `load_generation_context`'s `everything` window now starts at the first eligible memory on or after the child's DOB (`_shared/memory-book-scope-window.ts`, shared with `memory-book-edits`), and each `milestones[]` row additionally carries `status` (the worker treats a missing value as `'candidate'`). Outline elements gain the kind `chapter` (+ optional `chapter: { ageYear, startMonth, endMonth }`) for multi-year books only. Response shape and error semantics are otherwise unchanged. See [memory-book-generation.md](./features/memory-book-generation.md#multi-year-everything-books).
+
 *Ready push (memory-book shelf redesign):* `handlePublish`'s CAS `UPDATE`
 also selects back `id, family_id, child_id, scope_label, requested_by`;
 when the CAS wins (`data` non-null — the row genuinely transitioned

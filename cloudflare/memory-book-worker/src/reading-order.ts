@@ -29,6 +29,8 @@ import type {
   SpreadTitleMode,
 } from '../../../supabase/functions/_shared/memory-book-outline.ts';
 import type { BackboneSegment } from '../../../supabase/functions/_shared/memory-book-outline.ts';
+import { formatMonthRangeLabel } from './backbone';
+import type { AgeYearChapter } from './chapters';
 
 export interface PlacementCandidate {
   memoryId: string;
@@ -218,9 +220,19 @@ export function enforceThemedSpreadSpacing(
 }
 
 export type ReadingOrderSectionKind =
-  | 'cover' | 'title' | 'through-the-years' | 'firsts' | 'birthday' | 'themed' | 'backbone' | 'closing';
+  | 'cover' | 'title' | 'through-the-years' | 'chapter' | 'firsts' | 'birthday' | 'themed' | 'backbone' | 'closing';
 
 export const FIRSTS_DEFAULT_TITLE = 'Big and small victories this year';
+/** Multi-year ("everything") books: no "this year". */
+export const FIRSTS_DEFAULT_TITLE_MULTI_YEAR = 'Big and small victories';
+
+const CHAPTER_TITLE_WORDS = ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+
+/** English fallback title of an age-year chapter ("Year Two"); the renderer
+ * localizes it. n >= 11 -> "Year 11". */
+export function chapterEnglishTitle(ageYear: number): string {
+  return ageYear >= 1 && ageYear <= 10 ? `Year ${CHAPTER_TITLE_WORDS[ageYear - 1]}` : `Year ${ageYear}`;
+}
 
 export interface ReadingOrderSection {
   id: string;
@@ -235,6 +247,8 @@ export interface ReadingOrderSection {
   kicker?: string | null;
   highlights?: string[];
   firstsWarmNames?: ParsedFirstsWarmName[];
+  /** `kind: 'chapter'` only: the age-year chapter this opener introduces. */
+  chapter?: { ageYear: number; startMonth: string; endMonth: string };
 }
 
 export interface ReadingOrderThemedSpreadInput {
@@ -258,6 +272,13 @@ export interface ReadingOrderInput {
   backboneRationale: Record<string, string>;
   specialSegmentTitles?: Record<string, string>;
   highlightedMemoryIds?: ReadonlySet<string>;
+  /** Multi-year ("everything") chapter mode: the non-empty age-year chapters.
+   * Segments carry `chapterIndex` (into this array); a `chapter` section is
+   * emitted before the first segment of each chapter. Absent/empty -> none
+   * (single-year structure, byte-identical to before). */
+  chapters?: AgeYearChapter[];
+  /** Multi-year book: use the "no this year" default Firsts title. */
+  multiYear?: boolean;
 }
 
 export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection[] {
@@ -317,8 +338,39 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
 
   const highlightedMemoryIds = input.highlightedMemoryIds ?? new Set<string>();
 
+  // Chapter openers (Everything, chapter mode): chapter N is emitted right
+  // before the first backbone segment carrying its index -- chapter 1 ahead of
+  // the gap -1 themed spread, each later one after the previous gap's themed
+  // spread (it is emitted inside the segment loop, after pushThemedAt(index-1)).
+  const chapters = input.chapters ?? [];
+  const emittedChapterIndices = new Set<number>();
+  const pushChapterBefore = (segmentIndex: number) => {
+    const chapterIndex = input.finalBackboneSegments[segmentIndex]?.chapterIndex;
+    if (chapters.length === 0 || chapterIndex === undefined || emittedChapterIndices.has(chapterIndex)) return;
+    const chapter = chapters[chapterIndex];
+    if (!chapter) return;
+    emittedChapterIndices.add(chapterIndex);
+    const contentMonths = input.finalBackboneSegments
+      .filter((s) => s.chapterIndex === chapterIndex)
+      .flatMap((s) => s.monthKeys)
+      .sort();
+    sections.push({
+      id: `chapter:${chapter.ageYear}`,
+      kind: 'chapter',
+      title: chapterEnglishTitle(chapter.ageYear),
+      subtitle: contentMonths.length > 0
+        ? formatMonthRangeLabel([contentMonths[0], contentMonths[contentMonths.length - 1]])
+        : undefined,
+      memoryIds: [],
+      rationale: {},
+      chapter: { ageYear: chapter.ageYear, startMonth: chapter.startMonth, endMonth: chapter.endMonth },
+    });
+  };
+
+  pushChapterBefore(0);
   pushThemedAt(-1);
   input.finalBackboneSegments.forEach((segment, index) => {
+    pushChapterBefore(index);
     const rationale: Record<string, string> = {};
     for (const id of segment.memoryIds) {
       if (input.backboneRationale[id]) rationale[id] = input.backboneRationale[id];
@@ -340,7 +392,7 @@ export function buildReadingOrder(input: ReadingOrderInput): ReadingOrderSection
     sections.push({
       id: 'firsts',
       kind: 'firsts',
-      title: input.firsts.title?.trim() || FIRSTS_DEFAULT_TITLE,
+      title: input.firsts.title?.trim() || (input.multiYear ? FIRSTS_DEFAULT_TITLE_MULTI_YEAR : FIRSTS_DEFAULT_TITLE),
       memoryIds: input.firsts.memoryIds,
       rationale: {},
       firstsWarmNames: (input.firsts.warmNames ?? []).filter((w) => input.firsts!.memoryIds.includes(w.memoryId)),

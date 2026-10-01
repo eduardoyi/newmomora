@@ -442,6 +442,7 @@ function estimatePageCount(elements: { kind: string; memoryIds: string[] }[]): n
     cover: 2,
     title: 2,
     'through-the-years': 1,
+    chapter: 1,
     themed: 1,
     backbone: 0,
     birthday: 1,

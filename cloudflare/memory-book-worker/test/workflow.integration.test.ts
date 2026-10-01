@@ -169,6 +169,31 @@ function workflowWithEnv(env: Env): MemoryBookWorkflow {
 }
 
 describe('MemoryBookWorkflow', () => {
+  it('publishes outline.scope.type "everything" (and manifest scope kind) for an Everything book', async () => {
+    const context = baseContext();
+    const everythingContext: GenerationContextResponse = {
+      ...context,
+      book: { ...context.book, scopeKind: 'everything', scopeLabel: 'Everything' },
+    };
+    const { env, fetchMock, bridgeCalls } = createEnv({ bridgeResponses: { load_generation_context: everythingContext } });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await workflowWithEnv(env).run(
+      { payload: { bookId: BOOK_ID, attemptId: ATTEMPT_ID } } as WorkflowEvent<WorkflowDispatchPayload>,
+      fakeStep(),
+    );
+    expect(result).toEqual({ bookId: BOOK_ID, status: 'ready' });
+
+    const document = bridgeCalls.find((c) => c.operation === 'publish')!.body.bookDocument as {
+      outline: { scope: { type: string }; elements: Array<{ kind: string }> };
+      manifest: { scope: { kind: string } };
+    };
+    expect(document.outline.scope).toEqual({ type: 'everything' });
+    expect(document.manifest.scope.kind).toBe('everything');
+    // A single age-year of memories is not chapter mode: no chapter elements.
+    expect(document.outline.elements.some((e) => e.kind === 'chapter')).toBe(false);
+  });
+
   it('reaches ready and publishes a book_document with a valid outline + manifest', async () => {
     const { env, fetchMock, bridgeCalls } = createEnv();
     vi.stubGlobal('fetch', fetchMock);
@@ -190,6 +215,9 @@ describe('MemoryBookWorkflow', () => {
     expect(document.outline.coverCandidates).toEqual([MEMORY_2]);
     expect((document.manifest.memories as Record<string, unknown>)[MEMORY_1]).toBeDefined();
     expect((document.manifest.memories as Record<string, unknown>)[MEMORY_2]).toBeDefined();
+
+    // Year books keep their own scope type.
+    expect(document.outline.scope).toEqual({ type: 'age-year' });
 
     // Never send bridge calls out of order relative to the CAS discipline:
     // context load happens before publish.

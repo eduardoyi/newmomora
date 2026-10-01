@@ -49,14 +49,27 @@ export function Closing({ page, manifest, showGuides }: TemplateProps) {
     typeof page.params.closingTitle === 'string' && page.params.closingTitle.length > 0
       ? page.params.closingTitle
       : null;
-  const closingTitle = closingTitleOverride ?? furniture.closing.headline;
+  // Multi-year ("everything") books get their own headline + count line
+  // (years from the scope's own start/end, never the English scope label);
+  // every other scope kind — including legacy `custom` — is unchanged.
+  const isEverything = manifest.scope.kind === 'everything';
+  const closingTitle =
+    closingTitleOverride ?? (isEverything ? furniture.closing.multiYear.headline : furniture.closing.headline);
   const closingLineOverride =
     typeof page.params.closingLine === 'string' && page.params.closingLine.length > 0
       ? page.params.closingLine
       : null;
   const closingLine =
     closingLineOverride ??
-    (memoryCount > 0 ? furniture.closing.memoryCountLine(memoryCount, manifest.scope.label, yearOrdinal) : null);
+    (memoryCount > 0
+      ? isEverything
+        ? furniture.closing.multiYear.memoryCountLine(
+            memoryCount,
+            manifest.scope.start.slice(0, 4),
+            manifest.scope.end.slice(0, 4),
+          )
+        : furniture.closing.memoryCountLine(memoryCount, manifest.scope.label, yearOrdinal)
+      : null);
 
   return (
     <PageFrame isSpread={false} showGuides={showGuides} className="closing-page">

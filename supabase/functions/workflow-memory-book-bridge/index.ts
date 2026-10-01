@@ -26,6 +26,7 @@
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
+import { addDaysToDateOnly, resolveEverythingWindow, ScopeWindowError } from '../_shared/memory-book-scope-window.ts';
 import { byMemoryIds, fetchAll, PagedQueryError } from '../_shared/paged-query.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
@@ -152,14 +153,6 @@ async function loadActiveBook(
   return { row };
 }
 
-function addDaysToDateOnly(dateStr: string, days: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const utcMs = Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000;
-  const dt = new Date(utcMs);
-  const pad = (n: number, width: number) => String(n).padStart(width, '0');
-  return `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1, 2)}-${pad(dt.getUTCDate(), 2)}`;
-}
-
 interface WindowRows {
   memories: Array<{ id: string; content: string | null } & Record<string, unknown>>;
   media: unknown[];
@@ -278,7 +271,7 @@ async function loadWindowRows(
     (ids, from, to) =>
       supabase
         .from('memory_milestones')
-        .select('memory_id, family_member_id, milestone_id, detail, out_of_band')
+        .select('memory_id, family_member_id, milestone_id, detail, out_of_band, status')
         .neq('status', 'dismissed')
         .in('memory_id', ids)
         .order('id', { ascending: true })
@@ -351,21 +344,21 @@ async function buildGenerationContext(
 
   let windowStart: string;
   let windowEndExclusive: string;
-  // No memory can ever match a window before/at its own start (a strict
-  // gte/lt pair), so this sentinel makes an 'everything' family with zero
-  // memories yield an empty result via the SAME query path below, rather
-  // than a malformed date value reaching Postgres.
-  const EMPTY_WINDOW_SENTINEL = '0001-01-01';
   if (book.scope_kind === 'everything') {
-    const [earliestResult, latestResult] = await Promise.all([
-      supabase.from('memories').select('memory_date').eq('family_id', book.family_id).order('memory_date', { ascending: true }).limit(1).maybeSingle(),
-      supabase.from('memories').select('memory_date').eq('family_id', book.family_id).order('memory_date', { ascending: false }).limit(1).maybeSingle(),
-    ]);
-    // An error here must not degrade into the empty-window sentinel (a
-    // misleading NO_ELIGIBLE_MEMORIES).
-    if (earliestResult.error || latestResult.error) throw new ContextLoadError('everything_window');
-    windowStart = earliestResult.data?.memory_date ?? EMPTY_WINDOW_SENTINEL;
-    windowEndExclusive = latestResult.data?.memory_date ? addDaysToDateOnly(latestResult.data.memory_date, 1) : EMPTY_WINDOW_SENTINEL;
+    // D2: start = first eligible memory on/after the child's DOB, end = latest
+    // family memory + 1 day (shared with memory-book-edits' picker pool). An
+    // error must not degrade into the empty-window sentinel (a misleading
+    // NO_ELIGIBLE_MEMORIES); a genuine "no eligible memory" is the sentinel.
+    try {
+      ({ start: windowStart, endExclusive: windowEndExclusive } = await resolveEverythingWindow(supabase, {
+        familyId: book.family_id,
+        childId: book.child_id,
+        childDateOfBirth: child?.dateOfBirth ?? null,
+      }));
+    } catch (error) {
+      if (error instanceof ScopeWindowError) throw new ContextLoadError('everything_window');
+      throw error;
+    }
   } else {
     windowStart = book.scope_start_date!;
     windowEndExclusive = addDaysToDateOnly(book.scope_end_date!, 1);

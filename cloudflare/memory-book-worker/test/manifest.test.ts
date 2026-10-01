@@ -240,6 +240,48 @@ describe('buildBookManifest', () => {
     expect(manifest.child).toEqual({ id: 'family-1', name: 'The Rivas Family', dateOfBirth: null });
   });
 
+  it.each([
+    ['age_year', 'age-year'],
+    ['calendar_year', 'calendar-year'],
+    ['everything', 'everything'],
+    ['custom_range', 'custom'],
+  ] as const)('maps scopeKind %s to manifest scope kind %s', (scopeKind, expected) => {
+    const context = baseContext({ book: { ...baseContext().book, scopeKind } });
+    const manifest = buildBookManifest({ context, memoryIds: [], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });
+    expect(manifest.scope.kind).toBe(expected);
+  });
+
+  describe('portrait sampling (Everything only)', () => {
+    const portraitVersions = Array.from({ length: 17 }, (_, i) => {
+      const monthsIn = Math.round((i * 47) / 16);
+      const year = 2022 + Math.floor((9 + monthsIn) / 12);
+      const month = ((9 + monthsIn) % 12) + 1;
+      return {
+        id: `portrait-${i}`,
+        reference_date: `${year}-${String(month).padStart(2, '0')}-15`,
+        illustrated_profile_key: `portraits/illustrated-${i}.webp`,
+        profile_picture_key: `portraits/source-${i}.jpg`,
+      };
+    });
+
+    it('samples <= 6 portraits for an Everything book, keeping the first and the last, sorted by date', () => {
+      const context = baseContext({ book: { ...baseContext().book, scopeKind: 'everything' }, portraitVersions });
+      const manifest = buildBookManifest({ context, memoryIds: [], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });
+      expect(manifest.portraits).toHaveLength(6);
+      const dates = manifest.portraits.map((p) => p.date);
+      expect(dates).toEqual([...dates].sort());
+      expect(dates[0]).toBe(portraitVersions[0].reference_date);
+      expect(dates[dates.length - 1]).toBe(portraitVersions[16].reference_date);
+      expect(new Set(manifest.portraits.map((p) => p.file)).size).toBe(6);
+    });
+
+    it.each(['age_year', 'calendar_year', 'custom_range'] as const)('leaves a %s book\'s portraits untouched', (scopeKind) => {
+      const context = baseContext({ book: { ...baseContext().book, scopeKind }, portraitVersions });
+      const manifest = buildBookManifest({ context, memoryIds: [], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });
+      expect(manifest.portraits).toHaveLength(17);
+    });
+  });
+
   it('carries dateOfBirth as null when context.child has none (print-polish round, item F)', () => {
     const context = baseContext({ child: { id: 'child-1', name: 'Enzo', dateOfBirth: null } });
     const manifest = buildBookManifest({ context, memoryIds: [], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });

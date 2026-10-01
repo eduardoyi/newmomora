@@ -151,6 +151,10 @@ export interface BackboneSegment {
   label: string;
   monthKeys: string[];
   memoryIds: string[];
+  /** Multi-year ("everything") books only: index (into the book's chapters
+   * array, NOT the age-year) of the chapter this segment sits in. Absent for
+   * single-year books. */
+  chapterIndex?: number;
 }
 
 // ── Special backbone segment flags (birth/birthday month titles) ───────────
@@ -223,7 +227,18 @@ export const FIRSTS_MIN_MILESTONES = 1;
 
 // ── AI call: prompt construction ─────────────────────────────────────────
 
-export function buildOutlineSystemPrompt(): string {
+/** Multi-year ("everything") book guidance, inserted after the LANGUAGE
+ * paragraph of the system prompt ONLY when `multiYear` is set. */
+const MULTI_YEAR_BOOK_BLOCK =
+  'MULTI-YEAR BOOK: this book spans SEVERAL years of the child\'s life and is organised into one chapter per age-year (see CHAPTERS in the user message). Wherever the rules above say "this year", "of the year" or "a year of memories", read it as "across the years" -- never write copy that implies the book covers a single year. `firsts_title` is framed as "big and small victories" with no "this year" in it. The `dedication` cites the first and last dates of the span and never says "this year" (in Spanish, never "este año"). `back_cover_line` is about years of memories, not one year. Spread your hero, cover and panorama candidates across DIFFERENT years rather than concentrating them in one. A birthday month is titled "the month you turned N", using the N from its FLAGGED birthday marker. Selection across years is handled by code, so do NOT favour recent years over earlier ones.';
+
+export interface OutlineSystemPromptOptions {
+  /** Add the MULTI-YEAR BOOK block (the "everything" scope). Absent/false
+   * produces the byte-identical single-year prompt. */
+  multiYear?: boolean;
+}
+
+export function buildOutlineSystemPrompt(options?: OutlineSystemPromptOptions): string {
   return [
     "You are the curator for a premium printed baby/family memory book, built from a parent's private journal entries. You receive a deterministic skeleton (already decided in code: cover, title page, a portrait timeline, a chronological backbone segmented by month, possibly birthday spreads, a Firsts spread that CLOSES the book, and a closing page) and a list of SPREAD CANDIDATES from three sources: topic clusters, people-pair spreads (\"With <Name>\"), and emotion spreads (\"The funny ones\"). Your job is to select and sequence -- not to write or rewrite.",
     '',
@@ -238,6 +253,7 @@ export function buildOutlineSystemPrompt(): string {
     '',
     'LANGUAGE: write EVERY piece of copy you generate below (spread titles, kickers, segment_titles, firsts_title, warm_name, dedication, back_cover_line, editorial_note) in ONE consistent language -- the family\'s own journal-writing language, resolved in this exact order: (1) the predominant language of the actual caption text you can see -- the excerpts on the MEMORIES lines below, plus a LANGUAGE EVIDENCE ONLY block when the window itself has few captions (see below) -- judged from the real weight of evidence, never from a single foreign word or name; (2) if you cannot see enough caption text anywhere to judge a language, the CONFIGURED LANGUAGE value given below (when one is provided); (3) if neither is available, English. A LANGUAGE EVIDENCE ONLY block, when present, is recent caption text from this family\'s wider archive shown SOLELY so you can judge their writing language -- it is not part of this book, never eligible for a spread/backbone/Firsts, and never quotable as a title source. Return your resolved choice as a `language` field (a BCP-47 code, e.g. "es", "es-MX", "en") -- this is REQUIRED and must be the language you actually wrote everything else in, not a separate guess.',
     '',
+    ...(options?.multiYear ? [MULTI_YEAR_BOOK_BLOCK, ''] : []),
     'FIRSTS WARM NAMES: for EACH row listed under FIRSTS MILESTONES below (if any), write a `warm_name` -- the milestone rephrased as a warm second-person sentence, in the family\'s journal language, addressed to the child. Examples: "Monta bicicleta sin pedales" -> "Aprendiste a montar bicicleta sin pedales"; "Primer corte de pelo" -> "Tuviste tu primer corte de pelo". This is connective text (editable downstream) and must NEVER alter the parent\'s own memory caption -- it stands alongside it, not instead of it. Echo back the exact `memory_id` and `milestone_id` from that row so code can match your `warm_name` to the right entry.',
     '',
     'RELATIONSHIP WORDS (aunt, uncle, grandma, "nonno", "abuelo", "zio", "mami", etc.) may ONLY come from the TAGGED PEOPLE listed on each memory below: either their OWN profile nickname (the "nn:" field -- see PEOPLE-PAIR SPREAD TITLES below, this needs no further evidence) or their first name as the family actually wrote it (reasoning from a name like "Nonna Rosa" or "Tio Mike" is fine, that is user-authored evidence). NEVER infer a relationship from what people look like in a photo, and NEVER infer one just because a topic tag like `extended-family` or `grandparents` is present -- a real failure titled a cluster of grandparent photos "Entre tias, tios y primos" (aunts, uncles, and cousins) purely from the topic tag, when the tagged people did not support that specific relationship mix. When you are not confident a specific relationship word is supported by the tagged people (profile nickname OR name), use a warm generic title instead (spirit: "Look who came to see you") rather than guessing who someone is.',
@@ -331,6 +347,13 @@ export interface OutlineSkeletonSummaryInput {
    * enough on its own). LANGUAGE EVIDENCE ONLY: never eligible for a
    * spread/backbone/Firsts, never a quote source. */
   languageEvidenceCaptions: string[];
+  /** Multi-year books: when set, FIRSTS MILESTONES rows are listed ONLY for
+   * these memory ids (the capped Firsts set). `undefined` lists every row, as
+   * single-year books always have. */
+  firstsMemoryIds?: string[];
+  /** Multi-year books: the age-year chapters. When set, a CHAPTERS block is
+   * printed and each BACKBONE SEGMENT line is tagged with its chapter. */
+  chapters?: Array<{ ageYear: number; startMonth: string; endMonth: string }>;
 }
 
 export function buildOutlineUserPrompt(
@@ -368,10 +391,21 @@ export function buildOutlineUserPrompt(
   if (skeleton.firstsCount >= FIRSTS_MIN_MILESTONES) {
     lines.push('FIRSTS MILESTONES (write a warm_name for EACH row -- see FIRSTS WARM NAMES above):');
     const sortedFeatures = [...features.values()].sort((a, b) => a.date.localeCompare(b.date));
+    const firstsIdFilter = skeleton.firstsMemoryIds ? new Set(skeleton.firstsMemoryIds) : null;
     for (const feature of sortedFeatures) {
+      if (firstsIdFilter && !firstsIdFilter.has(feature.id)) continue;
       for (const milestone of feature.milestones) {
         lines.push(`- memory_id="${feature.id}" milestone_id="${milestone.milestoneId}" ("${milestone.name}")`);
       }
+    }
+    lines.push('');
+  }
+
+  const chapters = skeleton.chapters;
+  if (chapters && chapters.length > 0) {
+    lines.push('CHAPTERS (one per age-year, in order -- each BACKBONE SEGMENT below is tagged with its chapter):');
+    for (const chapter of chapters) {
+      lines.push(`- chapter ${chapter.ageYear}: ${chapter.startMonth} to ${chapter.endMonth}`);
     }
     lines.push('');
   }
@@ -385,7 +419,13 @@ export function buildOutlineUserPrompt(
         ? ' -- FLAGGED: birth month, draft a segment_titles entry'
         : ` -- FLAGGED: birthday month (turns ${flag.ageTurned}), draft a segment_titles entry`
       : '';
-    lines.push(`[${index}] ${segment.id} "${segment.label}" -- ${segment.memoryIds.length} memories${flagDesc}`);
+    const chapterTag =
+      chapters && chapters.length > 0 && segment.chapterIndex !== undefined
+        ? ` [chapter ${chapters[segment.chapterIndex]?.ageYear ?? segment.chapterIndex + 1}]`
+        : '';
+    lines.push(
+      `[${index}] ${segment.id} "${segment.label}"${chapterTag} -- ${segment.memoryIds.length} memories${flagDesc}`,
+    );
   });
   lines.push('');
 

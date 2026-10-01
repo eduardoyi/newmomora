@@ -795,3 +795,118 @@ describe('AnchorMedia solo-video scan-group placement (owner review round 9, ite
     expect(html).not.toContain('photo-tile__meta--right');
   });
 });
+
+describe('multi-year (everything scope) Closing + ThroughTheYears furniture', () => {
+  const closingOutline = () =>
+    makeOutline([
+      makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] }),
+      makeElement({ id: 'closing', kind: 'closing' }),
+    ]);
+  const renderClosing = (manifest: BookManifest, extraParams: Record<string, unknown> = {}) => {
+    const { document } = fitBook(closingOutline(), manifest);
+    const page = document.pages.find((p) => p.templateId === 'closing')!;
+    expect(page).toBeTruthy();
+    return {
+      page,
+      html: renderToStaticMarkup(
+        <TemplateRenderer page={{ ...page, params: { ...page.params, ...extraParams } }} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+      ),
+    };
+  };
+  const scope = (kind: string, label = 'Everything') => ({ kind, label, start: '2022-10-23', end: '2026-09-30' });
+
+  it('Closing, everything scope: es headline + years from scope.start/end (no English label leak)', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'es', scope: scope('everything') });
+    const { page, html } = renderClosing(manifest);
+    const n = Number(page.params.memoryCount);
+    expect(html).toContain('Y la historia continúa.');
+    expect(html).toContain(`Este libro recoge ${n} recuerdos, de 2022 a 2026.`);
+    expect(html).not.toContain('Everything');
+    expect(html).not.toContain('Hasta el año que viene.');
+    expect(html).toMatchSnapshot();
+  });
+
+  it('Closing, everything scope: en headline + years', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en', scope: scope('everything') });
+    const { page, html } = renderClosing(manifest);
+    expect(html).toContain('And the story continues.');
+    expect(html).toContain(`This book holds ${Number(page.params.memoryCount)} memories, from 2022 to 2026.`);
+    expect(html).toMatchSnapshot();
+  });
+
+  it('Closing, everything scope: closingTitle / closingLine edits still override', () => {
+    const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en', scope: scope('everything') });
+    const { html } = renderClosing(manifest, { closingTitle: 'Custom title', closingLine: 'Custom line' });
+    expect(html).toContain('Custom title');
+    expect(html).toContain('Custom line');
+    expect(html).not.toContain('And the story continues.');
+    expect(html).not.toContain('This book holds');
+  });
+
+  it('Closing, age-year and legacy custom scope: unchanged furniture', () => {
+    const ageYear = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'en' });
+    const a = renderClosing(ageYear);
+    expect(a.html).toContain('See you next year.');
+    expect(a.html).toContain(`This book holds ${Number(a.page.params.memoryCount)} memories from your first year.`);
+    expect(a.html).not.toContain('story continues');
+
+    const custom = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'es', scope: scope('custom') });
+    const c = renderClosing(custom);
+    expect(c.html).toContain('Hasta el año que viene.');
+    expect(c.html).toContain(`Este libro recoge ${Number(c.page.params.memoryCount)} recuerdos de Everything.`);
+    expect(c.html).not.toContain('historia continúa');
+  });
+
+  const portraits = [
+    { file: 'p1.jpg', date: '2023-06-01', ageLabel: '8 months' },
+    { file: 'p2.jpg', date: '2025-06-01', ageLabel: '2 years 8 months' },
+  ];
+  const renderTty = (manifest: BookManifest, params: Record<string, unknown> = {}) => {
+    const outline = makeOutline([makeElement({ id: 'tty', kind: 'through-the-years' })]);
+    const { document } = fitBook(outline, manifest);
+    const page = document.pages[0];
+    return renderToStaticMarkup(
+      <TemplateRenderer page={{ ...page, params: { ...page.params, ...params } }} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+    );
+  };
+
+  it('ThroughTheYears, everything scope: multi-year kicker + title lines (es/en)', () => {
+    const es = renderTty(makeManifest({}, { language: 'es', portraits, scope: scope('everything') }));
+    expect(es).toContain('los años en retratos');
+    expect(es).toContain('con los años');
+    expect(es).not.toContain('en doce meses');
+    expect(es).toMatchSnapshot();
+    const en = renderTty(makeManifest({}, { language: 'en', portraits, scope: scope('everything') }));
+    expect(en).toContain('the years in portraits');
+    expect(en).toContain('over the years');
+    expect(en).not.toContain('in twelve months');
+    expect(en).toMatchSnapshot();
+  });
+
+  it('ThroughTheYears, everything scope: ttyKicker / ttyTitle edits still win', () => {
+    const html = renderTty(makeManifest({}, { language: 'en', portraits, scope: scope('everything') }), {
+      ttyKicker: 'my kicker',
+      ttyTitle: 'Line one\nLine two',
+    });
+    expect(html).toContain('my kicker');
+    expect(html).toContain('Line one');
+    expect(html).toContain('Line two');
+    expect(html).not.toContain('the years in portraits');
+    expect(html).not.toContain('over the years');
+  });
+
+  it('ThroughTheYears, age-year and legacy custom scope: unchanged 12-month furniture', () => {
+    for (const manifest of [
+      makeManifest({}, { language: 'es', portraits }),
+      makeManifest({}, { language: 'es', portraits, scope: scope('custom') }),
+    ]) {
+      const html = renderTty(manifest);
+      expect(html).toContain('un año en retratos');
+      expect(html).toContain('en doce meses');
+      expect(html).not.toContain('los años en retratos');
+    }
+    const en = renderTty(makeManifest({}, { language: 'en', portraits }));
+    expect(en).toContain('through the years');
+    expect(en).toContain('in twelve months');
+  });
+});

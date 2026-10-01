@@ -280,6 +280,93 @@ contract now:
 `byMemoryIds` (or a nested `!inner` embed filter) with a stable sort key and
 an error check — never a bare `.in('memory_id', ids)`.
 
+## Multi-year (Everything) books
+
+Added 2026-10-01 (Phase 2 of [docs/plans/memory-book-everything-fixes.md](../plans/memory-book-everything-fixes.md);
+spec: [docs/plans/memory-book-everything-phase2.md](../plans/memory-book-everything-phase2.md)). **Status: code-complete, not
+deployed. `everything` is still paused for everyone except the owner family** (`PAUSED_SCOPE_KINDS` in
+`generate-memory-book`; the `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` secret exempts family ids). The pause is removed in
+Phase 3.3, after the dogfood run and owner review.
+
+Every rule below applies to `everything` ONLY. Year, calendar-year, custom-range and already-stored books take the
+identical legacy path (characterization goldens in `book-renderer/src/model/__tests__/fitter.golden.test.ts` and
+`cloudflare/memory-book-worker/test/outline.golden.test.ts` pin that).
+
+- **Scope identity.** `ManifestScopeKind` / `outline.scope.type` gain the value `'everything'` (was `'custom'`). Stored
+  pre-change docs still say `'custom'` and keep the old furniture ("Hasta el año que viene", "doce meses"). The fitter's
+  multi-year mode is gated on the presence of `chapter` outline elements, not on the scope kind.
+- **D2 window start.** `supabase/functions/_shared/memory-book-scope-window.ts` (`resolveEverythingWindow`) opens the
+  window at the first eligible memory on or after the child's DOB (eligible = untagged, or tagged to the child). Bridge
+  `buildGenerationContext` and `memory-book-edits` `resolveScopeWindow` both call it (one helper, so the picker pool equals
+  the generated window). Query errors throw `ScopeWindowError`, never the empty-window sentinel.
+- **Chapters (D3).** One `chapter` element per age-year (`worker src/chapters.ts`, month-aligned: the month containing the
+  Nth birthday is the LAST month of chapter N; Feb-29 safe via `addYears`). Rendered with the existing `spread-title`
+  template (kicker "capítulo uno" / title "Tu primer año", subtitle = the month range of its content), so
+  `sectionTitle:` / `eyebrow:` edits already apply. Chapters with no printable months are dropped; chapter mode needs >= 2
+  non-empty chapters, and no DOB means no chapters. Empty chapters dissolve in the fitter, and the audit flags a chapter
+  title page with no content pages as `section-title-orphan`.
+- **Quarter-capped backbone.** `buildBackboneSegments` (options `maxSpanMonths: 3`, `chapterOfMonth`) never merges more than
+  a 3-month calendar span (gap months count) and never crosses a chapter; the cap wins over the 3-printable minimum.
+  Birthday / birth months are flagged deterministically from DOB (`computeBirthdayMonthsFromDob`) and **no `birthday-N`
+  spreads are emitted** (see "Known defects"); those memories stay in their backbone month.
+- **Firsts cap (D5).** `worker src/firsts.ts`: at most 6 memories (`FIRSTS_MAX_MEMORIES_MULTI_YEAR`), the earliest holder of
+  each non-birthday milestone, scored (confirmed +2, not out-of-band +1, has photo/video +2, then engagement, then date),
+  returned chronologically. Prompt rows and `validMilestoneKeys` are restricted to the capped set. Default title "Big and
+  small victories".
+- **Themed pacing + budget (2.4).** `worker src/pacing.ts` ports the eval CLI's `paceThemedSpreads` / `admitThemedSpreads`.
+  Spreads are anchored by the median date of their members to a backbone gap (the AI's `insert_after_segment_index` is
+  ignored), no two are adjacent, total <= `floor(min(eligible, pageBudget) / 15)` (8 at 122 pages), and **<= 2 per
+  chapter**. Dissolved members return to their backbone segment (`themed_spread_dissolved_budget` violations).
+- **Portrait sampling (D4).** `worker src/portraits.ts` (`samplePortraitsForMultiYear`): <= 6 portraits, one per ~6 months,
+  always including the first and last, evenly spread in time. ThroughTheYears uses `Furniture.throughTheYearsMultiYear`
+  ("Cómo cambiaste con los años" / "How you changed over the years").
+- **Closing + prompt (D6).** `Furniture.closing.multiYear` ("Y la historia continúa." + "Este libro recoge N recuerdos, de
+  Y0 a Y1."), years from `manifest.scope.start/end`. `buildOutlineSystemPrompt({ multiYear: true })` adds a MULTI-YEAR BOOK
+  block; the user prompt gets a CHAPTERS block and chapter-tagged BACKBONE SEGMENT lines. Default (year) prompts are
+  byte-identical.
+- **Chapter-mode fitter budgeting (D1).** `fitBook` enters chapter mode iff the outline has >= 2 usable `chapter` elements.
+  `planChapterDemotions` computes the whole ordered omission list with no layout, and `fitBook` then
+  exponentially + binary searches the prefix length that satisfies the cap (then probes k-1 / k-2 for parity noise): ~15-25
+  full fits instead of one per omission (`FitOptions.onRunFit` is the test hook). Selection per step:
+  1. Tier A: the chapter with the highest keep-rate (`kept/total`; ties -> larger chapter, lower index) among chapters
+     with a candidate above BOTH the month floor (2) and the chapter floor (`min(total_c, 12)`); within it the kind by the
+     existing keep-rate parity rule, then lowest `rank`.
+  2. Tier B1 relaxes the chapter floor; Tier B2 relaxes the month floor too.
+  3. **Tier C** (chapter mode only, `ENABLE_TIER_C_CAPTIONED_DEMOTION = true`, `FitOptions.tierCCaptionedDemotion` test
+     override): captioned photo/video memories (never hero / panorama / milestone / quote-title sources) become demotable,
+     ranked by engagement then shorter text first.
+  4. **Tie-break** among equal `rank`: highest remaining fraction of the memory's calendar month, then highest remaining
+     count, then memory id (replaces earliest-first date order, which was the incident behaviour).
+  5. If the full plan still leaves the book over the cap it is returned `overCap`, as in the legacy loop.
+- **Audit.** `book-renderer/scripts/audit-layout.mts` runs `auditBookDocument` and prints violation counts by check,
+  fit-pass count, total omitted, Tier C engagement and per-chapter pages / kept-total / keep-rate / months at floor / months
+  empty (ids and counts only, no memory text). The seam check feeds the worker's REAL outline + manifest to it: run
+  `SEAM_OUT=<file> npx vitest run -c vitest.seam.config.ts` in `cloudflare/memory-book-worker` (writes a `book_document`
+  export from the synthetic 4-year context in `test/outline.everything.test.ts`; `SEAM_MIX=realistic|photoHeavy` picks
+  a lighter text-only/illustrated mix), then `npx vite-node scripts/audit-layout.mts -- <file>` in `book-renderer`.
+
+**Pending owner items (not decided by code):** copy review of every new es/en string (chapter titles/kickers,
+through-the-years, closing, Firsts default title); confirmation of Tier C (it can drop CAPTIONED photos, which the
+legacy path never does) after the dogfood run; the themed-spread survival risk (a themed spread must win single placement
+against a quarter-sized backbone segment and then survive the page cap, so the real count may land well below 8); the
+dogfood run itself (Enzo 4y, Mara 2y: 0 violations and <= 122 pages is only provable on real data).
+
+**Known risks.** A very dense book (about 600 eligible memories over 48 months with a large illustrated/text-only share)
+can exhaust Tiers A/B1 and reach B2 / Tier C's final stage, which relaxes the month floor and can leave a month with zero
+pages (`month-continuity`). On the synthetic seam fixture this appears at 28% illustrated (3 violations) and above, and
+disappears at 17% illustrated (0 violations, 122 pages). Re-check on the dogfood books.
+
+**Known defects (not fixed by Phase 2).** (1) The fitter has no `case 'birthday'`, so the worker's `birthday-N` elements
+(year books with >= 3 birthday-milestone memories for one age) are never laid out. (2) The worker emits `firstsWarmNames`
+on the firsts element but the fitter reads `firstsEntries` (`fitter.ts` ~L4147), so AI warm names never reach the
+renderer. See the "Known defects" section of the Phase 2 spec.
+
+**Extending:** new multi-year behaviour belongs behind the `chapter`-element gate (fitter) or `scopeKind === 'everything'`
+(worker, furniture) so year books stay byte-identical; re-run the golden tests, never `-u` them. Do not add a chapter
+title string without both `es` and `en` in `furniture.ts`. If you change the cap-demotion pools, keep
+`planChapterDemotions` layout-free (that is what keeps the fit count logarithmic). The page-count-aware themed admission
+mentioned under "Common extension patterns" is still the better long-term replacement for the fixed `/15` budget.
+
 ## In-app scope picker (5a.5)
 
 Originally shipped 2026-09-15 as a plain scope-status list (see
@@ -1015,6 +1102,7 @@ cd cloudflare/memory-book-web && npm test && npm run typecheck && npm run deploy
 
 | Date | Change |
 |------|--------|
+| 2026-10-01 | **Phase 2 — multi-year (Everything) rules** (code-complete, not deployed; `everything` still paused except the owner family; spec `docs/plans/memory-book-everything-phase2.md`). New scope value `'everything'` in manifest/outline; D2 DOB-aware window via the shared `_shared/memory-book-scope-window.ts` (bridge + `memory-book-edits`); age-year `chapter` elements + quarter-capped backbone + no birthday spreads; Firsts cap 6; themed pacing/budget (<= 8, <= 2 per chapter); portrait sampling (<= 6); multi-year ThroughTheYears/Closing copy and outline prompt; chapter-mode fitter budgeting (equal keep-rate per chapter, time-spread tie-break, bisection fit search, Tier C captioned demotion behind `ENABLE_TIER_C_CAPTIONED_DEMOTION`); `audit-layout.mts` now runs the integrity audit and prints chapter stats. Pending owner: copy review, Tier C confirmation, dogfood run. See [Multi-year (Everything) books](#multi-year-everything-books). |
 | 2026-10-01 | **Phase 0 — generation context integrity** (code-complete, not yet deployed; plan `docs/plans/memory-book-everything-fixes.md`). `workflow-memory-book-bridge` `load_generation_context` now pages the memories query and loads media/tags/milestones/likes/comments in sequential 150-id chunks via the new `_shared/paged-query.ts` (extracted from the film bridge, which keeps 200), with stable sort keys and deduping; every query's error is checked; head-only count reconciliation before loading (`memories!inner` embeds) with one reload on a shortfall; real query errors → 500 `context_load_failed` (retryable), null child / persistent shortfall → 422 `context_invalid` (non-retryable). `ensure_share_tokens` chunks its read and treats a `23505` active-token conflict as success via a re-read loop. `memory-book-edits` `picker_pool` person filter is a nested inner embed (no member-tag pre-lookup, no `.in()`); `resolveScopeWindow` errors → 500. Worker: load/publish step timeouts 30 s → 120 s, UTF-8 context size guard (> 900 KB → `CONTEXT_TOO_LARGE`), error classes set `name`, `errorCode` maps by `CODE:` prefix / name / stage-attributed step timeout, publish timeout → reconcile. `generate-memory-book`: `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` lets listed families bypass the `everything` pause. Live verification (plan 0.8) is pending. See [Generation context integrity](#generation-context-integrity-phase-0). |
 | 2026-10-01 | **Phase 1 — layout fixes** (renderer only, code-complete, not yet deployed; plan `docs/plans/memory-book-everything-fixes.md`). (1.1) `TextPage.tsx` now renders its `SectionHeader` inside `<SafeArea isSpread={false}>` like every other header-capable template (it was bare in the page frame: `SectionHeader` is absolute top:0/left:0, so on a text page the header sat at the bleed origin and trim cut its eyebrow line off). Verified against real `page.pdf` output (print.html build + Puppeteer, rasterized before/after), not DOM. Preview (`memory-book-web`) and the Fly print worker must redeploy together (parity rule). (1.3) `localizeMonthLabel` now also localizes the worker's cross-year range label `Month YYYY – Month YYYY` (`diciembre 2025 – enero 2026`); single and same-year shapes unchanged; tests cover every shape x language. (1.2/1.4) New offline audit `book-renderer/scripts/audit-layout.mts` (`npm run audit:layout -- <export.json>`): runs `fitBookForPrint` over an exported book (`{id, scopeLabel, scopeKind, coverAssetKey, bookDocument, edits}`) and reports template histogram, section headers on `text-page`, lone short-caption (<120 chars) text pages, and header pages whose template lacks SafeArea — ids/counts/page numbers only, never memory text or names. Extend it by adding templates to its `HEADER_POSITIONING` table. |
 | 2026-09-17 | Picker redesign (owner-approved brief), app-side only: the original scope-status row list is replaced by a book-cover shelf. `app/(app)/family/[id]/memory-books.tsx` (full rewrite) renders a 2-column grid of `src/components/memory-books/book-cover-tile.tsx` tiles (ready/generating/failed, a real cover photo via the new `memory_books.cover_asset_key` column or a deterministic wash fallback) when any book exists, else a personalized empty state (a random real photo of the child via `fetchExampleCoverAssetKey`). A fixed "Create a book" CTA opens `create-book-sheet.tsx` (a short SUGGESTIONS list from the new pure `pickSuggestedScopes` helper, plus an expandable grouped list — calendar-year scopes are never suggested, only ever a deliberate pick); a failed tile opens `retry-book-sheet.tsx`; both flows show an in-screen toast (`book-toast.tsx`). `useMemoryBooks`/`memory-books.ts` extended (not rewritten) for the new column plus `exampleCoverAssetKey`; the underlying scope math, polling, dispatch-error surface, and role gating are unchanged. Also added: `PushRouteData`'s `'memory-book'` route in `src/hooks/useNotifications.ts`, deep-linking a book-ready/failed push to the shelf. See [In-app scope picker (5a.5)](#in-app-scope-picker-5a5) for the full contract and its deviations. |

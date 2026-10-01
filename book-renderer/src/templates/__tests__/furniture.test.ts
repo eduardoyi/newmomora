@@ -254,3 +254,53 @@ describe('parseSingleMonthLabel — lone "Month YYYY" only', () => {
     expect(parseSingleMonthLabel('diciembre 2025')).toBeNull();
   });
 });
+
+describe('furniture — multi-year (everything scope) strings', () => {
+  it('chapter titles and kickers, es', () => {
+    const es = getFurniture('es').chapter;
+    const titles = ['primer', 'segundo', 'tercer', 'cuarto', 'quinto', 'sexto', 'séptimo', 'octavo', 'noveno', 'décimo'];
+    titles.forEach((w, i) => expect(es.title(i + 1)).toBe(`Tu ${w} año`));
+    expect(es.title(11)).toBe('Tu 11.º año');
+    expect(es.title(14)).toBe('Tu 14.º año');
+    const kickers = ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez'];
+    kickers.forEach((w, i) => expect(es.kicker(i + 1)).toBe(`capítulo ${w}`));
+    expect(es.kicker(11)).toBe('capítulo 11');
+  });
+
+  it('chapter titles and kickers, en', () => {
+    const en = getFurniture('en').chapter;
+    const words = ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
+    words.forEach((w, i) => expect(en.title(i + 1)).toBe(`Year ${w}`));
+    expect(en.title(11)).toBe('Year 11');
+    words.forEach((w, i) => expect(en.kicker(i + 1)).toBe(`chapter ${w.toLowerCase()}`));
+    expect(en.kicker(11)).toBe('chapter 11');
+  });
+
+  it('through-the-years multi-year variant', () => {
+    expect(getFurniture('es').throughTheYearsMultiYear).toEqual({
+      kicker: 'los años en retratos',
+      titleLines: ['Cómo cambiaste', 'con los años'],
+    });
+    expect(getFurniture('en').throughTheYearsMultiYear).toEqual({
+      kicker: 'the years in portraits',
+      titleLines: ['How you changed', 'over the years'],
+    });
+  });
+
+  it('closing multi-year headline and count line (range and single-year)', () => {
+    const es = getFurniture('es').closing.multiYear;
+    expect(es.headline).toBe('Y la historia continúa.');
+    expect(es.memoryCountLine(487, '2022', '2026')).toBe('Este libro recoge 487 recuerdos, de 2022 a 2026.');
+    expect(es.memoryCountLine(12, '2025', '2025')).toBe('Este libro recoge 12 recuerdos, de 2025.');
+    const en = getFurniture('en').closing.multiYear;
+    expect(en.headline).toBe('And the story continues.');
+    expect(en.memoryCountLine(487, '2022', '2026')).toBe('This book holds 487 memories, from 2022 to 2026.');
+    expect(en.memoryCountLine(12, '2025', '2025')).toBe('This book holds 12 memories, in 2025.');
+  });
+
+  it('single-year closing / through-the-years strings are unchanged', () => {
+    expect(getFurniture('en').closing.headline).toBe('See you next year.');
+    expect(getFurniture('en').throughTheYears.titleLines).toEqual(['How you changed', 'in twelve months']);
+    expect(getFurniture('es').closing.memoryCountLine(3, 'Everything', null)).toBe('Este libro recoge 3 recuerdos de Everything.');
+  });
+});

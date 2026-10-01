@@ -39,6 +39,7 @@ function readyBook(overrides: Record<string, unknown> = {}) {
   return {
     id: BOOK_ID,
     family_id: FAMILY_ID,
+    child_id: null,
     status: 'ready',
     scope_kind: 'custom_range',
     scope_start_date: '2026-01-01',
@@ -78,10 +79,16 @@ interface StubOptions {
   editsRow?: Record<string, unknown> | null;
   editsError?: { message: string } | null;
   upsertError?: { message: string } | null;
-  memoriesEarliest?: { memory_date: string } | null;
+  /** Rows the `everything` first-eligible scan returns (id, memory_date,
+   * memory_family_members embed); the stub is filter-blind, so these are
+   * already "the rows on/after DOB, ascending". */
+  memoriesScan?: Array<Record<string, unknown>>;
+  memoriesScanError?: { message: string } | null;
   memoriesLatest?: { memory_date: string } | null;
-  memoriesEarliestError?: { message: string } | null;
   memoriesLatestError?: { message: string } | null;
+  /** `family_members` DOB lookup used when the book has no frozen window. */
+  childRow?: { date_of_birth: string | null } | null;
+  childError?: { message: string } | null;
   /** Records the query SHAPE `memory_media` receives (the stub is
    * filter-blind, so picker_pool's select string / filters / range are
    * otherwise invisible to assertions). */
@@ -170,19 +177,29 @@ function createStubClient(options: StubOptions = {}) {
         }
 
         if (table === 'memories') {
-          let ascending = true;
+          // `everything` window resolution: the latest-date lookup
+          // (`.limit(1).maybeSingle()`) and the ascending tag-embed scan
+          // (`.range(...)`).
           const chain = {
             select: () => chain,
             eq: () => chain,
-            order: (_col: string, opts: { ascending: boolean }) => {
-              ascending = opts.ascending;
-              return chain;
-            },
+            gte: () => chain,
+            order: () => chain,
             limit: () => chain,
             maybeSingle: async () => ({
-              data: (ascending ? options.memoriesEarliest : options.memoriesLatest) ?? null,
-              error: (ascending ? options.memoriesEarliestError : options.memoriesLatestError) ?? null,
+              data: options.memoriesLatest ?? null,
+              error: options.memoriesLatestError ?? null,
             }),
+            range: async () => ({ data: options.memoriesScan ?? [], error: options.memoriesScanError ?? null }),
+          };
+          return chain;
+        }
+
+        if (table === 'family_members') {
+          const chain = {
+            select: () => chain,
+            eq: () => chain,
+            maybeSingle: async () => ({ data: options.childRow ?? null, error: options.childError ?? null }),
           };
           return chain;
         }
@@ -1007,21 +1024,74 @@ Deno.test('picker_pool: a media query failure with a memberId surfaces as a 500'
 });
 
 Deno.test('picker_pool: an everything-scope window lookup error surfaces as a 500, not an empty pool', async () => {
-  const mediaQueryLog = newMediaQueryLog();
+  for (const failing of [
+    { memoriesScanError: { message: 'boom' } },
+    { memoriesLatestError: { message: 'boom' } },
+    { childError: { message: 'boom' } },
+  ]) {
+    const mediaQueryLog = newMediaQueryLog();
+    const response = await handleMemoryBookEdits(
+      request({ op: 'picker_pool', bookId: BOOK_ID }),
+      baseDeps({
+        createServiceClient: createStubClient({
+          book: readyBook({ scope_kind: 'everything', child_id: MEMBER_ID, scope_start_date: null, scope_end_date: null }),
+          childRow: { date_of_birth: null },
+          memoriesLatest: { memory_date: '2026-02-10' },
+          memoriesScan: [{ id: 'm1', memory_date: '2024-01-01', memory_family_members: [] }],
+          ...failing,
+          mediaPool: [poolRow()],
+          mediaQueryLog,
+        }),
+      }),
+    );
+    assertEquals(response.status, 500, JSON.stringify(failing));
+    assertEquals((await response.json()).code, 'internal_error');
+    assertEquals(mediaQueryLog.select, []);
+  }
+});
+
+Deno.test('picker_pool: an everything book with a frozen outline.window uses it without touching memories', async () => {
+  const calls: string[] = [];
   const response = await handleMemoryBookEdits(
     request({ op: 'picker_pool', bookId: BOOK_ID }),
     baseDeps({
       createServiceClient: createStubClient({
-        book: readyBook({ scope_kind: 'everything', scope_start_date: null, scope_end_date: null }),
-        memoriesEarliestError: { message: 'boom' },
+        book: readyBook({
+          scope_kind: 'everything',
+          scope_start_date: null,
+          scope_end_date: null,
+          book_document: { outline: { window: { start: '2024-02-03', endExclusive: '2026-09-01' } }, manifest: { memories: {} } },
+        }),
         mediaPool: [poolRow()],
-        mediaQueryLog,
+        editsRow: null,
+        calls,
       }),
     }),
   );
-  assertEquals(response.status, 500);
-  assertEquals((await response.json()).code, 'internal_error');
-  assertEquals(mediaQueryLog.select, []);
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes('memories'), false);
+  assertEquals(calls.includes('family_members'), false);
+});
+
+Deno.test('picker_pool: an everything book without a frozen window falls back to the shared first-eligible resolution', async () => {
+  const calls: string[] = [];
+  const response = await handleMemoryBookEdits(
+    request({ op: 'picker_pool', bookId: BOOK_ID }),
+    baseDeps({
+      createServiceClient: createStubClient({
+        book: readyBook({ scope_kind: 'everything', child_id: MEMBER_ID, scope_start_date: null, scope_end_date: null }),
+        childRow: { date_of_birth: '2024-01-01' },
+        memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
+        memoriesLatest: { memory_date: '2026-02-10' },
+        mediaPool: [poolRow()],
+        editsRow: null,
+        calls,
+      }),
+    }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes('memories'), true);
+  assertEquals(calls.includes('family_members'), true);
 });
 
 // ── intersectDateWindow (direct) ──────────────────────────────────────────
@@ -1103,31 +1173,127 @@ Deno.test('resolveScopeWindow: custom_range uses the frozen dates with an inclus
   assertEquals(window, { start: '2026-01-01', endExclusive: '2026-02-01' });
 });
 
-Deno.test('resolveScopeWindow: everything resolves to the family\'s live min/max memory_date', async () => {
+const EVERYTHING_BOOK = {
+  family_id: FAMILY_ID,
+  child_id: MEMBER_ID,
+  scope_kind: 'everything' as const,
+  scope_start_date: null,
+  scope_end_date: null,
+};
+
+Deno.test('resolveScopeWindow: everything without a frozen window resolves via the shared first-eligible helper', async () => {
   const window = await resolveScopeWindow(
     createStubClient({
-      memoriesEarliest: { memory_date: '2024-05-01' },
+      childRow: { date_of_birth: '2024-01-01' },
+      memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
       memoriesLatest: { memory_date: '2026-02-10' },
     })(),
-    { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+    EVERYTHING_BOOK,
   );
   assertEquals(window, { start: '2024-05-01', endExclusive: '2026-02-11' });
 });
 
+Deno.test('resolveScopeWindow: everything skips a first memory tagged only to another member', async () => {
+  const window = await resolveScopeWindow(
+    createStubClient({
+      childRow: { date_of_birth: null },
+      memoriesScan: [
+        { id: 'm1', memory_date: '2024-01-01', memory_family_members: [{ family_member_id: 'someone-else' }] },
+        { id: 'm2', memory_date: '2024-03-03', memory_family_members: [{ family_member_id: MEMBER_ID }] },
+      ],
+      memoriesLatest: { memory_date: '2024-03-03' },
+    })(),
+    EVERYTHING_BOOK,
+  );
+  assertEquals(window, { start: '2024-03-03', endExclusive: '2024-03-04' });
+});
+
+Deno.test('resolveScopeWindow: everything with a null child_id skips the DOB lookup entirely', async () => {
+  const calls: string[] = [];
+  const window = await resolveScopeWindow(
+    createStubClient({
+      calls,
+      memoriesScan: [{ id: 'm1', memory_date: '2024-01-01', memory_family_members: [] }],
+      memoriesLatest: { memory_date: '2024-01-01' },
+    })(),
+    { ...EVERYTHING_BOOK, child_id: null },
+  );
+  assertEquals(window, { start: '2024-01-01', endExclusive: '2024-01-02' });
+  assertEquals(calls.includes('family_members'), false);
+});
+
 Deno.test('resolveScopeWindow: everything with zero memories collapses to the empty-window sentinel', async () => {
   const window = await resolveScopeWindow(
-    createStubClient({ memoriesEarliest: null, memoriesLatest: null })(),
-    { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+    createStubClient({ childRow: { date_of_birth: null }, memoriesLatest: null })(),
+    EVERYTHING_BOOK,
   );
   assertEquals(window.start, window.endExclusive);
 });
 
-Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the earliest lookup errors (never the empty sentinel)', async () => {
+Deno.test('resolveScopeWindow: everything prefers the book\'s frozen outline.window (the picker pool equals the generated window)', async () => {
+  const calls: string[] = [];
+  const window = await resolveScopeWindow(createStubClient({ calls })(), {
+    ...EVERYTHING_BOOK,
+    book_document: { outline: { window: { start: '2024-02-03', endExclusive: '2026-09-01', label: 'Everything' } } },
+  });
+  assertEquals(window, { start: '2024-02-03', endExclusive: '2026-09-01' });
+  assertEquals(calls, [], 'no DB read when a valid frozen window exists');
+});
+
+Deno.test('resolveScopeWindow: a malformed frozen window falls back to re-deriving it', async () => {
+  const stub = () =>
+    createStubClient({
+      childRow: { date_of_birth: null },
+      memoriesScan: [{ id: 'm1', memory_date: '2024-05-01', memory_family_members: [] }],
+      memoriesLatest: { memory_date: '2024-06-01' },
+    })();
+  for (const outlineWindow of [
+    { start: '2024-02-30', endExclusive: '2026-09-01' }, // calendrically bogus
+    { start: '2026-09-01', endExclusive: '2024-02-03' }, // inverted
+    { start: '2024-02-03' }, // missing end
+    'nope',
+    null,
+  ]) {
+    const window = await resolveScopeWindow(stub(), {
+      ...EVERYTHING_BOOK,
+      book_document: { outline: { window: outlineWindow } },
+    });
+    assertEquals(window, { start: '2024-05-01', endExclusive: '2024-06-02' });
+  }
+});
+
+Deno.test('resolveScopeWindow: a frozen window is ignored for non-everything kinds', async () => {
+  const window = await resolveScopeWindow(createStubClient()(), {
+    family_id: FAMILY_ID,
+    scope_kind: 'age_year',
+    scope_start_date: '2025-01-01',
+    scope_end_date: '2025-12-31',
+    book_document: { outline: { window: { start: '2020-01-01', endExclusive: '2021-01-01' } } },
+  });
+  assertEquals(window, { start: '2025-01-01', endExclusive: '2026-01-01' });
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the DOB lookup errors (never "no DOB")', async () => {
   await assertRejects(
     () =>
       resolveScopeWindow(
-        createStubClient({ memoriesEarliestError: { message: 'boom' }, memoriesLatest: { memory_date: '2026-02-10' } })(),
-        { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+        createStubClient({ childError: { message: 'boom' }, memoriesLatest: { memory_date: '2026-02-10' } })(),
+        EVERYTHING_BOOK,
+      ),
+    ScopeWindowError,
+  );
+});
+
+Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the first-eligible scan errors (never the empty sentinel)', async () => {
+  await assertRejects(
+    () =>
+      resolveScopeWindow(
+        createStubClient({
+          childRow: { date_of_birth: null },
+          memoriesScanError: { message: 'boom' },
+          memoriesLatest: { memory_date: '2026-02-10' },
+        })(),
+        EVERYTHING_BOOK,
       ),
     ScopeWindowError,
   );
@@ -1137,8 +1303,8 @@ Deno.test('resolveScopeWindow: everything throws ScopeWindowError when the lates
   await assertRejects(
     () =>
       resolveScopeWindow(
-        createStubClient({ memoriesEarliest: { memory_date: '2024-05-01' }, memoriesLatestError: { message: 'boom' } })(),
-        { family_id: FAMILY_ID, scope_kind: 'everything', scope_start_date: null, scope_end_date: null },
+        createStubClient({ childRow: { date_of_birth: null }, memoriesLatestError: { message: 'boom' } })(),
+        EVERYTHING_BOOK,
       ),
     ScopeWindowError,
   );

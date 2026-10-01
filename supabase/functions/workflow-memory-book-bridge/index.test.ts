@@ -1,4 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
+import { resolveScopeWindow } from '../memory-book-edits/index.ts';
+import { type FakeMemory, withFakeWindowMemories } from '../_shared/memory-book-scope-window.test-support.ts';
 import { handleWorkflowMemoryBookBridge, isSignedWorkflowRequest } from './index.ts';
 
 const BRIDGE_SECRET_ENV = 'CLOUDFLARE_MEMORY_BOOK_BRIDGE_SECRET';
@@ -633,23 +635,152 @@ Deno.test('load_generation_context: a failing language-evidence sample is a 500,
   assertEquals((await response.json()).code, 'context_load_failed');
 });
 
-Deno.test('load_generation_context: an errored everything earliest/latest query is a 500, not the empty-window sentinel', async () => {
-  for (const errors of [{ 'memories:single': { message: 'boom' } }, { 'memories:single': (prior: number) => (prior === 1 ? { message: 'boom' } : null) }]) {
+Deno.test('load_generation_context: an errored everything window query (latest or tag-embed scan) is a 500, not the empty-window sentinel', async () => {
+  const errorSets: Array<Record<string, StubErrorSpec>> = [
+    { 'memories:single': { message: 'boom' } },
+    { 'memories:list': (prior: number) => (prior === 0 ? { message: 'boom' } : null) },
+  ];
+  for (const errors of errorSets) {
     const response = await loadContext(
       loadTables(3, { book: { scope_kind: 'everything', child_id: null, scope_start_date: null, scope_end_date: null } }),
-      { errors: errors as Record<string, StubErrorSpec> },
+      { errors },
     );
     assertEquals(response.status, 500);
     assertEquals((await response.json()).code, 'context_load_failed');
   }
 });
 
-Deno.test('load_generation_context: an everything book resolves its window from earliest/latest memories', async () => {
+Deno.test('load_generation_context: an everything book resolves its window from the first/latest memories', async () => {
   const response = await loadContext(loadTables(3, { book: { scope_kind: 'everything', child_id: null, scope_start_date: null, scope_end_date: null } }));
   assertEquals(response.status, 200);
   const body = await response.json();
   assertEquals(body.book.windowStart, '2025-01-01');
   assertEquals(body.book.windowEndExclusive, '2025-01-02');
+});
+
+const OTHER_MEMBER_ID = '88888888-8888-4888-8888-888888888888';
+
+/** Pre-DOB untagged, then tagged-to-sibling, then the first ELIGIBLE one. */
+const WINDOW_MEMORIES: FakeMemory[] = [
+  { id: 'm0', family_id: 'family-1', memory_date: '2024-01-01', tags: [] },
+  { id: 'm1', family_id: 'family-1', memory_date: '2024-11-01', tags: [OTHER_MEMBER_ID] },
+  { id: 'm2', family_id: 'family-1', memory_date: '2025-01-01', tags: [] },
+  { id: 'm3', family_id: 'family-1', memory_date: '2025-03-05', tags: [CHILD_ID] },
+];
+
+function everythingChildTables() {
+  const tables = loadTables(3, { book: { scope_kind: 'everything', child_id: CHILD_ID, scope_start_date: null, scope_end_date: null } });
+  // DOB 2024-10-23 (loadTables' child) floors the scan; m1 is tagged only to a sibling.
+  return tables;
+}
+
+Deno.test('load_generation_context: the everything window start (first eligible on/after DOB) flows into every window query as gte', async () => {
+  const gtes: Array<{ table: string; column: string; value: unknown }> = [];
+  const base = createStubClient(everythingChildTables())() as unknown as { from(table: string): Record<string, unknown> };
+  const recording = {
+    from(table: string) {
+      const chain = base.from(table) as { gte: (column: string, value: unknown) => unknown };
+      const original = chain.gte;
+      chain.gte = (column, value) => {
+        gtes.push({ table, column, value });
+        return original(column, value);
+      };
+      return chain;
+    },
+  };
+  const response = await withBridgeSecret(async () =>
+    await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'load_generation_context', bookId: BOOK_ID, attemptId: ATTEMPT_ID }),
+      { createServiceClient: () => withFakeWindowMemories(recording, WINDOW_MEMORIES) },
+    )
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.book.windowStart, '2025-01-01');
+  assertEquals(body.book.windowEndExclusive, '2025-03-06');
+  const tables = new Set(gtes.map((g) => g.table));
+  for (const table of ['memories', 'memory_media', 'memory_family_members', 'memory_milestones', 'family_member_portrait_versions']) {
+    assertEquals(tables.has(table), true, `${table} was filtered by the window start`);
+  }
+  assertEquals(gtes.every((g) => g.value === '2025-01-01'), true, JSON.stringify(gtes));
+});
+
+Deno.test('load_generation_context: an everything family with no eligible memory keeps the empty-window sentinel path (not an error)', async () => {
+  const tables = everythingChildTables();
+  tables.memories = [];
+  tables.memory_media = [];
+  tables.memory_family_members = [];
+  tables.memory_milestones = [];
+  tables.memory_likes = [];
+  tables.memory_comments = [];
+  const response = await withBridgeSecret(async () =>
+    await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'load_generation_context', bookId: BOOK_ID, attemptId: ATTEMPT_ID }),
+      { createServiceClient: () => withFakeWindowMemories(createStubClient(tables)(), [WINDOW_MEMORIES[1]]) },
+    )
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.book.windowStart, '0001-01-01');
+  assertEquals(body.book.windowEndExclusive, '0001-01-01');
+});
+
+Deno.test('load_generation_context: a milestone row carries its status through to the worker (additive field)', async () => {
+  const tables = loadTables(3, { book: { scope_kind: 'calendar_year', child_id: null } });
+  const selects: string[] = [];
+  const base = createStubClient(tables)() as unknown as { from(table: string): Record<string, unknown> };
+  const client = {
+    from(table: string) {
+      const chain = base.from(table) as { select: (columns?: string, options?: unknown) => unknown };
+      const original = chain.select;
+      chain.select = (columns, options) => {
+        if (table === 'memory_milestones' && columns) selects.push(columns);
+        return original(columns, options);
+      };
+      return chain;
+    },
+  } as never;
+  const response = await withBridgeSecret(async () =>
+    await handleWorkflowMemoryBookBridge(
+      await signedRequest({ operation: 'load_generation_context', bookId: BOOK_ID, attemptId: ATTEMPT_ID }),
+      { createServiceClient: () => client },
+    )
+  );
+  assertEquals(response.status, 200);
+  assertEquals(selects.some((c) => c.split(',').map((x) => x.trim()).includes('status')), true);
+});
+
+Deno.test('contract: bridge generation and memory-book-edits resolve the same everything window for the same data (no frozen window)', async () => {
+  const scenarios: Array<{ label: string; memories: FakeMemory[]; childId: string | null }> = [
+    { label: 'child book, sibling-tagged first memory, pre-DOB memory', memories: WINDOW_MEMORIES, childId: CHILD_ID },
+    { label: 'family-wide book', memories: WINDOW_MEMORIES, childId: null },
+    { label: 'no eligible memory', memories: [WINDOW_MEMORIES[1]], childId: CHILD_ID },
+  ];
+  for (const { label, memories, childId } of scenarios) {
+    const tables = loadTables(3, { book: { scope_kind: 'everything', child_id: childId, scope_start_date: null, scope_end_date: null } });
+    const client = withFakeWindowMemories(createStubClient(tables)(), memories);
+
+    const bridgeResponse = await withBridgeSecret(async () =>
+      await handleWorkflowMemoryBookBridge(
+        await signedRequest({ operation: 'load_generation_context', bookId: BOOK_ID, attemptId: ATTEMPT_ID }),
+        { createServiceClient: () => client },
+      )
+    );
+    // A shortfall against the filter-blind stub's own tables is not what this
+    // test is about; the window is reported either way on a 200.
+    assertEquals(bridgeResponse.status, 200, label);
+    const { book } = await bridgeResponse.json();
+
+    const editsWindow = await resolveScopeWindow(client, {
+      family_id: 'family-1',
+      child_id: childId,
+      scope_kind: 'everything',
+      scope_start_date: null,
+      scope_end_date: null,
+      book_document: { outline: {}, manifest: {} },
+    });
+    assertEquals(editsWindow, { start: book.windowStart, endExclusive: book.windowEndExclusive }, label);
+  }
 });
 
 Deno.test('load_generation_context: a null child on a child-scoped book is a non-retryable 422', async () => {

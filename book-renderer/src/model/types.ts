@@ -162,15 +162,32 @@ export type OutlineElementKind =
   | 'backbone'
   | 'themed'
   | 'firsts'
-  | 'closing';
+  | 'closing'
+  /**
+   * Multi-year (Everything) chapter opener — one per age-year, emitted by the
+   * worker only for books with >=2 non-empty chapters. Rendered as an ordinary
+   * `spread-title` page; its presence (>=2 elements of this kind) also switches
+   * the fitter into chapter-mode page-cap budgeting. See `OutlineElement.chapter`.
+   */
+  | 'chapter';
 
 export type SpreadType = 'topic' | 'people-pair' | 'emotion';
 export type TitleMode = 'quote' | 'descriptive';
+
+/** Month-aligned span of one age-year chapter (inclusive 'YYYY-MM' bounds; the birthday month is the LAST month of its chapter). */
+export interface OutlineChapterMeta {
+  /** 1-based age year (chapter 1 = first year of life). */
+  ageYear: number;
+  startMonth: string;
+  endMonth: string;
+}
 
 export interface OutlineElement {
   id: string;
   kind: OutlineElementKind;
   title: string;
+  /** Present only on `kind: 'chapter'` elements. */
+  chapter?: OutlineChapterMeta;
   /** Present on some backbone segments (e.g. birth-month date range). */
   subtitle?: string;
   memoryIds: string[];
@@ -604,6 +621,18 @@ export interface FitOptions {
   spineMm?: number;
   /** Overrides `PHYSICAL.maxPrintablePages` — mainly for tests. */
   maxPages?: number;
+  /**
+   * Test hook: called once per full deterministic `runFit` pass `fitBook`
+   * performs (pairing escalation + cap-demotion search), so tests can assert
+   * the chapter-mode prefix search stays ~logarithmic instead of
+   * one-fit-per-omission.
+   */
+  onRunFit?: () => void;
+  /**
+   * Test override for `ENABLE_TIER_C_CAPTIONED_DEMOTION` (chapter-mode
+   * budgeting only; no effect on any other book). Defaults to the constant.
+   */
+  tierCCaptionedDemotion?: boolean;
 }
 
 /**

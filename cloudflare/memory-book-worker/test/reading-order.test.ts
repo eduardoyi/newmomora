@@ -155,3 +155,85 @@ describe('buildReadingOrder', () => {
     expect(sections.some((s) => s.kind === 'firsts')).toBe(false);
   });
 });
+
+describe('buildReadingOrder — chapters (Everything)', () => {
+  const chapters = [
+    { ageYear: 1, startMonth: '2022-10', endMonth: '2023-10' },
+    { ageYear: 2, startMonth: '2023-11', endMonth: '2024-10' },
+    { ageYear: 3, startMonth: '2024-11', endMonth: '2025-10' },
+  ];
+  const segments = [
+    { id: '2023-01_2023-03', label: 'January–March 2023', monthKeys: ['2023-01', '2023-02', '2023-03'], memoryIds: ['a'], chapterIndex: 0 },
+    { id: '2023-04_2023-06', label: 'April–June 2023', monthKeys: ['2023-04', '2023-06'], memoryIds: ['b'], chapterIndex: 0 },
+    { id: '2024-01', label: 'January 2024', monthKeys: ['2024-01'], memoryIds: ['c'], chapterIndex: 1 },
+    { id: '2025-02', label: 'February 2025', monthKeys: ['2025-02'], memoryIds: ['d'], chapterIndex: 2 },
+  ];
+  const themed = (id: string, gap: number) => ({
+    candidateId: id,
+    candidateKind: 'topic' as const,
+    title: id,
+    titleMode: 'descriptive' as const,
+    titleSourceMemoryId: null,
+    memoryIds: ['t1', 't2', 't3'],
+    insertAfterFinalSegmentIndex: gap,
+    rationale: {},
+    kicker: null,
+  });
+  const base = {
+    childName: 'Enzo',
+    finalBackboneSegments: segments,
+    firsts: null,
+    birthdaySpreads: [],
+    backboneRationale: {},
+  };
+
+  it('emits chapter openers before each chapter\'s first segment, chapter 1 before the gap -1 themed spread, later ones after the previous gap\'s spread', () => {
+    const sections = buildReadingOrder({
+      ...base,
+      chapters,
+      themedSpreads: [themed('topic:beach', -1), themed('topic:friends', 1), themed('topic:travel', 3)],
+    });
+    expect(sections.map((s) => s.id)).toEqual([
+      'cover', 'title', 'through-the-years',
+      'chapter:1', 'topic:beach',
+      'backbone:2023-01_2023-03', 'backbone:2023-04_2023-06', 'topic:friends',
+      'chapter:2', 'backbone:2024-01',
+      'chapter:3', 'backbone:2025-02', 'topic:travel',
+      'closing',
+    ]);
+  });
+
+  it('chapter element shape: id, kind, English fallback title, month-range subtitle from the actual content, empty memoryIds, chapter meta', () => {
+    const sections = buildReadingOrder({ ...base, chapters, themedSpreads: [] });
+    const chapterSections = sections.filter((s) => s.kind === 'chapter');
+    expect(chapterSections).toEqual([
+      { id: 'chapter:1', kind: 'chapter', title: 'Year One', subtitle: 'January–June 2023', memoryIds: [], rationale: {}, chapter: { ageYear: 1, startMonth: '2022-10', endMonth: '2023-10' } },
+      { id: 'chapter:2', kind: 'chapter', title: 'Year Two', subtitle: 'January 2024', memoryIds: [], rationale: {}, chapter: { ageYear: 2, startMonth: '2023-11', endMonth: '2024-10' } },
+      { id: 'chapter:3', kind: 'chapter', title: 'Year Three', subtitle: 'February 2025', memoryIds: [], rationale: {}, chapter: { ageYear: 3, startMonth: '2024-11', endMonth: '2025-10' } },
+    ]);
+  });
+
+  it('uses "Year N" past ten', () => {
+    const sections = buildReadingOrder({
+      ...base,
+      finalBackboneSegments: [{ ...segments[0], chapterIndex: 0 }],
+      chapters: [{ ageYear: 11, startMonth: '2033-01', endMonth: '2033-12' }],
+      themedSpreads: [],
+    });
+    expect(sections.find((s) => s.kind === 'chapter')?.title).toBe('Year 11');
+  });
+
+  it('emits no chapter sections without `chapters` (even when segments carry chapterIndex)', () => {
+    const sections = buildReadingOrder({ ...base, themedSpreads: [themed('topic:beach', 0)] });
+    expect(sections.some((s) => s.kind === 'chapter')).toBe(false);
+  });
+
+  it('multiYear swaps the default Firsts title (an AI title still wins)', () => {
+    const firsts = (title: string | null) => ({ present: true, title, memoryIds: ['f1'], warmNames: [] });
+    const get = (input: Parameters<typeof buildReadingOrder>[0]) => buildReadingOrder(input).find((s) => s.kind === 'firsts')?.title;
+    expect(get({ ...base, themedSpreads: [], firsts: firsts(null) })).toBe('Big and small victories this year');
+    expect(get({ ...base, themedSpreads: [], firsts: firsts(null), multiYear: true })).toBe('Big and small victories');
+    expect(get({ ...base, themedSpreads: [], firsts: firsts('Mis primeras veces'), multiYear: true })).toBe('Mis primeras veces');
+  });
+});
+

@@ -3338,3 +3338,149 @@ Deno.test('estimatePagesViaFitter: an untrusted (non-nominated) wide memory NEVE
 // `selectBackboneMemories` are DELETED -- neither function prices anything
 // anymore, so there is nothing left to inject a price function into. See
 // the "planNonBackboneBudget / selectBackboneMemories" no-cut tests above.
+
+// --- Phase 2 (everything scope): multi-year prompt, chapters, firsts cap ---
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Hashes captured from the pre-change (HEAD 117b571) builders. The existing
+// assertions above only check substrings, so these pin the FULL default
+// output: every new option must be absent-safe and byte-identical.
+const BASELINE_SYSTEM_PROMPT_SHA256 = 'd7c49af7a80e0a61261da73082772dfb104dccd7deaec1acac112f4438a61bf2';
+const BASELINE_USER_PROMPT_SHA256 = '8cc417b8e91a3af2859782d41ae86601ac39f3697da62c267cc9693130f64f60';
+
+function phase2UserPromptInput() {
+  const features = new Map([
+    ['m1', fixtureFeature({ id: 'm1', date: '2023-06-01', milestones: [{ milestoneId: 'ms-sits', name: 'Sits', detail: null, outOfBand: false }] })],
+    ['m2', fixtureFeature({ id: 'm2', date: '2023-05-01', milestones: [
+      { milestoneId: 'ms-crawls', name: 'Crawls', detail: null, outOfBand: false },
+      { milestoneId: 'ms-waves', name: 'Waves', detail: null, outOfBand: false },
+    ] })],
+    ['m3', fixtureFeature({ id: 'm3', date: '2023-07-01' })],
+  ]);
+  const skeleton = {
+    childName: 'Enzo',
+    scopeLabel: 'Year One',
+    windowStart: '2023-01-01',
+    windowLastDay: '2023-12-31',
+    backboneSegments: [
+      { id: 'seg-1', label: 'enero', monthKeys: ['2023-01'], memoryIds: ['m1'] },
+      { id: 'seg-2', label: 'mayo', monthKeys: ['2023-05'], memoryIds: ['m2', 'm3'] },
+    ],
+    firstsCount: 2,
+    birthdaySpreads: [],
+    throughTheYearsCount: 0,
+    specialSegments: [{ segmentId: 'seg-1', month: '2023-01', kind: 'birth' as const }],
+    configuredLanguage: 'es',
+    languageEvidenceCaptions: [],
+  };
+  return { skeleton, features };
+}
+
+Deno.test('buildOutlineSystemPrompt: default output (no options, empty options, multiYear false) is byte-identical to the pre-change prompt', async () => {
+  assertEquals(await sha256Hex(buildOutlineSystemPrompt()), BASELINE_SYSTEM_PROMPT_SHA256);
+  assertEquals(buildOutlineSystemPrompt({}), buildOutlineSystemPrompt());
+  assertEquals(buildOutlineSystemPrompt({ multiYear: false }), buildOutlineSystemPrompt());
+  assertEquals(buildOutlineSystemPrompt().includes('MULTI-YEAR BOOK'), false);
+});
+
+Deno.test('buildOutlineSystemPrompt: multiYear adds exactly one MULTI-YEAR BOOK block after the LANGUAGE paragraph, with the key instructions', () => {
+  const base = buildOutlineSystemPrompt();
+  const multi = buildOutlineSystemPrompt({ multiYear: true });
+  assertEquals(multi.split('MULTI-YEAR BOOK').length - 1, 1);
+  const blockStart = multi.indexOf('MULTI-YEAR BOOK');
+  const blockEnd = multi.indexOf('\n', blockStart);
+  const block = multi.slice(blockStart, blockEnd);
+  for (const phrase of [
+    'one chapter per age-year',
+    'across the years',
+    'big and small victories',
+    'este año',
+    'first and last dates',
+    'back_cover_line',
+    'years of memories',
+    'DIFFERENT years',
+    'the month you turned N',
+    'do NOT favour recent years',
+  ]) {
+    assertEquals(block.includes(phrase), true, `missing phrase: ${phrase}`);
+  }
+  // Placement: after the LANGUAGE paragraph, before FIRSTS WARM NAMES.
+  assertEquals(multi.indexOf('LANGUAGE: write EVERY') < blockStart, true);
+  assertEquals(blockStart < multi.indexOf('FIRSTS WARM NAMES'), true);
+  // Removing the inserted block (and its trailing blank line) restores the default prompt.
+  assertEquals(multi.slice(0, blockStart) + multi.slice(blockEnd + 2), base);
+});
+
+Deno.test('buildOutlineUserPrompt: default input (no firstsMemoryIds, no chapters) is byte-identical to the pre-change prompt', async () => {
+  const { skeleton, features } = phase2UserPromptInput();
+  const prompt = buildOutlineUserPrompt(skeleton, [], features);
+  assertEquals(await sha256Hex(prompt), BASELINE_USER_PROMPT_SHA256);
+  assertEquals(prompt.includes('CHAPTERS'), false);
+  assertEquals(prompt.includes('[chapter'), false);
+});
+
+Deno.test('buildOutlineUserPrompt: CHAPTERS block and per-segment chapter tags appear only when chapters are supplied', () => {
+  const { skeleton, features } = phase2UserPromptInput();
+  const withChapters = buildOutlineUserPrompt(
+    {
+      ...skeleton,
+      chapters: [
+        { ageYear: 1, startMonth: '2022-10', endMonth: '2023-10' },
+        { ageYear: 2, startMonth: '2023-11', endMonth: '2024-10' },
+      ],
+      backboneSegments: [
+        { ...skeleton.backboneSegments[0], chapterIndex: 0 },
+        { ...skeleton.backboneSegments[1], chapterIndex: 1 },
+      ],
+    },
+    [],
+    features,
+  );
+  assertEquals(withChapters.includes('CHAPTERS (one per age-year'), true);
+  assertEquals(withChapters.includes('- chapter 1: 2022-10 to 2023-10'), true);
+  assertEquals(withChapters.includes('- chapter 2: 2023-11 to 2024-10'), true);
+  assertEquals(withChapters.includes('[0] seg-1 "enero" [chapter 1] -- 1 memories'), true);
+  assertEquals(withChapters.includes('[1] seg-2 "mayo" [chapter 2] -- 2 memories'), true);
+  // CHAPTERS precedes BACKBONE SEGMENTS.
+  assertEquals(withChapters.indexOf('CHAPTERS (one per age-year') < withChapters.indexOf('BACKBONE SEGMENTS'), true);
+
+  // chapterIndex alone (no chapters array) adds nothing.
+  const tagOnly = buildOutlineUserPrompt(
+    { ...skeleton, backboneSegments: [{ ...skeleton.backboneSegments[0], chapterIndex: 0 }] },
+    [],
+    features,
+  );
+  assertEquals(tagOnly.includes('[chapter'), false);
+  assertEquals(tagOnly.includes('CHAPTERS'), false);
+
+  // Chapters supplied but a segment without chapterIndex stays untagged.
+  const untagged = buildOutlineUserPrompt(
+    { ...skeleton, chapters: [{ ageYear: 1, startMonth: '2022-10', endMonth: '2023-10' }] },
+    [],
+    features,
+  );
+  assertEquals(untagged.includes('CHAPTERS (one per age-year'), true);
+  assertEquals(untagged.includes('[chapter'), false);
+});
+
+Deno.test('buildOutlineUserPrompt: firstsMemoryIds restricts FIRSTS MILESTONES rows; undefined lists every row', () => {
+  const { skeleton, features } = phase2UserPromptInput();
+  const all = buildOutlineUserPrompt(skeleton, [], features);
+  assertEquals(all.includes('memory_id="m1" milestone_id="ms-sits"'), true);
+  assertEquals(all.includes('memory_id="m2" milestone_id="ms-crawls"'), true);
+  assertEquals(all.includes('memory_id="m2" milestone_id="ms-waves"'), true);
+
+  const capped = buildOutlineUserPrompt({ ...skeleton, firstsMemoryIds: ['m2'] }, [], features);
+  assertEquals(capped.includes('memory_id="m1" milestone_id="ms-sits"'), false);
+  assertEquals(capped.includes('memory_id="m2" milestone_id="ms-crawls"'), true);
+  assertEquals(capped.includes('memory_id="m2" milestone_id="ms-waves"'), true);
+  // The announcement count is the caller's (capped) firstsCount, untouched here.
+  assertEquals(capped.includes('Firsts (non-birthday explicit milestones) in scope: 2'), true);
+
+  const none = buildOutlineUserPrompt({ ...skeleton, firstsMemoryIds: [] }, [], features);
+  assertEquals(none.includes('milestone_id="'), false);
+});

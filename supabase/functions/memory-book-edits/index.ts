@@ -49,9 +49,19 @@ import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { pickCoverAssetKey } from '../_shared/memory-book-cover.ts';
+import {
+  addDaysToDateOnly,
+  EMPTY_WINDOW_SENTINEL,
+  resolveEverythingWindow,
+  ScopeWindowError,
+} from '../_shared/memory-book-scope-window.ts';
 import { createPresignedGetUrls } from '../_shared/r2.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
+
+// Kept exported from here so existing importers/tests of `ScopeWindowError`
+// (now defined in the shared window module) keep working.
+export { ScopeWindowError };
 
 // ── Edit shapes (Design Decision 6) ─────────────────────────────────────
 
@@ -546,6 +556,7 @@ function coverRecordsEqual(a: ImageEditRecord | undefined, b: ImageEditRecord | 
 interface BookRow {
   id: string;
   family_id: string;
+  child_id: string | null;
   status: string;
   scope_kind: 'age_year' | 'calendar_year' | 'everything' | 'custom_range';
   scope_start_date: string | null;
@@ -708,67 +719,59 @@ async function handleSaveEdit(
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 50;
-// No memory can ever match a window before/at its own start (a strict
-// gte/lt pair) -- same sentinel `workflow-memory-book-bridge` uses so an
-// 'everything' family with zero memories yields an empty result via the
-// SAME query path, rather than a malformed date reaching Postgres.
-const EMPTY_WINDOW_SENTINEL = '0001-01-01';
-
-function addDaysToDateOnly(dateStr: string, days: number): string {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const utcMs = Date.UTC(year, month - 1, day) + days * 24 * 60 * 60 * 1000;
-  const dt = new Date(utcMs);
-  const pad = (n: number, width: number) => String(n).padStart(width, '0');
-  return `${pad(dt.getUTCFullYear(), 4)}-${pad(dt.getUTCMonth() + 1, 2)}-${pad(dt.getUTCDate(), 2)}`;
-}
-
-/** Thrown by `resolveScopeWindow` when an `everything` min/max lookup fails
- * (DB/PostgREST error); `handlePickerPool` maps it to a 500 `internal_error`. */
-export class ScopeWindowError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ScopeWindowError';
-  }
+/** `book_document.outline.window` as frozen at generation time, when it is a
+ * well-formed `{ start, endExclusive }` pair of calendar dates with
+ * start <= endExclusive; otherwise null. */
+function readFrozenWindow(bookDocument: unknown): { start: string; endExclusive: string } | null {
+  if (!isPlainObject(bookDocument)) return null;
+  const outline = bookDocument.outline;
+  if (!isPlainObject(outline)) return null;
+  const frozen = outline.window;
+  if (!isPlainObject(frozen)) return null;
+  const { start, endExclusive } = frozen;
+  if (!isValidDateOnly(start) || !isValidDateOnly(endExclusive)) return null;
+  if (start > endExclusive) return null;
+  return { start, endExclusive };
 }
 
 /** Same scope-window resolution as
  * `workflow-memory-book-bridge/index.ts`'s `handleLoadGenerationContext`
  * (frozen `scope_start_date`/`scope_end_date` for every kind but
- * `everything`, which resolves to the family's live min/max `memory_date`
- * instead) -- the picker's pool must cover exactly the memories the book
- * itself was/would be curated from, not a different window. */
+ * `everything`) -- the picker's pool must cover exactly the memories the book
+ * itself was/would be curated from, not a different window.
+ *
+ * For `everything` the book's own frozen `book_document.outline.window` wins
+ * when present and valid, which guarantees the pool equals the generated
+ * window even if memories were added/removed since. Without one (a book
+ * that predates the field, or a malformed document) the window is
+ * re-derived with the shared `resolveEverythingWindow` -- the same code the
+ * bridge runs at generation time. */
 export async function resolveScopeWindow(
   supabase: SupabaseClient,
-  book: Pick<BookRow, 'family_id' | 'scope_kind' | 'scope_start_date' | 'scope_end_date'>,
+  book: Pick<BookRow, 'family_id' | 'scope_kind' | 'scope_start_date' | 'scope_end_date'>
+    & Partial<Pick<BookRow, 'child_id' | 'book_document'>>,
 ): Promise<{ start: string; endExclusive: string }> {
   if (book.scope_kind === 'everything') {
-    const [earliestResult, latestResult] = await Promise.all([
-      supabase
-        .from('memories')
-        .select('memory_date')
-        .eq('family_id', book.family_id)
-        .order('memory_date', { ascending: true })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from('memories')
-        .select('memory_date')
-        .eq('family_id', book.family_id)
-        .order('memory_date', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
-    // An error here must NOT collapse into the empty-window sentinel (which
-    // would read as "family has no memories" -> an empty picker pool).
-    if (earliestResult.error || latestResult.error) {
-      throw new ScopeWindowError(earliestResult.error?.message ?? latestResult.error?.message ?? 'unknown');
+    const frozen = readFrozenWindow(book.book_document);
+    if (frozen) return frozen;
+
+    const childId = book.child_id ?? null;
+    let childDateOfBirth: string | null = null;
+    if (childId) {
+      // An error here must NOT collapse into "no DOB" (a different window).
+      const { data, error } = await supabase
+        .from('family_members')
+        .select('date_of_birth')
+        .eq('id', childId)
+        .maybeSingle();
+      if (error) throw new ScopeWindowError('child_dob_query_failed');
+      childDateOfBirth = (data as { date_of_birth: string | null } | null)?.date_of_birth ?? null;
     }
-    const earliest = earliestResult.data;
-    const latest = latestResult.data;
-    return {
-      start: earliest?.memory_date ?? EMPTY_WINDOW_SENTINEL,
-      endExclusive: latest?.memory_date ? addDaysToDateOnly(latest.memory_date, 1) : EMPTY_WINDOW_SENTINEL,
-    };
+    return await resolveEverythingWindow(supabase, {
+      familyId: book.family_id,
+      childId,
+      childDateOfBirth,
+    });
   }
   return {
     start: book.scope_start_date ?? EMPTY_WINDOW_SENTINEL,
@@ -1080,7 +1083,7 @@ export async function handleMemoryBookEdits(
   const supabase = dependencies.createServiceClient();
   const { data: book, error: bookError } = await supabase
     .from('memory_books')
-    .select('id, family_id, status, scope_kind, scope_start_date, scope_end_date, book_document')
+    .select('id, family_id, child_id, status, scope_kind, scope_start_date, scope_end_date, book_document')
     .eq('id', body.bookId)
     .maybeSingle<BookRow>();
   if (bookError) {
