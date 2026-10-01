@@ -2,6 +2,29 @@
   background: var(--color-white);
 }
 
+/* Fills the SafeArea; the single child centres vertically in whatever is left
+   under the header / above the folio. `margin-block: auto` (not
+   justify-content: center) so an overflowing block grows downward only and
+   is never pushed up under the header. */
+.text-page__stage {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.text-page__inner {
+  margin-block: auto;
+}
+
+.text-page__inner--quote {
+  align-self: center;
+  margin-left: 0;
+  margin-right: 0;
+}
+
 .text-page__entry {
   display: flex;
   flex-direction: column;
@@ -29,4 +52,32 @@
   line-height: 1.72;
   letter-spacing: -0.004em;
   white-space: pre-wrap;
+}
+
+/* Pull quote: one short entry, centred, date kicker above a lavender opening mark. */
+.text-page__entry--quote {
+  align-items: center;
+  gap: 0;
+  margin-bottom: 0;
+  text-align: center;
+}
+
+.text-page__quote-mark {
+  display: block;
+  height: 0.55em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1;
+  margin-top: 0.3em;
+  margin-bottom: 0.2em;
+}
+
+.text-page__quote {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1.32;
+  letter-spacing: -0.012em;
+  white-space: pre-wrap;
+  text-wrap: balance;
 }

@@ -357,28 +357,28 @@ describe('chapter-mode Tier C (captioned photo/video demotion)', () => {
     return { manifest, outline };
   }
 
-  it('runs only after ordinary tiers that respect the floors are exhausted, and before the month floor is given up', () => {
+  it('runs only after ordinary tiers that respect the floors are exhausted, and before the section floor is given up', () => {
     const { manifest, outline } = tierOrderingBook();
     const plan = planChapterDemotions(outline, manifest);
     const tiers = plan.map((d) => d.tier);
-    // Ordinary candidates that respect the month floor go first (x-p1, z-p1) ...
+    // Ordinary candidates that respect the section floor go first (x-p1, z-p1) ...
     expect(plan.slice(0, 2).map((d) => d.id).sort()).toEqual(['x-p1', 'z-p1']);
     expect(tiers.slice(0, 2).every((t) => t === 'A' || t === 'B1')).toBe(true);
-    // ... then the captioned memories above THEIR month floor (Tier C) ...
-    const cIds = plan.filter((d) => d.tier === 'C').map((d) => d.id);
-    expect(cIds.length).toBeGreaterThan(0);
-    expect(cIds.every((id) => id.startsWith('y-c'))).toBe(true);
-    expect(tiers.indexOf('C')).toBe(2);
-    // ... and only then the ordinary memory the month floor was holding back (z-p2), floors relaxed.
-    expect(plan.map((d) => d.id).slice(2)).toEqual(['y-c1', 'y-c2', 'z-p2', 'y-c3']);
-    expect(plan.find((d) => d.id === 'z-p2')?.tier).toBe('B2');
+    // ... then the captioned memories above THEIR section's floor (Tier C) ...
+    expect(plan.slice(2, 4).map((d) => d.id)).toEqual(['y-c1', 'y-c2']);
+    expect(tiers.slice(2, 4)).toEqual(['C', 'C']);
+    // ... and only then the ordinary memory the section floor was holding back (z-p2), floor relaxed to 1 ...
+    expect(plan[4]).toMatchObject({ id: 'z-p2', tier: 'B2' });
+    // ... then Tier C again at floor 1 (Phase 2b fix B: the text-only memories are Tier C candidates too).
+    expect(plan.slice(5).map((d) => d.tier)).toEqual(['C', 'C', 'C', 'C', 'C']);
+    expect(plan.map((d) => d.id).slice(5)).toEqual(['x-t1', 'y-c3', 'x-t2', 'y-t1', 'z-t1']);
   });
 
   it("literal plan order (C only after B2) is reachable via the planner's measuring switch", () => {
     const { manifest, outline } = tierOrderingBook();
     const literal = planChapterDemotions(outline, manifest, { tierCAfterB2: true });
-    expect(literal.map((d) => d.id).slice(2)).toEqual(['z-p2', 'y-c1', 'y-c2', 'y-c3']);
-    expect(literal.map((d) => d.tier).slice(2)).toEqual(['B2', 'C', 'C', 'C']);
+    expect(literal.map((d) => d.id).slice(2)).toEqual(['z-p2', 'y-c1', 'y-c2', 'x-t1', 'y-c3', 'x-t2', 'y-t1', 'z-t1']);
+    expect(literal.map((d) => d.tier).slice(2)).toEqual(['B2', 'C', 'C', 'C', 'C', 'C', 'C', 'C']);
   });
 
   it('ranks by engagement, then shorter text first', () => {
@@ -464,8 +464,9 @@ describe('fitBook — chapter mode prefix search', () => {
   });
 
   it('exhausted plan: returns the full list as overCap, like the legacy loop', () => {
-    // Every month keeps one sacred text-only memory, so the pools run dry while still over the cap.
-    const { manifest, outline } = threeChapterBook([20, 40, 80], (date, i) => (i === 0 ? makeMemory({ date, type: 'text_only', text: 'A short note.' }) : photo(date)));
+    // Every month keeps one sacred (milestone) text-only memory, so the pools run dry while still over the cap.
+    const sacred = (date: string) => makeMemory({ date, type: 'text_only', text: 'A short note.', milestones: [{ id: 'first-steps', name: 'First steps', detail: '' }] });
+    const { manifest, outline } = threeChapterBook([20, 40, 80], (date, i) => (i === 0 ? sacred(date) : photo(date)));
     const result = fitBook(outline, manifest, { maxPages: 3 });
     expect(result.capacity.overCap).toBe(true);
     expect(result.capacity.omittedMemoryIds).toEqual(planChapterDemotions(outline, manifest).map((d) => d.id));
@@ -503,8 +504,11 @@ describe('fitBook — chapter mode prefix search', () => {
 // 2.8 — the ~600-memory, 5-chapter Everything fixture
 // ---------------------------------------------------------------------------
 
-describe('synthetic Everything book (600 memories, 5 chapters)', () => {
-  const book = buildSyntheticEverythingBook();
+describe('synthetic Everything book (600 memories, 5 chapters, quarter sections)', () => {
+  // Phase 2b: the worker now emits fixed 3-month backbone blocks, so the main
+  // fixture uses that shape (the old merge-until-3-printable monthly shape
+  // meant ~46 sections whose floors alone ate the budget — finding A).
+  const book = buildSyntheticEverythingBook({ quarterSections: true });
   const { outline, manifest, memoryIdsByChapter } = book;
   let fits = 0;
   const result = fitBook(outline, manifest, { onRunFit: () => fits++ });
@@ -577,7 +581,7 @@ describe('synthetic Everything book (600 memories, 5 chapters)', () => {
   });
 
   it('es books render Spanish chapter furniture and still fit and audit clean', () => {
-    const es = buildSyntheticEverythingBook({ language: 'es' });
+    const es = buildSyntheticEverythingBook({ language: 'es', quarterSections: true });
     const r = fitBook(es.outline, es.manifest);
     expect(r.capacity.overCap).toBe(false);
     expect(auditBookDocument(r.document, es.outline, es.manifest)).toEqual([]);

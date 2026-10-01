@@ -469,8 +469,6 @@ export interface AudioNoteContent {
   kind: 'audio-note';
   memoryId: string;
   date: string;
-  /** Phase 2 wires the real short URL; phase 1 renders a neutral short-code placeholder. */
-  shortCode: string;
   /** Round-19: see `PhotoSlotContent.shareToken` — the scan mark IS the
    * page for an audio-note, so this is `null` only for a memory that
    * predates tokens (falls back to the static placeholder mark). */

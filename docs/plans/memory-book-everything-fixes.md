@@ -267,7 +267,7 @@ decision — whether to design pooling — still waits on Phase 0 regenerated da
 
 ### Phase 2 — multi-year rules (Everything only; D1–D6)
 
-Concrete spec: [memory-book-everything-phase2.md](memory-book-everything-phase2.md)
+Concrete spec: [memory-book-everything-phase2.md](memory-book-everything-phase2.md) · dogfood round 1 fixes: [memory-book-everything-phase2b.md](memory-book-everything-phase2b.md) (implemented 2026-10-01)
 
 Status 2026-10-01: 2.1–2.8 [DONE — code-complete in the worktree, not deployed; `everything` stays paused except the owner
 family]. Seam check (worker output -> renderer fitter via `audit-layout.mts`): 4/4 chapters render, no chapter orphans, <= 122

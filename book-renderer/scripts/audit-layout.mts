@@ -210,10 +210,32 @@ function auditBook(file: string) {
   const pages = fit.document.pages;
 
   // Content-integrity audit (src/model/audit.ts) on the finished document — violation counts by check.
-  const violations = auditBookDocument(fit.document, outline, manifest);
+  const violations = auditBookDocument(fit.document, outline, manifest, { omittedMemoryIds: fit.capacity.omittedMemoryIds });
   const violationsByCheck: Record<string, number> = {};
   for (const v of violations) violationsByCheck[v.check] = (violationsByCheck[v.check] ?? 0) + 1;
   const omittedIds = new Set(fit.capacity.omittedMemoryIds);
+  // Phase 2b: kept memories / assets vs what actually renders (ids and counts only).
+  const keptMemoryIds = new Set<string>();
+  for (const e of outline.elements) for (const id of e.memoryIds) if (manifest.memories[id] && !omittedIds.has(id)) keptMemoryIds.add(id);
+  let assetsKept = 0;
+  let mediaMemoriesKept = 0;
+  for (const id of keptMemoryIds) {
+    const n = manifest.memories[id].assets.length;
+    assetsKept += n;
+    if (n > 0) mediaMemoriesKept++;
+  }
+  const renderedAssets = new Set<string>();
+  const renderedMediaMemories = new Set<string>();
+  for (const p of fit.document.pages) {
+    for (const s of p.slots) {
+      if (s.kind !== 'photo') continue;
+      const c = s.content as { memoryId?: string; assetFile?: string; editedFromFile?: string | null };
+      if (!c.memoryId || !keptMemoryIds.has(c.memoryId)) continue;
+      renderedAssets.add(`${c.memoryId}|${c.editedFromFile ?? c.assetFile}`);
+      renderedMediaMemories.add(c.memoryId);
+    }
+  }
+  const mediaCoverage = { memoriesKept: keptMemoryIds.size, mediaMemoriesKept, mediaMemoriesRendered: renderedMediaMemories.size, assetsKept, assetsRendered: renderedAssets.size };
   const chapterMode = chapterStats(outline, manifest, pages, omittedIds);
 
   const templateHistogram: Record<string, number> = {};
@@ -273,6 +295,7 @@ function auditBook(file: string) {
     },
     fitCount,
     omittedTotal: omittedIds.size,
+    mediaCoverage,
     chapterMode,
   };
 }
@@ -296,6 +319,7 @@ function printTable(r: Report): void {
   console.log(`header pages lacking SafeArea (bare-before-fix / not-rendered): ${bare.reduce((n, x) => n + x.count, 0)}`);
   console.log(`integrity violations: ${r.integrity.total}${r.integrity.total ? '  ' + Object.entries(r.integrity.byCheck).map(([c, n]) => `${c}=${n}`).join(' ') : ''}`);
   for (const v of r.integrity.items) console.log(`  ${v.check}  element ${v.elementId ?? '-'}  page ${v.pageId ?? '-'}`);
+  console.log(`kept memories ${r.mediaCoverage.memoriesKept} | media memories kept/rendered ${r.mediaCoverage.mediaMemoriesKept}/${r.mediaCoverage.mediaMemoriesRendered} | assets kept/rendered ${r.mediaCoverage.assetsKept}/${r.mediaCoverage.assetsRendered}`);
   console.log(`fit passes (onRunFit): ${r.fitCount} | omitted memories: ${r.omittedTotal} | over cap: ${r.fitCapacity.overCap}`);
   if (r.chapterMode) {
     const c = r.chapterMode;

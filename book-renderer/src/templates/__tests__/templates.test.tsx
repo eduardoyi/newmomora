@@ -295,7 +295,7 @@ describe('template snapshots', () => {
     expect(descriptiveHtml).not.toContain('spread-title__attribution');
   });
 
-  it('AudioNote never prints the transcription, only the parent caption and the scan mark (furniture follows journal language)', () => {
+  it('AudioNote never prints the transcription, only the parent caption and the scan mark — badge-only like a video mark, no script word or URL line', () => {
     const esManifest = makeManifest(
       { 'mem-audio': makeMemory({ type: 'audio', text: 'Singing happy birthday.', assets: [] }) },
       { language: 'es' },
@@ -306,15 +306,16 @@ describe('template snapshots', () => {
     const { page, html: esHtml } = renderPage(esManifest, outline);
     expect(page.templateId).toBe('audio-note');
     expect(esHtml).toContain('Singing happy birthday.');
-    expect(esHtml).toContain('escúchalo');
+    expect(esHtml).not.toContain('escúchalo');
+    expect(esHtml).not.toContain('momora.co/e/');
+    expect(esHtml).not.toContain('audio-note__mark-text');
     expect(esHtml).not.toContain('footer-index');
 
-    // No `language` on the manifest -> defaults to "en" furniture, never Spanish.
     const enManifest = makeManifest({
       'mem-audio': makeMemory({ type: 'audio', text: 'Singing happy birthday.', assets: [] }),
     });
     const { html: enHtml } = renderPage(enManifest, outline);
-    expect(enHtml).toContain('listen to it');
+    expect(enHtml).not.toContain('listen to it');
     expect(enHtml).not.toContain('escúchalo');
   });
 
@@ -399,6 +400,31 @@ describe('template snapshots', () => {
     const { x, y } = getSafeInsetPct(false);
     expect(html).toContain(`top:${y}%`);
     expect(html).toContain(`left:${x}%`);
+  });
+
+  it('TextPage: a single entry of <= 120 chars is a pull quote (centred, lavender opening mark, date kicker above); body text verbatim', () => {
+    const text = 'She said the moon was following our car.';
+    const manifest = makeManifest({ 'mem-1': makeMemory({ date: '2024-12-05', text, assets: [] }) });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { page, html } = renderPage(manifest, outline);
+    expect(page.templateId).toBe('text-page');
+    expect(html).toContain('text-page__quote');
+    expect(html).toContain('text-page__quote-mark');
+    expect(html).toContain(text);
+    expect(html).not.toContain('text-page__body');
+    // date kicker precedes the quote
+    expect(html.indexOf('text-page__date')).toBeLessThan(html.indexOf('text-page__quote-mark'));
+  });
+
+  it('TextPage: a single entry over 120 chars keeps the body typography (no pull quote)', () => {
+    const text = 'x'.repeat(10) + ' ' + 'A slightly longer note about the whole afternoon, which runs past the pull-quote limit by a comfortable margin. '.repeat(1);
+    expect(text.length).toBeGreaterThan(120);
+    const manifest = makeManifest({ 'mem-1': makeMemory({ text, assets: [] }) });
+    const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+    const { html } = renderPage(manifest, outline);
+    expect(html).toContain('text-page__body');
+    expect(html).not.toContain('text-page__quote');
+    expect(html).toContain(text);
   });
 
   it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix; full-bleed "photo" voice removed 2026-08-31, so this is now the only photo-bearing voice)', () => {

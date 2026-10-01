@@ -89,8 +89,6 @@ export interface Furniture {
    * scratch.
    */
   scanToWatch: string;
-  /** The single Caveat word on an audio-note page. */
-  listenToIt: string;
   firsts: { kicker: string };
   closing: {
     headline: string;
@@ -147,7 +145,6 @@ const FURNITURE: Record<Language, Furniture> = {
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'es')} momentos` : `${childName}, ${dateStr}`,
     scanToWatch: 'escanea para verlo',
-    listenToIt: 'escúchalo',
     firsts: { kicker: 'primeras veces' },
     closing: {
       headline: 'Hasta el año que viene.',
@@ -182,7 +179,6 @@ const FURNITURE: Record<Language, Furniture> = {
     spreadTitleAttribution: (childName, dateStr, momentCount) =>
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'en')} moments` : `${childName}, ${dateStr}`,
     scanToWatch: 'scan to watch it',
-    listenToIt: 'listen to it',
     firsts: { kicker: 'firsts' },
     closing: {
       headline: 'See you next year.',

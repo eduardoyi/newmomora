@@ -36,7 +36,6 @@ describe('furniture — table completeness', () => {
       expect(f.dedication.signature.length).toBeGreaterThan(0);
       expect(f.dedication.scanInstruction.length).toBeGreaterThan(0);
       expect(f.scanToWatch.length).toBeGreaterThan(0);
-      expect(f.listenToIt.length).toBeGreaterThan(0);
       expect(f.firsts.kicker.length).toBeGreaterThan(0);
       expect(f.closing.headline.length).toBeGreaterThan(0);
       expect(f.closing.memoryCountLine(10, 'Year One', null).length).toBeGreaterThan(0);
@@ -69,7 +68,8 @@ describe('furniture — Spanish strings match the design canvas verbatim', () =>
   it('scan-mark microcopy', () => {
     const es = getFurniture('es');
     expect(es.scanToWatch).toBe('escanea para verlo');
-    expect(es.listenToIt).toBe('escúchalo');
+    // Audio marks are badge-only now (no "escúchalo" script word) — see AudioNote.
+    expect('listenToIt' in es).toBe(false);
   });
 
   it('dedication scan-instruction covers both video and audio (print-polish round, owner-approved copy)', () => {

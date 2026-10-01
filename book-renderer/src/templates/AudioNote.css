@@ -38,27 +38,5 @@
 
 .audio-note__mark {
   display: flex;
-  align-items: flex-end;
-  gap: 1.2em;
-}
-
-.audio-note__mark-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4em;
-  padding-bottom: 0.3em;
-  text-align: left;
-}
-
-.audio-note__word {
-  font-family: var(--font-script);
-  font-weight: 500;
-  line-height: 1;
-}
-
-.audio-note__code {
-  font-family: var(--font-sans);
-  font-weight: 500;
-  line-height: 1.2;
-  letter-spacing: 0.04em;
+  justify-content: center;
 }

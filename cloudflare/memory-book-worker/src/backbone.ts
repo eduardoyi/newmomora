@@ -135,6 +135,101 @@ export function buildBackboneSegments(
   return segments;
 }
 
+export interface QuarterBlockOptions {
+  /** Chapter mode: the book's chapters (month-aligned, contiguous, in order).
+   * Blocks are cut per chapter from `chapters[i].startMonth` and never cross a
+   * chapter boundary; each segment carries its `chapterIndex`. Omit for a
+   * single group cut from the window's first month. */
+  chapters?: ReadonlyArray<{ startMonth: string; endMonth: string }>;
+  /** The window's first / last month (`YYYY-MM`). Blocks are clipped to
+   * `[first, last]` (widened if a memory lies outside, so none is ever lost). */
+  firstMonth?: string;
+  lastMonth?: string;
+}
+
+/** Length of an Everything backbone block, in calendar months. */
+export const QUARTER_BLOCK_MONTHS = 3;
+
+function monthKeyOfOrdinal(ordinal: number): string {
+  return `${String(Math.floor(ordinal / 12)).padStart(4, '0')}-${String((ordinal % 12) + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Everything books: backbone segments are FIXED calendar-aligned 3-month
+ * blocks (docs/plans/memory-book-everything-phase2b.md fix A). Chapter mode
+ * walks each chapter's calendar months from its start cutting consecutive
+ * 3-month blocks (a 13-month age-year chapter -> 3,3,3,3,1; the trailing
+ * 1-month block is the birthday month and stays its own segment); without
+ * chapters the same blocks run from the window's first month. Blocks are
+ * clipped to the window and dropped when they hold no printable memory --
+ * there is NO merge-until-N-printable rule. A segment's `monthKeys` are the
+ * months of its block that actually hold memories (as for every other
+ * backbone segment), so the id/label describe real content.
+ */
+export function buildQuarterBlockSegments(
+  memories: BackboneMemoryInput[],
+  options: QuarterBlockOptions = {},
+): BackboneSegment[] {
+  const byMonth = new Map<string, BackboneMemoryInput[]>();
+  for (const memory of memories) {
+    const key = memory.date.slice(0, 7);
+    const list = byMonth.get(key) ?? [];
+    list.push(memory);
+    byMonth.set(key, list);
+  }
+  const memoryMonths = [...byMonth.keys()].sort();
+  if (memoryMonths.length === 0) return [];
+
+  const firstMemory = monthOrdinal(memoryMonths[0]);
+  const lastMemory = monthOrdinal(memoryMonths[memoryMonths.length - 1]);
+  const clipFirst = options.firstMonth ? Math.min(monthOrdinal(options.firstMonth), firstMemory) : firstMemory;
+  const clipLast = options.lastMonth ? Math.max(monthOrdinal(options.lastMonth), lastMemory) : lastMemory;
+
+  const ranges: Array<{ start: number; end: number; chapterIndex: number | undefined }> = [];
+  const chapters = options.chapters ?? [];
+  if (chapters.length > 0) {
+    chapters.forEach((chapter, index) => {
+      ranges.push({
+        // The first chapter also owns memories dated before the DOB month
+        // (chapterIndexOfMonth clamps them to chapter 0); the last chapter
+        // owns anything past its theoretical end.
+        start: index === 0 ? Math.min(monthOrdinal(chapter.startMonth), clipFirst) : monthOrdinal(chapter.startMonth),
+        end: index === chapters.length - 1 ? Math.max(monthOrdinal(chapter.endMonth), clipLast) : monthOrdinal(chapter.endMonth),
+        chapterIndex: index,
+      });
+    });
+  } else {
+    ranges.push({ start: clipFirst, end: clipLast, chapterIndex: undefined });
+  }
+
+  const segments: BackboneSegment[] = [];
+  for (const range of ranges) {
+    for (let blockStart = range.start; blockStart <= range.end; blockStart += QUARTER_BLOCK_MONTHS) {
+      const blockEnd = Math.min(blockStart + QUARTER_BLOCK_MONTHS - 1, range.end);
+      const months: string[] = [];
+      const ids: string[] = [];
+      let printable = 0;
+      for (let ordinal = Math.max(blockStart, clipFirst); ordinal <= Math.min(blockEnd, clipLast); ordinal++) {
+        const key = monthKeyOfOrdinal(ordinal);
+        const bucket = byMonth.get(key);
+        if (!bucket) continue;
+        months.push(key);
+        ids.push(...bucket.map((m) => m.id));
+        printable += bucket.filter((m) => m.printable).length;
+      }
+      if (printable === 0) continue;
+      segments.push({
+        id: months.join('_'),
+        label: formatMonthRangeLabel(months),
+        monthKeys: months,
+        memoryIds: ids,
+        ...(range.chapterIndex !== undefined ? { chapterIndex: range.chapterIndex } : {}),
+      });
+    }
+  }
+  return segments;
+}
+
 export function flagSpecialBackboneSegments(
   segments: BackboneSegment[],
   birthMonth: string | null,

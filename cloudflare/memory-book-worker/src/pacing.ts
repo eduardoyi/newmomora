@@ -183,6 +183,11 @@ export interface ThemedSpreadAdmissionCandidate {
   memberCount: number;
   /** The spread's own seasonal anchor gap (already paced). */
   anchorGap: number;
+  /** Optional inclusive gap range the spread must stay inside (Everything
+   * chapter mode: its home chapter's gaps). The anchor is clamped into it
+   * and the spill search never leaves it; a spread with no free gap in range
+   * dissolves. Absent: today's behaviour. */
+  gapRange?: { min: number; max: number };
 }
 
 export interface ThemedSpreadAdmissionResult {
@@ -217,7 +222,13 @@ export function admitThemedSpreads(
   const placedGapById = new Map<string, number>();
 
   for (const spread of withinBudget) {
-    const anchor = Math.min(Math.max(spread.anchorGap, minGap), lastValidIndex);
+    const lowGap = Math.max(minGap, spread.gapRange?.min ?? minGap);
+    const highGap = Math.min(lastValidIndex, spread.gapRange?.max ?? lastValidIndex);
+    if (lowGap > highGap) {
+      dissolvedIds.push(spread.id); // empty range -- nowhere to place it.
+      continue;
+    }
+    const anchor = Math.min(Math.max(spread.anchorGap, lowGap), highGap);
     if (!taken.has(anchor)) {
       taken.add(anchor);
       placedGapById.set(spread.id, anchor);
@@ -225,8 +236,8 @@ export function admitThemedSpreads(
     }
     let best: number | null = null;
     let bestDist = Infinity;
-    const searchStart = Math.max(minGap, anchor - maxSpillDistance);
-    const searchEnd = Math.min(lastValidIndex, anchor + maxSpillDistance);
+    const searchStart = Math.max(lowGap, anchor - maxSpillDistance);
+    const searchEnd = Math.min(highGap, anchor + maxSpillDistance);
     for (let gap = searchStart; gap <= searchEnd; gap++) {
       if (taken.has(gap)) continue;
       const dist = Math.abs(gap - anchor);

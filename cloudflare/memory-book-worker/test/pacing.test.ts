@@ -275,6 +275,42 @@ describe('admitThemedSpreads', () => {
 
 // ── reassignDissolvedSpreadMembers (ported) ────────────────────────────────
 
+describe('admitThemedSpreads — gapRange (chapter-clamped placement)', () => {
+  it('clamps the anchor into the range and keeps the spill search inside it', () => {
+    // Chapter owns gaps 4..6. Anchor 1 clamps to 4; a second spread anchored at 4 spills to 5 (never 3).
+    const out = admitThemedSpreads(
+      [
+        { id: 'a', memberCount: 9, anchorGap: 1, gapRange: { min: 4, max: 6 } },
+        { id: 'b', memberCount: 8, anchorGap: 4, gapRange: { min: 4, max: 6 } },
+      ],
+      10,
+      8,
+    );
+    expect(out.placedGapById.get('a')).toBe(4);
+    expect(out.placedGapById.get('b')).toBe(5);
+    expect(out.dissolvedIds).toEqual([]);
+  });
+
+  it('dissolves a spread with no free gap left inside its range (never spills out of the chapter)', () => {
+    const out = admitThemedSpreads(
+      [
+        { id: 'a', memberCount: 9, anchorGap: 4, gapRange: { min: 4, max: 4 } },
+        { id: 'b', memberCount: 8, anchorGap: 4, gapRange: { min: 4, max: 4 } },
+      ],
+      10,
+      8,
+    );
+    expect([...out.placedGapById.keys()]).toEqual(['a']);
+    expect(out.dissolvedIds).toEqual(['b']);
+  });
+
+  it('an empty range dissolves; no range behaves as before', () => {
+    const out = admitThemedSpreads([{ id: 'a', memberCount: 3, anchorGap: 2, gapRange: { min: 0, max: -1 } }, { id: 'b', memberCount: 3, anchorGap: 2 }], 10, 8);
+    expect(out.dissolvedIds).toEqual(['a']);
+    expect(out.placedGapById.get('b')).toBe(2);
+  });
+});
+
 describe('reassignDissolvedSpreadMembers', () => {
   it("routes a dissolved spread's members to their own default backbone segment", () => {
     const placement = new Map([

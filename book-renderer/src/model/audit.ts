@@ -76,7 +76,10 @@ export type IntegrityCheck =
   | 'photo-count'
   | 'illustrated-stack-overflow'
   | 'illustrated-digest'
-  | 'through-the-years';
+  | 'through-the-years'
+  | 'media-memory-without-media'
+  | 'unrenderable-slots'
+  | 'title-then-empty';
 
 export interface IntegrityViolation {
   check: IntegrityCheck;
@@ -85,7 +88,22 @@ export interface IntegrityViolation {
   pageId?: string;
 }
 
-export function auditBookDocument(document: BookDocument, outline: BookOutline, manifest: BookManifest): IntegrityViolation[] {
+export interface AuditOptions {
+  /**
+   * Memory ids the fitter deliberately omitted (`FitResult.capacity.omittedMemoryIds`).
+   * Lets `media-memory-without-media` also catch a kept memory that vanished
+   * entirely; without it only a memory that prints SOMETHING (caption,
+   * illustration) yet none of its media can be recognised.
+   */
+  omittedMemoryIds?: Iterable<string>;
+}
+
+export function auditBookDocument(
+  document: BookDocument,
+  outline: BookOutline,
+  manifest: BookManifest,
+  options: AuditOptions = {},
+): IntegrityViolation[] {
   return [
     ...auditMonthContinuity(document, outline, manifest),
     ...auditSectionTitleOrphans(document, outline),
@@ -98,6 +116,9 @@ export function auditBookDocument(document: BookDocument, outline: BookOutline, 
     ...auditIllustratedStackOverflow(document),
     ...auditIllustratedDigest(document),
     ...auditThroughTheYears(document),
+    ...auditMediaMemoryWithoutMedia(document, outline, manifest, options.omittedMemoryIds),
+    ...auditUnrenderableSlots(document),
+    ...auditTitleThenEmpty(document),
   ];
 }
 
@@ -120,6 +141,11 @@ function auditMonthContinuity(document: BookDocument, outline: BookOutline, mani
   const violations: IntegrityViolation[] = [];
   const pagesByElement = groupPagesBySource(document);
   const backboneElements = outline.elements.filter((e) => e.kind === 'backbone');
+  const pooledMemoryIds = new Set<string>();
+  for (const page of document.pages) {
+    if (page.templateId !== 'quote-collection') continue;
+    for (const id of slotMemoryIds(page)) pooledMemoryIds.add(id);
+  }
 
   // Erasure check (the diagnosed Enzo bug): a backbone element is a
   // calendar month by construction — if the outline gave it memories at
@@ -127,6 +153,10 @@ function auditMonthContinuity(document: BookDocument, outline: BookOutline, mani
   for (const element of backboneElements) {
     if (element.memoryIds.length === 0) continue;
     const pages = pagesByElement.get(element.id) ?? [];
+    // Chapter-mode quote pooling (Phase 2b fix 4): a section whose memories
+    // were all pooled into the chapter's quote collection has no pages of its
+    // own, but its memories ARE printed — not an erasure.
+    if (pages.length === 0 && element.memoryIds.some((id) => pooledMemoryIds.has(id))) continue;
     if (pages.length === 0) {
       violations.push({
         check: 'month-continuity',
@@ -578,6 +608,10 @@ function auditFullBleedCropLoss(document: BookDocument): IntegrityViolation[] {
     if (page.templateId !== 'full-bleed') continue;
     const photoSlot = page.slots.find((s): s is typeof s & { content: PhotoSlotContent } => s.kind === 'photo');
     if (!photoSlot) continue;
+    // Mirrors the fitter's gate: a USER-CHOSEN (swapped-in) photo is exempt from crop-loss
+    // policing (`scoreFullBleed`'s `cropGateWaived`, owner decision 2026-09-09) — a parent who
+    // picked it can judge the square crop. `editedFromFile` is set only on a substituted asset.
+    if (photoSlot.content.editedFromFile) continue;
     const cropLoss = fullBleedCropLoss(photoSlot.content.assetAspectRatio);
     if (cropLoss > FULL_BLEED_HERO_MAX_CROP_LOSS) {
       violations.push({
@@ -837,5 +871,162 @@ function auditThroughTheYears(document: BookDocument): IntegrityViolation[] {
     });
   }
 
+  return violations;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2b (dogfood round 1) — three checks added after real Everything books
+// shipped pages where a memory's media silently vanished, a page had slots no
+// template could draw, and a title page faced nothing. Run on EVERY book.
+// ---------------------------------------------------------------------------
+
+/** Every memory id a page's slots reference (photo, text, illustration, audio-note, quote/digest entries). */
+function slotMemoryIds(page: BookPage): string[] {
+  const ids: string[] = [];
+  for (const slot of page.slots) {
+    const memoryId = (slot.content as { memoryId?: string | null }).memoryId;
+    if (typeof memoryId === 'string') ids.push(memoryId);
+  }
+  return ids;
+}
+
+/**
+ * (j) A memory that carries photo/video assets must show at least one of
+ * them as a photo slot somewhere in the book. Diagnosed from Mara p79: a
+ * photo memory and a video memory merged onto a `text-page` whose slots are
+ * text-only, so both kept their caption and lost their media. Two detections:
+ *  - always: the memory prints something (any non-photo slot) yet has no
+ *    photo slot anywhere;
+ *  - when `omittedMemoryIds` is supplied: a memory that is neither omitted nor
+ *    printed at all (e.g. dropped as an un-fittable gap).
+ */
+function auditMediaMemoryWithoutMedia(
+  document: BookDocument,
+  outline: BookOutline,
+  manifest: BookManifest,
+  omittedMemoryIds: Iterable<string> | undefined,
+): IntegrityViolation[] {
+  const omitted = omittedMemoryIds ? new Set(omittedMemoryIds) : null;
+  const withPhoto = new Set<string>();
+  const printed = new Set<string>();
+  for (const page of document.pages) {
+    for (const slot of page.slots) {
+      const memoryId = (slot.content as { memoryId?: string | null }).memoryId;
+      if (typeof memoryId !== 'string') continue;
+      printed.add(memoryId);
+      if (slot.kind === 'photo') withPhoto.add(memoryId);
+    }
+  }
+  const violations: IntegrityViolation[] = [];
+  const seen = new Set<string>();
+  for (const element of outline.elements) {
+    for (const id of element.memoryIds) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const memory = manifest.memories[id];
+      if (!memory || memory.assets.length === 0) continue;
+      if (omitted?.has(id)) continue;
+      if (withPhoto.has(id)) continue;
+      if (!printed.has(id) && omitted === null) continue; // can't tell "omitted" from "lost" without the omission list
+      violations.push({
+        check: 'media-memory-without-media',
+        elementId: element.id,
+        message: `Memory ${id} (${memory.assets.length} asset${memory.assets.length === 1 ? '' : 's'}) ${
+          printed.has(id) ? 'prints without any of its media' : 'is neither omitted nor printed'
+        }.`,
+      });
+    }
+  }
+  return violations;
+}
+
+/**
+ * Photo slots each template can actually DRAW (derived from the templates'
+ * own rendering: AnchorMedia lays out exactly 1 or 2 tiles — 3+ yields no
+ * rects at all, so nothing prints; FlexGrid is a 4-photo composition (rule: a
+ * page holds 1, 2 or 4); full-bleed / panorama / photo-story render the first
+ * photo only; the text-forward and illustration templates render none).
+ * A template not listed is not checked.
+ */
+const PHOTO_SLOT_CAPACITY: Partial<Record<BookPage['templateId'], number>> = {
+  'anchor-media': 2,
+  'flex-grid': 4,
+  'full-bleed': 1,
+  'panorama-spread': 1,
+  'photo-story': 1,
+  'text-page': 0,
+  'illustrated-story': 0,
+  'audio-note': 0,
+  'quote-collection': 0,
+  'illustrated-digest': 0,
+};
+
+function auditUnrenderableSlots(document: BookDocument): IntegrityViolation[] {
+  const violations: IntegrityViolation[] = [];
+  for (const page of document.pages) {
+    const capacity = PHOTO_SLOT_CAPACITY[page.templateId];
+    if (capacity === undefined) continue;
+    const photoCount = page.slots.filter((s) => s.kind === 'photo').length;
+    if (photoCount > capacity) {
+      violations.push({
+        check: 'unrenderable-slots',
+        pageId: page.id,
+        message: `Page ${page.id}: template "${page.templateId}" can draw at most ${capacity} photo slot${capacity === 1 ? '' : 's'} but the page holds ${photoCount} — the extra photos never print.`,
+      });
+    }
+  }
+  return violations;
+}
+
+/** What a page actually DRAWS from its slots (the audit's own mirror of each template's render rules); a non-slot-driven page counts as content. */
+function drawnContentCount(page: BookPage): number {
+  const count = (kind: string) => page.slots.filter((s) => s.kind === kind).length;
+  switch (page.templateId) {
+    case 'blank':
+      return 0;
+    case 'anchor-media': {
+      const photos = count('photo');
+      return photos === 1 || photos === 2 ? photos : 0;
+    }
+    case 'flex-grid':
+      return count('photo') + count('text');
+    case 'full-bleed':
+    case 'panorama-spread':
+    case 'photo-story':
+      return count('photo') > 0 ? 1 : 0;
+    case 'text-page':
+      return count('text');
+    case 'illustrated-story':
+      return count('text') + count('illustration');
+    case 'audio-note':
+      return count('audio-note') + count('text');
+    case 'quote-collection':
+    case 'illustrated-digest':
+      return page.slots.length;
+    default:
+      return 1; // spread-title, dedication, closing, through-the-years, cover-wrap, firsts...: self-contained
+  }
+}
+
+/**
+ * (l) A title-only page (chapter / themed / firsts `spread-title`)
+ * immediately followed by a page that draws no media and no text — a title
+ * facing nothing (Enzo p6 -> p7, where the following page's 5 photo slots
+ * were undrawable; also a title facing a parity blank).
+ */
+function auditTitleThenEmpty(document: BookDocument): IntegrityViolation[] {
+  const violations: IntegrityViolation[] = [];
+  const pages = document.pages;
+  for (let i = 0; i < pages.length - 1; i++) {
+    if (pages[i].templateId !== 'spread-title') continue;
+    const next = pages[i + 1];
+    if (drawnContentCount(next) === 0) {
+      violations.push({
+        check: 'title-then-empty',
+        pageId: pages[i].id,
+        message: `Title page ${pages[i].id} is immediately followed by page ${next.id} ("${next.templateId}"), which draws no media and no text.`,
+      });
+    }
+  }
   return violations;
 }

@@ -39,6 +39,7 @@ import {
 } from './candidates';
 import {
   buildBackboneSegments,
+  buildQuarterBlockSegments,
   buildSpecialSegmentTitlesByMonth,
   computeAgeYearBirthdayMonths,
   flagSpecialBackboneSegments,
@@ -90,8 +91,22 @@ export interface OutlineResult {
 
 const MIN_SPREAD_SIZE = 3;
 
-/** Everything books: a backbone segment spans at most a quarter. */
-const EVERYTHING_MAX_SEGMENT_SPAN_MONTHS = 3;
+/**
+ * Home chapter of a themed spread (chapter mode): the chapter holding the
+ * most members; a tie goes to the chapter of the lower-median member (by
+ * date, then id), or -- if that chapter is not among the tied ones -- the
+ * tied chapter closest to it (lower index on a further tie).
+ */
+function pickHomeChapter(members: Array<{ memoryId: string; date: string; chapter: number }>): number {
+  const counts = new Map<number, number>();
+  for (const m of members) counts.set(m.chapter, (counts.get(m.chapter) ?? 0) + 1);
+  const best = Math.max(...counts.values());
+  const tied = [...counts.entries()].filter(([, n]) => n === best).map(([chapter]) => chapter).sort((a, b) => a - b);
+  if (tied.length === 1) return tied[0];
+  const sorted = [...members].sort((a, b) => a.date.localeCompare(b.date) || a.memoryId.localeCompare(b.memoryId));
+  const medianChapter = sorted[Math.floor((sorted.length - 1) / 2)].chapter;
+  return [...tied].sort((a, b) => Math.abs(a - medianChapter) - Math.abs(b - medianChapter) || a - b)[0];
+}
 
 export async function runOutlineStage(env: Env, context: GenerationContextResponse): Promise<OutlineResult> {
   const violations: OutlineIntegrityViolation[] = [];
@@ -151,16 +166,19 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     .filter((f) => isPrintable(f))
     .map((f) => ({ id: f.id, date: f.date, printable: true }));
   // Everything (multi-year): one chapter per age-year (only when >= 2 are
-  // non-empty -- "chapter mode") and quarter-capped backbone segments that
+  // non-empty -- "chapter mode") and quarter-block backbone segments that
   // never cross a chapter. Every other scope keeps today's call exactly.
   const childDateOfBirth = context.child?.dateOfBirth ?? null;
   const chapters: AgeYearChapter[] = isEverything
     ? resolveChapters(childDateOfBirth, backboneInput.map((m) => m.date.slice(0, 7)))
     : [];
+  // Everything: fixed calendar-aligned 3-month blocks (per chapter in chapter
+  // mode), clipped to the window -- phase 2b fix A. Other scopes unchanged.
   const backboneSegments = isEverything
-    ? buildBackboneSegments(backboneInput, 3, {
-      maxSpanMonths: EVERYTHING_MAX_SEGMENT_SPAN_MONTHS,
-      chapterOfMonth: chapters.length > 0 ? (month) => chapterIndexOfMonth(chapters, month) : undefined,
+    ? buildQuarterBlockSegments(backboneInput, {
+      chapters: chapters.length > 0 ? chapters : undefined,
+      firstMonth: context.book.windowStart.slice(0, 7),
+      lastMonth: subtractOneDay(context.book.windowEndExclusive).slice(0, 7),
     })
     : buildBackboneSegments(backboneInput);
   const defaultBackboneByMemory = new Map<string, string>();
@@ -344,6 +362,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   // insert_after_segment_index.
   const placedGapBySpreadId = new Map<string, number>();
   const budgetDissolved: Array<{ id: string; reason: string }> = [];
+  const chapterDissolved: Array<{ id: string; detail: string }> = [];
   if (isEverything) {
     const survivingSpreads = new Map<string, string[]>();
     for (const spread of parsed.spreads) {
@@ -358,16 +377,54 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
 
     const segmentChapterIndices = backboneSegments.map((s) => s.chapterIndex ?? 0);
     const lastValidIndex = backboneSegments.length - 1;
+    const chapterMode = chapters.length > 0;
+
+    // Chapter mode (phase 2b fix 3): membership is chapter-blind, so pull each
+    // spread back into one HOME chapter before placing it. Members outside it
+    // return to their own default backbone segment; a spread left with fewer
+    // than MIN_SPREAD_SIZE members dissolves entirely.
+    const homeChapterBySpreadId = new Map<string, number>();
+    if (chapterMode) {
+      const memberChapter = (memoryId: string) => chapterIndexOfMonth(chapters, features.get(memoryId)!.date.slice(0, 7));
+      const releasedMembers = new Map<string, string[]>();
+      for (const [id, members] of [...survivingSpreads.entries()]) {
+        const home = pickHomeChapter(members.map((memoryId) => ({ memoryId, date: features.get(memoryId)!.date, chapter: memberChapter(memoryId) })));
+        const inHome = members.filter((memoryId) => memberChapter(memoryId) === home);
+        const outOfHome = members.filter((memoryId) => memberChapter(memoryId) !== home);
+        if (inHome.length < MIN_SPREAD_SIZE) {
+          releasedMembers.set(id, members);
+          survivingSpreads.delete(id);
+          chapterDissolved.push({ id, detail: `${id}: dissolved` });
+          continue;
+        }
+        homeChapterBySpreadId.set(id, home);
+        if (outOfHome.length > 0) {
+          releasedMembers.set(id, outOfHome);
+          survivingSpreads.set(id, inHome);
+          chapterDissolved.push({ id, detail: `${id}: ${outOfHome.length} moved` });
+        }
+      }
+      finalPlacement = reassignDissolvedSpreadMembers(finalPlacement, releasedMembers, defaultBackboneByMemory);
+    }
+
+    const chapterGapRange = (chapterIndex: number) => {
+      const indices = segmentChapterIndices.flatMap((c, i) => (c === chapterIndex ? [i] : []));
+      return indices.length > 0 ? { min: indices[0], max: indices[indices.length - 1] } : { min: 0, max: -1 };
+    };
     const pacingCandidates = [...survivingSpreads.entries()].map(([id, members]) => {
       const medianMonth = computeMedianDate(members.map((memoryId) => features.get(memoryId)!.date)).slice(0, 7);
       return { id, idealGapIndex: findAnchorSegmentIndex(medianMonth, backboneSegments), anchored: isTimeAnchoredCandidate(id) };
     });
-    const pacedGapById = paceThemedSpreads(backboneSegments.length, pacingCandidates);
+    // paceThemedSpreads is a year-book heuristic that drags spreads to the
+    // first uncovered gap -- far from their members in a multi-year book -- so
+    // chapter mode skips it and clamps each spread into its home chapter.
+    const pacedGapById = chapterMode ? new Map<string, number>() : paceThemedSpreads(backboneSegments.length, pacingCandidates);
     const admission = admitThemedSpreads(
       pacingCandidates.map((c) => ({
         id: c.id,
         memberCount: survivingSpreads.get(c.id)!.length,
         anchorGap: pacedGapById.get(c.id) ?? c.idealGapIndex,
+        ...(chapterMode ? { gapRange: chapterGapRange(homeChapterBySpreadId.get(c.id)!) } : {}),
       })),
       lastValidIndex,
       computeThemedSpreadBudget(features.size, context.book.pageBudget),
@@ -471,6 +528,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   violations.push(
     ...reassignments.map((r) => ({ kind: 'single_placement_reassignment', detail: `${r.memoryId}: kept in ${r.keptIn}` })),
     ...themedDissolve.dissolvedSpreadIds.map((id) => ({ kind: 'themed_spread_dissolved', detail: id })),
+    ...chapterDissolved.map((d) => ({ kind: 'themed_spread_out_of_chapter', detail: d.detail })),
     ...budgetDissolved.map((d) => ({ kind: 'themed_spread_dissolved_budget', detail: `${d.id}: ${d.reason}` })),
     ...birthdayDissolve.dissolvedAges.map((age) => ({ kind: 'birthday_spread_dissolved', detail: String(age) })),
     ...excludedMemoryIds.map((e) => ({ kind: 'memory_excluded', detail: `${e.memoryId}: ${e.reason}` })),

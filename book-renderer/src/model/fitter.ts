@@ -262,6 +262,20 @@ const MIN_MEMORIES_PER_MONTH = 2;
  */
 const CHAPTER_FLOOR_MEMORIES = 12;
 /**
+ * Chapter-mode per-SECTION keep floors (Phase 2b fix A / fix 6). The floor is
+ * keyed by the outline element (a backbone quarter block, or a themed spread),
+ * not by calendar month: with ~3-month sections a per-month floor let
+ * structure dominate the budget. Each backbone section keeps at least
+ * `min(total, 2)` memories, a themed spread `min(total, 3)`; relaxation goes
+ * to 1, and to 0 only as the very last resort.
+ */
+const SECTION_FLOOR_BACKBONE = 2;
+const SECTION_FLOOR_THEMED = 3;
+/** A themed spread that ends a chapter-mode fit with fewer kept memories than this dissolves its title page (fix 6). */
+const THEMED_MIN_KEPT_MEMORIES = 2;
+/** Chapter-mode refill (fix C): maximum `runFit` attempts spent restoring omitted memories after the prefix search. */
+const REFILL_MAX_ATTEMPTS = 40;
+/**
  * Chapter-mode Tier C (last resort): allow demoting CAPTIONED photo/video
  * memories (never hero/panorama/milestone/quote-title sources) once every
  * other demotion tier is exhausted and the book is still over the cap. Real
@@ -1193,11 +1207,6 @@ function findNearestBreak(text: string, mid: number, pattern: RegExp): number | 
   return best;
 }
 
-/** Fabricates a short, stable placeholder "short code" until phase 2 wires the real momora.co/e/<token> URL. */
-function placeholderShortCode(memoryId: string): string {
-  return memoryId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase().padEnd(4, 'X');
-}
-
 // ---------------------------------------------------------------------------
 // Per-group template scoring. Each scorer returns a 0..1 fit quality, or
 // `null` if the template is infeasible for this content at all. Evaluated
@@ -1250,9 +1259,21 @@ function toGroup(memories: ResolvedMemory[]): MemoryGroup {
   return { memories, photoAssets, hasLongText, totalTextChars };
 }
 
-/** A group the pairing pass may combine with an adjacent one: exactly one memory, exactly one photo. */
+/**
+ * A group the pairing pass may combine with an adjacent one: exactly one
+ * memory, exactly one photo — and never one carrying long text or an audio
+ * memory. Phase 2b fix 1: a merged group with long text scores `text-page`
+ * (whose slots are text-only), silently dropping BOTH memories' media; an
+ * audio memory is owned by the audio-note composition. Such groups keep their
+ * own page.
+ */
 function isSoloPhotoGroup(group: MemoryGroup): boolean {
-  return group.memories.length === 1 && group.photoAssets.length === 1;
+  return (
+    group.memories.length === 1 &&
+    group.photoAssets.length === 1 &&
+    !group.hasLongText &&
+    !isAudioMemory(group.memories[0].memory)
+  );
 }
 
 /**
@@ -1685,7 +1706,6 @@ function buildSlotsForTemplate(
           kind: 'audio-note',
           memoryId: id,
           date: memory.date,
-          shortCode: placeholderShortCode(id),
           shareToken: memory.shareToken ?? null,
         };
         slots.push({ id: nextSlotId('audio'), kind: 'audio-note', content });
@@ -2330,7 +2350,14 @@ interface ContentPagesState {
 type ContentUnit =
   | { kind: 'group'; group: MemoryGroup }
   | { kind: 'panorama'; item: ResolvedMemory }
-  | { kind: 'quote-collection'; items: ResolvedMemory[] }
+  /**
+   * `pooled` (chapter-mode quote pooling, Phase 2b fix 4): a collection built
+   * from a whole chapter's one-liners and appended after its last section —
+   * unlike an in-section run it has no exact chronological position, so it may
+   * trade places with a preceding flexible single to land even instead of
+   * paying a parity blank, and it never carries the section header.
+   */
+  | { kind: 'quote-collection'; items: ResolvedMemory[]; pooled?: boolean }
   /**
    * `variant: 'spread'` — exactly 4 entries, 2-page spread, even-start
    * required (same as before). `variant: 'single'` — exactly 2 entries,
@@ -2605,8 +2632,24 @@ function buildContentUnits(
       (isExplicitCandidate || isWideHero) && asset !== null && isTrustedPanoramaCandidate(asset) && state.panoramaBudgetUsed < quota;
     if (qualifies) {
       flushRun();
-      units.push({ kind: 'panorama', item });
+      // Phase 2b fix 2: the panorama/full-bleed unit takes ONLY the chosen
+      // (first) asset — it used to carry the whole memory, so the normal
+      // panorama path printed `assets[0]` and silently dropped the rest, and
+      // the demote rung dumped every asset on an anchor-media page that can
+      // only draw 1-2 slots. The memory's REMAINING assets go back into the
+      // run buffer as an ordinary group (laid out on the pages that follow).
+      // The caption (and milestones/illustration) stay with the chosen
+      // asset's unit — exactly where they lived before — so the continuation
+      // carries none of them and the text prints exactly once.
+      const [, ...restAssets] = item.memory.assets;
+      units.push({ kind: 'panorama', item: { id: item.id, memory: { ...item.memory, assets: [asset] } } });
       state.panoramaBudgetUsed += 1;
+      if (restAssets.length > 0) {
+        runBuffer.push({
+          id: item.id,
+          memory: { ...item.memory, assets: restAssets, text: null, illustration: null, milestones: [] },
+        });
+      }
     } else {
       runBuffer.push(item);
     }
@@ -2652,6 +2695,13 @@ function buildContentPages(
    * whatever the parent originally wrote. Absent for every other section.
    */
   captionOverrides: ReadonlyMap<string, string> = EMPTY_STRING_MAP,
+  /**
+   * Chapter-mode quote pooling (Phase 2b fix 4): the chapter's pooled
+   * quote-eligible memories, printed as `pooled` quote-collection unit(s) at
+   * the END of this (the chapter's last backbone) section. Their own sections
+   * skipped them via `omittedIds`.
+   */
+  pooledQuoteTail: readonly ResolvedMemory[] = [],
 ): BookPage[] {
   const resolvedMemories = resolveMemoriesInOrder(manifest, element, omittedIds);
   const memories: ResolvedMemory[] =
@@ -2661,7 +2711,7 @@ function buildContentPages(
           const warmName = captionOverrides.get(id);
           return warmName ? { id, memory: { ...memory, text: warmName } } : { id, memory };
         });
-  if (memories.length === 0) return [];
+  if (memories.length === 0 && pooledQuoteTail.length === 0) return [];
 
   const builtUnits = buildContentUnits(memories, element, outline, state, pairingLevel);
   // Owner round-6: reorder units so parity lands naturally (see
@@ -2677,12 +2727,22 @@ function buildContentPages(
   // follows it, which the old `isFirstUnit`-only heuristic mispredicted).
   // Seeded from the REAL running `state` at this exact point in assembly —
   // see `ReorderSimState`'s own doc comment for why this can never drift.
-  const units = reorderUnitsForParity(builtUnits, currentPageParity(outerPages) === 'even', element, outline, {
+  const reorderedUnits = reorderUnitsForParity(builtUnits, currentPageParity(outerPages) === 'even', element, outline, {
     contentPageCount: state.contentPageCount,
     fullBleedBudget: state.fullBleedBudget,
     lastTemplateId: state.lastTemplateId,
     headerPending: sectionHeader != null,
   });
+  // Pooled chapter quotes go after everything else (appended AFTER the reorder
+  // pass: assembly's own `ensureEvenLanding` swap/blank handles their parity).
+  const units: ContentUnit[] = [...reorderedUnits];
+  if (pooledQuoteTail.length >= QUOTE_COLLECTION_MIN) {
+    let offset = 0;
+    for (const size of partitionQuoteRun(pooledQuoteTail.length)) {
+      units.push({ kind: 'quote-collection', items: pooledQuoteTail.slice(offset, offset + size), pooled: true });
+      offset += size;
+    }
+  }
   const pages: BookPage[] = [];
   let headerPending = sectionHeader;
   // Round-4 item 3 ("empty pages littering the flow"): before falling back
@@ -2853,9 +2913,9 @@ function buildContentPages(
       // the composition itself. Parity-forced the same way panorama is
       // (item 8) — it's a spread too, and never swaps for the same reason
       // (its entries' chronological position must stay exact).
-      const reswap = ensureEvenLanding(index, 'parity:quote-collection', false);
+      const reswap = ensureEvenLanding(index, 'parity:quote-collection', Boolean(unit.pooled));
       const pageParams: TemplateParams = {};
-      if (headerPending) {
+      if (headerPending && !unit.pooled) {
         pageParams.sectionHeader = headerPending;
         headerPending = null;
       }
@@ -3741,10 +3801,13 @@ function chapterIndexForMonth(spans: readonly ChapterSpan[], month: string): num
 
 export type ChapterDemotionTier = 'A' | 'B1' | 'B2' | 'C';
 
+/** `text` = a text-only memory demoted by Tier C (Phase 2b fix B). */
+export type ChapterDemotionKind = DemotionKind | 'text';
+
 export interface ChapterDemotion {
   id: string;
   elementId: string;
-  kind: DemotionKind;
+  kind: ChapterDemotionKind;
   rank: number;
   chapterIndex: number;
   /** 1-based age year of the chapter (for gap reasons). */
@@ -3752,34 +3815,47 @@ export interface ChapterDemotion {
   tier: ChapterDemotionTier;
 }
 
-interface PlanCandidate extends DemotionCandidate {
+interface PlanCandidate extends Omit<DemotionCandidate, 'kind'> {
+  kind: ChapterDemotionKind;
   chapterIndex: number;
   /** Printable caption length — Tier C ranks shorter text first. */
   textLength: number;
-  isBackbone: boolean;
 }
 
 /**
  * Tier C pool (chapter mode, last resort): CAPTIONED photo/video memories —
  * never a hero/panorama nominee, a milestone holder, or a quote-title source.
  * Disjoint from the ordinary pools (those are caption-less or illustrated).
+ *
+ * Phase 2b fix B: the pool also holds TEXT-ONLY memories (no photo/video, no
+ * illustration, not an audio note) under the same protections. Before this a
+ * one-liner could be a section's only surviving memory because nothing text
+ * was ever demotable. They rank with the rest of the pool — engagement
+ * ascending, then SHORTER text first (one-liners go first), then spread/id.
  */
-function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookManifest): DemotionCandidate[] {
+function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookManifest): Array<Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }> {
   const protectedIds = new Set<string>([...(outline.panoramaCandidates ?? []), ...(outline.heroCandidates ?? [])]);
-  const candidates: DemotionCandidate[] = [];
+  const candidates: Array<Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }> = [];
   for (const element of outline.elements) {
     if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
     for (const { id, memory } of resolveMemoriesInOrder(manifest, element)) {
       if (protectedIds.has(id)) continue;
       if (memory.illustration) continue; // illustrated memories are the `illustrated` pool's business
-      if (memory.assets.length === 0 || !captionOf(memory)) continue;
       if ((memory.milestones ?? []).length > 0) continue;
       if (element.titleSourceMemoryId === id) continue;
+      let kind: ChapterDemotionKind;
+      if (memory.assets.length > 0) {
+        if (!captionOf(memory)) continue;
+        kind = photoOnlyKind(memory);
+      } else {
+        if (isAudioMemory(memory) || !captionOf(memory)) continue; // an audio note owns its composition; nothing printable otherwise
+        kind = 'text';
+      }
       const highlighted = isHighlight(element, outline, id);
       candidates.push({
         id,
         elementId: element.id,
-        kind: photoOnlyKind(memory),
+        kind,
         month: memory.date.slice(0, 7),
         rank: memory.engagement * 10 + (highlighted ? 5 : 0),
       });
@@ -3787,6 +3863,9 @@ function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookM
   }
   return candidates;
 }
+
+/** How far a section's keep floor is relaxed at a given stage (see `planChapterDemotions`). */
+type SectionFloorLevel = 'full' | 'one' | 'none';
 
 /**
  * The complete, ordered list of page-cap omissions for a chapter-mode book —
@@ -3796,18 +3875,22 @@ function gatherCaptionedDemotionCandidates(outline: BookOutline, manifest: BookM
  * `options.tierCAfterB2` restores the plan text's literal stage order (A, B1, B2, then C) — kept as a
  * measuring/revert switch; the default order is explained at `stages` below.
  *
+ * Floors are per SECTION (Phase 2b fix A / 6): a backbone element keeps at
+ * least `min(total, 2)` memories, a themed element `min(total, 3)`; relaxation
+ * goes to 1 and only at the very end to 0.
+ *
  * Per step, the first stage with an eligible candidate wins:
- *   Tier A  — candidates above BOTH the month floor and the chapter floor
+ *   Tier A  — candidates above BOTH the section floor and the chapter floor
  *             (`min(total_c, CHAPTER_FLOOR_MEMORIES)`). Pick the chapter with
  *             the highest keep-rate (ties: larger total, lower index), then
  *             the kind via `pickHighestKeepRateKind` (global totals), then the
  *             lowest rank.
- *   Tier B1 — chapter floor relaxed, month floor kept.
- *   Tier C  — (when enabled) captioned photo/video memories, ranked by
- *             engagement then shorter text; chapter selection as above;
- *             floors honoured first, then chapter floor relaxed.
- *   Tier B2 — both floors relaxed (a month can empty), then Tier C likewise.
- * Rank ties break on time spread: the month with the highest remaining
+ *   Tier B1 — chapter floor relaxed, section floor kept.
+ *   Tier C  — (when enabled) captioned photo/video AND text-only memories,
+ *             ranked by engagement then shorter text; chapter selection as
+ *             above; floors honoured first, then chapter floor relaxed.
+ *   Tier B2 — section floor relaxed to 1, then Tier C likewise; then floor 0.
+ * Rank ties break on time spread: the SECTION with the highest remaining
  * fraction, then the highest remaining count, then memory id ascending (ids
  * are random uuids, so the last tie is not date-biased).
  */
@@ -3825,27 +3908,23 @@ export function planChapterDemotions(
   // like `backboneThemedKindTotals` they count toward the denominators).
   const chapterTotal = spans.map(() => 0);
   const chapterOmitted = spans.map(() => 0);
-  const monthOriginal = new Map<string, number>();
-  const monthOmitted = new Map<string, number>();
-  const backboneCounts = new Map<string, number>(); // month floor input (backbone-only, like the legacy floor)
-  const elementKindById = new Map<string, OutlineElement['kind']>();
+  const sectionTotal = new Map<string, number>();
+  const sectionOmitted = new Map<string, number>();
+  const sectionIsThemed = new Map<string, boolean>();
   for (const element of outline.elements) {
     if (element.kind !== 'backbone' && element.kind !== 'themed') continue;
-    elementKindById.set(element.id, element.kind);
+    sectionIsThemed.set(element.id, element.kind === 'themed');
     for (const { memory } of resolveMemoriesInOrder(manifest, element)) {
-      const month = memory.date.slice(0, 7);
-      chapterTotal[chapterOfMonth(month)]++;
-      monthOriginal.set(month, (monthOriginal.get(month) ?? 0) + 1);
-      if (element.kind === 'backbone') backboneCounts.set(month, (backboneCounts.get(month) ?? 0) + 1);
+      chapterTotal[chapterOfMonth(memory.date.slice(0, 7))]++;
+      sectionTotal.set(element.id, (sectionTotal.get(element.id) ?? 0) + 1);
     }
   }
   const chapterFloor = chapterTotal.map((t) => Math.min(t, CHAPTER_FLOOR_MEMORIES));
 
-  const toPlan = (c: DemotionCandidate): PlanCandidate => ({
+  const toPlan = (c: Omit<DemotionCandidate, 'kind'> & { kind: ChapterDemotionKind }): PlanCandidate => ({
     ...c,
     chapterIndex: chapterOfMonth(c.month),
     textLength: captionOf(manifest.memories[c.id]).length,
-    isBackbone: elementKindById.get(c.elementId) === 'backbone',
   });
   const ordinaryPool = [...gatherDemotionCandidates(outline, manifest), ...gatherIllustratedDemotionCandidates(outline, manifest)].map(toPlan);
   const tierCPool = tierCEnabled ? gatherCaptionedDemotionCandidates(outline, manifest).map(toPlan) : [];
@@ -3855,23 +3934,28 @@ export function planChapterDemotions(
   const omitted = new Set<string>();
   const plan: ChapterDemotion[] = [];
 
-  const monthFraction = (month: string) => {
-    const original = monthOriginal.get(month) ?? 0;
-    return original > 0 ? (original - (monthOmitted.get(month) ?? 0)) / original : 0;
+  const sectionRemaining = (elementId: string) => (sectionTotal.get(elementId) ?? 0) - (sectionOmitted.get(elementId) ?? 0);
+  const sectionFraction = (elementId: string) => {
+    const total = sectionTotal.get(elementId) ?? 0;
+    return total > 0 ? sectionRemaining(elementId) / total : 0;
   };
-  const monthRemaining = (month: string) => (monthOriginal.get(month) ?? 0) - (monthOmitted.get(month) ?? 0);
+  const sectionFloor = (elementId: string, level: SectionFloorLevel) => {
+    if (level === 'none') return 0;
+    const base = level === 'one' ? 1 : sectionIsThemed.get(elementId) ? SECTION_FLOOR_THEMED : SECTION_FLOOR_BACKBONE;
+    return Math.min(sectionTotal.get(elementId) ?? 0, base);
+  };
   const keepRate = (chapterIndex: number) =>
     chapterTotal[chapterIndex] > 0 ? (chapterTotal[chapterIndex] - chapterOmitted[chapterIndex]) / chapterTotal[chapterIndex] : -Infinity;
 
-  /** Rank, then (Tier C only) shorter text, then time spread, then id. Negative = `a` goes first. */
+  /** Rank, then (Tier C only) shorter text, then section time spread, then id. Negative = `a` goes first. */
   const compare = (a: PlanCandidate, b: PlanCandidate, tierC: boolean): number => {
     if (a.rank !== b.rank) return a.rank - b.rank;
     if (tierC && a.textLength !== b.textLength) return a.textLength - b.textLength;
-    const fa = monthFraction(a.month);
-    const fb = monthFraction(b.month);
+    const fa = sectionFraction(a.elementId);
+    const fb = sectionFraction(b.elementId);
     if (fa !== fb) return fb - fa;
-    const ra = monthRemaining(a.month);
-    const rb = monthRemaining(b.month);
+    const ra = sectionRemaining(a.elementId);
+    const rb = sectionRemaining(b.elementId);
     if (ra !== rb) return rb - ra;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   };
@@ -3900,41 +3984,39 @@ export function planChapterDemotions(
     return inChapter.reduce((best, c) => (compare(c, best, tierC) < 0 ? c : best));
   };
 
-  // A stage = (pool, month floor, whether the chapter floor binds). The
-  // month floor is the backbone calendar-month count a candidate must stay
-  // above after its own cut (`MIN_MEMORIES_PER_MONTH` normally); `null` means
-  // no month floor at all.
+  // A stage = (pool, section floor level, whether the chapter floor binds). A
+  // candidate is eligible while its SECTION still has more than the stage's
+  // floor remaining (so the cut leaves at least the floor).
   type Stage = { tier: ChapterDemotionTier; tierC: boolean; ok: (c: PlanCandidate) => boolean };
-  const stage = (tier: ChapterDemotionTier, tierC: boolean, monthFloor: number | null, chapterFloorBinds: boolean): Stage => ({
+  const stage = (tier: ChapterDemotionTier, tierC: boolean, level: SectionFloorLevel, chapterFloorBinds: boolean): Stage => ({
     tier,
     tierC,
     ok: (c) =>
-      (monthFloor === null || (backboneCounts.get(c.month) ?? Infinity) > monthFloor) &&
+      sectionRemaining(c.elementId) > sectionFloor(c.elementId, level) &&
       (!chapterFloorBinds || chapterTotal[c.chapterIndex] - chapterOmitted[c.chapterIndex] > chapterFloor[c.chapterIndex]),
   });
 
   // Stages are tried in order at every step (eligibility only shrinks as
   // omissions accrue, so they are consumed monotonically). Floors are given
   // up in order of the damage they prevent: the chapter floor first, then the
-  // month floor — first down to ONE memory per month (the month still
-  // prints), and to none only as the very last resort (a month vanishes: the
-  // audit's month-continuity violation). Tier C (captioned photo/video) runs
-  // once every ordinary candidate that respects a given floor level is gone,
-  // BEFORE the next, more destructive floor level is given up. The plan text
-  // lists C after all of B2 and has no month-floor-1 level; see the report.
-  const A = stage('A', false, MIN_MEMORIES_PER_MONTH, true);
-  const B1 = stage('B1', false, MIN_MEMORIES_PER_MONTH, false);
+  // section floor — first down to ONE memory per section (the section still
+  // prints), and to none only as the very last resort (a section vanishes:
+  // the audit's month-continuity violation). Tier C (captioned photo/video +
+  // text-only) runs once every ordinary candidate that respects a given floor
+  // level is gone, BEFORE the next, more destructive floor level is given up.
+  const A = stage('A', false, 'full', true);
+  const B1 = stage('B1', false, 'full', false);
   const stages: Stage[] = options.tierCAfterB2
     ? // The plan text's literal order: ordinary A, B1, B2 (no floors), then C.
-      [A, B1, stage('B2', false, null, false), ...(tierCEnabled ? [stage('C', true, MIN_MEMORIES_PER_MONTH, true), stage('C', true, MIN_MEMORIES_PER_MONTH, false), stage('C', true, null, false)] : [])]
+      [A, B1, stage('B2', false, 'none', false), ...(tierCEnabled ? [stage('C', true, 'full', true), stage('C', true, 'full', false), stage('C', true, 'none', false)] : [])]
     : [
         A,
         B1,
-        ...(tierCEnabled ? [stage('C', true, MIN_MEMORIES_PER_MONTH, true), stage('C', true, MIN_MEMORIES_PER_MONTH, false)] : []),
-        stage('B2', false, 1, false),
-        ...(tierCEnabled ? [stage('C', true, 1, false)] : []),
-        stage('B2', false, null, false),
-        ...(tierCEnabled ? [stage('C', true, null, false)] : []),
+        ...(tierCEnabled ? [stage('C', true, 'full', true), stage('C', true, 'full', false)] : []),
+        stage('B2', false, 'one', false),
+        ...(tierCEnabled ? [stage('C', true, 'one', false)] : []),
+        stage('B2', false, 'none', false),
+        ...(tierCEnabled ? [stage('C', true, 'none', false)] : []),
       ];
 
   for (;;) {
@@ -3951,9 +4033,8 @@ export function planChapterDemotions(
     if (!chosen || !stage) break;
     omitted.add(chosen.id);
     chapterOmitted[chosen.chapterIndex]++;
-    monthOmitted.set(chosen.month, (monthOmitted.get(chosen.month) ?? 0) + 1);
-    if (chosen.isBackbone) backboneCounts.set(chosen.month, (backboneCounts.get(chosen.month) ?? 0) - 1);
-    if (!stage.tierC) omittedByKind[chosen.kind]++;
+    sectionOmitted.set(chosen.elementId, (sectionOmitted.get(chosen.elementId) ?? 0) + 1);
+    if (!stage.tierC) omittedByKind[chosen.kind as DemotionKind]++;
     plan.push({
       id: chosen.id,
       elementId: chosen.elementId,
@@ -3972,11 +4053,52 @@ function chapterDemotionGapReason(d: ChapterDemotion, cap: number): string {
   const how: Record<ChapterDemotionTier, string> = {
     A: 'chosen to keep every chapter at a similar keep-rate',
     B1: 'chapter floor relaxed (every chapter was at its floor)',
-    B2: 'chapter and month floors relaxed (nothing else left to cut)',
-    C: 'last resort: captioned photo/video memory, after every other tier was exhausted',
+    B2: 'chapter and section floors relaxed (nothing else left to cut)',
+    C: 'last resort: captioned photo/video or text-only memory, after every other tier was exhausted',
   };
-  const what = d.tier === 'C' ? `captioned ${d.kind}` : d.kind;
+  const what = d.tier === 'C' ? (d.kind === 'text' ? 'text-only' : `captioned ${d.kind}`) : d.kind;
   return `Omitted (${what}) to respect the ${cap}-page cap (chapter ${d.ageYear}, rank ${d.rank}, ${how[d.tier]}).`;
+}
+
+/**
+ * Chapter-mode quote pooling (Phase 2b fix 4). Walks the outline in order: a
+ * chapter's backbone sections are every backbone element between its chapter
+ * opener and the next one. When the chapter's non-omitted `isQuoteEligible`
+ * memories number at least `QUOTE_COLLECTION_MIN` they are pooled — returned
+ * under the id of the chapter's LAST backbone element (the quote collection
+ * prints right after that section) and listed in `pooledIds` so the sections
+ * skip them. Fewer than the minimum: nothing is pooled for that chapter.
+ */
+function planChapterQuotePools(
+  outline: BookOutline,
+  manifest: BookManifest,
+  omittedIds: ReadonlySet<string>,
+): { afterElement: Map<string, ResolvedMemory[]>; pooledIds: Set<string> } {
+  const afterElement = new Map<string, ResolvedMemory[]>();
+  const pooledIds = new Set<string>();
+  let backbones: OutlineElement[] = [];
+  const flush = () => {
+    if (backbones.length > 0) {
+      const pooled: ResolvedMemory[] = [];
+      for (const section of backbones) {
+        for (const resolved of resolveMemoriesInOrder(manifest, section, omittedIds)) {
+          if (section.titleSourceMemoryId === resolved.id) continue; // the section's own title source stays in its section
+          if (isQuoteEligible(resolved.memory)) pooled.push(resolved);
+        }
+      }
+      if (pooled.length >= QUOTE_COLLECTION_MIN) {
+        afterElement.set(backbones[backbones.length - 1].id, pooled);
+        for (const { id } of pooled) pooledIds.add(id);
+      }
+    }
+    backbones = [];
+  };
+  for (const element of outline.elements) {
+    if (element.kind === 'chapter') flush();
+    else if (element.kind === 'backbone') backbones.push(element);
+  }
+  flush();
+  return { afterElement, pooledIds };
 }
 
 /** One full deterministic fit at a given pairing level / omission set — no cap awareness of its own. */
@@ -4016,6 +4138,15 @@ function runFit(
     }
     pendingChapter = null;
   };
+
+  // Chapter mode only (Phase 2b fix 4): quote-eligible memories are POOLED per
+  // chapter — with ~3-month sections an adjacent run of 3 never happens, so
+  // the per-element splice never fired. They leave their sections and print as
+  // one quote-collection (split by `partitionQuoteRun`) after the chapter's
+  // last backbone section; a chapter with fewer than `QUOTE_COLLECTION_MIN`
+  // leaves them in place (the TextPage pull-quote design handles those).
+  const quotePool = chapterMode ? planChapterQuotePools(outline, manifest, omittedIds) : null;
+  const omittedForSections: ReadonlySet<string> = quotePool && quotePool.pooledIds.size > 0 ? new Set([...omittedIds, ...quotePool.pooledIds]) : omittedIds;
 
   for (const element of outline.elements) {
     switch (element.kind) {
@@ -4057,6 +4188,14 @@ function runFit(
         // page, so its own parity math is correct either way), then only
         // commit the title if there's real content to follow. See also
         // `auditBookDocument` check (b), a permanent regression backstop.
+        // Phase 2b fix 6 (chapter mode): a themed spread squeezed below
+        // `THEMED_MIN_KEPT_MEMORIES` kept memories dissolves its TITLE page —
+        // a title facing a single memory reads as a broken spread. The
+        // remaining memory (if any) still prints, just without the title.
+        if (chapterMode && resolveMemoriesInOrder(manifest, element, omittedIds).length < THEMED_MIN_KEPT_MEMORIES) {
+          pages.push(...buildContentPages(element, manifest, outline, gaps, state, scoreThreshold, null, pairingLevel, omittedIds, pages));
+          continue;
+        }
         const titlePage = buildSpreadTitlePage(element);
         const priorLastTemplateId = state.lastTemplateId;
         state.lastTemplateId = titlePage.templateId;
@@ -4124,7 +4263,21 @@ function runFit(
           title: localizeMonthLabel(element.title, lang),
           special: Boolean(element.subtitle),
         };
-        const contentPages = buildContentPages(element, manifest, outline, gaps, state, scoreThreshold, header, pairingLevel, omittedIds, pages);
+        const contentPages = buildContentPages(
+          element,
+          manifest,
+          outline,
+          gaps,
+          state,
+          scoreThreshold,
+          header,
+          pairingLevel,
+          omittedForSections,
+          pages,
+          EMPTY_STRING_MAP,
+          // The chapter's pooled quote collection(s) print at the end of its LAST backbone section.
+          quotePool?.afterElement.get(element.id) ?? [],
+        );
         pages.push(...contentPages);
         continue;
       }
@@ -4313,7 +4466,32 @@ export function fitBook(outline: BookOutline, manifest: BookManifest, options: F
       }
     }
     result = plan.length > 0 ? fitAt(chosenK) : result;
-    for (const d of plan.slice(0, chosenK)) {
+    let omittedPlan = plan.slice(0, chosenK);
+
+    // Refill (Phase 2b fix C). Page count is NOT monotone in the prefix
+    // length (a memory omitted at the margin can free a whole panorama /
+    // full-bleed quota cliff — one omission freed 6 pages in a real book), so
+    // the shortest fitting prefix can land well under the cap. Walk the
+    // omitted memories in REVERSE plan order (the least expendable first) and
+    // restore each one that still fits, one `runFit` per attempt, until the cap
+    // is reached, the list ends, or the attempt budget is spent.
+    if (plan.length > 0 && result.document.totalPages < cap) {
+      const stillOmitted = new Set(omittedPlan.map((d) => d.id));
+      let attempts = 0;
+      for (let i = omittedPlan.length - 1; i >= 0 && attempts < REFILL_MAX_ATTEMPTS && result.document.totalPages < cap; i--) {
+        const trial = new Set(stillOmitted);
+        trial.delete(omittedPlan[i].id);
+        attempts++;
+        const trialFit = runFit(outline, manifest, options, pairingLevel, trial);
+        if (trialFit.document.totalPages <= cap) {
+          result = trialFit;
+          stillOmitted.delete(omittedPlan[i].id);
+        }
+      }
+      omittedPlan = omittedPlan.filter((d) => stillOmitted.has(d.id));
+    }
+
+    for (const d of omittedPlan) {
       omittedIds.add(d.id);
       omittedGaps.push({ elementId: d.elementId, reason: chapterDemotionGapReason(d, cap), memoryIds: [d.id] });
     }

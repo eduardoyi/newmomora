@@ -415,6 +415,59 @@ describe('Everything outline + manifest (synthetic 4-year context)', () => {
     }
   });
 
+  it('quarter blocks (phase 2b fix A): 3-month blocks per chapter from the chapter start, the birthday month is its own 1-month segment, sparse blocks are not merged', async () => {
+    const context = buildContext();
+    const { result } = await runEverything(context);
+    const chapters = result.elements.filter((e) => e.kind === 'chapter').map((e) => e.chapter!);
+    const backbone = result.elements.filter((e) => e.kind === 'backbone');
+    // Every segment lies inside ONE fixed block counted from its chapter's start month (calendar-aligned).
+    for (const element of backbone) {
+      const months = backboneMonths(element.id);
+      const chapter = chapters.find((c) => months[0] >= c.startMonth && months[0] <= c.endMonth)!;
+      const blockStart = ord(chapter.startMonth) + Math.floor((ord(months[0]) - ord(chapter.startMonth)) / 3) * 3;
+      expect(months.every((m) => ord(m) >= blockStart && ord(m) <= blockStart + 2)).toBe(true);
+    }
+    // Chapter 1 (2022-10..2023-10) is 13 months -> blocks 3,3,3,3,1: its birthday month (2023-10) is a lone 1-month
+    // segment, flagged by the DOB birthday flag. (12-month chapters cut 3,3,3,3: their birthday month closes a block.)
+    const birthdaySegment = backbone.find((e) => backboneMonths(e.id).includes(chapters[0].endMonth))!;
+    expect(backboneMonths(birthdaySegment.id)).toEqual([chapters[0].endMonth]);
+    // The 1-month birthday section is its own segment even though it holds fewer memories than its neighbours (no merging).
+    expect(birthdaySegment.memoryIds.length).toBeGreaterThan(0);
+  });
+
+  it('themed spreads stay in their chapter (phase 2b fix 3): every member and the placed spread sit in one home chapter', async () => {
+    const context = buildContext();
+    const { result } = await runEverything(context);
+    const chapters = result.elements.filter((e) => e.kind === 'chapter').map((e) => e.chapter!);
+    const chapterOf = (id: string) => {
+      const month = context.memories.find((m) => m.id === id)!.memory_date.slice(0, 7);
+      return chapters.findIndex((c) => month >= c.startMonth && month <= c.endMonth);
+    };
+    const themed = result.elements.filter((e) => e.kind === 'themed');
+    expect(themed.length).toBeGreaterThan(0);
+
+    let currentChapterElement = -1;
+    const placedChapterBySpread = new Map<string, number>();
+    for (const e of result.elements) {
+      if (e.kind === 'chapter') currentChapterElement += 1;
+      if (e.kind === 'themed') placedChapterBySpread.set(e.id, currentChapterElement);
+    }
+    for (const e of themed) {
+      const memberChapters = new Set(e.memoryIds.map(chapterOf));
+      expect(memberChapters.size).toBe(1);
+      expect(e.memoryIds.length).toBeGreaterThanOrEqual(3);
+      // The element sits inside its members' chapter in the final reading order (between that chapter's opener and the next).
+      expect(placedChapterBySpread.get(e.id)).toBe([...memberChapters][0]);
+    }
+    // The chapter-blind AI membership forces a real cross-chapter pull-back (not a vacuous pass).
+    const outOfChapter = result.violations.filter((v) => v.kind === 'themed_spread_out_of_chapter');
+    expect(outOfChapter.length).toBeGreaterThan(0);
+    expect(outOfChapter.every((v) => / \d+ moved$| dissolved$/.test(v.detail))).toBe(true);
+    // Nothing is lost: still exactly-once placement.
+    const placed = result.elements.flatMap((e) => e.memoryIds);
+    expect(new Set(placed).size).toBe(placed.length);
+  });
+
   it('samples <= 6 portraits (first + last kept), sets scope kind "everything", and feeds the sampled count to the prompt', async () => {
     const context = buildContext();
     const { manifest, user } = await runEverything(context);

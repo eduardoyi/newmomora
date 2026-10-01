@@ -31,6 +31,14 @@ export interface SyntheticEverythingOptions {
   /** Total memories (default 600). */
   memoryCount?: number;
   seed?: number;
+  /**
+   * Phase 2b shape: backbone sections are FIXED 3-month blocks cut from each
+   * chapter's first month (a 13-month chapter -> 3,3,3,3,1; the trailing
+   * 1-month block is the birthday month) — what the Everything worker emits
+   * now. Default `false` keeps the original merge-until-3-printable shape
+   * (many 1-month sections) every pre-2b assertion was written against.
+   */
+  quarterSections?: boolean;
 }
 
 export interface SyntheticChapter {
@@ -323,7 +331,7 @@ export function buildSyntheticEverythingBook(options: SyntheticEverythingOptions
         .sort(byDate);
       monthKeys.push(month);
       ids.push(...members);
-      if (ids.length >= 3 || monthKeys.length >= 3) flush();
+      if (options.quarterSections ? monthKeys.length >= 3 : ids.length >= 3 || monthKeys.length >= 3) flush();
     }
     flush();
   });
