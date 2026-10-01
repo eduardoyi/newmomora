@@ -357,28 +357,51 @@ describe('chapter-mode Tier C (captioned photo/video demotion)', () => {
     return { manifest, outline };
   }
 
-  it('runs only after ordinary tiers that respect the floors are exhausted, and before the section floor is given up', () => {
+  it('takes part in the keep-rate balance (Phase 2c): a chapter whose ordinary pool is empty keeps being cut from Tier C while the other chapter is cut from its ordinary pool', () => {
     const { manifest, outline } = tierOrderingBook();
     const plan = planChapterDemotions(outline, manifest);
-    const tiers = plan.map((d) => d.tier);
-    // Ordinary candidates that respect the section floor go first (x-p1, z-p1) ...
-    expect(plan.slice(0, 2).map((d) => d.id).sort()).toEqual(['x-p1', 'z-p1']);
-    expect(tiers.slice(0, 2).every((t) => t === 'A' || t === 'B1')).toBe(true);
-    // ... then the captioned memories above THEIR section's floor (Tier C) ...
-    expect(plan.slice(2, 4).map((d) => d.id)).toEqual(['y-c1', 'y-c2']);
-    expect(tiers.slice(2, 4)).toEqual(['C', 'C']);
-    // ... and only then the ordinary memory the section floor was holding back (z-p2), floor relaxed to 1 ...
-    expect(plan[4]).toMatchObject({ id: 'z-p2', tier: 'B2' });
-    // ... then Tier C again at floor 1 (Phase 2b fix B: the text-only memories are Tier C candidates too).
-    expect(plan.slice(5).map((d) => d.tier)).toEqual(['C', 'C', 'C', 'C', 'C']);
-    expect(plan.map((d) => d.id).slice(5)).toEqual(['x-t1', 'y-c3', 'x-t2', 'y-t1', 'z-t1']);
+    // Both chapters hold <= 12 memories, so their chapter floors equal their totals: the balanced levels are
+    // empty from the start and every step is chosen at the relaxed level (section floor 1) over BOTH pools,
+    // by chapter keep-rate. Before Phase 2c the whole ordinary pool (x-p1, z-p1, z-p2) went first and chapter 2
+    // (caption-only) stayed untouched until chapter 1 was exhausted.
+    expect(plan.map((d) => `${d.id}:${d.tier}`)).toEqual([
+      'x-p1:B1', // ch1 6/6 vs ch2 4/4: tie -> larger chapter; ordinary before Tier C inside it
+      'y-c1:C', // ch1 is now at 5/6, ch2 (4/4) leads: its only pool is Tier C
+      'z-p1:B1',
+      'y-c2:C',
+      'z-p2:B1', // section z goes 3 -> 2 -> 1 (the relaxed level's floor)
+      'x-t1:C', // ch1 3/6 == ch2 2/4: larger chapter first; its ordinary pool is empty -> Tier C
+      'y-c3:C',
+      'x-t2:C',
+      'y-t1:C',
+      'z-t1:C',
+    ]);
+    // The two chapters stay within one memory of each other's keep-rate at every prefix until a chapter is exhausted.
+    const chapterOf = (id: string) => (id.startsWith('y') ? 1 : 0);
+    const totals = [6, 4];
+    const omitted = [0, 0];
+    for (const d of plan.slice(0, 6)) {
+      omitted[chapterOf(d.id)]++;
+      const rates = omitted.map((o, c) => (totals[c] - o) / totals[c]);
+      expect(Math.abs(rates[0] - rates[1])).toBeLessThanOrEqual(1 / 4 + 1e-9);
+    }
   });
 
-  it("literal plan order (C only after B2) is reachable via the planner's measuring switch", () => {
+  it("the measuring switch (tierCAfterB2) restores the literal 'ordinary pool first, Tier C only once it is empty' order", () => {
     const { manifest, outline } = tierOrderingBook();
     const literal = planChapterDemotions(outline, manifest, { tierCAfterB2: true });
-    expect(literal.map((d) => d.id).slice(2)).toEqual(['z-p2', 'y-c1', 'y-c2', 'x-t1', 'y-c3', 'x-t2', 'y-t1', 'z-t1']);
-    expect(literal.map((d) => d.tier).slice(2)).toEqual(['B2', 'C', 'C', 'C', 'C', 'C', 'C', 'C']);
+    expect(literal.map((d) => `${d.id}:${d.tier}`)).toEqual([
+      'x-p1:B1',
+      'z-p1:B1',
+      'z-p2:B1', // the whole ordinary pool first ...
+      'y-c1:C', // ... then Tier C, balanced by keep-rate over the same ladder
+      'y-c2:C',
+      'x-t1:C',
+      'y-c3:C',
+      'x-t2:C',
+      'y-t1:C',
+      'z-t1:C',
+    ]);
   });
 
   it('ranks by engagement, then shorter text first', () => {

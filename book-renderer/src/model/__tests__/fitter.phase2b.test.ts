@@ -203,23 +203,32 @@ function section(id: string, months: string[], count: number, build: (date: stri
 // ---------------------------------------------------------------------------
 
 describe('fix A: chapter-mode floors are per section (3-month block), not per calendar month', () => {
-  it('a 3-month section keeps min(total, 2) memories through every floor-respecting stage, not 2 per month', () => {
-    const q1 = section('backbone:2021-04_2021-06', ['2021-04', '2021-05', '2021-06'], 12);
-    const q2 = section('backbone:2022-04_2022-06', ['2022-04', '2022-05', '2022-06'], 12);
-    const manifest = makeManifest({ ...q1.memories, ...q2.memories });
-    const outline = makeOutline([chapterEl(CH1), q1.element, chapterEl(CH2), q2.element]);
+  it('a 3-month section keeps min(total, 2) memories through the full-floor level, not 2 per month', () => {
+    // Phase 2c: the ladder is level-based. Two chapters of 7 sections x 3 memories (21 memories, chapter floor 12):
+    // L1 (full section floor 2 + chapter floor) cuts every section 3 -> 2 first — a chapter's L1 candidates come
+    // before its L2 ones (section floor 1) — and a per-month floor would have protected 6 of 9 per section instead.
+    const sectionsFor = (year: number, prefix: string) =>
+      [3, 4, 5, 6, 7, 8, 9].map((m) => section(`backbone:${prefix}-${m}`, [`${year}-${String(m).padStart(2, '0')}`], 3));
+    const sections1 = sectionsFor(2021, 'a');
+    const sections2 = sectionsFor(2022, 'b');
+    const manifest = makeManifest(Object.assign({}, ...sections1.map((x) => x.memories), ...sections2.map((x) => x.memories)));
+    const outline = makeOutline([chapterEl(CH1), ...sections1.map((x) => x.element), chapterEl(CH2), ...sections2.map((x) => x.element)]);
     const plan = planChapterDemotions(outline, manifest);
-    // Everything is photo-only: the ordinary pool alone empties each section down to the floors (2) before B2 relaxes to 1.
-    const beforeRelax = plan.filter((d) => d.tier === 'A' || d.tier === 'B1');
-    const cutPerSection = (ids: string[], upTo: typeof plan) => upTo.filter((d) => ids.includes(d.id)).length;
-    expect(12 - cutPerSection(q1.ids, beforeRelax)).toBe(2); // 2 per SECTION (a per-month floor would have kept 6)
-    expect(12 - cutPerSection(q2.ids, beforeRelax)).toBe(2);
-    // Then B2 relaxes the floor to 1, and only the final cut per section goes to 0.
-    expect(plan.filter((d) => d.tier === 'B2').length).toBe(plan.length - beforeRelax.length);
-    // The last two cuts (one per section) are the floor-0 stage; before them each section still had 1.
-    const beforeLast = plan.slice(0, plan.length - 2);
-    expect(12 - cutPerSection(q1.ids, beforeLast)).toBe(1);
-    expect(12 - cutPerSection(q2.ids, beforeLast)).toBe(1);
+    for (const sections of [sections1, sections2]) {
+      const ids = new Set(sections.flatMap((x) => x.ids));
+      const cuts = plan.filter((d) => ids.has(d.id));
+      // The chapter's first 7 cuts take exactly one memory from each of its 7 sections (3 -> 2 everywhere) ...
+      expect(new Set(cuts.slice(0, 7).map((d) => d.elementId)).size).toBe(7);
+      // ... then it goes on to the floor-1 level (chapter floor 12 of 21 => 2 more memories) ...
+      expect(cuts.slice(7, 9).every((d) => d.tier === 'A')).toBe(true);
+      // ... and the remaining cuts (chapter floor relaxed, then section floor 0) come strictly after.
+      expect(cuts.slice(9).every((d) => d.tier === 'B1' || d.tier === 'B2')).toBe(true);
+      expect(cuts.slice(9).some((d) => d.tier === 'B2')).toBe(true);
+    }
+    // The floor-0 stage (a section vanishes) is the very last thing in the plan.
+    const lastB1 = plan.map((d) => d.tier).lastIndexOf('B1');
+    const firstB2 = plan.findIndex((d) => d.tier === 'B2');
+    expect(firstB2).toBeGreaterThan(lastB1);
   });
 
   it('time-spread tie-break is per section: the section with the larger remaining fraction is cut first on equal rank', () => {
@@ -253,9 +262,16 @@ describe('fix 6: themed spreads hold a floor of min(total, 3) until floors are r
   it('planner: a themed element keeps 3 through the floor-respecting stages (backbone sections keep 2)', () => {
     const { manifest, outline, themedIds } = themedBook();
     const plan = planChapterDemotions(outline, manifest);
-    const beforeRelax = plan.filter((d) => d.tier === 'A' || d.tier === 'B1');
-    expect(6 - beforeRelax.filter((d) => themedIds.includes(d.id)).length).toBe(3);
-    expect(8 - beforeRelax.filter((d) => d.elementId === 'backbone:2021-04_2021-06').length).toBe(2);
+    // Chapter 1 holds 14 memories (floor 12), so exactly 2 cuts respect the chapter floor — both at the FULL
+    // section-floor level (L1: themed keeps 3, backbone keeps 2) before any L2 (floor 1) cut is considered.
+    const chapter1 = plan.filter((d) => d.chapterIndex === 0);
+    const full = chapter1.slice(0, 2);
+    expect(full.every((d) => d.tier === 'A')).toBe(true);
+    expect(6 - full.filter((d) => themedIds.includes(d.id)).length).toBeGreaterThanOrEqual(3);
+    expect(8 - full.filter((d) => d.elementId === 'backbone:2021-04_2021-06').length).toBeGreaterThanOrEqual(2);
+    // Past the chapter floor (relaxed levels) the themed element is cut like any other section, down to its own floor of 1 first.
+    const relaxed = chapter1.slice(2);
+    expect(relaxed.every((d) => d.tier === 'B1' || d.tier === 'B2')).toBe(true);
   });
 
   it('chapter mode: a themed element with fewer than 2 kept memories dissolves its title page but still prints the memory', () => {

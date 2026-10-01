@@ -3,7 +3,7 @@ import path from 'node:path';
 import { parseManifest, parseOutline } from '../src/model/loader';
 import { normalizeEditsShapeForClient } from '../src/web/book/normalizeEdits';
 import { fitBookForPrint } from './lib/fitBookForPrint';
-import { auditBookDocument } from '../src/model/audit';
+import { auditBookDocument, summarizeAssetCoverage } from '../src/model/audit';
 import { planChapterDemotions } from '../src/model/fitter';
 import type { BookManifest, BookOutline, BookPage } from '../src/model/types';
 
@@ -96,7 +96,7 @@ interface ChapterStat {
 /**
  * Chapter-mode stats (Everything books; null for a book with < 2 chapter
  * elements). Ids/counts only. Memory population = backbone + themed members
- * (exactly the fitter's budgeting population). A month is "at floor" when
+ * + firsts members (exactly the fitter's budgeting population). A month is "at floor" when
  * demotion hit it (omitted > 0) and <= MONTH_FLOOR memories remain; "empty"
  * when it had memories and none remain.
  */
@@ -140,6 +140,17 @@ function chapterStats(
   const total = spans.map(() => 0);
   const kept = spans.map(() => 0);
   for (const e of outline.elements) {
+    if (e.kind === 'firsts') {
+      // Never demoted, in no backbone section — but kept memories of their own chapter (planner counts them too).
+      for (const id of e.memoryIds) {
+        const m = manifest.memories[id];
+        if (!m) continue;
+        const ci = chapterOfMonth(m.date.slice(0, 7));
+        total[ci]++;
+        kept[ci]++;
+      }
+      continue;
+    }
     if (e.kind !== 'backbone' && e.kind !== 'themed') continue;
     for (const id of e.memoryIds) {
       const m = manifest.memories[id];
@@ -214,28 +225,10 @@ function auditBook(file: string) {
   const violationsByCheck: Record<string, number> = {};
   for (const v of violations) violationsByCheck[v.check] = (violationsByCheck[v.check] ?? 0) + 1;
   const omittedIds = new Set(fit.capacity.omittedMemoryIds);
-  // Phase 2b: kept memories / assets vs what actually renders (ids and counts only).
-  const keptMemoryIds = new Set<string>();
-  for (const e of outline.elements) for (const id of e.memoryIds) if (manifest.memories[id] && !omittedIds.has(id)) keptMemoryIds.add(id);
-  let assetsKept = 0;
-  let mediaMemoriesKept = 0;
-  for (const id of keptMemoryIds) {
-    const n = manifest.memories[id].assets.length;
-    assetsKept += n;
-    if (n > 0) mediaMemoriesKept++;
-  }
-  const renderedAssets = new Set<string>();
-  const renderedMediaMemories = new Set<string>();
-  for (const p of fit.document.pages) {
-    for (const s of p.slots) {
-      if (s.kind !== 'photo') continue;
-      const c = s.content as { memoryId?: string; assetFile?: string; editedFromFile?: string | null };
-      if (!c.memoryId || !keptMemoryIds.has(c.memoryId)) continue;
-      renderedAssets.add(`${c.memoryId}|${c.editedFromFile ?? c.assetFile}`);
-      renderedMediaMemories.add(c.memoryId);
-    }
-  }
-  const mediaCoverage = { memoriesKept: keptMemoryIds.size, mediaMemoriesKept, mediaMemoriesRendered: renderedMediaMemories.size, assetsKept, assetsRendered: renderedAssets.size };
+  // Kept memories / assets vs what actually renders (ids and counts only). Phase 2c: in chapter mode a
+  // memory shows at most 2 assets, so `hiddenByCap` (a deliberate cap) is reported apart from `assetsLost`
+  // (shown but never rendered: a genuine loss, should be 0). Uses the EDITED manifest, like the slots.
+  const mediaCoverage = summarizeAssetCoverage(fit.document, outline, fit.editedManifest, omittedIds);
   const chapterMode = chapterStats(outline, manifest, pages, omittedIds);
 
   const templateHistogram: Record<string, number> = {};
@@ -319,7 +312,8 @@ function printTable(r: Report): void {
   console.log(`header pages lacking SafeArea (bare-before-fix / not-rendered): ${bare.reduce((n, x) => n + x.count, 0)}`);
   console.log(`integrity violations: ${r.integrity.total}${r.integrity.total ? '  ' + Object.entries(r.integrity.byCheck).map(([c, n]) => `${c}=${n}`).join(' ') : ''}`);
   for (const v of r.integrity.items) console.log(`  ${v.check}  element ${v.elementId ?? '-'}  page ${v.pageId ?? '-'}`);
-  console.log(`kept memories ${r.mediaCoverage.memoriesKept} | media memories kept/rendered ${r.mediaCoverage.mediaMemoriesKept}/${r.mediaCoverage.mediaMemoriesRendered} | assets kept/rendered ${r.mediaCoverage.assetsKept}/${r.mediaCoverage.assetsRendered}`);
+  const mc = r.mediaCoverage;
+  console.log(`kept memories ${mc.memoriesKept} | media memories kept/rendered ${mc.mediaMemoriesKept}/${mc.mediaMemoriesRendered} | assets: memory assets ${mc.assetsKept}, shown ${mc.assetsShown} (hidden by cap ${mc.hiddenByCap}), rendered ${mc.assetsRendered}, genuinely lost ${mc.assetsLost}`);
   console.log(`fit passes (onRunFit): ${r.fitCount} | omitted memories: ${r.omittedTotal} | over cap: ${r.fitCapacity.overCap}`);
   if (r.chapterMode) {
     const c = r.chapterMode;

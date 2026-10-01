@@ -48,7 +48,14 @@ import {
   DIGEST_FOLIO_CLEARANCE_MM,
   canvasPxToTrimMm,
 } from '../templates/mm';
-import { BLANK_REASONS, PRODIGI_MIN_PAGES, fullBleedCropLoss, FULL_BLEED_HERO_MAX_CROP_LOSS } from './fitter';
+import {
+  BLANK_REASONS,
+  PRODIGI_MIN_PAGES,
+  fullBleedCropLoss,
+  FULL_BLEED_HERO_MAX_CROP_LOSS,
+  isChapterMode,
+  shownAssetsOf,
+} from './fitter';
 
 /**
  * Automated content-integrity audit (owner review round 5, item 1) — run
@@ -899,6 +906,9 @@ function slotMemoryIds(page: BookPage): string[] {
  *    photo slot anywhere;
  *  - when `omittedMemoryIds` is supplied: a memory that is neither omitted nor
  *    printed at all (e.g. dropped as an un-fittable gap).
+ * Chapter mode (Phase 2c photo cap): a memory shows at most 2 of its assets,
+ * so "at least one photo slot" is exactly the requirement there too; the
+ * hidden remainder is accounted for by `summarizeAssetCoverage`, not flagged.
  */
 function auditMediaMemoryWithoutMedia(
   document: BookDocument,
@@ -938,6 +948,77 @@ function auditMediaMemoryWithoutMedia(
     }
   }
   return violations;
+}
+
+/** Asset accounting for a finished fit (see `summarizeAssetCoverage`). */
+export interface AssetCoverage {
+  memoriesKept: number;
+  mediaMemoriesKept: number;
+  mediaMemoriesRendered: number;
+  /** Every asset of every kept memory, as the manifest holds them. */
+  assetsKept: number;
+  /** Assets the book MEANS to show: `assetsKept` minus the chapter-mode photo cap (equal outside chapter mode). */
+  assetsShown: number;
+  /** Assets deliberately left out by the chapter-mode photo cap (a cap decision, not a loss). */
+  hiddenByCap: number;
+  /** Photo/video slots actually rendered for kept memories (distinct memory + slot identity). */
+  assetsRendered: number;
+  /** Shown assets that never rendered: the genuine loss (should be 0). */
+  assetsLost: number;
+}
+
+/**
+ * Kept-memory asset accounting, separating assets hidden by the chapter-mode
+ * photo cap from genuine loss. `manifest` must be the EDITED manifest
+ * (`applyPreFit` output) when edits apply, so a user-replaced asset is
+ * identified the way the slots identify it (`editedFromFile ?? file`).
+ * Ids and counts only.
+ */
+export function summarizeAssetCoverage(
+  document: BookDocument,
+  outline: BookOutline,
+  manifest: BookManifest,
+  omittedMemoryIds: Iterable<string> = [],
+): AssetCoverage {
+  const omitted = new Set(omittedMemoryIds);
+  const capped = isChapterMode(outline);
+  const kept = new Set<string>();
+  for (const element of outline.elements) {
+    for (const id of element.memoryIds) if (manifest.memories[id] && !omitted.has(id)) kept.add(id);
+  }
+  const identity = (memoryId: string, asset: { file: string; editedFromFile?: string }) => `${memoryId}|${asset.editedFromFile ?? asset.file}`;
+  const shown = new Set<string>();
+  let assetsKept = 0;
+  let mediaMemoriesKept = 0;
+  for (const id of kept) {
+    const assets = manifest.memories[id].assets;
+    assetsKept += assets.length;
+    if (assets.length > 0) mediaMemoriesKept++;
+    for (const asset of capped ? shownAssetsOf(assets) : assets) shown.add(identity(id, asset));
+  }
+  const rendered = new Set<string>();
+  const renderedMemories = new Set<string>();
+  for (const page of document.pages) {
+    for (const slot of page.slots) {
+      if (slot.kind !== 'photo') continue;
+      const c = slot.content as PhotoSlotContent;
+      if (!c.memoryId || !kept.has(c.memoryId)) continue;
+      rendered.add(`${c.memoryId}|${c.editedFromFile ?? c.assetFile}`);
+      renderedMemories.add(c.memoryId);
+    }
+  }
+  let assetsLost = 0;
+  for (const key of shown) if (!rendered.has(key)) assetsLost++;
+  return {
+    memoriesKept: kept.size,
+    mediaMemoriesKept,
+    mediaMemoriesRendered: renderedMemories.size,
+    assetsKept,
+    assetsShown: shown.size,
+    hiddenByCap: assetsKept - shown.size,
+    assetsRendered: rendered.size,
+    assetsLost,
+  };
 }
 
 /**
