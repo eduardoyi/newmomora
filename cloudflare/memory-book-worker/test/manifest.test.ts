@@ -144,6 +144,24 @@ function baseContext(overrides: Partial<GenerationContextResponse> = {}): Genera
 }
 
 describe('buildBookManifest', () => {
+  it('threads the milestone row status into the manifest milestone (additive; absent stays absent)', () => {
+    const context = baseContext({
+      memories: [
+        { id: 'mem-1', content: 'x', memory_date: '2025-01-01', memory_type: 'text', emotion: null, topics: [], topic_details: {}, illustration_key: null },
+      ],
+      milestones: [
+        { memory_id: 'mem-1', family_member_id: 'child-1', milestone_id: 'first-steps', detail: null, out_of_band: false, status: 'confirmed' },
+        { memory_id: 'mem-1', family_member_id: 'child-1', milestone_id: 'blows-kiss', detail: null, out_of_band: false, status: 'candidate' },
+        { memory_id: 'mem-1', family_member_id: 'child-1', milestone_id: 'waves-bye', detail: null, out_of_band: false },
+      ],
+    });
+    const manifest = buildBookManifest({ context, memoryIds: ['mem-1'], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });
+    const [a, b, c] = manifest.memories['mem-1'].milestones;
+    expect(a.status).toBe('confirmed');
+    expect(b.status).toBe('candidate');
+    expect('status' in c).toBe(false);
+  });
+
   it('assembles a memory with assets, milestones, tagged members, and engagement', () => {
     const context = baseContext({
       memories: [
@@ -172,7 +190,7 @@ describe('buildBookManifest', () => {
     expect(memory.engagement).toBe(2);
     expect(memory.assets).toHaveLength(1);
     expect(memory.assets[0].file).toBe('preview.jpg');
-    expect(memory.milestones).toEqual([{ id: 'first-steps', name: expect.any(String), detail: null }]);
+    expect(memory.milestones).toEqual([{ id: 'first-steps', name: expect.any(String), detail: null }]); // no status key when the row has none
     expect(memory.taggedMembers).toEqual([{ name: 'Enzo', isChild: true }]);
     expect(memory.shareToken).toBeNull();
     // Print-polish round (owner decision 2026-09-14, item F): `dateOfBirth`

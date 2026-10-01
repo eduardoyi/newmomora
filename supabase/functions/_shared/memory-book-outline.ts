@@ -274,7 +274,7 @@ export function buildOutlineSystemPrompt(options?: OutlineSystemPromptOptions): 
     '- GOOD: "only travel memory with text; high engagement"',
     '- BAD: "establishes adventure as part of the year" (this is prose written to justify a choice, not evidence)',
     '',
-    'SPECIAL BACKBONE SEGMENT TITLES: some backbone segments below are flagged as the child\'s BIRTH month or a BIRTHDAY month. For ONLY those flagged segments (never any other segment), draft a special title in the family\'s journal language -- birth in the spirit of "welcome to the world", birthday in the spirit of "the month you turned N". Return these in `segment_titles`, keyed by the flagged segment\'s id. Do not add an entry for a segment that was not flagged.',
+    'SPECIAL BACKBONE SEGMENT TITLES: some backbone segments below are flagged as the child\'s BIRTH month or a BIRTHDAY month. For ONLY those flagged segments (never any other segment), draft a special title in the family\'s journal language -- birth in the spirit of "welcome to the world", birthday in the spirit of "the month you turned N" when the flagged segment spans a SINGLE calendar month (e.g. "The month you turned one" / "El mes en que cumpliste un año"), but when the FLAGGED marker says the segment spans SEVERAL months (its label is a range such as "August–October 2024") use PERIOD wording instead (e.g. "When you turned two" / "Cuando cumpliste dos años") and NEVER "the month you turned" / "El mes en que cumpliste", because the section covers a period, not one month. Always spell the age N out in words with its unit (Spanish "un año" / "dos años" / "tres años"), never as a bare digit. Return these in `segment_titles`, keyed by the flagged segment\'s id. Do not add an entry for a segment that was not flagged.',
     '',
     'KICKER (antetítulo): for a THEMED spread ONLY (never for months/Firsts/birthday), you may add a `kicker` -- a short thematic eyebrow line that sits above the title (the design renders it in small caps), <=6 words, journal language. It is connective text, editable later, never parent text. Examples: "lo que nos hiciste reír" above the title "Ay Dios mío"; "lo que más te gustó hacer" above the title "Construir y jugar". Optional -- omit it rather than force one.',
     '',
@@ -429,7 +429,7 @@ export function buildOutlineUserPrompt(
     const flagDesc = flag
       ? flag.kind === 'birth'
         ? ' -- FLAGGED: birth month, draft a segment_titles entry'
-        : skeleton.multiYear && segment.monthKeys.length > 1
+        : segment.monthKeys.length > 1
           ? ` -- FLAGGED: birthday period (turns ${flag.ageTurned}; this section spans ${segment.monthKeys.length} months, so use PERIOD wording such as "When you turned two" / "Cuando cumpliste dos años" with the age spelled out in words, NOT "the month you turned"), draft a segment_titles entry`
           : ` -- FLAGGED: birthday month (turns ${flag.ageTurned}), draft a segment_titles entry`
       : '';

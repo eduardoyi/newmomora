@@ -1,7 +1,7 @@
 # Feature: Memory analysis (`analyze-memory`)
 
 **Status:** `in-progress` (phase 1 of docs/plans/memory-book.md shipped 2026-08-24: schema, shared constants, Edge Function, docs, tests. Client wiring for video-poster emotion and the archive backfill are phase 2.)
-**Last updated:** 2026-08-24
+**Last updated:** 2026-10-01
 **PRD reference:** New premium product surface (see docs/plans/memory-book.md); this pass also feeds Looking Back and future in-app search independently of the book
 
 ## Overview
@@ -158,7 +158,8 @@ poster as analyzable, and build the archive backfill script.
   depend on `{emotion, colorPalette, skipped?}` remaining valid; new fields
   must stay additive.
 - The explicit-text-only milestone rule
-  (`docs/plans/milestone-catalog.md` principle 1): a milestone claim is
+  (`docs/plans/milestone-catalog.md` principle 1, enforced by the
+  explicit-evidence gate below): a milestone claim is
   built from `content`/`audio_transcript` text ONLY. The one sanctioned
   exception is the deterministic birthday match (`computeMilestoneRows` in
   `analyze-memory-core.ts`), which is a database fact (DOB join), not model
@@ -180,6 +181,82 @@ poster as analyzable, and build the archive backfill script.
 - Changing the milestone catalog or topic vocabulary → update the doc
   **and** the `_shared` constant together; the sync test will catch a
   one-sided edit.
+
+## Explicit-evidence gate (2026-10-01)
+
+Owner rule: **never assume or infer a milestone unless the parent's memory text
+explicitly states it.** The prompt always said so; the detector did not obey
+(a haircut caption tagged `first-haircut`, "Enzo asked a question" tagged
+`first-question`, a balance-bike ride tagged `balance-bike` with no
+"first"/"learned" wording — ~1 in 5 tagged firsts had first-time language).
+Three layers now enforce it:
+
+1. **Prompt** (`buildMemoryAnalysisSystemPrompt`): milestone only when the text
+   itself states the achievement; "first X" entries need explicit first-time
+   wording (an activity merely happening is not enough); every catalog line in
+   the prompt carries a `[needs ...]` tag from the per-entry rule; at most one
+   milestone; `null` when in doubt.
+2. **Response contract** — the `milestone` object gains a required
+   **`evidence`** field: the shortest verbatim span of the parent's text that
+   states the milestone (`{"claim", "catalog_id", "detail", "evidence"}`).
+   `detail` keeps its meaning (free-text qualifier such as "mango" or the age
+   turned) and is NOT evidence. This is internal to the model call; the Edge
+   Function's HTTP response contract is unchanged. A claim without `evidence`
+   is dropped (so an old cached prompt/model that omits it yields no milestone,
+   never a guess).
+3. **Deterministic post-gate** (`gateMilestoneClaim` →
+   `verifyMilestoneEvidence` in `_shared/memory-milestone-evidence.ts`, run in
+   `runMemoryAnalysis` before `computeMilestoneRows`): drops a claim unless the
+   quote is verbatim in the memory text (normalized case/diacritics/whitespace/
+   punctuation, 8-400 chars) **and** carries the explicit language the entry's
+   kind requires **and** mentions the entry's subject (es/en/pt stems). Kinds
+   are `first` (first-time wording required), `achievement` (first-time or
+   achievement wording: aprendió a, ya, por fin, learned to, can now,
+   already, aprendeu, já…), `event` (birthday, graduation: the event itself).
+   The per-entry rules live as data in `MILESTONE_EVIDENCE_RULES` next to the
+   catalog (`memory-milestones.ts`); a test fails if a catalog id has no rule.
+   Drops log `analyze-memory milestone dropped <memoryId> <milestoneId> <reason>`
+   (ids and a reason code only; never text). The deterministic birthday DOB
+   join is unaffected.
+
+**Extending:** add a catalog entry → add its rule (`kind`, `subject`, optional
+`phrases`/`extra`) to `MILESTONE_EVIDENCE_RULES` in the same change; add a
+language → extend `FIRST_RE`/`ACHIEVEMENT_RE` and the entry subjects. The gate
+checks explicitness and subject, not truth — keep it conservative (a missed
+milestone is better than a wrong one).
+
+### Backfill / cleanup of existing candidate rows
+
+`supabase/scripts/milestone-honesty-backfill.ts` (`npm run
+eval:milestone-honesty`) re-checks every stored `memory_milestones` row with
+`status = 'candidate'` against the same gate. Old rows have no stored quote, so
+it runs `memoryTextStatesMilestone` on the memory's analyzer text (each
+sentence and each adjacent sentence pair must carry the required language plus
+the subject). `confirmed` and `dismissed` rows are never read or written;
+`birthday` rows (deterministic DOB path), unknown ids, and rows whose memory is
+gone are exempt.
+
+1. Dry run (default): `npm run eval:milestone-honesty` — prints counts only
+   (total candidates, would-keep, would-dismiss, exempt, per `milestone_id`
+   counts, reason counts). No memory text, names, or memory ids.
+2. Apply: `npm run eval:milestone-honesty -- --apply` — writes the rollback file
+   first (`supabase/scripts/eval-output/milestone-honesty/<runId>/rollback.json`,
+   gitignored: row ids, milestone ids, reason, previous status), then sets
+   `status = 'dismissed'` in batches (guarded `status = 'candidate'`).
+3. Undo: `npm run eval:milestone-honesty -- --rollback <file>` (dry run) then
+   `... --rollback <file> --apply` restores the rows (guarded `status =
+   'dismissed'`).
+
+Dismissed rows are invisible to every consumer. Consumer audit (2026-10-01):
+Memory Book bridge (`workflow-memory-book-bridge`, both count and load queries)
+filters `.neq('status','dismissed')`; the Year Film bridge loads all statuses
+but `year-film-script.ts` / `year-film-eligibility.ts` drop `dismissed` in every
+path (certain firsts, share-sensitivity, milestone memory ids, birthday
+celebration, firsts eligibility); `eval-memory-book-outline.ts`,
+`eval-memory-book-assets.ts` and `import-printed-memory-book.ts` filter it; the
+Memory Book Worker's Firsts gate (`gateFirstsMilestones`) additionally requires
+explicit first-time text or a `confirmed` status. Nothing in `src/` or `app/`
+reads `memory_milestones` (no user-visible candidate surface exists today).
 
 ## Constraints & gotchas
 
@@ -251,7 +328,9 @@ poster as analyzable, and build the archive backfill script.
 |---|---|
 | `supabase/functions/analyze-emotion/index.test.ts` | Auth rejection, `validateMediaPhotoMemoryRow` (including the video-with-poster acceptance case), `updateMemoryAnalysisIfSnapshotMatches` CAS behavior |
 | `supabase/functions/analyze-memory/index.test.ts` | Smoke test pinning the re-export wiring |
-| `supabase/functions/_shared/analyze-memory-core.test.ts` | `parseTopics`, `parseMilestoneClaim`, `parseMemoryAnalysisModelOutput`, `buildAnalysisInput` per memory type, `selectImageCandidates`, `buildRelevantMilestoneCatalog`, `computeMilestoneRows` (age-band, deterministic birthday, claim/deterministic merge), `runMemoryAnalysis` orchestration (skip path + a full mocked-OpenAI pass) |
+| `supabase/functions/_shared/memory-milestone-evidence.test.ts` | Evidence gate: per-entry rule coverage of the catalog, verbatim-quote matching, first/achievement/event rules, owner over-tag cases rejected, explicit es/en/pt cases kept, sentence-window text gate |
+| `supabase/scripts/milestone-honesty-backfill.test.ts` | Backfill pure helpers: arg parsing, row decisions (birthday/unknown exempt), summary counts, rollback file shape + strict parsing |
+| `supabase/functions/_shared/analyze-memory-core.test.ts` | Evidence-gated `gateMilestoneClaim`, prompt contract (`evidence`, per-entry tags), gated `runMemoryAnalysis`; `parseTopics`, `parseMilestoneClaim`, `parseMemoryAnalysisModelOutput`, `buildAnalysisInput` per memory type, `selectImageCandidates`, `buildRelevantMilestoneCatalog`, `computeMilestoneRows` (age-band, deterministic birthday, claim/deterministic merge), `runMemoryAnalysis` orchestration (skip path + a full mocked-OpenAI pass) |
 | `supabase/functions/_shared/memory-topics.test.ts` | Sync test against `docs/plans/topic-vocabulary.md`; `DATE_GATED_TOPIC_IDS`/`TOPICS_REQUIRING_DETAIL` correctness |
 | `supabase/functions/_shared/memory-milestones.test.ts` | Sync test against `docs/plans/milestone-catalog.md`; `parseAgeBandMonths`; `milestonesInBand` |
 | `supabase/functions/_shared/date-context.test.ts` | JDN date math, `computeBirthdayMatch`/birth-vs-birthday split, `nearbyHolidays`, `isDateWithinGate` per gate shape, `gateTopicsByDate`, structured context rendering |
@@ -269,3 +348,4 @@ npm run test:edge   # full edge suite, includes the above
 | Date | Change |
 |------|--------|
 | 2026-08-24 | Phase 1 ship: migration (`memories` enrichment columns + `memory_milestones`), typed topic/milestone constants with doc sync tests, `analyze-memory-core.ts`, `chatJsonWithVisionMulti`, `analyze-emotion` extended in place, `analyze-memory` alias endpoint added. |
+| 2026-10-01 | Explicit-evidence rule enforced: model returns a verbatim `evidence` quote per milestone; deterministic per-entry post-gate (`memory-milestone-evidence.ts`) drops claims whose quote is not in the text or lacks first-time/achievement language; `npm run eval:milestone-honesty` backfill (dry-run default, rollback file) dismisses unsupported `candidate` rows. |

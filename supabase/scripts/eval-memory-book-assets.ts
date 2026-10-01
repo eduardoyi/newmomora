@@ -1388,6 +1388,9 @@ async function loadMilestonesForMemories(supabase: AuthedClient, memoryIds: stri
         supabase
           .from('memory_milestones')
           .select('memory_id, milestone_id, detail')
+          // 'dismissed' rows must never surface (same rule as the production
+          // bridge and eval-memory-book-outline.ts).
+          .neq('status', 'dismissed')
           .in('memory_id', idChunk)
           .order('memory_id', { ascending: true })
           .range(from, to),

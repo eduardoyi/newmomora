@@ -2,7 +2,9 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   buildAnalysisInput,
   buildRelevantMilestoneCatalog,
+  buildMemoryAnalysisSystemPrompt,
   computeMilestoneRows,
+  gateMilestoneClaim,
   parseMemoryAnalysisModelOutput,
   parseMilestoneClaim,
   parseTopics,
@@ -10,6 +12,8 @@ import {
   selectImageCandidates,
   type MediaAssetForAnalysis,
 } from './analyze-memory-core.ts';
+import { TOPICS } from './memory-topics.ts';
+import { MILESTONES } from './memory-milestones.ts';
 
 // --- parseTopics -------------------------------------------------------------
 
@@ -76,12 +80,12 @@ Deno.test('parseTopics returns empty for a non-array value', () => {
 
 Deno.test('parseMilestoneClaim validates catalog_id against the real catalog', () => {
   const result = parseMilestoneClaim({ claim: 'took her first steps', catalog_id: 'first-steps', detail: null });
-  assertEquals(result, { claim: 'took her first steps', catalogId: 'first-steps', detail: null });
+  assertEquals(result, { claim: 'took her first steps', catalogId: 'first-steps', detail: null, evidence: null });
 });
 
 Deno.test('parseMilestoneClaim nulls an unrecognized catalog_id but keeps the claim', () => {
   const result = parseMilestoneClaim({ claim: 'turned three', catalog_id: 'not-a-real-id', detail: null });
-  assertEquals(result, { claim: 'turned three', catalogId: null, detail: null });
+  assertEquals(result, { claim: 'turned three', catalogId: null, detail: null, evidence: null });
 });
 
 Deno.test('parseMilestoneClaim returns null for a missing/blank claim', () => {
@@ -98,14 +102,19 @@ Deno.test('parseMemoryAnalysisModelOutput assembles every axis from one raw JSON
     labels: ['sand', 'sun', 'towel'],
     description: 'A day at the beach.',
     emotion: 'joy',
-    milestone: { claim: 'first steps', catalog_id: 'first-steps', detail: null },
+    milestone: { claim: 'first steps', catalog_id: 'first-steps', detail: null, evidence: 'took her first steps' },
   });
 
   assertEquals(output.topics, [{ id: 'beach', detail: null }]);
   assertEquals(output.labels, ['sand', 'sun', 'towel']);
   assertEquals(output.description, 'A day at the beach.');
   assertEquals(output.emotion, 'joy');
-  assertEquals(output.milestoneClaim, { claim: 'first steps', catalogId: 'first-steps', detail: null });
+  assertEquals(output.milestoneClaim, {
+    claim: 'first steps',
+    catalogId: 'first-steps',
+    detail: null,
+    evidence: 'took her first steps',
+  });
 });
 
 Deno.test('parseMemoryAnalysisModelOutput normalizes an unknown emotion to the tender fallback', () => {
@@ -235,7 +244,7 @@ Deno.test('buildRelevantMilestoneCatalog unions in-band entries across tagged me
 Deno.test('computeMilestoneRows: no text means no claim-based milestone even if the model claims one', () => {
   const rows = computeMilestoneRows({
     textPresent: false,
-    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null },
+    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [{ id: 'a', ageMonths: 12 }],
     taggedMembersForBirthday: [],
@@ -247,7 +256,7 @@ Deno.test('computeMilestoneRows: no text means no claim-based milestone even if 
 Deno.test('computeMilestoneRows: an in-band single tagged member resolves family_member_id, out_of_band false', () => {
   const rows = computeMilestoneRows({
     textPresent: true,
-    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null },
+    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [{ id: 'a', ageMonths: 12 }],
     taggedMembersForBirthday: [],
@@ -259,7 +268,7 @@ Deno.test('computeMilestoneRows: an in-band single tagged member resolves family
 Deno.test('computeMilestoneRows: an out-of-band claim is kept, flagged, with no family_member_id', () => {
   const rows = computeMilestoneRows({
     textPresent: true,
-    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null },
+    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [{ id: 'a', ageMonths: 60 }], // 5 years old -- well outside first-steps' band
     taggedMembersForBirthday: [],
@@ -271,7 +280,7 @@ Deno.test('computeMilestoneRows: an out-of-band claim is kept, flagged, with no 
 Deno.test('computeMilestoneRows: two members both in-band leaves family_member_id null (ambiguous)', () => {
   const rows = computeMilestoneRows({
     textPresent: true,
-    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null },
+    milestoneClaim: { claim: 'first steps', catalogId: 'first-steps', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [{ id: 'a', ageMonths: 12 }, { id: 'b', ageMonths: 10 }],
     taggedMembersForBirthday: [],
@@ -284,7 +293,7 @@ Deno.test('computeMilestoneRows: two members both in-band leaves family_member_i
 Deno.test('computeMilestoneRows: an unresolved catalog_id produces no row', () => {
   const rows = computeMilestoneRows({
     textPresent: true,
-    milestoneClaim: { claim: 'did something', catalogId: null, detail: null },
+    milestoneClaim: { claim: 'did something', catalogId: null, detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [],
     taggedMembersForBirthday: [],
@@ -320,7 +329,7 @@ Deno.test('computeMilestoneRows: deterministic birthday does NOT fire outside th
 Deno.test('computeMilestoneRows: deterministic birthday fires from explicit text alone (no birthday topic)', () => {
   const rows = computeMilestoneRows({
     textPresent: true,
-    milestoneClaim: { claim: 'turned four today', catalogId: 'birthday', detail: null },
+    milestoneClaim: { claim: 'turned four today', catalogId: 'birthday', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [],
     taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
@@ -334,7 +343,7 @@ Deno.test('computeMilestoneRows: deterministic birthday overrides a claim-based 
     textPresent: true,
     // Model paraphrase claims "turned three" but the DOB join says 4 --
     // the deterministic value wins.
-    milestoneClaim: { claim: 'turned three', catalogId: 'birthday', detail: 'wrong age from model' },
+    milestoneClaim: { claim: 'turned three', catalogId: 'birthday', detail: 'wrong age from model', evidence: null },
     topics: [],
     taggedMembersWithAge: [],
     taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
@@ -395,7 +404,12 @@ Deno.test('runMemoryAnalysis: a text-only memory produces a full analysis with d
                 labels: ['sand', 'sun'],
                 description: 'A beach day.',
                 emotion: 'joy',
-                milestone: { claim: 'first steps', catalog_id: 'first-steps', detail: null },
+                milestone: {
+                  claim: 'first steps',
+                  catalog_id: 'first-steps',
+                  detail: null,
+                  evidence: 'She took her first steps on the beach today',
+                },
               }),
             },
           },
@@ -471,6 +485,160 @@ Deno.test('runMemoryAnalysis: forwards real token usage from the provider respon
     if (result.skipped) throw new Error('expected a completed analysis');
     assertEquals(result.usage, { promptTokens: 812, completionTokens: 97 });
   } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+// --- explicit-evidence gate (owner rule 2026-10-01) -----------------------------------
+
+function claim(catalogId: string, evidence: string | null) {
+  return { claim: 'x', catalogId, detail: null, evidence };
+}
+
+Deno.test('parseMilestoneClaim reads the verbatim evidence quote (and aliases), trimmed', () => {
+  assertEquals(
+    parseMilestoneClaim({ claim: 'c', catalog_id: 'first-steps', evidence: '  dio sus primeros pasos ' })?.evidence,
+    'dio sus primeros pasos',
+  );
+  assertEquals(parseMilestoneClaim({ claim: 'c', catalog_id: 'first-steps', quote: 'primeros pasos' })?.evidence, 'primeros pasos');
+  assertEquals(parseMilestoneClaim({ claim: 'c', catalog_id: 'first-steps' })?.evidence, null);
+});
+
+Deno.test('gateMilestoneClaim drops the owner over-tag cases (haircut, question, balance bike)', () => {
+  const cases: Array<[string, string, string]> = [
+    ['first-haircut', 'Enzo en la barbería con su corte de pelo nuevo', 'Enzo en la barbería con su corte de pelo nuevo'],
+    ['first-question', 'Enzo me preguntó por qué el cielo es azul', 'Enzo me preguntó por qué el cielo es azul'],
+    ['balance-bike', 'Enzo riding his balance bike at the park', 'Enzo riding his balance bike at the park'],
+  ];
+  for (const [id, text, quote] of cases) {
+    const gated = gateMilestoneClaim(claim(id, quote), text);
+    assertEquals(gated.claim, null, id);
+    assertEquals(gated.rejected, 'no_explicit_language', id);
+  }
+});
+
+Deno.test('gateMilestoneClaim keeps genuinely explicit claims', () => {
+  const cases: Array<[string, string, string]> = [
+    ['first-haircut', 'Hoy le cortaron el pelo por primera vez. Quedó guapísimo.', 'hoy le cortaron el pelo por primera vez'],
+    ['first-steps', 'Mira: dio sus primeros pasos!', 'dio sus primeros pasos'],
+    [
+      'bike-no-training-wheels',
+      'Today Mia learned to ride her bike without training wheels. So proud.',
+      'learned to ride her bike without training wheels',
+    ],
+    ['first-haircut', 'Su primeiro corte de cabelo, que fofo', 'Su primeiro corte de cabelo'],
+  ];
+  for (const [id, text, quote] of cases) {
+    const gated = gateMilestoneClaim(claim(id, quote), text);
+    assertEquals(gated.rejected, null, id);
+    assertEquals(gated.claim?.catalogId, id);
+  }
+});
+
+Deno.test('gateMilestoneClaim drops a quote that is not verbatim in the memory text', () => {
+  const gated = gateMilestoneClaim(
+    claim('first-haircut', 'se cortó el pelo por primera vez'),
+    'Fuimos a la peluquería y Enzo se portó muy bien.',
+  );
+  assertEquals(gated.claim, null);
+  assertEquals(gated.rejected, 'quote_not_in_text');
+});
+
+Deno.test('gateMilestoneClaim tolerates case, accents, whitespace and punctuation differences in the quote', () => {
+  const gated = gateMilestoneClaim(
+    claim('first-haircut', '  HOY le cortaron el PELO por primera vez…  '),
+    'Hoy le cortaron   el pelo, por primera vez!',
+  );
+  assertEquals(gated.rejected, null);
+});
+
+Deno.test('gateMilestoneClaim drops a claim with no evidence quote at all', () => {
+  const gated = gateMilestoneClaim(claim('first-steps', null), 'Dio sus primeros pasos');
+  assertEquals(gated.claim, null);
+  assertEquals(gated.rejected, 'no_evidence');
+});
+
+Deno.test('gateMilestoneClaim: first-time wording about something else does not carry a different milestone', () => {
+  const gated = gateMilestoneClaim(
+    claim('first-haircut', 'primera vez que come mango'),
+    'Primera vez que come mango. Luego fuimos al parque.',
+  );
+  assertEquals(gated.rejected, 'subject_not_mentioned');
+});
+
+Deno.test('gateMilestoneClaim passes a claim with no catalog id through untouched', () => {
+  const unresolved = { claim: 'x', catalogId: null, detail: null, evidence: null };
+  assertEquals(gateMilestoneClaim(unresolved, 'anything').claim, unresolved);
+});
+
+Deno.test('buildMemoryAnalysisSystemPrompt demands a verbatim evidence quote and tags per-entry requirements', () => {
+  const prompt = buildMemoryAnalysisSystemPrompt({
+    topics: TOPICS,
+    milestoneCatalog: MILESTONES.filter((m) => ['first-haircut', 'rolls-over', 'birthday'].includes(m.id)),
+  });
+  assertEquals(prompt.includes('"evidence": string'), true);
+  assertEquals(prompt.includes('character for character'), true);
+  assertEquals(prompt.includes('first-haircut — First haircut (3m–4y) [needs explicit first-time wording]'), true);
+  assertEquals(prompt.includes('rolls-over — Rolls over (2–8m) [needs explicit first-time or achievement wording]'), true);
+  assertEquals(prompt.includes('[needs the event itself stated]'), true);
+});
+
+Deno.test('runMemoryAnalysis: a model milestone claim that fails the evidence gate produces no milestone row', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  const originalLog = console.log;
+  const logged: unknown[][] = [];
+  console.log = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                topics: [],
+                labels: [],
+                description: 'A haircut.',
+                emotion: 'joy',
+                milestone: {
+                  claim: 'first haircut',
+                  catalog_id: 'first-haircut',
+                  detail: null,
+                  evidence: 'Enzo en la barbería con su corte de pelo',
+                },
+              }),
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: {
+        id: 'm3',
+        content: 'Enzo en la barbería con su corte de pelo nuevo',
+        memoryType: 'text_only',
+        memoryDate: '2026-06-15',
+        audioTranscript: null,
+      },
+      taggedMembers: [{ id: 'a', name: 'Enzo', dateOfBirth: '2024-06-15' }],
+      media: [],
+    });
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.milestones, []);
+    // PII rule: the drop log carries ids and a reason code only.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0], ['analyze-memory milestone dropped', 'm3', 'first-haircut', 'no_explicit_language']);
+  } finally {
+    console.log = originalLog;
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
     else Deno.env.set('OPENAI_API_KEY', originalKey);

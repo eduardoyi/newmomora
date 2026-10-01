@@ -2228,7 +2228,7 @@ Deno.test('buildOutlineUserPrompt: flags a special segment for the model with it
   assertEquals(prompt.includes('FLAGGED: birth month'), true);
 });
 
-Deno.test('buildOutlineUserPrompt: multi-year birthday flag uses PERIOD wording for a multi-month segment, single-month wording otherwise; non-multi-year is unchanged', () => {
+Deno.test('buildOutlineUserPrompt: birthday flag uses PERIOD wording for a multi-month segment in ANY scope (year/calendar books included), single-month wording otherwise', () => {
   const multiSegment = {
     id: '2024-08_2024-09_2024-10',
     label: 'August–October 2024',
@@ -2272,11 +2272,16 @@ Deno.test('buildOutlineUserPrompt: multi-year birthday flag uses PERIOD wording 
   assertEquals(multiLine.includes('FLAGGED: birthday month'), false);
   const singleLine = multi.find((l) => l.includes(singleSegment.id) && l.includes('FLAGGED'))!;
   assertEquals(singleLine.endsWith('FLAGGED: birthday month (turns 3), draft a segment_titles entry'), true);
-  // Non-multi-year books keep the original marker for every segment, byte for byte.
+  // Year/calendar books (multiYear unset/false) merge sparse months into a
+  // multi-month backbone segment too: the PERIOD wording applies to ANY scope
+  // when the segment spans >1 month; single-month segments are unchanged.
   for (const mode of [undefined, false] as const) {
     const lines = build(mode);
     const line = lines.find((l) => l.includes(multiSegment.id) && l.includes('FLAGGED'))!;
-    assertEquals(line.endsWith('FLAGGED: birthday month (turns 2), draft a segment_titles entry'), true);
+    assertEquals(line.includes('FLAGGED: birthday period (turns 2;'), true);
+    assertEquals(line.includes('FLAGGED: birthday month'), false);
+    const single = lines.find((l) => l.includes(singleSegment.id) && l.includes('FLAGGED'))!;
+    assertEquals(single.endsWith('FLAGGED: birthday month (turns 3), draft a segment_titles entry'), true);
   }
 });
 
@@ -3398,10 +3403,14 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Hashes captured from the pre-change (HEAD 117b571) builders. The existing
+// Hashes captured from the pre-change (HEAD 117b571) builders. The SYSTEM hash
+// was deliberately re-pinned (fix/milestone-honesty): the base SPECIAL BACKBONE
+// SEGMENT TITLES paragraph now states the single-month vs multi-month birthday
+// title rule with spelled-out ages (d7c49af7... -> cc45233b...). The user-prompt
+// hash is unchanged (its fixture has no multi-month birthday segment). The existing
 // assertions above only check substrings, so these pin the FULL default
 // output: every new option must be absent-safe and byte-identical.
-const BASELINE_SYSTEM_PROMPT_SHA256 = 'd7c49af7a80e0a61261da73082772dfb104dccd7deaec1acac112f4438a61bf2';
+const BASELINE_SYSTEM_PROMPT_SHA256 = 'cc45233ba3fc4162a4f3f0ac320a4cec500210305a87960d4238efffa269cf0f';
 const BASELINE_USER_PROMPT_SHA256 = '8cc417b8e91a3af2859782d41ae86601ac39f3697da62c267cc9693130f64f60';
 
 function phase2UserPromptInput() {

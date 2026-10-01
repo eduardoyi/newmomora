@@ -50,6 +50,7 @@ import {
 } from '../templates/mm';
 import { anchorPairMeetsMinSize } from '../templates/layout/anchorMediaLayout';
 import { resolveElementMemories } from './loader';
+import { reassignUnqualifiedFirsts } from './firstsGate';
 
 // ---------------------------------------------------------------------------
 // Deterministic layout fitter (Stage C: "AI for taste, code for geometry").
@@ -4137,6 +4138,7 @@ export function planChapterDemotions(
   manifest: BookManifest,
   options: { tierC?: boolean; tierCAfterB2?: boolean } = {},
 ): ChapterDemotion[] {
+  outline = reassignUnqualifiedFirsts(outline, manifest); // same Firsts gate as fitBook (idempotent)
   const spans = chapterSpansOf(outline);
   if (spans.length < 2) return [];
   const tierCEnabled = options.tierC ?? ENABLE_TIER_C_CAPTIONED_DEMOTION;
@@ -4763,6 +4765,12 @@ function runFit(
 // ---------------------------------------------------------------------------
 
 export function fitBook(outline: BookOutline, manifest: BookManifest, options: FitOptions = {}): FitResult {
+  // Fit-time Firsts honesty gate: members without a parent-confirmed milestone
+  // or explicit first-time language in their own text are reassigned into the
+  // chronological backbone (see `firstsGate.ts`). Fixes books stored by older
+  // generations without regeneration; every downstream stage (pagination,
+  // page-cap demotion, quote pooling) sees them as ordinary backbone memories.
+  outline = reassignUnqualifiedFirsts(outline, manifest);
   const cap = options.maxPages ?? DEFAULT_MAX_PAGES;
 
   let pairingLevel: PairingLevel = 0;

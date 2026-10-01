@@ -181,7 +181,7 @@ export function buildBookManifest(input: BuildManifestInput): BookManifest {
     const assets = buildAssetsForMemory(mediaByMemory.get(memoryId) ?? [], input.originalDimensionsByMediaId ?? {});
 
     const milestones: ManifestMilestone[] = (milestonesByMemory.get(memoryId) ?? []).map((row) =>
-      buildManifestMilestone(row.milestone_id, row.detail),
+      buildManifestMilestone(row.milestone_id, row.detail, row.status),
     );
 
     const taggedMembers: ManifestTaggedMember[] = [];

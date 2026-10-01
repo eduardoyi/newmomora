@@ -82,6 +82,12 @@ export interface ManifestMilestone {
   id: string;
   name: string;
   detail: string;
+  /**
+   * Milestone row status from the generation bridge ('confirmed' | 'candidate' | ...).
+   * Optional/additive: absent on manifests generated before the Firsts honesty
+   * fix. The fitter's Firsts gate treats absent as a plain candidate.
+   */
+  status?: string;
 }
 
 export interface ManifestTaggedMember {
