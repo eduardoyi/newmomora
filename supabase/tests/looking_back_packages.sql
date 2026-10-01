@@ -366,7 +366,12 @@ from generate_series(1, 4) as series;
 insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
 select ('93400000-0000-4000-8000-' || lpad(series::text, 12, '0'))::uuid,
   '82000000-0000-4000-8000-000000000015', '81000000-0000-4000-8000-000000000015',
-  'Release month fallback fixture ' || series, (current_date - interval '4 years')::date - 10,
+  'Release month fallback fixture ' || series,
+  -- Same calendar month as the on-this-day anniversary but outside its +/-7
+  -- day window, whatever today's day-of-month is (a fixed "- 10" crossed into
+  -- the previous month on days 1-10 and failed test 57 on those days).
+  (current_date - interval '4 years')::date
+    + case when extract(day from current_date - interval '4 years') > 10 then -10 else 10 end,
   'text_illustration', 'failed'
 from generate_series(1, 8) as series;
 insert into public.memories (id, family_id, user_id, content, memory_date, memory_type, illustration_status)
