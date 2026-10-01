@@ -205,9 +205,9 @@ function buildLlmResponse(context: GenerationContextResponse, body: Record<strin
     id: m[1],
     memberIds: m[2].split(', ').filter(Boolean),
   }));
-  const flagged = [...user.matchAll(/^\[\d+\] (\S+) "[^"]*"(?: \[chapter \d+\])? -- \d+ memories -- FLAGGED: (birth month|birthday month \(turns (\d+)\))/gm)].map((m) => ({
+  const flagged = [...user.matchAll(/^\[\d+\] (\S+) "[^"]*"(?: \[chapter \d+\])? -- \d+ memories -- FLAGGED: (birth month|birthday (month|period) \(turns (\d+))/gm)].map((m) => ({
     id: m[1],
-    title: m[3] ? `The month you turned ${m[3]}` : 'The month you were born',
+    title: m[4] ? (m[3] === 'period' ? `When you turned ${m[4]}` : `The month you turned ${m[4]}`) : 'The month you were born',
   }));
   const firstsRows = [...user.matchAll(/^- memory_id="([^"]+)" milestone_id="([^"]+)"/gm)].map((m) => ({ memoryId: m[1], milestoneId: m[2] }));
   const offered = new Set([...user.matchAll(/^(mem-\d{4}) \| /gm)].map((m) => m[1]));
@@ -327,8 +327,17 @@ describe('Everything outline + manifest (synthetic 4-year context)', () => {
     }
     expect(user).not.toContain('Birthdays in scope');
     expect(user).toMatch(/FLAGGED: birth month/);
-    for (const age of [1, 2, 3]) expect(user).toContain(`FLAGGED: birthday month (turns ${age})`);
+    // Quarter-block sections span several months, so a birthday flag on one uses PERIOD wording; a block holding a
+    // single month with memories keeps the single-month wording. Either way each age is flagged exactly once.
+    for (const age of [1, 2, 3]) expect(user).toMatch(new RegExp(`FLAGGED: birthday (month|period) \\(turns ${age}[;)]`));
     expect(user).not.toContain('turns 4');
+    const flaggedLines = user.split('\n').filter((l) => l.includes('FLAGGED: birthday'));
+    for (const line of flaggedLines) {
+      const label = line.match(/^\[\d+\] \S+ "([^"]*)"/)![1];
+      const multiMonth = /[–-]/.test(label);
+      expect(line.includes('FLAGGED: birthday period')).toBe(multiMonth);
+      if (multiMonth) expect(line).toContain('Cuando cumpliste');
+    }
   });
 
   it('caps Firsts at 6 memories, chronological, and lists only those in the prompt', async () => {

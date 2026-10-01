@@ -274,7 +274,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     specialSegments: originalSpecialFlags,
     configuredLanguage: context.configuredLanguage,
     languageEvidenceCaptions: context.languageEvidenceCaptions,
-    ...(isEverything ? { firstsMemoryIds } : {}),
+    ...(isEverything ? { firstsMemoryIds, multiYear: true } : {}),
     ...(chapters.length > 0 ? { chapters } : {}),
   };
 

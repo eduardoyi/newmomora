@@ -8,17 +8,70 @@
   height: 100%;
 }
 
+/* position: absolute is set inline; the SectionHeader inside is absolute top/left of this box. */
 .quote-collection__column {
+  box-sizing: border-box;
+}
+
+/* Bands share the stage height equally; no divider between them (owner
+   review 2026-10-01: the hairlines were unnecessary). */
+.quote-collection__stage {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.quote-collection__band {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2.4em;
 }
 
 .quote-collection__entry {
   display: flex;
   flex-direction: column;
-  gap: 0.5em;
+  align-items: flex-start;
+  box-sizing: border-box;
+}
+
+.quote-collection__entry[data-align='end'] {
+  align-self: flex-end;
+}
+
+/* Large lavender opening mark, sitting just above the quote's first line. */
+.quote-collection__mark {
+  display: block;
+  height: 0.42em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1;
+  margin-bottom: 0.1em;
+}
+
+.quote-collection__text {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  white-space: pre-wrap;
+  text-wrap: balance;
+}
+
+.quote-collection__meta {
+  display: flex;
+  align-items: center;
+  gap: 3em;
+  margin-top: 3.6em;
+}
+
+.quote-collection__rule {
+  display: block;
+  width: 8em;
+  height: 1px;
 }
 
 .quote-collection__date {
@@ -27,13 +80,7 @@
   line-height: 1.2;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-}
-
-.quote-collection__text {
-  margin: 0;
-  font-family: var(--font-display);
-  font-weight: 400;
-  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .quote-collection__illo {

@@ -526,3 +526,31 @@ describe('tallSoloCanSitBesideHeader (round-16 follow-up: wrapping titles force 
     expect(tallSoloCanSitBesideHeader(190, 'El mes en que llegaste a casa', true)).toBe(false);
   });
 });
+
+describe('tallSoloCanSitBesideHeader with the image aspect (Phase 2d: non-wrapping but WIDE titles)', () => {
+  // The real Enzo pages: "julio–septiembre 2023" style 3-month titles model 113-146mm wide
+  // (< the 152mm wrap limit) yet the 50% floor column starts at x = 95mm, under the title.
+  it('refuses beside-header placement when the column the image would get intersects the modeled title box', () => {
+    for (const title of ['julio–septiembre 2023', 'noviembre 2025–enero 2026']) {
+      expect(tallSoloCanSitBesideHeader(190, title, false)).toBe(true); // legacy wrap-only answer
+      expect(tallSoloCanSitBesideHeader(190, title, false, 0.5625)).toBe(false);
+      expect(tallSoloCanSitBesideHeader(190, title, false, 0.68)).toBe(false);
+    }
+  });
+
+  it('whenever it says yes, the image rect clears the title box (same predicate the audit uses)', () => {
+    for (const title of ['mayo 2025', 'octubre 2025', 'agosto 2024', 'julio–agosto 2023', 'julio–septiembre 2023']) {
+      for (const aspect of [0.4, 0.5, 0.5625, 0.68, 0.8]) {
+        if (!tallSoloCanSitBesideHeader(190, title, false, aspect)) continue;
+        const rect = layoutTallSoloBesideHeader(aspect, 190, 190 - 15, title, false);
+        const titleWidth = Math.min(title.length * 34 * 0.45 * 0.3528, 190 * 0.8);
+        expect(rect.xMm >= titleWidth || rect.yMm >= 40).toBe(true);
+      }
+    }
+  });
+
+  it('a short title keeps the beside-header composition (no regression where there was no overlap)', () => {
+    expect(tallSoloCanSitBesideHeader(190, 'mayo 2025', false, 0.5625)).toBe(true);
+    expect(tallSoloCanSitBesideHeader(190, 'mayo 2025', false, 0.5625, true)).toBe(true);
+  });
+});

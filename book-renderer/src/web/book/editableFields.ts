@@ -134,6 +134,9 @@ export function computeTextFields(pages: BookPage[], manifest: BookManifest): Te
       title = title ?? header.title;
       kicker = kicker ?? header.kicker;
     }
+    // A pooled quote-collection (`<chapter id>:quotes`) has a title only (`quotesTitle`), no eyebrow.
+    const isPooledQuotes = page.templateId === 'quote-collection' && typeof page.params.quotesTitle === 'string';
+    if (isPooledQuotes) title = title ?? (page.params.quotesTitle as string);
     if (title !== null) {
       const key = `sectionTitle:${elementId}`;
       if (!fields.has(key)) {
@@ -143,7 +146,7 @@ export function computeTextFields(pages: BookPage[], manifest: BookManifest): Te
     // Eyebrow is overridable even when the outline never supplied a kicker
     // (Design Decision 6: "eyebrows derived-but-overridable") — the field
     // always shows once a title exists, with an empty starting value.
-    if (title !== null) {
+    if (title !== null && !isPooledQuotes) {
       const key = `eyebrow:${elementId}`;
       if (!fields.has(key)) {
         fields.set(key, { target: key, label: 'Eyebrow', value: kicker ?? '', multiline: false });

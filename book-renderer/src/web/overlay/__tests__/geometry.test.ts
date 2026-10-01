@@ -111,6 +111,13 @@ describe('resolveTextAnchor', () => {
     expect(resolveTextAnchor(gridPage, 'eyebrow:seg-9')).toEqual({ strategy: 'section-kicker' });
   });
 
+  it('resolves sectionTitle structurally on a pooled quote-collection (params.quotesTitle, no eyebrow)', () => {
+    const quotes = page({ templateId: 'quote-collection', sourceElementId: 'chapter:1:quotes', params: { quotesTitle: 'Things you said' } });
+    expect(resolveTextAnchor(quotes, 'sectionTitle:chapter:1:quotes')).toEqual({ strategy: 'section-title' });
+    expect(resolveTextAnchor(quotes, 'eyebrow:chapter:1:quotes')).toBeNull();
+    expect(resolveTextAnchor(quotes, 'sectionTitle:chapter:2:quotes')).toBeNull();
+  });
+
   it('returns null for a sectionTitle/eyebrow target whose elementId does not match this page', () => {
     const gridPage = page({ templateId: 'flex-grid', sourceElementId: 'seg-9', params: { sectionHeader: { title: 'Marzo', kicker: null, special: false } } });
     expect(resolveTextAnchor(gridPage, 'sectionTitle:seg-OTHER')).toBeNull();

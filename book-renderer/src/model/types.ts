@@ -162,6 +162,13 @@ export type OutlineElementKind =
   | 'backbone'
   | 'themed'
   | 'firsts'
+  /**
+   * Year-book birthday spread (`birthday-N`, worker emits one per age with >= 3
+   * memories carrying that birthday milestone; their memories are removed from
+   * the backbone). Laid out like a themed spread — a localized `spread-title`
+   * opener plus its members. Never emitted for multi-year (Everything) books.
+   */
+  | 'birthday'
   | 'closing'
   /**
    * Multi-year (Everything) chapter opener — one per age-year, emitted by the
@@ -219,6 +226,14 @@ export interface OutlineElement {
    * own verbatim memory text is used instead (never fabricated).
    */
   firstsEntries?: OutlineFirstsEntry[];
+  /**
+   * The key the memory-book worker ACTUALLY stores on a `firsts` element
+   * (`reading-order.ts`: `firstsWarmNames`, same `{ memoryId, milestoneId,
+   * warmName }` entry shape). The fitter reads both keys (`firstsEntries`
+   * wins on conflict), so books already stored with this key get their AI
+   * warm names without regeneration.
+   */
+  firstsWarmNames?: OutlineFirstsEntry[];
 }
 
 /** See `OutlineElement.firstsEntries`. */

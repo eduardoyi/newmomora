@@ -402,7 +402,7 @@ describe('template snapshots', () => {
     expect(html).toContain(`left:${x}%`);
   });
 
-  it('TextPage: a single entry of <= 120 chars is a pull quote (centred, lavender opening mark, date kicker above); body text verbatim', () => {
+  it('TextPage: a single entry of <= 120 chars is a pull quote (centred, large lavender opening mark, date kicker BELOW the quote since Phase 2d); body text verbatim', () => {
     const text = 'She said the moon was following our car.';
     const manifest = makeManifest({ 'mem-1': makeMemory({ date: '2024-12-05', text, assets: [] }) });
     const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
@@ -412,8 +412,9 @@ describe('template snapshots', () => {
     expect(html).toContain('text-page__quote-mark');
     expect(html).toContain(text);
     expect(html).not.toContain('text-page__body');
-    // date kicker precedes the quote
-    expect(html.indexOf('text-page__date')).toBeLessThan(html.indexOf('text-page__quote-mark'));
+    // Phase 2d: the quote leads and the date kicker follows it (same order as the quote-collection).
+    expect(html.indexOf('text-page__quote-mark')).toBeLessThan(html.indexOf('text-page__quote"'));
+    expect(html.indexOf('text-page__quote"')).toBeLessThan(html.indexOf('text-page__date'));
   });
 
   it('TextPage: a single entry over 120 chars keeps the body typography (no pull quote)', () => {
@@ -425,6 +426,19 @@ describe('template snapshots', () => {
     expect(html).toContain('text-page__body');
     expect(html).not.toContain('text-page__quote');
     expect(html).toContain(text);
+    // 200+ chars would add a drop cap; this one is shorter, so none.
+    expect(html).not.toContain('text-page__body--dropcap');
+  });
+
+  it('TextPage: a lone story of 200+ chars starting on a letter gets the lavender drop cap; one starting on a dash does not', () => {
+    const body = 'a long afternoon in the garden, with the bee and the pebbles and the yellow bucket. '.repeat(4);
+    const run = (text: string) => {
+      const manifest = makeManifest({ 'mem-1': makeMemory({ text, assets: [] }) });
+      const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['mem-1'] })]);
+      return renderPage(manifest, outline).html;
+    };
+    expect(run(`We spent ${body}`)).toContain('text-page__body--dropcap');
+    expect(run(`\u2014Mama, ${body}`)).not.toContain('text-page__body--dropcap');
   });
 
   it('WraparoundCover: mixed-voice spine text is dark ink, not white — the spine sits on paper-white paper, not the photo (item 17 bug fix; full-bleed "photo" voice removed 2026-08-31, so this is now the only photo-bearing voice)', () => {
@@ -934,5 +948,36 @@ describe('multi-year (everything scope) Closing + ThroughTheYears furniture', ()
     const en = renderTty(makeManifest({}, { language: 'en', portraits }));
     expect(en).toContain('through the years');
     expect(en).toContain('in twelve months');
+  });
+  it('QuoteCollection: 1-3 entries on a single (non-spread) page carry the furniture title; a quotesTitle param overrides it; verbatim text; es/en defaults', () => {
+    const manifest = makeManifest({
+      'mem-1': makeMemory({ date: '2025-03-01', text: 'Uno, verbatim "quoted" - Enzo', assets: [] }),
+      'mem-2': makeMemory({ date: '2025-03-02', text: 'Dos.', assets: [] }),
+      'mem-3': makeMemory({ date: '2025-03-03', text: 'Tres.', assets: [] }),
+    });
+    (manifest as { language: string }).language = 'es';
+    const slots = ['mem-1', 'mem-2', 'mem-3'].map((id, i) => ({
+      id: `q${i}`,
+      kind: 'quote-entry' as const,
+      content: { kind: 'quote-entry' as const, memoryId: id, date: manifest.memories[id].date, text: manifest.memories[id].text as string, illustration: null },
+    }));
+    const base = {
+      id: 'p', sourceElementId: 'backbone:x', templateId: 'quote-collection' as const, params: {}, slots,
+      isSpread: false, isEvenPage: true, pageNumbers: [4], blankReason: null,
+    };
+    const render = (params: Record<string, unknown>, isSpread = false) =>
+      renderToStaticMarkup(
+        <TemplateRenderer page={{ ...(base as object), params, isSpread, pageNumbers: isSpread ? [4, 5] : [4] } as never} manifest={manifest} bookSlug="test-book" showGuides={false} />,
+      );
+    const single = render({});
+    expect(single).toContain('Cosas que dijiste');
+    expect(single).toContain('data-spread="false"');
+    expect(single).toContain('Uno, verbatim &quot;quoted&quot; - Enzo');
+    expect((single.match(/quote-collection__mark/g) ?? []).length).toBe(3);
+    expect(render({ quotesTitle: 'Lo que decias' })).toContain('Lo que decias');
+    expect(render({ sectionHeader: { kicker: 'Marzo 2025', title: 'Marzo', special: false } })).not.toContain('Cosas que dijiste');
+    expect(render({}, true)).toContain('data-spread="true"');
+    (manifest as { language: string }).language = 'en';
+    expect(render({})).toContain('Things you said');
   });
 });

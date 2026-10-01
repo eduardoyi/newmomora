@@ -28,12 +28,12 @@
 .text-page__entry {
   display: flex;
   flex-direction: column;
-  gap: 1em;
+  gap: 3em;
   margin-bottom: 1.6em;
 }
 
 .text-page__rule {
-  width: 4em;
+  width: 8em;
   height: 1px;
 }
 
@@ -54,7 +54,7 @@
   white-space: pre-wrap;
 }
 
-/* Pull quote: one short entry, centred, date kicker above a lavender opening mark. */
+/* Pull quote: one short entry, centred — big lavender opening mark, quote, short rule, date kicker. */
 .text-page__entry--quote {
   align-items: center;
   gap: 0;
@@ -64,20 +64,43 @@
 
 .text-page__quote-mark {
   display: block;
-  height: 0.55em;
+  height: 0.42em;
   font-family: var(--font-display);
   font-weight: 400;
   line-height: 1;
-  margin-top: 0.3em;
-  margin-bottom: 0.2em;
+  margin-bottom: 0.14em;
 }
 
 .text-page__quote {
   margin: 0;
   font-family: var(--font-display);
   font-weight: 400;
-  line-height: 1.32;
-  letter-spacing: -0.012em;
+  line-height: 1.26;
+  letter-spacing: -0.016em;
   white-space: pre-wrap;
   text-wrap: balance;
+}
+
+.text-page__quote-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4em;
+  margin-top: 11em;
+}
+
+.text-page__quote-rule {
+  display: block;
+  width: 10em;
+  height: 1px;
+}
+
+/* Long single story: a lavender drop cap opens the entry (two lines tall).
+   Browsers without `initial-letter` simply show the coloured first letter. */
+.text-page__body--dropcap::first-letter {
+  initial-letter: 2;
+  font-family: var(--font-display);
+  font-weight: 400;
+  color: #8e7fb8; /* lavender.deep */
+  margin-right: 0.12em;
 }

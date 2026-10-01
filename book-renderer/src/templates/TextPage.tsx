@@ -11,12 +11,21 @@ import type { TextSlotContent } from '../model/types';
 import './TextPage.css';
 
 const COMPANION_MAX = 900;
+/** A lone entry at least this long (and not a pull quote) opens with a drop cap. */
+const DROP_CAP_MIN = 200;
 /** A single entry this short is set as a pull quote instead of a body paragraph. */
 const PULL_QUOTE_MAX = 120;
-/** Pull-quote size (pt) — Newsreader, tuned for a 210mm page. */
-const PULL_QUOTE_PT = 28;
+/** Pull-quote size (pt) by length — Newsreader, the big editorial size for a short line, stepping down for longer ones. */
+function pullQuotePt(length: number): number {
+  if (length <= 40) return 46;
+  if (length <= 70) return 40;
+  if (length <= 95) return 36;
+  return 32;
+}
+/** Pull-quote opening-mark size (pt) — a large lavender glyph, the same one the quote-collection uses. */
+const PULL_QUOTE_MARK_PT = 120;
 /** Pull-quote measure (mm), centred on the page. */
-const PULL_QUOTE_WIDTH_MM = 140;
+const PULL_QUOTE_WIDTH_MM = 150;
 /** Body measure (mm) and left indent (mm from the safe edge) — unchanged from the original canvas placement (130mm column starting 25mm inside trim). */
 const BODY_WIDTH_MM = 130;
 const BODY_INDENT_MM = 15;
@@ -28,11 +37,16 @@ const FOLIO_RESERVE_MM = 12;
  * Text is always printed verbatim and in full — never trimmed, never
  * summarized. Two compositions, both vertically centred in the free area
  * (below the section header, above the folio) instead of pinned high:
- *   - exactly ONE entry of <= 120 chars -> pull quote: centred, Newsreader
- *     28pt, a lavender opening quote glyph, the date as a small tracked
- *     kicker above;
+ *   - exactly ONE entry of <= 120 chars -> pull quote (Phase 2d): centred,
+ *     Newsreader 32-46pt by length, a large lavender opening quote glyph, a
+ *     short lavender rule and the date as a small tracked kicker below — the
+ *     same language as the "things you said" quote-collection (so they read
+ *     as one family);
  *   - anything longer / multi-entry -> today's body typography (4-column
- *     measure, 17pt/1.72, 15pt once a single entry runs past 900 chars).
+ *     measure, 17pt/1.72, 15pt once a single entry runs past 900 chars);
+ *     a lone entry of 200+ chars opens with a lavender drop cap and every
+ *     entry's date is a darker lavender kicker (the old pale numeral grey
+ *     read too faint in print).
  */
 export function TextPage({ page, manifest, showGuides }: TemplateProps) {
   const textSlots = page.slots.filter((s): s is { id: string; kind: 'text'; content: TextSlotContent } => s.kind === 'text');
@@ -42,6 +56,9 @@ export function TextPage({ page, manifest, showGuides }: TemplateProps) {
   const longest = Math.max(0, ...textSlots.map((s) => s.content.text.length));
   const bodySize = longest > COMPANION_MAX ? 15 : 17;
   const language = getLanguage(manifest);
+  // A lone long story opens with a lavender drop cap — only when it starts on
+  // a letter (a leading dash/quote/emoji must never be swallowed into one).
+  const dropCap = textSlots.length === 1 && longest >= DROP_CAP_MIN && /^\p{L}/u.test(textSlots[0].content.text);
   const isPullQuote = textSlots.length === 1 && longest > 0 && longest <= PULL_QUOTE_MAX;
 
   return (
@@ -68,21 +85,24 @@ export function TextPage({ page, manifest, showGuides }: TemplateProps) {
             >
               {textSlots.map((slot) => (
                 <div key={slot.id} className="text-page__entry text-page__entry--quote">
-                  {slot.content.date && (
-                    <span className="text-page__date" style={{ fontSize: ptCqw(canvasPxToPt(9.5), false), color: colors.numeral }}>
-                      {formatLongDate(slot.content.date, language)}
-                    </span>
-                  )}
                   <span
                     className="text-page__quote-mark"
                     aria-hidden="true"
-                    style={{ fontSize: ptCqw(80, false), color: lavender.deep }}
+                    style={{ fontSize: ptCqw(PULL_QUOTE_MARK_PT, false), color: lavender.deep }}
                   >
                     {'\u201C'}
                   </span>
-                  <p className="text-page__quote" style={{ fontSize: ptCqw(PULL_QUOTE_PT, false), color: colors.ink }}>
+                  <p className="text-page__quote" style={{ fontSize: ptCqw(pullQuotePt(slot.content.text.length), false), color: colors.ink }}>
                     {slot.content.text}
                   </p>
+                  {slot.content.date && (
+                    <div className="text-page__quote-meta">
+                      <span className="text-page__quote-rule" style={{ background: lavender.deep }} />
+                      <span className="text-page__date" style={{ fontSize: ptCqw(7.5, false), color: lavender.ink }}>
+                        {formatLongDate(slot.content.date, language)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -96,13 +116,16 @@ export function TextPage({ page, manifest, showGuides }: TemplateProps) {
                 <div key={slot.id} className="text-page__entry">
                   {slot.content.date && (
                     <>
-                      <div className="text-page__rule" style={{ background: colors.borderStrong }} />
-                      <span className="text-page__date" style={{ fontSize: ptCqw(canvasPxToPt(9.5), false), color: colors.numeral }}>
+                      <div className="text-page__rule" style={{ background: lavender.deep }} />
+                      <span className="text-page__date" style={{ fontSize: ptCqw(canvasPxToPt(9.5), false), color: lavender.ink }}>
                         {formatLongDate(slot.content.date, language)}
                       </span>
                     </>
                   )}
-                  <p className="text-page__body" style={{ fontSize: ptCqw(bodySize, false), color: colors.ink }}>
+                  <p
+                    className={`text-page__body${dropCap ? ' text-page__body--dropcap' : ''}`}
+                    style={{ fontSize: ptCqw(bodySize, false), color: colors.ink }}
+                  >
                     {slot.content.text}
                   </p>
                 </div>

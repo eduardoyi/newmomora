@@ -2228,6 +2228,57 @@ Deno.test('buildOutlineUserPrompt: flags a special segment for the model with it
   assertEquals(prompt.includes('FLAGGED: birth month'), true);
 });
 
+Deno.test('buildOutlineUserPrompt: multi-year birthday flag uses PERIOD wording for a multi-month segment, single-month wording otherwise; non-multi-year is unchanged', () => {
+  const multiSegment = {
+    id: '2024-08_2024-09_2024-10',
+    label: 'August–October 2024',
+    monthKeys: ['2024-08', '2024-09', '2024-10'],
+    memoryIds: ['a', 'b', 'c'],
+  };
+  const singleSegment = {
+    id: '2025-02',
+    label: 'February 2025',
+    monthKeys: ['2025-02'],
+    memoryIds: ['d'],
+  };
+  const build = (multiYear: boolean | undefined) =>
+    buildOutlineUserPrompt(
+      {
+        childName: 'Enzo',
+        scopeLabel: 'Everything',
+        windowStart: '2024-08-01',
+        windowLastDay: '2025-02-28',
+        backboneSegments: [multiSegment, singleSegment],
+        firstsCount: 0,
+        birthdaySpreads: [],
+        throughTheYearsCount: 0,
+        specialSegments: [
+          { segmentId: multiSegment.id, month: '2024-09', kind: 'birthday', ageTurned: 2 },
+          { segmentId: singleSegment.id, month: '2025-02', kind: 'birthday', ageTurned: 3 },
+        ],
+        configuredLanguage: null,
+        languageEvidenceCaptions: [],
+        ...(multiYear === undefined ? {} : { multiYear }),
+      },
+      [],
+      new Map(),
+    ).split('\n');
+  const multi = build(true);
+  const multiLine = multi.find((l) => l.includes(multiSegment.id) && l.includes('FLAGGED'))!;
+  assertEquals(multiLine.includes('FLAGGED: birthday period (turns 2;'), true);
+  assertEquals(multiLine.includes('When you turned N'), true);
+  assertEquals(multiLine.includes('Cuando cumpliste N'), true);
+  assertEquals(multiLine.includes('FLAGGED: birthday month'), false);
+  const singleLine = multi.find((l) => l.includes(singleSegment.id) && l.includes('FLAGGED'))!;
+  assertEquals(singleLine.endsWith('FLAGGED: birthday month (turns 3), draft a segment_titles entry'), true);
+  // Non-multi-year books keep the original marker for every segment, byte for byte.
+  for (const mode of [undefined, false] as const) {
+    const lines = build(mode);
+    const line = lines.find((l) => l.includes(multiSegment.id) && l.includes('FLAGGED'))!;
+    assertEquals(line.endsWith('FLAGGED: birthday month (turns 2), draft a segment_titles entry'), true);
+  }
+});
+
 Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own FIRSTS MILESTONES block (owner round-4 decision, 2026-08-27: a live regen had the owner dismiss a wrong match, leaving exactly ONE real milestone -- the OLD >=2 gate withheld the milestone_id slug entirely, and the model guessed the bare NAME instead, producing an unknown_firsts_milestone violation for a perfectly real milestone; a single genuine victory now earns the section)', () => {
   const features = new Map([
     ['m1', fixtureFeature({
@@ -3404,6 +3455,9 @@ Deno.test('buildOutlineSystemPrompt: multiYear adds exactly one MULTI-YEAR BOOK 
     'years of memories',
     'DIFFERENT years',
     'the month you turned N',
+    'when you turned N',
+    'Cuando cumpliste N',
+    'PERIOD wording',
     'do NOT favour recent years',
   ]) {
     assertEquals(block.includes(phrase), true, `missing phrase: ${phrase}`);

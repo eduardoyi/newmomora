@@ -90,6 +90,12 @@ export interface Furniture {
    */
   scanToWatch: string;
   firsts: { kicker: string };
+  /**
+   * Pooled quote-collection page/spread title ("the things you said") — the
+   * template falls back to this when the fitter passes no `params.quotesTitle`
+   * (a pooled collection carries no section header of its own).
+   */
+  quotes: { title: string };
   closing: {
     headline: string;
     /**
@@ -146,6 +152,7 @@ const FURNITURE: Record<Language, Furniture> = {
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'es')} momentos` : `${childName}, ${dateStr}`,
     scanToWatch: 'escanea para verlo',
     firsts: { kicker: 'primeras veces' },
+    quotes: { title: 'Cosas que dijiste' },
     closing: {
       headline: 'Hasta el año que viene.',
       memoryCountLine: (count, scopeLabel, yearOrdinal) =>
@@ -180,6 +187,7 @@ const FURNITURE: Record<Language, Furniture> = {
       momentCount > 1 ? `${childName}, ${dateStr} — ${numberWord(momentCount, 'en')} moments` : `${childName}, ${dateStr}`,
     scanToWatch: 'scan to watch it',
     firsts: { kicker: 'firsts' },
+    quotes: { title: 'Things you said' },
     closing: {
       headline: 'See you next year.',
       memoryCountLine: (count, scopeLabel, yearOrdinal) =>

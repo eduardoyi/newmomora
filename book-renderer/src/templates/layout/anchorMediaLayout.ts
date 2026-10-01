@@ -1,5 +1,13 @@
 import { PHYSICAL } from '../../model/types';
-import { snapToBaseline, MIN_IMAGE_SIDE_MM, MIN_PAIR_FILL_RATIO, modelSectionHeaderTitle, VIDEO_BELOW_SCAN_FOOTER_EXTRA_MM } from '../mm';
+import {
+  snapToBaseline,
+  MIN_IMAGE_SIDE_MM,
+  MIN_PAIR_FILL_RATIO,
+  modelSectionHeaderTitle,
+  VIDEO_BELOW_SCAN_FOOTER_EXTRA_MM,
+  FOOTER_RESERVE_MM,
+  SECTION_HEADER_RESERVE_MM,
+} from '../mm';
 
 /**
  * Solo/pair anchor-media sizing (owner review round 3 items 3/4/6, round 4
@@ -466,8 +474,35 @@ export function tallSoloHeaderWidthCapMm(safeBoxWidthMm: number, title: string |
  * ordinary below-header solo layout. One shared predicate so the template
  * and the audit can never disagree about which composition a page uses.
  */
-export function tallSoloCanSitBesideHeader(safeBoxWidthMm: number, title: string | null, special: boolean): boolean {
-  return !modelSectionHeaderTitle(safeBoxWidthMm, title, special).wraps;
+export function tallSoloCanSitBesideHeader(
+  safeBoxWidthMm: number,
+  title: string | null,
+  special: boolean,
+  /**
+   * Phase 2d fix (real Enzo "Everything" book, pages for 3-month sections such
+   * as "julio–septiembre 2023"): a title can be NON-wrapping yet wider than
+   * the column the image claims — the modeled title box then reaches under the
+   * image's left edge (the 50% floor column starts at `safe - 0.5*safe`, but a
+   * 21-27 character title models 113-146mm wide). When the caller passes the
+   * image's `aspect`, beside-header placement is also refused whenever the
+   * column rect it WOULD get intersects the title's own modeled box — the page
+   * falls back to the ordinary below-header solo (which is bigger than the
+   * only column that could fit anyway). Omitting `aspect` keeps the old
+   * wrap-only answer (legacy callers/tests). `isSoloVideo` mirrors the
+   * template's/audit's choice of rect function (`layoutSoloVideoAnchor`).
+   */
+  aspect?: number,
+  isSoloVideo = false,
+): boolean {
+  const model = modelSectionHeaderTitle(safeBoxWidthMm, title, special);
+  if (model.wraps) return false;
+  if (aspect === undefined || model.widthMm <= 0) return true;
+  const availableHeightMm = safeBoxWidthMm - FOOTER_RESERVE_MM;
+  const rect = isSoloVideo
+    ? layoutSoloVideoAnchor(aspect, safeBoxWidthMm, availableHeightMm, true, title, special).rect
+    : layoutTallSoloBesideHeader(aspect, safeBoxWidthMm, availableHeightMm, title, special);
+  const intersectsTitle = rect.xMm < model.widthMm && rect.yMm < SECTION_HEADER_RESERVE_MM;
+  return !intersectsTitle;
 }
 
 export function layoutTallSoloBesideHeader(

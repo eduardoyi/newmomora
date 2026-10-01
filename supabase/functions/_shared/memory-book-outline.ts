@@ -230,7 +230,7 @@ export const FIRSTS_MIN_MILESTONES = 1;
 /** Multi-year ("everything") book guidance, inserted after the LANGUAGE
  * paragraph of the system prompt ONLY when `multiYear` is set. */
 const MULTI_YEAR_BOOK_BLOCK =
-  'MULTI-YEAR BOOK: this book spans SEVERAL years of the child\'s life and is organised into one chapter per age-year (see CHAPTERS in the user message). Wherever the rules above say "this year", "of the year" or "a year of memories", read it as "across the years" -- never write copy that implies the book covers a single year. `firsts_title` is framed as "big and small victories" with no "this year" in it. The `dedication` cites the first and last dates of the span and never says "this year" (in Spanish, never "este año"). `back_cover_line` is about years of memories, not one year. Spread your hero, cover and panorama candidates across DIFFERENT years rather than concentrating them in one. A birthday month is titled "the month you turned N", using the N from its FLAGGED birthday marker. Selection across years is handled by code, so do NOT favour recent years over earlier ones.';
+  'MULTI-YEAR BOOK: this book spans SEVERAL years of the child\'s life and is organised into one chapter per age-year (see CHAPTERS in the user message). Wherever the rules above say "this year", "of the year" or "a year of memories", read it as "across the years" -- never write copy that implies the book covers a single year. `firsts_title` is framed as "big and small victories" with no "this year" in it. The `dedication` cites the first and last dates of the span and never says "this year" (in Spanish, never "este año"). `back_cover_line` is about years of memories, not one year. Spread your hero, cover and panorama candidates across DIFFERENT years rather than concentrating them in one. A FLAGGED birthday section that spans a SINGLE calendar month (its label is one month) is titled "the month you turned N"; a FLAGGED birthday section that spans SEVERAL months (its label is a range such as "August–October 2024"; its FLAGGED marker says so) is titled with PERIOD wording -- "when you turned N" (in Spanish "Cuando cumpliste N") -- and NEVER "the month you turned" / "El mes en que cumpliste", because the section covers a period, not one month. Use the N from the FLAGGED birthday marker; this overrides the "month you turned N" wording in SPECIAL BACKBONE SEGMENT TITLES below. Selection across years is handled by code, so do NOT favour recent years over earlier ones.';
 
 export interface OutlineSystemPromptOptions {
   /** Add the MULTI-YEAR BOOK block (the "everything" scope). Absent/false
@@ -354,6 +354,11 @@ export interface OutlineSkeletonSummaryInput {
   /** Multi-year books: the age-year chapters. When set, a CHAPTERS block is
    * printed and each BACKBONE SEGMENT line is tagged with its chapter. */
   chapters?: Array<{ ageYear: number; startMonth: string; endMonth: string }>;
+  /** Multi-year ("everything") books only: backbone segments are fixed
+   * 3-month blocks, so a birthday-flagged segment spanning more than one
+   * month is marked with PERIOD wording (not "birthday month") in the
+   * FLAGGED line. Unset for every other scope -- their output is unchanged. */
+  multiYear?: boolean;
 }
 
 export function buildOutlineUserPrompt(
@@ -417,7 +422,9 @@ export function buildOutlineUserPrompt(
     const flagDesc = flag
       ? flag.kind === 'birth'
         ? ' -- FLAGGED: birth month, draft a segment_titles entry'
-        : ` -- FLAGGED: birthday month (turns ${flag.ageTurned}), draft a segment_titles entry`
+        : skeleton.multiYear && segment.monthKeys.length > 1
+          ? ` -- FLAGGED: birthday period (turns ${flag.ageTurned}; this section spans ${segment.monthKeys.length} months, so use PERIOD wording such as "When you turned N" / "Cuando cumpliste N", NOT "the month you turned"), draft a segment_titles entry`
+          : ` -- FLAGGED: birthday month (turns ${flag.ageTurned}), draft a segment_titles entry`
       : '';
     const chapterTag =
       chapters && chapters.length > 0 && segment.chapterIndex !== undefined

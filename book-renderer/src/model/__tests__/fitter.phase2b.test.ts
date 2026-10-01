@@ -455,7 +455,10 @@ describe('fix 4: per-chapter quote pooling (chapter mode)', () => {
     const { document } = fitBook(outline, manifest);
     const collections = document.pages.filter((p) => p.templateId === 'quote-collection');
     expect(collections).toHaveLength(1);
-    expect(collections[0].sourceElementId).toBe('backbone:c1-b'); // the chapter-1 LAST backbone section
+    // Phase 2d: a pooled collection is emitted under its own stable `<chapter id>:quotes`
+    // element id (so `sectionTitle:` edits target it, never the host backbone section).
+    expect(collections[0].sourceElementId).toBe('chapter:1:quotes');
+    expect(collections[0].isSpread).toBe(true); // 5 entries: 4-6 stay a spread
     expect(quoteEntryIds(collections[0]).sort()).toEqual([...c1.quoteIds].sort());
     // It prints after that section's own pages and before the next chapter opener.
     const idx = document.pages.indexOf(collections[0]);
@@ -468,12 +471,13 @@ describe('fix 4: per-chapter quote pooling (chapter mode)', () => {
     expect(auditBookDocument(document, outline, manifest, { omittedMemoryIds: [] })).toEqual([]);
   });
 
-  it('a long pool splits with partitionQuoteRun (7 -> 4 + 3), each spread sourced by the same section', () => {
+  it('a long pool splits with partitionQuoteRun (7 -> a 4-entry spread + a 3-entry single page), all under the chapter\'s pooled-quotes element id', () => {
     const { manifest, outline, c1 } = pooledBook(7, 0);
     const { document } = fitBook(outline, manifest);
     const collections = document.pages.filter((p) => p.templateId === 'quote-collection');
     expect(collections.map((p) => quoteEntryIds(p).length)).toEqual([4, 3]);
-    expect(collections.every((p) => p.sourceElementId === 'backbone:c1-b')).toBe(true);
+    expect(collections.map((p) => p.isSpread)).toEqual([true, false]);
+    expect(collections.every((p) => p.sourceElementId === 'chapter:1:quotes')).toBe(true);
     expect(new Set(collections.flatMap(quoteEntryIds))).toEqual(new Set(c1.quoteIds));
     // Distinct page ids (the pseudo-section id namespace never collides with the section's own pages).
     expect(new Set(document.pages.map((p) => p.id)).size).toBe(document.pages.length);

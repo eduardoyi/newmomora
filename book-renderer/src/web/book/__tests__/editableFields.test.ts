@@ -192,3 +192,19 @@ describe('computeEditablePhotoSlots — isVideoPoster (owner-approved follow-up 
     expect(slots).toEqual([{ key: slotKey('mem-1', 'assets/a.jpg'), memoryId: 'mem-1', assetFile: 'assets/a.jpg', isCover: false, isVideoPoster: true }]);
   });
 });
+
+describe('computeTextFields — pooled quote-collection title (Phase 2d)', () => {
+  it('offers a sectionTitle field for params.quotesTitle under the chapter-keyed element id, and no eyebrow field', () => {
+    const manifest = makeManifest({}, { language: 'en' });
+    const quotes = page({ templateId: 'quote-collection', sourceElementId: 'chapter:1:quotes', params: { quotesTitle: 'Things you said' } });
+    const fields = computeTextFields([quotes], manifest);
+    expect(fields.find((f) => f.target === 'sectionTitle:chapter:1:quotes')?.value).toBe('Things you said');
+    expect(fields.some((f) => f.target.startsWith('eyebrow:'))).toBe(false);
+  });
+
+  it('a quote-collection without quotesTitle (an in-section run) offers nothing of its own', () => {
+    const manifest = makeManifest({}, { language: 'en' });
+    const quotes = page({ templateId: 'quote-collection', sourceElementId: 'backbone:x', params: {} });
+    expect(computeTextFields([quotes], manifest).filter((f) => f.target.includes('backbone:x'))).toEqual([]);
+  });
+});

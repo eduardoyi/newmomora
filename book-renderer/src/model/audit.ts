@@ -204,7 +204,7 @@ function auditMonthContinuity(document: BookDocument, outline: BookOutline, mani
 }
 
 // ---------------------------------------------------------------------------
-// (b) No titled section (spread-title, via themed/firsts) with zero content
+// (b) No titled section (spread-title, via themed/firsts/birthday) with zero content
 // pages behind it before the next section (the diagnosed Mara "Retratos con
 // Mirian" bug — fixed at the root in fitter.ts's dissolve-when-empty guard;
 // this is the permanent regression backstop).
@@ -214,7 +214,7 @@ function auditSectionTitleOrphans(document: BookDocument, outline: BookOutline):
   const violations: IntegrityViolation[] = [];
   const pagesByElement = groupPagesBySource(document);
   for (const element of outline.elements) {
-    if (element.kind !== 'themed' && element.kind !== 'firsts') continue;
+    if (element.kind !== 'themed' && element.kind !== 'firsts' && element.kind !== 'birthday') continue;
     const pages = pagesByElement.get(element.id) ?? [];
     const hasTitle = pages.some((p) => p.templateId === 'spread-title');
     const hasContent = pages.some((p) => p.templateId !== 'spread-title');
@@ -304,14 +304,22 @@ function auditGeometricOverlap(document: BookDocument): IntegrityViolation[] {
         // it was sized against (a solo otherwise has nothing else to
         // overlap — there's only ever one photo slot on this page).
         const sectionHeader = (page.params.sectionHeader ?? null) as SectionHeaderParams | null;
+        const isSoloVideo = Boolean(photoSlots[0].content.qr);
         const isTall =
           sectionHeader &&
           classifyOrientation(photoSlots[0].content.assetAspectRatio) === 'tall' &&
           // Round-16 follow-up: mirrors AnchorMedia.tsx exactly — a wrapping
           // title forces the below-header composition, so the beside-header
           // geometry (and its overlap checks) must not be recomputed here.
-          tallSoloCanSitBesideHeader(SAFE_BOX_MM, sectionHeader.title, sectionHeader.special);
-        const isSoloVideo = Boolean(photoSlots[0].content.qr);
+          // Phase 2d: the same predicate also refuses a column that would
+          // intersect a non-wrapping-but-wide title (same args as the template).
+          tallSoloCanSitBesideHeader(
+            SAFE_BOX_MM,
+            sectionHeader.title,
+            sectionHeader.special,
+            photoSlots[0].content.assetAspectRatio,
+            isSoloVideo,
+          );
         if (isTall) {
           const availableHeightMm = SAFE_BOX_MM - FOOTER_RESERVE_MM;
           // Round-9 item 4: a solo VIDEO recomputes via the SAME shared

@@ -21,7 +21,7 @@
  *
  * What it does NOT cover: `model/edits.ts` (applyPreFit/applyPostFit — edits
  * application), multi-year `chapter` elements (don't exist yet), `birthday`
- * elements beyond the one documented-defect test below, print/PDF output,
+ * elements beyond the one (deliberately re-pinned) test below, print/PDF output,
  * the Fly `/fit` wrapper, the web preview. Slot ids (`photo:slot-12`) are
  * deliberately NOT serialized: they come from a module counter and are an
  * implementation detail; slot CONTENT (memory ids, assets, captions, index)
@@ -284,12 +284,15 @@ describe('fitter golden — year / calendar / legacy custom books', () => {
   });
 });
 
-describe('fitter golden — documented defect (do not "fix" in Phase 2)', () => {
-  it('a `birthday` outline element is silently ignored by the fitter: its memories are never laid out', () => {
-    // docs/plans/memory-book-everything-phase2.md "Known defect (separate fix)":
-    // runFit has no `birthday` case, so the worker's `birthday-N` elements
-    // (and the memories moved into them) vanish. This test pins that
-    // CURRENT behaviour; whoever lands the separate fix updates it on purpose.
+describe('fitter golden — birthday elements (defect fixed in Phase 2d, deliberately re-pinned)', () => {
+  it('a `birthday` outline element is now laid out: a localized title page, then its members', () => {
+    // docs/plans/memory-book-everything-phase2d.md item 3b. This test used to
+    // pin the DEFECT (runFit had no `birthday` case, so the worker's
+    // `birthday-N` elements and the memories moved into them were silently
+    // never laid out). Phase 2d fixed it on purpose, so the expectation is
+    // inverted: the members print, behind a `spread-title` opener. The rest
+    // of the golden snapshots are unaffected (no synthetic book carries a
+    // birthday element).
     const { outline, manifest } = load(VARIANTS[0]);
     const backbone = outline.elements.find((e) => e.kind === 'backbone' && e.memoryIds.length >= 4)!;
     const moved = backbone.memoryIds.slice(0, 3);
@@ -299,7 +302,7 @@ describe('fitter golden — documented defect (do not "fix" in Phase 2)', () => 
     };
     withBirthday.elements.splice(3, 0, {
       id: 'birthday-2',
-      kind: 'birthday' as never,
+      kind: 'birthday',
       title: 'Birthday -- turns 2',
       memoryIds: moved,
       rationale: {},
@@ -308,7 +311,10 @@ describe('fitter golden — documented defect (do not "fix" in Phase 2)', () => 
     const laidOut = new Set(
       result.document.pages.flatMap((p) => p.slots.map((s) => (s.content as { memoryId?: string | null }).memoryId).filter(Boolean)),
     );
-    for (const id of moved) expect(laidOut.has(id)).toBe(false);
-    expect(result.document.pages.some((p) => p.sourceElementId === 'birthday-2')).toBe(false);
+    for (const id of moved) expect(laidOut.has(id)).toBe(true);
+    const title = result.document.pages.find((p) => p.sourceElementId === 'birthday-2' && p.templateId === 'spread-title');
+    expect(title).toBeDefined();
+    expect(title!.params.title).toBe('When you turned two');
+    expect(auditBookDocument(result.document, withBirthday, manifest, { omittedMemoryIds: result.capacity.omittedMemoryIds })).toEqual([]);
   });
 });

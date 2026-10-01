@@ -35,9 +35,19 @@ import { PHYSICAL } from './types';
 import type { FooterIndexEntry } from '../templates/common/FooterIndex.types';
 import type { SectionHeaderParams } from '../templates/common/SectionHeader.types';
 import { localizeMonthLabel, parseSingleMonthLabel, lastDayOfMonthIso } from '../templates/common/formatDate';
-import { getFurniture, getLanguage } from '../templates/furniture';
+import { getFurniture, getLanguage, numberWord, type Language } from '../templates/furniture';
 import { ageAtDate, formatAgeChip } from '../templates/age';
-import { illustratedIlloFitHeightMm, SAFE_BOX_MM, SECTION_HEADER_RESERVE_MM, footerReserveMm, printableCaption } from '../templates/mm';
+import {
+  illustratedIlloFitHeightMm,
+  illustratedStackTopMm,
+  illustratedCaptionHeightEstimateMm,
+  ILLUSTRATED_STACK_GAP_MM,
+  ILLUSTRATED_FOLIO_CLEARANCE_MM,
+  SAFE_BOX_MM,
+  SECTION_HEADER_RESERVE_MM,
+  footerReserveMm,
+  printableCaption,
+} from '../templates/mm';
 import { anchorPairMeetsMinSize } from '../templates/layout/anchorMediaLayout';
 import { resolveElementMemories } from './loader';
 
@@ -80,6 +90,17 @@ const QUOTE_ENTRY_MAX_CHARS = 200;
 const QUOTE_COLLECTION_MIN = 3;
 /** The collection's own page-budget ceiling per spread — a longer run splits into several spreads (see `partitionQuoteRun`). */
 const QUOTE_COLLECTION_MAX = 6;
+/**
+ * Phase 2d: a collection of this many entries or fewer is ONE ordinary page
+ * (`isSpread: false`, no even-start requirement); more (4-6) is a 2-page
+ * spread. See `quoteCollectionIsSinglePage`.
+ */
+const QUOTE_SINGLE_PAGE_MAX = 3;
+
+/** A `quote-collection` unit of <= `QUOTE_SINGLE_PAGE_MAX` entries is a single page; 4-6 entries are a spread. */
+function quoteCollectionIsSinglePage(entryCount: number): boolean {
+  return entryCount <= QUOTE_SINGLE_PAGE_MAX;
+}
 /**
  * Illustrated-story pairing (acceptance-review follow-up): two ADJACENT
  * short illustrated stories share a facing spread with alternating
@@ -630,7 +651,10 @@ function unitParityMeta(
     return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'panorama-spread' };
   }
   if (unit.kind === 'quote-collection') {
-    return { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' };
+    // Phase 2d: 1-3 entries are one ordinary page (no even-start requirement; not a swap target — assembly never marks it swappable); 4-6 are a spread.
+    return quoteCollectionIsSinglePage(unit.items.length)
+      ? { span: 1, needsEven: false, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' }
+      : { span: 2, needsEven: true, movableSingle: false, isPairSecond: false, isPairFirst: false, predictedTemplateId: 'quote-collection' };
   }
   if (unit.kind === 'illustrated-digest') {
     // Owner round-12 extension: the SINGLE-page variant is an ordinary
@@ -846,7 +870,13 @@ export function reorderUnitsForParity(
       // ONE page instead (task 1's fitted-height cap keeps that safe).
       // Modeling that here keeps the sim in sync: a de-split render is a
       // plain 1-page single with no even-landing requirement, span 1.
-      if (meta.predictedTemplateId === 'illustrated-story' && meta.span === 2 && !meta.isPairFirst) {
+      //
+      // Phase 2d fix 3d: ...but ONLY when that "both" render actually fits
+      // the safe box (`illustratedBothModeFits`, the audit's own formula). A
+      // long story whose stack cannot fit commits to the split in assembly
+      // (swap, else a blank), so it falls through to the last-resort
+      // "assembly will insert a blank (or swap)" model below instead.
+      if (meta.predictedTemplateId === 'illustrated-story' && meta.span === 2 && !meta.isPairFirst && deSplitFits(arr[i], sim)) {
         finalizeUnit(arr[i], 'illustrated-story');
         parityEven = !parityEven; // a de-split "both" mode render is always a plain 1-page single (odd span)
         continue;
@@ -913,6 +943,13 @@ export function reorderUnitsForParity(
   return arr;
 }
 
+/** Phase 2d: whether a solo illustrated unit's single-page ("both") render fits the safe box, given the sim's pending-header state (see `illustratedBothModeFits`). */
+function deSplitFits(unit: ContentUnit, sim: ReorderSimState): boolean {
+  if (unit.kind !== 'group' || unit.group.memories.length !== 1) return true;
+  const { id, memory } = unit.group.memories[0];
+  return illustratedBothModeFits(memory, sim.headerPending, predictIllustratedStagger(id));
+}
+
 /**
  * Round-5 item 6, re-based round-9 item 1c: decides whether a solo
  * illustrated-story splits across two facing pages (text left, illustration
@@ -941,6 +978,24 @@ function illustratedStoryNeedsSplit(memory: ManifestMemory, hasSectionHeader: bo
   if (!memory.illustration) return false;
   const heightMm = illustratedIlloFitHeightMm(len, hasSectionHeader, stagger, memory.illustration.aspectRatio);
   return heightMm < ILLUSTRATED_SPLIT_MIN_ILLO_HEIGHT_MM;
+}
+
+/**
+ * Whether a single-page ("both" mode) illustrated-story stack fits the safe
+ * box above the folio clearance — the SAME three pure functions the template
+ * renders with and `auditBookDocument`'s `illustrated-stack-overflow` check
+ * (i) recomputes with, so the fitter's decision can never drift from the
+ * audit. A memory with no illustration has no stack to overflow.
+ */
+function illustratedBothModeFits(memory: ManifestMemory, hasSectionHeader: boolean, stagger: boolean): boolean {
+  if (!memory.illustration) return true;
+  const len = captionOf(memory).length;
+  const stackBottomMm =
+    illustratedStackTopMm(hasSectionHeader, stagger) +
+    illustratedCaptionHeightEstimateMm(len, stagger) +
+    ILLUSTRATED_STACK_GAP_MM +
+    illustratedIlloFitHeightMm(len, hasSectionHeader, stagger, memory.illustration.aspectRatio);
+  return stackBottomMm <= SAFE_BOX_MM - ILLUSTRATED_FOLIO_CLEARANCE_MM + 1e-6;
 }
 
 /**
@@ -2170,6 +2225,11 @@ export function partitionPortraits(n: number): number[] {
  * `QUOTE_COLLECTION_MAX` instead of 3) — only ever called on a run already
  * known to be >= `QUOTE_COLLECTION_MIN`, so every resulting group size
  * lands in [3, 6]: 7 -> [4,3], 13 -> [5,4,4], 17 -> [6,6,5].
+ *
+ * Phase 2d: a group of 3 (the only single-page size this ever yields) is ONE
+ * page; 4-6 is a 2-page spread (4 = 2+2, 5 = 2+3, 6 = 3+3 — the template
+ * splits the entries, the title on the left page). See
+ * `quoteCollectionIsSinglePage`.
  */
 export function partitionQuoteRun(n: number): number[] {
   if (n <= 0) return [];
@@ -2359,7 +2419,13 @@ type ContentUnit =
    * trade places with a preceding flexible single to land even instead of
    * paying a parity blank, and it never carries the section header.
    */
-  | { kind: 'quote-collection'; items: ResolvedMemory[]; pooled?: boolean }
+  /**
+   * `pooledSourceId` (pooled only): the stable `sourceElementId` the page is
+   * emitted under (`<chapter id>:quotes`), so `sectionTitle:<id>` /
+   * `eyebrow:<id>` edits target the pooled collection's own title and never
+   * the host backbone section's.
+   */
+  | { kind: 'quote-collection'; items: ResolvedMemory[]; pooled?: boolean; pooledSourceId?: string }
   /**
    * `variant: 'spread'` — exactly 4 entries, 2-page spread, even-start
    * required (same as before). `variant: 'single'` — exactly 2 entries,
@@ -2773,6 +2839,8 @@ function buildContentPages(
    * skipped them via `omittedIds`.
    */
   pooledQuoteTail: readonly ResolvedMemory[] = [],
+  /** Stable `sourceElementId` for the pooled quote page(s) (see `ContentUnit`'s `pooledSourceId`). */
+  pooledQuoteSourceId?: string,
   /** Chapter-mode firsts section: the compact layout (see `buildFirstsUnits`). */
   compactFirsts = false,
 ): BookPage[] {
@@ -2812,7 +2880,7 @@ function buildContentPages(
   if (pooledQuoteTail.length >= QUOTE_COLLECTION_MIN) {
     let offset = 0;
     for (const size of partitionQuoteRun(pooledQuoteTail.length)) {
-      units.push({ kind: 'quote-collection', items: pooledQuoteTail.slice(offset, offset + size), pooled: true });
+      units.push({ kind: 'quote-collection', items: pooledQuoteTail.slice(offset, offset + size), pooled: true, pooledSourceId: pooledQuoteSourceId });
       offset += size;
     }
   }
@@ -2986,20 +3054,37 @@ function buildContentPages(
       // the composition itself. Parity-forced the same way panorama is
       // (item 8) — it's a spread too, and never swaps for the same reason
       // (its entries' chronological position must stay exact).
-      const reswap = ensureEvenLanding(index, 'parity:quote-collection', Boolean(unit.pooled));
+      //
+      // Phase 2d: 1-3 entries are ONE ordinary page (`isSpread: false`, no
+      // even-start requirement, so no parity dance and never a swap target);
+      // 4-6 stay a 2-page spread (the template puts the title on the left
+      // page: 4 = 2+2, 5 = 2+3, 6 = 3+3).
+      const singlePage = quoteCollectionIsSinglePage(unit.items.length);
+      const reswap = singlePage ? null : ensureEvenLanding(index, 'parity:quote-collection', Boolean(unit.pooled));
       const pageParams: TemplateParams = {};
       if (headerPending && !unit.pooled) {
         pageParams.sectionHeader = headerPending;
         headerPending = null;
+      } else if (unit.pooled) {
+        // A pooled collection has no section of its own, so it carries its
+        // own title as `params.quotesTitle` (furniture default, localized;
+        // the template renders it as a section-style title) — deliberately
+        // NOT a `sectionHeader`. It is emitted under its own stable
+        // `sourceElementId` (`<chapter id>:quotes`), so a
+        // `sectionTitle:<chapter id>:quotes` edit (`applySectionHeaderField`
+        // writes `quotesTitle` on quote-collection pages) retitles exactly
+        // the chapter's pooled collection(s) and never the backbone section
+        // it is appended to.
+        pageParams.quotesTitle = getFurniture(getLanguage(manifest)).quotes.title;
       }
       pages.push(
         emptyPage({
           id: `${element.id}:${index}:quotes`,
-          sourceElementId: element.id,
+          sourceElementId: (unit.pooled && unit.pooledSourceId) || element.id,
           templateId: 'quote-collection',
           params: pageParams,
           slots: buildQuoteCollectionSlots(unit.items),
-          isSpread: true,
+          isSpread: !singlePage,
         }),
       );
       if (reswap) {
@@ -3202,7 +3287,20 @@ function buildContentPages(
       // — the SAME "a smaller/plainer composition is an acceptable trade,
       // a blank page is not" principle round-9 item 2b already established
       // for full-bleed.
-      (currentPageParity([...outerPages, ...pages]) === 'even' || lastSwappablePageIndex === pages.length - 1)
+      //
+      // Phase 2d fix 3d (`illustrated-stack-overflow`): that fall-through is
+      // only valid when the single-page "both" composition actually FITS the
+      // safe box. A long story (about 500+ chars; ~400 under a section header)
+      // cannot share a page with its drawing at all — the caption alone is
+      // taller than the box — so "both" overflowed into the folio zone
+      // (Everything books at caps 126/130/140, and a year-book exhausted-cap
+      // case). When the stack cannot fit, the split is committed regardless:
+      // `ensureEvenLanding` below still tries the local swap first and pays a
+      // parity blank only as the true last resort — a blank page is a lesser
+      // defect than an illustration stamped over the folio.
+      (currentPageParity([...outerPages, ...pages]) === 'even' ||
+        lastSwappablePageIndex === pages.length - 1 ||
+        !illustratedBothModeFits(soloMemory, Boolean(params.sectionHeader), Boolean(params.stagger)))
     ) {
       // Round-5 item 6: text stands alone; the illustration moves to the
       // facing page, bleeding through the outer trim and foot — either the
@@ -3533,6 +3631,56 @@ function describeGapReason(group: MemoryGroup): string {
  * veces" / "firsts", localized) rather than outline-authored, since firsts
  * is the one themed-style section whose eyebrow is chrome, not AI copy.
  */
+/** The worker's English placeholder title for a `birthday-N` element ("Birthday -- turns 2"). */
+const BIRTHDAY_PLACEHOLDER_TITLE = /^Birthday\s*--\s*turns\s+(\d+)$/i;
+
+/**
+ * Age turned for a `birthday` element: from its id (`birthday-2`), else from
+ * the worker's placeholder title; `null` when neither parses.
+ */
+function birthdayAgeOf(element: OutlineElement): number | null {
+  const fromId = element.id.match(/^birthday-(\d+)$/);
+  if (fromId) return Number(fromId[1]);
+  const fromTitle = element.title.match(BIRTHDAY_PLACEHOLDER_TITLE);
+  return fromTitle ? Number(fromTitle[1]) : null;
+}
+
+/**
+ * Localized `birthday` section title/kicker. Period wording ("Cuando
+ * cumpliste dos años" / "When you turned two") — never the single-month
+ * "El mes en que cumpliste…" (a birthday section is not a month). A title
+ * the worker did not generate from its placeholder (a real/edited editorial
+ * title) is kept verbatim; with no parsable age the element title is used.
+ */
+export function birthdayTitleFor(element: OutlineElement, lang: Language): { title: string; kicker: string } {
+  const kicker = lang === 'es' ? 'cumpleaños' : 'birthday';
+  const age = birthdayAgeOf(element);
+  const isPlaceholder = BIRTHDAY_PLACEHOLDER_TITLE.test(element.title.trim());
+  if (age === null || (!isPlaceholder && element.title.trim() !== '')) return { title: element.title, kicker };
+  if (lang === 'es') {
+    return { title: `Cuando cumpliste ${age === 1 ? 'un' : numberWord(age, 'es')} ${age === 1 ? 'año' : 'años'}`, kicker };
+  }
+  return { title: `When you turned ${numberWord(age, 'en')}`, kicker };
+}
+
+function buildBirthdayTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
+  const { title, kicker } = birthdayTitleFor(element, getLanguage(manifest));
+  return emptyPage({
+    id: `${element.id}:title`,
+    sourceElementId: element.id,
+    templateId: 'spread-title',
+    params: {
+      title,
+      subtitle: element.subtitle ?? null,
+      kicker: element.kicker ?? kicker,
+      titleMode: 'descriptive',
+      titleSourceMemoryId: null,
+      spreadType: null,
+      momentCount: element.memoryIds.length,
+    },
+  });
+}
+
 function buildFirstsTitlePage(element: OutlineElement, manifest: BookManifest): BookPage {
   const furniture = getFurniture(getLanguage(manifest));
   return emptyPage({
@@ -4222,10 +4370,11 @@ function planChapterQuotePools(
   outline: BookOutline,
   manifest: BookManifest,
   omittedIds: ReadonlySet<string>,
-): { afterElement: Map<string, ResolvedMemory[]>; pooledIds: Set<string> } {
-  const afterElement = new Map<string, ResolvedMemory[]>();
+): { afterElement: Map<string, { items: ResolvedMemory[]; sourceId: string }>; pooledIds: Set<string> } {
+  const afterElement = new Map<string, { items: ResolvedMemory[]; sourceId: string }>();
   const pooledIds = new Set<string>();
   let backbones: OutlineElement[] = [];
+  let chapterId: string | null = null;
   const flush = () => {
     if (backbones.length > 0) {
       const pooled: ResolvedMemory[] = [];
@@ -4236,18 +4385,41 @@ function planChapterQuotePools(
         }
       }
       if (pooled.length >= QUOTE_COLLECTION_MIN) {
-        afterElement.set(backbones[backbones.length - 1].id, pooled);
+        const lastBackboneId = backbones[backbones.length - 1].id;
+        // Stable id for edits: `sectionTitle:<chapter id>:quotes` (see `ContentUnit`'s `pooledSourceId`).
+        afterElement.set(lastBackboneId, { items: pooled, sourceId: `${chapterId ?? lastBackboneId}:quotes` });
         for (const { id } of pooled) pooledIds.add(id);
       }
     }
     backbones = [];
   };
   for (const element of outline.elements) {
-    if (element.kind === 'chapter') flush();
-    else if (element.kind === 'backbone') backbones.push(element);
+    if (element.kind === 'chapter') {
+      flush();
+      chapterId = element.id;
+    } else if (element.kind === 'backbone') backbones.push(element);
   }
   flush();
   return { afterElement, pooledIds };
+}
+
+/** A blank the parity machinery inserted (reason `parity:*`, closing-total excluded). */
+function isParityBlank(page: BookPage | undefined): page is BookPage {
+  return Boolean(page && page.templateId === 'blank' && page.blankReason?.startsWith('parity:') && page.blankReason !== 'parity:closing-total');
+}
+
+/**
+ * Phase 2d fix 3d: a section opener (chapter / themed / firsts / birthday
+ * `spread-title`) is pushed before its content, so when the content's FIRST
+ * page needs the opposite parity (a long illustrated story's text half must
+ * land even) the parity blank ends up right after the title — a title facing
+ * a blank (audit `title-then-empty`) and, mid-section, an avoidable blank.
+ * Moving that one blank BEFORE the title leaves every later page exactly
+ * where it was (same page count, same parities) and puts the title on a
+ * recto with a blank verso — the classic opener convention.
+ */
+function hoistLeadingParityBlank(contentPages: BookPage[]): BookPage | null {
+  return isParityBlank(contentPages[0]) ? contentPages.shift()! : null;
 }
 
 /** One full deterministic fit at a given pairing level / omission set — no cap awareness of its own. */
@@ -4333,6 +4505,40 @@ function runFit(
         pendingChapter = { titleIndex: pages.length - 1, priorLastTemplateId };
         continue;
       }
+      case 'birthday': {
+        // Phase 2d fix 3b: the worker's `birthday-N` elements (year books with
+        // >= 3 memories carrying the same birthday milestone; their memories
+        // are REMOVED from the backbone) used to hit no case here and were
+        // never printed. Laid out like a themed spread: an own-page
+        // `spread-title` opener (localized from the age — the worker only
+        // sends the English placeholder "Birthday -- turns N"), then the
+        // members through the ordinary content-page machinery. Same
+        // dissolve-if-empty guard as themed/firsts. Birthday members are
+        // never page-cap demotion candidates (see `gatherDemotionCandidates`).
+        const titlePage = buildBirthdayTitlePage(element, manifest);
+        const priorLastTemplateId = state.lastTemplateId;
+        state.lastTemplateId = titlePage.templateId;
+        const contentPages = buildContentPages(
+          element,
+          manifest,
+          outline,
+          gaps,
+          state,
+          scoreThreshold,
+          null,
+          pairingLevel,
+          omittedIds,
+          [...pages, titlePage],
+        );
+        if (contentPages.length === 0) {
+          state.lastTemplateId = priorLastTemplateId; // the title never actually happened
+          continue;
+        }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
+        pages.push(titlePage, ...contentPages);
+        continue;
+      }
       case 'themed': {
         // Round-5 item 2b (root cause of Mara's "Retratos con Mirian"
         // rendering with zero member pages): every member of a themed
@@ -4370,6 +4576,8 @@ function runFit(
           state.lastTemplateId = priorLastTemplateId; // the title never actually happened
           continue;
         }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
         pages.push(titlePage, ...contentPages);
         continue;
       }
@@ -4431,8 +4639,16 @@ function runFit(
           pages,
           EMPTY_STRING_MAP,
           // The chapter's pooled quote collection(s) print at the end of its LAST backbone section.
-          quotePool?.afterElement.get(element.id) ?? [],
+          quotePool?.afterElement.get(element.id)?.items ?? [],
+          quotePool?.afterElement.get(element.id)?.sourceId,
         );
+        if (pendingChapter && pages.length === pendingChapter.titleIndex + 1) {
+          const leadBlank = hoistLeadingParityBlank(contentPages);
+          if (leadBlank) {
+            pages.splice(pendingChapter.titleIndex, 0, leadBlank);
+            pendingChapter.titleIndex += 1;
+          }
+        }
         pages.push(...contentPages);
         continue;
       }
@@ -4442,7 +4658,7 @@ function runFit(
         // memories flow through the SAME content-page machinery as any
         // other section — no bespoke ruled index-list, no repeated
         // caption. The one twist: a memory with an AI-written `warm_name`
-        // (outline.json `firstsEntries`, still arriving) uses that as its
+        // (outline.json `firstsWarmNames` — or `firstsEntries`) uses that as its
         // footer caption instead of its own raw text (see
         // `buildFirstsTitlePage` and the caption-override map below).
         // Round-5 item 2b: same dissolve-if-empty guard as 'themed' above —
@@ -4452,7 +4668,12 @@ function runFit(
         const titlePage = buildFirstsTitlePage(element, manifest);
         const priorLastTemplateId = state.lastTemplateId;
         state.lastTemplateId = titlePage.templateId;
-        const warmNames = new Map((element.firstsEntries ?? []).map((e) => [e.memoryId, e.warmName]));
+        // The worker stores `firstsWarmNames` (same entry shape); `firstsEntries`
+        // is the older renderer-contract key and wins on conflict.
+        const warmNames = new Map<string, string>();
+        for (const e of [...(element.firstsWarmNames ?? []), ...(element.firstsEntries ?? [])]) {
+          if (e && typeof e.memoryId === 'string' && typeof e.warmName === 'string' && e.warmName.trim() !== '') warmNames.set(e.memoryId, e.warmName);
+        }
         const contentPages = buildContentPages(
           element,
           manifest,
@@ -4468,12 +4689,15 @@ function runFit(
           [...pages, titlePage],
           warmNames,
           [],
+          undefined,
           chapterMode,
         );
         if (contentPages.length === 0) {
           state.lastTemplateId = priorLastTemplateId;
           continue;
         }
+        const leadBlank = hoistLeadingParityBlank(contentPages);
+        if (leadBlank) pages.push(leadBlank);
         pages.push(titlePage, ...contentPages);
         continue;
       }

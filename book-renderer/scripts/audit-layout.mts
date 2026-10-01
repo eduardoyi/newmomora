@@ -130,7 +130,8 @@ function chapterStats(
   const firstsIds = new Set(outline.elements.filter((e) => e.kind === 'firsts').map((e) => e.id));
   for (const p of pages) {
     const n = p.pageNumbers?.length ?? 1;
-    const ci = chapterOfElement.get(p.sourceElementId);
+    // A pooled quote-collection page is emitted under `<chapter id>:quotes` (Phase 2d): count it in its chapter.
+    const ci = chapterOfElement.get(p.sourceElementId) ?? chapterOfElement.get(p.sourceElementId.replace(/:quotes$/, ''));
     if (ci != null) pagesBy[ci] += n;
     else if (firstsIds.has(p.sourceElementId)) firstsPages += n;
   }
