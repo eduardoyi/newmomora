@@ -2266,8 +2266,9 @@ Deno.test('buildOutlineUserPrompt: multi-year birthday flag uses PERIOD wording 
   const multi = build(true);
   const multiLine = multi.find((l) => l.includes(multiSegment.id) && l.includes('FLAGGED'))!;
   assertEquals(multiLine.includes('FLAGGED: birthday period (turns 2;'), true);
-  assertEquals(multiLine.includes('When you turned N'), true);
-  assertEquals(multiLine.includes('Cuando cumpliste N'), true);
+  assertEquals(multiLine.includes('When you turned two'), true);
+  assertEquals(multiLine.includes('Cuando cumpliste dos años'), true);
+  assertEquals(multiLine.includes('spelled out in words'), true);
   assertEquals(multiLine.includes('FLAGGED: birthday month'), false);
   const singleLine = multi.find((l) => l.includes(singleSegment.id) && l.includes('FLAGGED'))!;
   assertEquals(singleLine.endsWith('FLAGGED: birthday month (turns 3), draft a segment_titles entry'), true);
@@ -3455,8 +3456,10 @@ Deno.test('buildOutlineSystemPrompt: multiYear adds exactly one MULTI-YEAR BOOK 
     'years of memories',
     'DIFFERENT years',
     'the month you turned N',
-    'when you turned N',
-    'Cuando cumpliste N',
+    'When you turned two',
+    'Cuando cumpliste dos años',
+    'El mes en que cumpliste un año',
+    'SPELLED OUT in words',
     'PERIOD wording',
     'do NOT favour recent years',
   ]) {
