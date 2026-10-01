@@ -1,7 +1,7 @@
 # Feature: Family relationships
 
 **Status:** `in-progress` (built 2026-09-28, pending device QA + prod rollout)
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-30
 **Plan:** [docs/plans/family-relationships.md](../plans/family-relationships.md) (hardened, owner decisions §7)
 
 ## Overview
@@ -46,11 +46,25 @@ need to know who "I/me" is.
   clears it.
 - **Member detail**: subtitle "Grandparent · Eduardo's side"; "This is me"
   (unlinked accounts), "This is you" (tap to unlink), and for owners/managers
-  "Unlink account" when another account claimed this person.
+  "Unlink account" when another account claimed this person. Owners/managers
+  also get a **Family sharing** row when the person could still be linked
+  (`isInviteTargetEligible`: not a child/pet, not linked to any account, not
+  hidden): "Invite {name} to Momora" opens the invite screen with that person
+  preselected, or shows the live invite's state ("Invite sent · Expires in
+  Nd" → Pending invites, "Waiting for your approval" → Approvals). See
+  [family-sharing.md](./family-sharing.md).
 - **Joining**: after approval, both waiting screens
   (`app/(onboarding)/join/waiting.tsx`, `app/(app)/sharing/waiting.tsx`) open
   Who's who in `mode=self` ("Are you in the family?") when the family has
-  anyone linkable; "Skip" goes to the timeline.
+  anyone linkable; "Skip" goes to the timeline. **Invite-time link:** an
+  invite made for a family person links the redeemer's account to that person
+  when the approver approves (`apply_invite_member_link`, server-side,
+  best-effort — never overwrites an existing link or "I'm not in the list",
+  skipped if the person was claimed/deleted/no longer linkable; the approver
+  is told via `linked === false`). Both waiting screens then skip Who's who
+  when the account is already linked (`shouldOfferWhosWhoAfterJoin` in
+  `src/services/family-relationships.ts`, which reads the links first and
+  falls through to the old behaviour if that read fails).
 - **Onboarding** kids are created as "Our child" (`commit_onboarding`).
 
 ## Architecture
@@ -184,7 +198,7 @@ subscriptions (billing write gate), content reporting (snippet exclusion).
 |-------|-------|
 | pgTAP | `supabase/tests/family_relationships.sql` (121 assertions: constraints, triggers, RPC auth incl. anonymous/lapsed/non-member, compare-and-set, dedupe, onboarding kids), `client_table_grants.sql`, `onboarding_anonymous_lockdown.sql` |
 | Deno | `_shared/family-relationships.test.ts`, `_shared/family-relationship-suggestions.test.ts`, `suggest-family-relationships/index.test.ts`, `year-film-eligibility.test.ts` (niece, teen), `process-voice-memory/index.test.ts` (self link) |
-| Jest | `src/utils/family-relationships.test.ts` (incl. enum parity with Edge + SQL), `src/utils/whos-who-card.test.ts`, `src/screen-tests/whos-who.integration.test.tsx` |
+| Jest | `src/utils/family-relationships.test.ts` (incl. enum parity with Edge + SQL, `isInviteTargetEligible`), `src/screen-tests/family-member.invite-row.test.tsx`, `src/utils/whos-who-card.test.ts`, `src/screen-tests/whos-who.integration.test.tsx` |
 | Maestro | `.maestro/flows/family-relationships/edit-role.yaml`, `whos-who.yaml` (read-only) |
 
 ```bash
@@ -198,4 +212,5 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/family-relati
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | Invite-for-person: invite-time "this is me" link on approval, waiting screens skip Who's who when already linked, person-detail invite entry point, shared `isInviteTargetEligible` predicate. See [family-sharing.md](./family-sharing.md). |
 | 2026-09-28 | Initial build: roles + sides, "this is me", AI suggestions + Who's who, Year Film and voice consumers |

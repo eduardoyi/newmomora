@@ -1,7 +1,7 @@
 # Feature: Family sharing
 
 **Status:** `done`
-**Last updated:** 2026-07-13
+**Last updated:** 2026-09-30
 **PRD reference:** —  (post-MVP capability; see `docs/plans/family-sharing.md` for the decision record and rationale)
 
 ## Overview
@@ -31,13 +31,46 @@ to family-membership checks. There is no "personal, unshared" mode anymore
   (Viewer or Manager) → Create invite & share opens the native share sheet
   with a pre-written two-step message containing a universal link and the
   raw code. The code is visible again any time on **Pending invites**.
+- **Invite for a person (optional):** the invite screen opens with a
+  **"Who's this for? (optional)"** section above the role cards: a name
+  input (≤60 chars, words capitalized) and a chip row of family people who
+  could still be linked (not a child/pet/unsorted under 13, not already linked
+  to any account, not content-safety hidden; hidden entirely when nobody
+  qualifies). Tapping a chip picks that person and fills the name (editable);
+  tapping it again unlinks the person but keeps the text. The same screen
+  opens with a person preselected from **person detail → Family sharing →
+  "Invite {name} to Momora"** (`sharingInviteForMemberRoute`; an ineligible
+  `memberId` is ignored silently). Leaving it blank behaves exactly like
+  before. The share message then opens "Hi {name}! I'm journaling…"
+  (`buildInviteShareMessage`, also used by Pending invites → Share again).
+  On person detail the row reflects the live invite for that person
+  (`liveInviteForMember`: a `redeemed` one first, else the newest unexpired
+  `pending`): "Invite sent · Expires in 6d" → Pending invites, "Waiting for
+  your approval" → Approvals.
 - **Redeem (any signed-in or new user):** enter the 3-word code (dash- or
   space-separated, case-insensitive) → **waiting screen** ("X will confirm
   it's you shortly"), polling every 5s.
 - **Approve (owner/manager):** Settings → Members → Waiting for approval
   (the Members row shows "N waiting for approval") lists every redeemed
   invite awaiting a decision, with the redeemer's **name + email** so the
-  approver can verify it's really them → Approve or Reject.
+  approver can verify it's really them → Approve or Reject. An invite made for
+  someone shows **"Invited as {invitee_name}"** under the redeemer's name and
+  email (so a mismatch is easy to spot) and, when the invited person can
+  still be linked (same `isInviteTargetEligible` predicate, evaluated against
+  links refetched on mount), **"Will be linked to {person} in the family"**.
+  Approving links the redeemer's account to that person ("this is me") so the
+  invitee skips Who's who. If the link was skipped (person claimed or deleted
+  meanwhile, redeemer already linked) the approval still succeeds and an alert
+  says "Approved. We couldn't link them to {person}; they can pick themselves
+  when they open the app." Pending invites label each invite with the name
+  (code underneath) when one was given.
+- **Join greeting / prefill:** the onboarding join path's "found" screen
+  greets the invitee ("Hi {name} — …") using the `inviteeName` the preview
+  Edge Function returns, and the name step prefills `displayName ??
+  inviteeName` (always editable; a name the user already typed wins). The
+  prefill applies to the new-signup path only; the signed-in redeem screen
+  never touches an existing profile name. Both waiting screens skip Who's who
+  when the approved account is already linked (`shouldOfferWhosWhoAfterJoin`).
 - **Role gating:** viewers cannot create/edit/delete memories or children and
   cannot invite/approve members. They can browse the timeline/calendar/family
   roster and may like or comment on memories. Restricted screens still bounce
@@ -296,7 +329,7 @@ same authorization shape as `resolve-family-invite` itself.
 |---|---|
 | `families` | Tenant row: owner, name, `illustration_style`, soft-delete |
 | `family_memberships` | User ↔ family, with `role` (`owner`\|`manager`\|`viewer`); unique per `(family_id, user_id)`; exactly one `owner` row per family |
-| `family_invites` | Invite code lifecycle: `pending → redeemed → approved\|rejected`, plus `revoked`/expiry |
+| `family_invites` | Invite code lifecycle: `pending → redeemed → approved\|rejected`, plus `revoked`/expiry. `invitee_name` (snapshot label, ≤60 chars) and `family_member_id` (the family person it is for, `on delete set null`) are set only by `create_family_invite`; clients may update only `status` (column grant, see gotchas) |
 | `invite_code_words` | ~1,000-word curated seed list `create_family_invite` samples 3 words from |
 | `invite_redemption_attempts` | Rate-limit log (`user_id`, `ip`, `attempted_at`); service-role/definer-only, no client-visible policy |
 | `family_activity_log` | New-memory push debounce log (`family_id`, `actor_id`, `kind`, `created_at`); service-role/definer-only |
@@ -344,7 +377,7 @@ the RLS it's supposed to gate; `security definer` sidesteps it).
 | RPC | Callable by | Purpose |
 |---|---|---|
 | `create_family(name)` | Any authenticated user | New family + caller as owner; sets `active_family_id` if the caller had none; capped at 5 owned families/user |
-| `create_family_invite(fam, invite_role)` | Manager+ of `fam` | Generates a unique 3-word code, `invite_role in ('manager','viewer')` |
+| `create_family_invite(fam, invite_role, p_invitee_name, p_invitee_member_id)` | Manager+ of `fam` | Generates a unique 3-word code, `invite_role in ('manager','viewer')`; the last two args are optional (who the invite is for). Errors (message = token): `22023` `invitee_name_too_long` / `member_not_in_family` / `member_not_linkable`, `23505` `member_already_linked`. A picked person with a blank name defaults the name to the person's (trimmed, ≤60) |
 | `delete_family(fam)` | Owner of `fam` | Soft delete (`deleted_at = now()`) — the single column flip is the whole side-effect surface: RLS helpers stop matching for non-owners and `redeem-family-invite` rejects codes for deleted families, so no invite rows are touched. See `supabase/migrations/20260720110000_delete_family.sql` |
 | `get_family_member_profiles(fam)` | Member of `fam` | Names/roles for attribution + Settings member list, covering current members **and** former members who still appear as creators (see gotchas) |
 | `get_invite_redeemer(invite_id)` | Manager+ of **that invite's** family (resolved internally, not "manager anywhere") | Redeemer's name + email for the approvals screen |
@@ -356,8 +389,8 @@ the RLS it's supposed to gate; `security definer` sidesteps it).
 | Function | Input | Output | Auth |
 |---|---|---|---|
 | `redeem-family-invite` | `{ code: string }` | `{ familyName: string, role: string }` | JWT |
-| `resolve-family-invite` | `{ inviteId: string, action: 'approve'\|'reject' }` | `{ success: true, status: 'approved'\|'rejected' }` | JWT, manager+ of the invite's family |
-| `preview-family-invite` | `{ code: string }` | `{ familyName: string, inviterName: string }` | JWT -- anonymous OR permanent (onboarding join path's pre-auth carve-out; see [usage-limits.md](./usage-limits.md) and the WP-SEC package in [docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)). Never leaks a membership list, email, role, or family id; rate-limited by code, not by caller. |
+| `resolve-family-invite` | `{ inviteId: string, action: 'approve'\|'reject' }` | `{ success: true, status: 'approved'\|'rejected', linked?: boolean }` (`linked` only when approving an invite that targeted a person) | JWT, manager+ of the invite's family |
+| `preview-family-invite` | `{ code: string }` | `{ familyName: string, inviterName: string, inviteeName: string \| null }` | JWT -- anonymous OR permanent (onboarding join path's pre-auth carve-out; see [usage-limits.md](./usage-limits.md) and the WP-SEC package in [docs/plans/onboarding-implementation.md](../plans/onboarding-implementation.md)). Never leaks a membership list, email, role, or family id; rate-limited by code, not by caller. `inviteeName` (who the inviter said the invite is for) is a deliberate, accepted exposure to anonymous callers — the endpoint is rate-limited per code and already reveals the family and inviter names; the invite's `family_member_id` is never returned. |
 | `notify-family-activity` | `{ memoryId: string }` | `{ sent: boolean, reason?: 'debounced' }` | JWT, caller must be both the memory's creator and manager+ of its family |
 
 See [TECH_SPEC.md §4.10–4.12](../TECH_SPEC.md) for the canonical contracts
@@ -397,7 +430,10 @@ documents **behavior and call order**.
    partial failure or a race via another invite is tolerated; the DB's
    50-cap trigger surfaces as `family_full`) → **always** point
    `active_family_id` at this family (redeeming is the strongest signal of
-   intent — no "only if null") → mark `approved` → best-effort push +
+   intent — no "only if null") → if the invite has a `family_member_id`, call
+   `apply_invite_member_link` (service-role-only RPC; best-effort — an error is
+   logged by code only and never fails the approval; the response's `linked`
+   reports whether it stuck) → mark `approved` → best-effort push +
    Bento "You're in!" email to the redeemer.
 
 ### `notify-family-activity` — call order
@@ -608,6 +644,32 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 
 ## Constraints & gotchas
 
+- **Invite-for-person rules** ([plan](../plans/invite-for-person.md)):
+  - *Eligibility* is one rule in three places: SQL `is_linkable_family_member`
+    (used by the new code; `set_my_family_member` deliberately keeps its own
+    inline copy), client `isLinkableMember`, and the client predicate
+    `isInviteTargetEligible` (linkable, not linked to **any** account including
+    the caller's, not hidden) that the picker, person detail and Approvals
+    share. Keep the cross-reference comments in sync when changing the rule.
+  - *Column grant (D9):* table-level `UPDATE` on `family_invites` was narrowed
+    to `update (status)` (the only column any client writes), so nobody can
+    retarget an invite at another person after creation. A new client write
+    to `family_invites` needs its column added to the grant.
+  - *Link at approval is best-effort (D5):* skipped when the person is no
+    longer linkable, was claimed by another account, or was deleted, and never
+    overwrites an existing link or an explicit "I'm not in the list". Several
+    pending invites for one person are allowed; the first approval wins.
+  - *Reject after partial failure:* pre-existing trade-off, now slightly
+    wider: if the status flip to `approved` fails after the membership insert
+    and link, the row stays `redeemed`, and a later Reject leaves that account
+    a member (now also linked). No compensation is attempted.
+  - `invitee_name` is a snapshot; it is not synced with later renames of the
+    person. No names or person ids are logged or sent to analytics
+    (`invite_created` carries only `has_invitee_name` / `for_family_member`).
+  - Extending: editing an invite's name/person after creation is out of
+    scope (revoke and re-invite); an "Invited" badge in the Family tab list
+    is too. Rollback order if ever needed: republish the previous app update
+    first, then revert the DB (see the plan's §8).
 - **Invite codes:** 3 dash-separated lowercase words, single-use, 7-day
   expiry (computed from `expires_at`, no sweep job). Rate-limited 10/hour
   per user and 30/hour per (best-effort) IP.
@@ -695,7 +757,9 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 
 | File | Covers |
 |---|---|
-| `src/utils/invites.test.ts` | Code normalize/format/shape validation, share-message builder, expiry formatting, waiting-outcome state machine |
+| `src/utils/invites.test.ts` | Code normalize/format/shape validation, share-message builder (± invitee name), expiry formatting, waiting-outcome state machine, `liveInviteForMember` precedence/expiry |
+| `src/services/invites.test.ts` | `createFamilyInvite` passes `p_invitee_*` only when set; error mapping keeps message + code |
+| `src/utils/family-relationships.test.ts` | `isInviteTargetEligible` (child/pet/claimed/own link/hidden) |
 | `src/utils/roles.test.ts` | `canEditFamilyContent`/`isOwnerRole`/`isViewerRole` gating helpers, `roleLabel`, `canManageMember` (member-management affordance rules) |
 | `src/utils/pending-invite-code.test.ts` | AsyncStorage get/set/clear for the pending invite code |
 | `src/services/auth.test.ts` | OTP error mapping (`isUserNotFoundOtpError`), device timezone |
@@ -717,6 +781,10 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 | `src/screen-tests/calendar.role-gating.test.tsx` | Calendar create-FAB role gate (viewer hidden, manager visible) |
 | `src/screen-tests/sharing.members.test.tsx` | Family members screen: invite affordance by role, conditional Waiting for approval/Pending invites rows (non-expired-only, hidden while loading, never queried for viewers), member-management affordance matrix (owner/manager/viewer × own/owner/other rows), promote/demote/remove wiring, destructive-confirm gating, zero-row refresh copy |
 | `src/screen-tests/no-family.test.tsx` | Create-family / redeem entry points, single state-driven post-create navigation, `pendingInviteCode` guard precedence |
+| `src/screen-tests/sharing.invite.test.tsx` | Invite screen: `invite_created` analytics (incl. `has_invitee_name` / `for_family_member`), name typing, chip select/deselect, `memberId` preselect, ineligible param ignored, args passed to the service, error-token mapping |
+| `src/screen-tests/sharing.pending-invites.test.tsx` | Name-as-label + code secondary, code-only layout when unnamed, Share again greeting |
+| `src/screen-tests/sharing.approvals.test.tsx` | `invite_resolved` analytics, "Invited as", "Will be linked" visibility (claimed / own link / hidden / deleted person), `linked === false` note |
+| `src/screen-tests/family-member.invite-row.test.tsx` | Person-detail "Family sharing" row matrix (viewer, child, claimed, hidden, loading, pending, redeemed, expired) and routing |
 | `src/screen-tests/sharing.redeem.test.tsx` | Redeem screen prefill, definitive-vs-transient error handling |
 | `src/screen-tests/invite.integration.test.tsx` | Universal-link routing distinguishes anonymous onboarding sessions from permanent accounts |
 
@@ -726,6 +794,7 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 |---|---|
 | `.maestro/flows/auth/login.yaml`, `sign-in.yaml` | OTP dev-path login (reused by every other flow's login step) |
 | `.maestro/flows/sharing/01-owner-create-invite.yaml` → `04-second-account-sees-timeline.yaml` | Full two-account invite → redeem → approve loop (run together — see `.maestro/flows/sharing/README.md`). **Not run in this change** — authored against current testIDs only. |
+| `.maestro/flows/sharing/invite-from-person-detail.yaml` | Person detail → "Invite … to Momora" → invite screen with the person preselected (stops before creating). The 01 flow also types an invitee name and asserts it on Pending invites. **Not run in this change.** |
 | `.maestro/flows/sharing/viewer-readonly.yaml` | Viewer sees timeline/calendar but no create FAB, and the trimmed Settings screen (no daily reminder, invite, family settings, or photo import; Members stays). **Not run in this change.** |
 
 ### Edge Function tests (Deno)
@@ -734,7 +803,8 @@ their likes/comments. See [likes-and-comments.md](./likes-and-comments.md).
 |---|---|
 | `supabase/functions/redeem-family-invite/index.test.ts` | Happy path, expired, revoked, reused, rate-limited (user + IP), already-member, family soft-deleted |
 | `supabase/functions/resolve-family-invite/index.test.ts` | Approve/reject, non-manager rejection, duplicate-membership idempotency, 50-cap `family_full`, missing redeemer, Bento email success/skip/failure |
-| `supabase/functions/preview-family-invite/index.test.ts` | Happy path returns only `familyName`/`inviterName`, generic `invalid_code` for expired/revoked/redeemed/soft-deleted/unknown, rate-limited by code (not caller), and an end-to-end proof that an anonymous JWT is accepted (never 401) |
+| `supabase/tests/family_invite_invitee.sql` | pgTAP: invitee args validation, eligibility rejections, column grants, `apply_invite_member_link` |
+| `supabase/functions/preview-family-invite/index.test.ts` | Happy path returns only `familyName`/`inviterName`/`inviteeName` (null when unset), generic `invalid_code` for expired/revoked/redeemed/soft-deleted/unknown, rate-limited by code (not caller), and an end-to-end proof that an anonymous JWT is accepted (never 401) |
 | `supabase/functions/_shared/auth.test.ts`, `supabase/tests/onboarding_anonymous_lockdown.sql` | WP-SEC anonymous lockdown: `getAuthenticatedNonAnonymousUser` chokepoint, RESTRICTIVE anonymous-deny RLS, and every guarded SECURITY DEFINER RPC |
 | `supabase/functions/cleanup-abandoned-anonymous-users/index.test.ts` | TTL cutoff, the dangerous-failure-mode proof (a permanent user in the candidate list is never deleted), a candidate that unexpectedly owns real content is skipped (not deleted), already-gone/race and per-candidate-delete-failure handling |
 | `supabase/functions/notify-family-activity/index.test.ts` | Debounce window, non-creator rejection, viewer/non-manager rejection, recipient filtering on `notify_new_memories` |
@@ -760,6 +830,7 @@ maestro test -e TEST_EMAIL_2=... -e TEST_PASSWORD_2=... .maestro/flows/sharing/v
 
 | Date | Change |
 |------|--------|
+| 2026-09-30 | Invites for a person: optional "Who's this for?" (typed name and/or family person) on the invite screen and from person detail; Pending invites/Approvals show who an invite is for; the join flow greets and prefills the invitee's name; approval links the account to the invited person server-side (best-effort, `linked` flag). New `family_invites.invitee_name` / `family_member_id`, `create_family_invite` gained two optional args, client `UPDATE` on `family_invites` narrowed to `status`. See [plan](../plans/invite-for-person.md) and [family-relationships](./family-relationships.md). |
 | 2026-08-21 | Added `family_memberships.activity_seen_at` and `member_joined`/`member_pending` DB-trigger events feeding the new [Family activity](./family-activity.md) feed — no change to invite/approval behavior itself, just new read-side event emission. |
 | 2026-08-15 | Universal invite links now keep anonymous onboarding sessions on the pre-auth join path instead of sending them to the permanent-account redemption screen, which previously produced an `Unauthorized` response. |
 | 2026-08-15 | Fixed manager/owner cross-creator media edits retaining preview variants: the media RPC now admits only the exact snapshot-paired preview for a retained foreign original, while keeping caller-prefix admission for new/replaced previews and all existing role/billing/anonymous guards. |

@@ -16,6 +16,7 @@ interface FakeInvite {
   role: string;
   status: string;
   redeemed_by: string | null;
+  family_member_id?: string | null;
   resolved_by?: string | null;
   resolved_at?: string | null;
 }
@@ -28,6 +29,11 @@ interface FakeState {
   authUsers: Array<{ id: string; email: string | null }>;
   membershipInsertError?: { code: string; message: string } | null;
   billingRpcError?: { code: string; message: string } | null;
+  /** What apply_invite_member_link returns (default true). */
+  linkRpcResult?: boolean;
+  linkRpcError?: { code: string; message: string } | null;
+  /** Every apply_invite_member_link call's args, for call-count assertions. */
+  linkRpcCalls?: Array<Record<string, unknown>>;
 }
 
 function createFakeServiceClient(state: FakeState) {
@@ -138,7 +144,15 @@ function createFakeServiceClient(state: FakeState) {
 
       throw new Error(`Unexpected table ${table}`);
     },
-    rpc(name: string) {
+    rpc(name: string, args?: Record<string, unknown>) {
+      if (name === 'apply_invite_member_link') {
+        (state.linkRpcCalls ??= []).push(args ?? {});
+        return Promise.resolve(
+          state.linkRpcError
+            ? { data: null, error: state.linkRpcError }
+            : { data: state.linkRpcResult ?? true, error: null },
+        );
+      }
       if (name !== 'assert_billing_write_access') {
         throw new Error(`Unexpected RPC ${name}`);
       }
@@ -512,4 +526,131 @@ Deno.test('a Bento send failure does not fail the approval', async () => {
   assertEquals(response.status, 200);
   assertEquals(state.invites[0].status, 'approved');
   await response.body?.cancel();
+});
+
+// --- Invite for a person: link on approval (docs/plans/invite-for-person.md) --
+
+const MEMBER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+Deno.test('an invite without a person never calls the link RPC and omits `linked`', async () => {
+  const state = baseState();
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  await withMockedPush(async () => {
+    response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+  });
+
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, { success: true, status: 'approved' });
+  assertEquals('linked' in body, false);
+  assertEquals(state.linkRpcCalls ?? [], []);
+});
+
+Deno.test('approving an invite for a person calls the link RPC once and reports linked: true', async () => {
+  const state = baseState();
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  await withMockedPush(async () => {
+    response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { success: true, status: 'approved', linked: true });
+  assertEquals(state.linkRpcCalls, [{ p_invite_id: INVITE_ID }]);
+  assertEquals(state.invites[0].status, 'approved');
+});
+
+Deno.test('a skipped link (RPC returns false) still approves, with linked: false', async () => {
+  const state = baseState({ linkRpcResult: false });
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  await withMockedPush(async () => {
+    response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { success: true, status: 'approved', linked: false });
+  assertEquals(state.invites[0].status, 'approved');
+  assertEquals(state.profiles[0].active_family_id, FAMILY_ID);
+});
+
+Deno.test('a link RPC error does not fail the approval: approved with linked: false, code-only log', async () => {
+  const state = baseState({
+    linkRpcError: { code: '57014', message: 'canceling statement due to statement timeout' },
+  });
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  const originalError = console.error;
+  const logged: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    logged.push(args);
+  };
+
+  let response!: Response;
+  try {
+    await withMockedPush(async () => {
+      response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+    });
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { success: true, status: 'approved', linked: false });
+  assertEquals(state.invites[0].status, 'approved');
+  assertEquals(
+    logged.filter((args) => String(args[0]).includes('member link')),
+    [['resolve-family-invite member link failed', '57014']],
+  );
+});
+
+Deno.test('the link still runs on the 23505 already-a-member path', async () => {
+  const state = baseState({
+    membershipInsertError: { code: '23505', message: 'duplicate key value' },
+  });
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  let response!: Response;
+  await withMockedPush(async () => {
+    response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).linked, true);
+  assertEquals(state.linkRpcCalls?.length, 1);
+});
+
+Deno.test('the reject path never calls the link RPC', async () => {
+  const state = baseState();
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  const response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'reject');
+
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, { success: true, status: 'rejected' });
+  assertEquals(state.linkRpcCalls ?? [], []);
+});
+
+Deno.test('a failed approval (family full) never reaches the link RPC', async () => {
+  const state = baseState({
+    membershipInsertError: { code: 'P0001', message: 'Maximum 50 members per family' },
+  });
+  state.invites[0].family_member_id = MEMBER_ID;
+  const client = createFakeServiceClient(state);
+
+  const response = await processResolution(client as never, OWNER_ID, INVITE_ID, 'approve');
+
+  assertEquals(response.status, 409);
+  await response.body?.cancel();
+  assertEquals(state.linkRpcCalls ?? [], []);
 });

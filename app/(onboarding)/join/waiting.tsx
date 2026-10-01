@@ -23,18 +23,21 @@ import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbIllustration } from '@/components/onboarding/onb-illustration';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors, fonts, spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useRedeemedInviteStatus } from '@/hooks/useRedeemedInviteStatus';
 import { userProfileQueryKey } from '@/hooks/useUserProfile';
 import { onboardingJoinFoundRoute } from '@/lib/onboarding-routes';
 import { noFamilyRoute, timelineRoute, whosWhoSelfRoute } from '@/lib/routes';
-import { familyHasLinkableMember } from '@/services/family-relationships';
+import { shouldOfferWhosWhoAfterJoin } from '@/services/family-relationships';
 import { getJoinDraft } from '@/services/onboarding-join';
 import { pickNewlyJoinedFamilyId } from '@/utils/invites';
 import { getPendingInviteCode } from '@/utils/pending-invite-code';
 
 export default function JoinWaitingScreen() {
   const { familyId, memberships, refetchMemberships, setActiveFamily } = useFamily();
+  const { user } = useAuth();
+  const userId = user?.id;
   const queryClient = useQueryClient();
   const [isFinishing, setIsFinishing] = useState(false);
   const [inviterName, setInviterName] = useState<string | null>(null);
@@ -98,14 +101,14 @@ export default function JoinWaitingScreen() {
       await queryClient.invalidateQueries({ queryKey: userProfileQueryKey });
       // "Are you in the family?" (docs/features/family-relationships.md) when
       // there is someone to pick; that screen says who they joined. Skippable.
-      if (newFamilyId && (await familyHasLinkableMember(newFamilyId))) {
+      if (newFamilyId && (await shouldOfferWhosWhoAfterJoin(newFamilyId, userId))) {
         router.replace(whosWhoSelfRoute('timeline'));
         return;
       }
       router.replace(timelineRoute);
       Alert.alert('Welcome!', `You've joined ${outcome.familyName ?? 'the family'}.`);
     })();
-  }, [outcome, queryClient, refetchMemberships, setActiveFamily]);
+  }, [outcome, queryClient, refetchMemberships, setActiveFamily, userId]);
 
   const handleBack = () => {
     router.replace(familyId ? timelineRoute : noFamilyRoute);

@@ -48,11 +48,18 @@ export const INVITE_LINK_BASE_URL = 'https://usemomora.com/invite';
  * copy iterations will want it) but the approved template deliberately says
  * "our family's memories" rather than interpolating the family name.
  */
-export function buildInviteShareMessage(code: string, familyName: string): string {
+export function buildInviteShareMessage(
+  code: string,
+  familyName: string,
+  inviteeName?: string | null,
+): string {
   void familyName;
 
+  const name = inviteeName?.trim();
+  const greeting = name ? `Hi ${name}!` : 'Hi!';
+
   return [
-    "Hi! I'm journaling our family's memories with Momora and I'd love you to join.",
+    `${greeting} I'm journaling our family's memories with Momora and I'd love you to join.`,
     `1. Get the app: ${INVITE_LINK_BASE_URL}?code=${code}`,
     '2. Sign up, then tap "I have an invite code"',
     `3. Enter code: ${code}`,
@@ -177,4 +184,27 @@ export function deriveWaitingOutcome(row: RedeemedInviteStatusRow | null): Waiti
   }
 
   return { kind: 'unavailable' };
+}
+
+/**
+ * The invite that matters for a person's detail screen
+ * (docs/plans/invite-for-person.md D7): a `redeemed` one (someone is waiting
+ * on approval) beats the newest unexpired `pending` one; otherwise null.
+ * Expired pending invites are derived, not swept, so `expires_at` decides.
+ */
+export function liveInviteForMember<
+  T extends { family_member_id: string | null; status: string; expires_at: string; created_at: string },
+>(invites: readonly T[], memberId: string, now: Date = new Date()): T | null {
+  const forMember = invites.filter((invite) => invite.family_member_id === memberId);
+  const redeemed = forMember.find((invite) => invite.status === 'redeemed');
+
+  if (redeemed) {
+    return redeemed;
+  }
+
+  const pending = forMember
+    .filter((invite) => invite.status === 'pending' && isPendingInviteActive(invite.expires_at, now))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  return pending[0] ?? null;
 }

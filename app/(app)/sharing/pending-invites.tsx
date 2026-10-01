@@ -50,7 +50,7 @@ export default function PendingInvitesScreen() {
     }
 
     try {
-      await Share.share({ message: buildInviteShareMessage(invite.code, family.name) });
+      await Share.share({ message: buildInviteShareMessage(invite.code, family.name, invite.invitee_name) });
     } catch {
       // Dismissing the share sheet is not an error.
     }
@@ -125,9 +125,24 @@ export default function PendingInvitesScreen() {
               const card = (
                 <View key={invite.id} style={styles.card} testID={`pending-invite-${invite.id}`}>
                   <View style={styles.cardHeader}>
-                    <Text style={styles.code} testID={`pending-invite-${invite.id}-code`}>
-                      {invite.code}
-                    </Text>
+                    {invite.invitee_name ? (
+                      <View style={styles.cardTitle}>
+                        <Text
+                          numberOfLines={1}
+                          style={styles.inviteeName}
+                          testID={`pending-invite-${invite.id}-name`}
+                        >
+                          {invite.invitee_name}
+                        </Text>
+                        <Text style={styles.codeSecondary} testID={`pending-invite-${invite.id}-code`}>
+                          {invite.code}
+                        </Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.code} testID={`pending-invite-${invite.id}-code`}>
+                        {invite.code}
+                      </Text>
+                    )}
                     <View style={[styles.roleChip, isRedeemed && styles.redeemedChip]}>
                       <Text style={[styles.roleChipText, isRedeemed && styles.redeemedChipText]}>
                         {invite.role === 'manager' ? 'Manager' : 'Viewer'}
@@ -267,6 +282,21 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
     fontSize: 16,
     color: colors.ink,
+  },
+  cardTitle: {
+    flex: 1,
+    gap: 2,
+    marginRight: spacing.sm,
+  },
+  inviteeName: {
+    fontFamily: fonts.displayMedium,
+    fontSize: 18,
+    color: colors.ink,
+  },
+  codeSecondary: {
+    fontFamily: 'SpaceMono',
+    fontSize: 13,
+    color: colors.ink3,
   },
   roleChip: {
     backgroundColor: colors.surface2,

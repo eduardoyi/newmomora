@@ -74,7 +74,7 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `memory_save_failed` | `code: 'validation_error'\|'media_upload_failed'\|'network_error'\|'other'` | `app/(app)/new-memory.tsx` (`validation_error` on content/date/media-missing checks, `network_error` on the save-path catch) and `src/hooks/use-pending-memory-uploads.tsx` (`media_upload_failed`, the queue's terminal-failure transition) |
 | `illustration_completed` | `outcome: 'ready'\|'failed'` | `src/hooks/useGenerationStatusPolling.ts` **and** `src/hooks/useMemoriesRealtime.ts` — both gated through the shared dedupe singleton (see below); no `intent` property (the polled row doesn't carry `request_intent`) |
 | `illustration_retry_requested` | `intent: 'recovery'\|'manual_regenerate'` | `app/(app)/memory/[id]/index.tsx` — the two client-initiated retry/regenerate buttons, where intent *is* known |
-| `invite_created` | `role: 'manager'\|'viewer'`, `family_id: string` | `app/(app)/sharing/invite.tsx` |
+| `invite_created` | `role: 'manager'\|'viewer'`, `family_id: string`, `has_invitee_name: boolean`, `for_family_member: boolean` (booleans only, never the name) | `app/(app)/sharing/invite.tsx` |
 | `invite_redeemed` | `family_id: string` | `app/(app)/sharing/redeem.tsx` (in-app redeem) **and** `app/(onboarding)/join/email.tsx` (J4 join-path redeem) |
 | `invite_resolved` | `outcome: 'approved'\|'rejected'`, `family_id: string` | `app/(app)/sharing/approvals.tsx` |
 | `notification_opened` | `target: NonNullable<PushRouteData['route']>` (literal `memory\|new-memory\|approvals\|timeline` — `new-memory` is hyphenated verbatim, no renaming layer) | `src/hooks/useNotifications.ts` — `routeFromPushData`/`handleNotificationResponse`, plain functions, not the hook body |

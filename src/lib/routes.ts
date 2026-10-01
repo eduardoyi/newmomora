@@ -97,6 +97,10 @@ export const familySettingsRoute = '/(app)/family-settings' as Href;
 // `family/` (that group means the *children* roster; see plan §9 on the
 // children-vs-household naming hazard).
 export const sharingInviteRoute = '/(app)/sharing/invite' as Href;
+// Invite screen with a person already picked (docs/plans/invite-for-person.md §5.2).
+export function sharingInviteForMemberRoute(memberId: string): Href {
+  return `/(app)/sharing/invite?memberId=${encodeURIComponent(memberId)}` as Href;
+}
 export const sharingManageRoute = '/(app)/sharing/manage' as Href;
 export const sharingMembersRoute = '/(app)/sharing/members' as Href;
 export const sharingPendingInvitesRoute = '/(app)/sharing/pending-invites' as Href;

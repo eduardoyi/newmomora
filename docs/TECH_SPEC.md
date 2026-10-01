@@ -314,6 +314,16 @@ create table public.family_invites (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Invites for a person (20261001120000_invite_invitee.sql): who the invite is for.
+alter table public.family_invites
+  add column invitee_name text,              -- snapshot label, 1-60 chars (check)
+  add column family_member_id uuid,          -- the family person this invite is for
+  add constraint family_invites_family_member_fkey
+    foreign key (family_member_id, family_id)
+    references public.family_members (id, family_id)
+    on delete set null (family_member_id);
+create index family_invites_family_member_id_idx
+  on public.family_invites (family_member_id) where family_member_id is not null;
 
 -- ~1,000-word curated seed list create_family_invite samples 3 words from.
 -- Service-role/definer-only -- RLS enabled with NO policies (see §2.6).
@@ -1608,6 +1618,8 @@ Quick reference:
   `get_my_redeemed_invite_status`, `replace_memory_media_assets`.
 - **New Edge Functions:** `redeem-family-invite`, `resolve-family-invite`,
   `notify-family-activity` — see §4.10–§4.12.
+- **Invites for a person** (`20261001120000_invite_invitee.sql`): see "Invites
+  for a person" below.
 - **Migration:** `supabase/migrations/20260711120000_family_sharing.sql`
   (schema + RLS + backfill) and `20260711120001_invite_code_words_seed.sql`
   (word list).
@@ -1621,6 +1633,60 @@ Quick reference:
   separate invite-revocation step, since `is_family_member`/`has_family_role`
   already exempt only the owner from a soft-deleted family, and
   `redeem-family-invite` already rejects `family.deleted_at` truthy.
+
+#### Invites for a person
+
+Migration `20261001120000_invite_invitee.sql`
+([plan](./plans/invite-for-person.md)). An invite can say who it is for: a
+typed name (`family_invites.invitee_name`, a snapshot not kept in sync with
+later renames) and/or a person from the family list
+(`family_invites.family_member_id`). On approval the redeemer's account is
+linked to that person ("this is me") server-side.
+
+- **Columns.** `invitee_name text null` (check: null or 1-60 chars);
+  `family_member_id uuid null` with composite FK `(family_member_id, family_id)
+  → family_members (id, family_id) ON DELETE SET NULL (family_member_id)` (the
+  person must be in the invite's family; deleting the person keeps the invite)
+  and a partial index on `family_member_id`. Both are written only by
+  `create_family_invite`.
+- **Client grant.** Table-level `UPDATE` on `family_invites` was narrowed to
+  `grant update (status) on public.family_invites to authenticated` (the only
+  column the client writes: `revokeFamilyInvite`), so the new columns are
+  immutable from the client. `SELECT` is unchanged; `fetchFamilyInvites`
+  `select('*')` picks the new columns up.
+- **`create_family_invite(fam uuid, invite_role text, p_invitee_name text default null, p_invitee_member_id uuid default null) returns family_invites`**
+  — `security definer`, `search_path = ''`, `authenticated` only. The old
+  2-arg function was dropped (not overloaded: a 2-arg overload next to the
+  defaulted one would make `{ fam, invite_role }` ambiguous, PGRST203); old
+  clients' named-arg calls resolve to this one via the defaults and behave
+  exactly as before. Existing checks unchanged (anonymous guard, role,
+  `has_family_role(owner,manager)`, billing gate, code loop). New:
+  `p_invitee_name` is trimmed, blank → null, over 60 chars → `22023`
+  `invitee_name_too_long`; `p_invitee_member_id` must be in `fam` (`22023`
+  `member_not_in_family`), pass `is_linkable_family_member` (`22023`
+  `member_not_linkable`) and not already be linked by any membership (`23505`
+  `member_already_linked`); a null name then defaults to
+  `left(trim(member.name), 60)`. Error **messages equal the tokens** (the
+  client's `mapSupabaseError` keeps only `message` + `code`). Several pending
+  invites for the same person are allowed; the first approval wins the link.
+- **`is_linkable_family_member(p_member_id uuid) returns boolean`** —
+  `stable`, `security definer`, `search_path = ''`, **no client grant** (a
+  definer would otherwise reveal child/pet/age for any uuid). True unless the
+  row is missing, `relationship in ('child','pet')`, or unsorted
+  (`relationship is null`) with DOB age < 13. Same rule as the inline copy in
+  `set_my_family_member` and client `isLinkableMember`; all three carry
+  cross-reference comments (`set_my_family_member` is deliberately not
+  refactored onto the helper).
+- **`apply_invite_member_link(p_invite_id uuid) returns boolean`** —
+  `security definer`, `search_path = ''`, **`service_role` only**, called by
+  `resolve-family-invite` on approve. Requires the invite to be `redeemed` or
+  `approved` with `redeemed_by` and `family_member_id` set and the person still
+  linkable, then sets `family_memberships.family_member_id` where the
+  redeemer's membership has no link and `not_in_list = false` (an existing
+  link or "I'm not in the list" is never overridden). A person claimed by
+  another account (unique violation) returns false. Returns true when the
+  account ends up linked to the invite's person (including an idempotent
+  retry), false when the link was skipped; never raises for a skipped link.
 
 ### 2.7 Content reporting and account blocking
 
@@ -2397,8 +2463,20 @@ Approves or rejects a redeemed invite. Caller must be owner/manager of **that in
 **Response**
 
 ```json
-{ "success": true, "status": "approved" }
+{ "success": true, "status": "approved", "linked": true }
 ```
+
+`linked` is optional: present only on approve of an invite that targeted a
+family person (`family_invites.family_member_id`). It is `true` only when
+`apply_invite_member_link` returned true; `false` when the link was skipped
+(person claimed / no longer linkable / deleted, redeemer already linked or
+"not in the list") or the RPC errored. The link is best-effort: it runs after
+the membership insert (including the `23505` already-a-member path), right
+before the status flip, and never fails the approval (errors are logged by
+code only). Reject never calls it. Old clients ignore the field. Known
+trade-off (pre-existing for the membership insert): if the status flip fails
+after the insert and link, the invite stays `redeemed` and a later Reject
+leaves that account a member, now also linked.
 
 **Auth:** JWT, owner/manager of the invite's family.
 
@@ -2600,8 +2678,13 @@ WP-SEC.
 **Response**
 
 ```json
-{ "familyName": "Rivera family", "inviterName": "Rosa" }
+{ "familyName": "Rivera family", "inviterName": "Rosa", "inviteeName": "Grandma Ana" }
 ```
+
+`inviteeName` is `string | null`: the invite's optional `invitee_name` (who the
+inviter said it is for), used to greet the invitee and prefill the name step.
+Accepted exposure: the endpoint is rate-limited per code and already reveals
+the family and inviter names. The invite's `family_member_id` is never returned.
 
 Never returns a membership list, email, the invite's role, or a family id.
 
@@ -3579,11 +3662,11 @@ extension path.
 ### 5.6 Family sharing: invite → redeem → approve
 
 ```
-1. Manager+: Settings → Invite → pick role → create_family_invite RPC → share sheet (universal link + raw code)
+1. Manager+: Settings → Invite → (optional "Who's this for?": typed name and/or a family person) → pick role → create_family_invite RPC → share sheet (universal link + raw code)
 2. Redeemer: enter code (or arrive prefilled via app/invite.tsx universal link) → redeem-family-invite EF
 3. Redeemer: waiting screen polls get_my_redeemed_invite_status RPC every 5s
 4. Manager+: Settings → Approvals (redeemed invites, via get_invite_redeemer RPC for name+email) → resolve-family-invite EF
-5. On approve: membership row created, redeemer's active_family_id set, push + Bento email
+5. On approve: membership row created, redeemer's active_family_id set, the account linked to the invited person if the invite had one (apply_invite_member_link, best-effort), push + Bento email
 6. Redeemer's client invalidates user_profiles + family-memberships queries → FamilyProvider resolves the new family → timeline
 ```
 

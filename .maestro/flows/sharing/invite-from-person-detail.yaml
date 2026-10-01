@@ -1,0 +1,39 @@
+appId: com.memora.app
+---
+# Invite from a person's detail screen (docs/plans/invite-for-person.md §5.5):
+# person detail -> "Invite {name} to Momora" -> the invite screen opens with
+# that person's chip preselected and their name filled in. Read-only on
+# purpose: stops before "Create invite & share" so no invite is left behind.
+#
+# Needs a logged-in owner/manager whose family has at least one linkable,
+# unclaimed person (not a child/pet, not linked to an account); the row is
+# conditional, so a family without one just passes through. NOT executed as
+# part of this change -- authored lint-by-eye only against the testIDs in
+# app/(app)/family/[id]/index.tsx and app/(app)/sharing/invite.tsx.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-family
+- extendedWaitUntil:
+    visible:
+      id: "family-member-card-info-.*"
+    timeout: 15000
+- tapOn:
+    id: "family-member-card-info-.*"
+- runFlow:
+    when:
+      visible:
+        id: family-member-invite
+    commands:
+      - tapOn:
+          id: family-member-invite
+      - extendedWaitUntil:
+          visible:
+            id: sharing-invite-name-input
+          timeout: 10000
+      # The chip row shows, and the name input was filled from the person (so
+      # its placeholder is gone); which person depends on the account's data.
+      - assertVisible:
+          id: "sharing-invite-person-.*"
+      - assertNotVisible: "Their name, e.g. Grandma Ana"
+      - tapOn:
+          id: sharing-invite-cancel

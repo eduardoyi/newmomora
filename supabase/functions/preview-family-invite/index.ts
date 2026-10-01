@@ -7,6 +7,12 @@
 // deliberately accepts BOTH, unlike every other Edge Function (see
 // _shared/auth.ts).
 //
+// Also returns the invite's optional `invitee_name` (who the inviter said the
+// invite is for) so the join screen can greet them; accepted exposure -- the
+// endpoint is rate-limited per code and already reveals the family and
+// inviter names (docs/plans/invite-for-person.md D3). The invite's
+// family_member_id is never returned.
+//
 // Never leaks: membership lists, emails, the invite's role, or family ids.
 // Same generic invalid-code error for not-found/expired/revoked/redeemed/
 // family-soft-deleted, so the endpoint can't be used as an oracle -- same
@@ -30,6 +36,7 @@ export interface PreviewFamilyInviteRequest {
 export interface PreviewFamilyInviteResponse {
   familyName: string;
   inviterName: string;
+  inviteeName: string | null;
 }
 
 export const CODE_PREVIEW_LIMIT_PER_HOUR = 20;
@@ -76,6 +83,7 @@ interface InviteRow {
   status: string;
   expires_at: string;
   invited_by: string;
+  invitee_name: string | null;
 }
 
 export async function processPreview(
@@ -137,7 +145,7 @@ export async function processPreview(
   //    is worse than a generic "invalid" here.
   const { data: inviteData, error: inviteError } = await serviceClient
     .from('family_invites')
-    .select('family_id, status, expires_at, invited_by')
+    .select('family_id, status, expires_at, invited_by, invitee_name')
     .eq('code', code)
     .maybeSingle();
 
@@ -183,6 +191,7 @@ export async function processPreview(
   const response: PreviewFamilyInviteResponse = {
     familyName: family.name as string,
     inviterName,
+    inviteeName: invite.invitee_name || null,
   };
 
   return jsonResponse(response);

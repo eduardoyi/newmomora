@@ -350,7 +350,7 @@ select ok(
   'the authenticated role retains execute on create_family (body enforces the anonymous guard)'
 );
 select ok(
-  not has_function_privilege('anon', 'public.create_family_invite(uuid,text)', 'EXECUTE'),
+  not has_function_privilege('anon', 'public.create_family_invite(uuid,text,text,uuid)', 'EXECUTE'),
   'the anon role has no execute on create_family_invite'
 );
 select ok(

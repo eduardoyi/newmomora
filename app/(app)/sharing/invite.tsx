@@ -1,15 +1,20 @@
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 
-import { AuthErrorMessage } from '@/components/auth-screen';
+import { AuthErrorMessage, AuthInput } from '@/components/auth-screen';
+import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { KeyboardAwareFormScreen } from '@/components/keyboard-aware-form-screen';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { familyInvitesQueryKey } from '@/hooks/queryKeys';
+import { useContentSafety } from '@/hooks/useContentSafety';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { sharingPendingInvitesRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
 import { createFamilyInvite } from '@/services/invites';
+import { isInviteTargetEligible } from '@/utils/family-relationships';
 import { buildInviteShareMessage } from '@/utils/invites';
 import { canEditFamilyContent } from '@/utils/roles';
 import { useQueryClient } from '@tanstack/react-query';
@@ -29,10 +34,46 @@ const ROLE_OPTIONS: { value: InviteRole; label: string; description: string }[] 
   },
 ];
 
+const INVITEE_NAME_MAX_LENGTH = 60;
+
+// `maxLength` only limits typing, not programmatic fills.
+function clipInviteeName(name: string): string {
+  return name.trim().slice(0, INVITEE_NAME_MAX_LENGTH);
+}
+
+// Server errors are matched by message token (several share code 22023;
+// docs/plans/invite-for-person.md §5.2). Raw tokens never reach the screen.
+function mapInviteError(error: { message: string; code?: string }): {
+  message: string;
+  clearPerson: boolean;
+} | null {
+  if (error.message === 'member_already_linked') {
+    return { message: 'Someone in the family already says this is them.', clearPerson: true };
+  }
+  if (error.message === 'member_not_linkable' || error.message === 'member_not_in_family') {
+    return {
+      message: "That person can't be invited anymore. Pick someone else or type a name.",
+      clearPerson: true,
+    };
+  }
+  if (error.message === 'invitee_name_too_long' || error.code === '23514') {
+    return { message: 'That name is a bit long.', clearPerson: false };
+  }
+  return null;
+}
+
 export default function InviteFamilyMemberScreen() {
+  const { memberId: memberIdParam } = useLocalSearchParams<{ memberId?: string }>();
   const { family, familyId, role } = useFamily();
   const queryClient = useQueryClient();
+  const { members } = useFamilyMembers();
+  const relationships = useFamilyRelationships(members);
+  const contentSafety = useContentSafety();
   const [selectedRole, setSelectedRole] = useState<InviteRole>('viewer');
+  // Overrides of what the `memberId` param preselects: `undefined` / `null`
+  // mean "the user hasn't touched it yet".
+  const [selectedOverride, setSelectedOverride] = useState<string | null | undefined>(undefined);
+  const [nameOverride, setNameOverride] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -43,6 +84,41 @@ export default function InviteFamilyMemberScreen() {
     }
   }, [role]);
 
+  const eligibleMembers = useMemo(
+    () =>
+      relationships.isLoadingLinks || contentSafety.isLoading
+        ? []
+        : members.filter((member) =>
+            isInviteTargetEligible(
+              member,
+              relationships.links,
+              contentSafety.isTargetReported('family_member_profile', member.id),
+            ),
+          ),
+    [members, relationships.isLoadingLinks, relationships.links, contentSafety],
+  );
+
+  // `memberId` param (person detail's "Invite {name}"): preselect once the
+  // people and links have loaded; ignored silently if they turn out ineligible.
+  const preselected = memberIdParam
+    ? eligibleMembers.find((member) => member.id === memberIdParam) ?? null
+    : null;
+  const selectedMemberId =
+    selectedOverride === undefined ? (preselected?.id ?? null) : selectedOverride;
+  const inviteeName =
+    nameOverride ?? (preselected ? clipInviteeName(preselected.name) : '');
+
+  const handleSelectMember = (member: { id: string; name: string }) => {
+    if (selectedMemberId === member.id) {
+      // Deselect unlinks the person but keeps whatever is typed.
+      setSelectedOverride(null);
+      setNameOverride(inviteeName);
+      return;
+    }
+    setSelectedOverride(member.id);
+    setNameOverride(clipInviteeName(member.name));
+  };
+
   const handleInvite = async () => {
     if (!familyId || !family) {
       return;
@@ -51,21 +127,40 @@ export default function InviteFamilyMemberScreen() {
     setErrorMessage('');
     setIsCreating(true);
 
+    const trimmedName = inviteeName.trim();
+
     try {
-      const { data: invite, error } = await createFamilyInvite(familyId, selectedRole);
+      const { data: invite, error } = await createFamilyInvite(familyId, selectedRole, {
+        inviteeName: trimmedName || undefined,
+        inviteeMemberId: selectedMemberId ?? undefined,
+      });
 
       if (error || !invite) {
+        const mapped = error ? mapInviteError(error) : null;
+        if (mapped) {
+          if (mapped.clearPerson) {
+            setSelectedOverride(null);
+            setNameOverride(inviteeName);
+          }
+          setErrorMessage(mapped.message);
+          return;
+        }
         throw new Error(error?.message ?? 'Could not create the invite');
       }
 
       queryClient.invalidateQueries({ queryKey: familyInvitesQueryKey(familyId) });
-      trackEvent('invite_created', { role: selectedRole, family_id: familyId });
+      trackEvent('invite_created', {
+        role: selectedRole,
+        family_id: familyId,
+        has_invitee_name: trimmedName.length > 0,
+        for_family_member: selectedMemberId !== null,
+      });
 
       // The share sheet resolving covers both "shared" and "dismissed" -- in
       // either case the invite now exists, so land on pending-invites where
       // it can be reshared or revoked.
       try {
-        await Share.share({ message: buildInviteShareMessage(invite.code, family.name) });
+        await Share.share({ message: buildInviteShareMessage(invite.code, family.name, trimmedName || null) });
       } catch {
         // A share-sheet failure never orphans the invite.
       }
@@ -96,7 +191,48 @@ export default function InviteFamilyMemberScreen() {
       </View>
 
       <View style={styles.form}>
-        <Text style={styles.sectionLabel}>They can join as</Text>
+        <Text style={styles.sectionLabel}>Who&apos;s this for? (optional)</Text>
+
+        <AuthInput
+          autoCapitalize="words"
+          maxLength={INVITEE_NAME_MAX_LENGTH}
+          onChangeText={setNameOverride}
+          placeholder="Their name, e.g. Grandma Ana"
+          returnKeyType="done"
+          testID="sharing-invite-name-input"
+          value={inviteeName}
+        />
+
+        {eligibleMembers.length > 0 ? (
+          <ScrollView
+            contentContainerStyle={styles.chipRow}
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+          >
+            {eligibleMembers.map((member) => {
+              const isSelected = member.id === selectedMemberId;
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isSelected }}
+                  key={member.id}
+                  onPress={() => handleSelectMember(member)}
+                  style={[styles.personChip, isSelected && styles.personChipSelected]}
+                  testID={`sharing-invite-person-${member.id}`}
+                >
+                  <FamilyMemberAvatar member={member} size={24} />
+                  <Text style={[styles.personChipText, isSelected && styles.personChipTextSelected]}>
+                    {member.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+
+        <Text style={[styles.sectionLabel, styles.roleSectionLabel]}>They can join as</Text>
 
         {ROLE_OPTIONS.map((option) => {
           const isSelected = option.value === selectedRole;
@@ -180,6 +316,35 @@ const styles = StyleSheet.create({
     letterSpacing: 0.14 * 11,
     textTransform: 'uppercase',
     color: colors.ink3,
+  },
+  roleSectionLabel: {
+    marginTop: spacing.sm,
+  },
+  chipRow: {
+    gap: spacing.sm,
+  },
+  personChip: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  personChipSelected: {
+    backgroundColor: colors.primaryTint,
+    borderColor: colors.primary,
+  },
+  personChipText: {
+    fontFamily: fonts.sansBold,
+    fontSize: 14,
+    color: colors.ink2,
+  },
+  personChipTextSelected: {
+    color: colors.primaryDark,
   },
   roleCard: {
     backgroundColor: colors.white,

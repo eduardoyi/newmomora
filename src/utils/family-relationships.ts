@@ -136,6 +136,24 @@ export function isLinkableMember(member: RelationshipMemberLike, referenceDate =
 }
 
 /**
+ * Can an invite be aimed at this person (docs/plans/invite-for-person.md
+ * §5.1)? Linkable, not linked to ANY account -- including the caller's own,
+ * since inviting someone as a person you already are makes no sense and the
+ * server rejects claimed people -- and not content-safety hidden. The invite
+ * picker, person detail and Approvals all use this one predicate.
+ */
+export function isInviteTargetEligible(
+  member: RelationshipMemberLike,
+  links: readonly { familyMemberId: string | null }[],
+  isHidden: boolean,
+  referenceDate = new Date(),
+): boolean {
+  if (isHidden) return false;
+  if (!isLinkableMember(member, referenceDate)) return false;
+  return !links.some((link) => link.familyMemberId === member.id);
+}
+
+/**
  * Own-child rule (mirrors `isOwnChild` in
  * supabase/functions/_shared/family-relationships.ts): an explicit role wins
  * -- 'child' is a child, any other role is not; an unsorted member falls back

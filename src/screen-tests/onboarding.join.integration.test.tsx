@@ -28,8 +28,9 @@ import {
   onboardingJoinNameRoute,
   onboardingJoinWaitingRoute,
 } from '@/lib/onboarding-routes';
-import { noFamilyRoute, timelineRoute } from '@/lib/routes';
+import { noFamilyRoute, timelineRoute, whosWhoSelfRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
+import { shouldOfferWhosWhoAfterJoin } from '@/services/family-relationships';
 import { redeemFamilyInvite } from '@/services/invites';
 import { clearJoinDraft, getJoinDraft, patchJoinDraft, previewFamilyInvite } from '@/services/onboarding-join';
 import { updateUserProfile } from '@/services/user-profile';
@@ -59,6 +60,10 @@ jest.mock('@/services/onboarding-join', () => ({
   getJoinDraft: jest.fn(),
   patchJoinDraft: jest.fn().mockResolvedValue(undefined),
   clearJoinDraft: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('@/services/family-relationships', () => ({
+  shouldOfferWhosWhoAfterJoin: jest.fn(),
 }));
 
 jest.mock('@/services/invites', () => ({
@@ -100,6 +105,7 @@ const mockedPatchJoinDraft = patchJoinDraft as jest.MockedFunction<typeof patchJ
 const mockedClearJoinDraft = clearJoinDraft as jest.MockedFunction<typeof clearJoinDraft>;
 const mockedRedeemFamilyInvite = redeemFamilyInvite as jest.MockedFunction<typeof redeemFamilyInvite>;
 const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof updateUserProfile>;
+const mockedShouldOfferWhosWho = shouldOfferWhosWhoAfterJoin as jest.MockedFunction<typeof shouldOfferWhosWhoAfterJoin>;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseRedeemedInviteStatus = useRedeemedInviteStatus as jest.MockedFunction<typeof useRedeemedInviteStatus>;
@@ -158,6 +164,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockedGetPendingInviteCode.mockResolvedValue(null);
   mockedGetJoinDraft.mockResolvedValue({});
+  mockedShouldOfferWhosWho.mockResolvedValue(false);
   mockedUseAuth.mockReturnValue(authState());
   mockedUseFamily.mockReturnValue(familyState());
 });
@@ -203,19 +210,47 @@ describe('JoinFoundScreen (J2)', () => {
 
   it('shows the family + inviter name, and confirming stores the inviter name and navigates to J3', async () => {
     mockedPreviewFamilyInvite.mockResolvedValue({
-      data: { familyName: "Rivera Family", inviterName: 'Sam' },
+      data: { familyName: "Rivera Family", inviterName: 'Sam', inviteeName: null },
       error: null,
     });
 
-    const { getByTestId, findByText } = renderScreen(<JoinFoundScreen />);
+    const { getByTestId, findByText, queryByText } = renderScreen(<JoinFoundScreen />);
 
     expect(await findByText('Join Rivera Family?')).toBeTruthy();
     expect(await findByText("Sam invited you to see and share the family's memories.")).toBeTruthy();
 
     fireEvent.press(getByTestId('onb-join-found-confirm-button'));
 
-    expect(mockedPatchJoinDraft).toHaveBeenCalledWith({ inviterName: 'Sam' });
+    expect(queryByText(/^Hi /)).toBeNull();
+    expect(mockedPatchJoinDraft).toHaveBeenCalledWith({ inviterName: 'Sam', inviteeName: undefined });
     expect(router.push).toHaveBeenCalledWith(onboardingJoinNameRoute);
+  });
+
+  it('greets the invitee by name and stores it in the draft when the invite names them', async () => {
+    mockedPreviewFamilyInvite.mockResolvedValue({
+      data: { familyName: 'Rivera Family', inviterName: 'Sam', inviteeName: 'Ana' },
+      error: null,
+    });
+
+    const { findByText } = renderScreen(<JoinFoundScreen />);
+
+    expect(
+      await findByText("Hi Ana — Sam invited you to see and share the family's memories."),
+    ).toBeTruthy();
+    expect(mockedPatchJoinDraft).toHaveBeenCalledWith({ inviterName: 'Sam', inviteeName: 'Ana' });
+  });
+
+  it('clears a stale invitee name when the preview errors', async () => {
+    mockedPreviewFamilyInvite.mockResolvedValue({
+      data: null,
+      error: { message: 'That invite code is invalid or has expired.', code: 'invalid_code' },
+    });
+
+    const { findByText, queryByText } = renderScreen(<JoinFoundScreen />);
+
+    expect(await findByText('Join this family?')).toBeTruthy();
+    expect(queryByText(/^Hi /)).toBeNull();
+    expect(mockedPatchJoinDraft).toHaveBeenCalledWith({ inviteeName: undefined });
   });
 
   it('falls back to a generic confirm state when the anonymous session fails, and still lets the user continue', async () => {
@@ -224,6 +259,7 @@ describe('JoinFoundScreen (J2)', () => {
     const { getByTestId, findByText } = renderScreen(<JoinFoundScreen />);
 
     expect(await findByText('Join this family?')).toBeTruthy();
+    expect(mockedPatchJoinDraft).toHaveBeenCalledWith({ inviteeName: undefined });
 
     fireEvent.press(getByTestId('onb-join-found-confirm-button'));
 
@@ -244,7 +280,7 @@ describe('JoinFoundScreen (J2)', () => {
 
   it('re-enter code replaces to J1', async () => {
     mockedPreviewFamilyInvite.mockResolvedValue({
-      data: { familyName: "Rivera Family", inviterName: 'Sam' },
+      data: { familyName: "Rivera Family", inviterName: 'Sam', inviteeName: null },
       error: null,
     });
 
@@ -270,6 +306,26 @@ describe('JoinFoundScreen (J2)', () => {
 describe('JoinNameScreen (J3)', () => {
   it('prefills from the stored join draft', async () => {
     mockedGetJoinDraft.mockResolvedValue({ displayName: 'Grandma Ana' });
+
+    const { getByTestId } = renderScreen(<JoinNameScreen />);
+
+    await waitFor(() => {
+      expect(getByTestId('onb-join-name-input').props.value).toBe('Grandma Ana');
+    });
+  });
+
+  it('prefills from the invitee name when nothing has been typed yet', async () => {
+    mockedGetJoinDraft.mockResolvedValue({ inviteeName: 'Ana' });
+
+    const { getByTestId } = renderScreen(<JoinNameScreen />);
+
+    await waitFor(() => {
+      expect(getByTestId('onb-join-name-input').props.value).toBe('Ana');
+    });
+  });
+
+  it('prefers a name the user already typed over the invitee name', async () => {
+    mockedGetJoinDraft.mockResolvedValue({ displayName: 'Grandma Ana', inviteeName: 'Ana' });
 
     const { getByTestId } = renderScreen(<JoinNameScreen />);
 
@@ -518,6 +574,55 @@ describe('JoinWaitingScreen (J5)', () => {
     const refetchOrder = refetchMemberships.mock.invocationCallOrder[0];
     const setActiveOrder = setActiveFamily.mock.invocationCallOrder[0];
     expect(refetchOrder).toBeLessThan(setActiveOrder);
+  });
+
+  it('on approval, skips Who\'s who and shows the welcome when the account was already linked', async () => {
+    mockedGetPendingInviteCode.mockResolvedValue(null);
+    mockedUseAuth.mockReturnValue(authState({ user: { id: 'user-1' } as never }));
+    mockedShouldOfferWhosWho.mockResolvedValue(false);
+    mockedUseFamily.mockReturnValue(
+      familyState({
+        refetchMemberships: jest
+          .fn()
+          .mockResolvedValue([{ id: 'm1', familyId: 'family-new', role: 'viewer', name: 'Rivera Family' }]),
+      }),
+    );
+    mockedUseRedeemedInviteStatus.mockReturnValue({
+      outcome: { kind: 'approved', familyName: 'Rivera Family' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderWithQueryClient(<JoinWaitingScreen />);
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(timelineRoute);
+    });
+    expect(mockedShouldOfferWhosWho).toHaveBeenCalledWith('family-new', 'user-1');
+  });
+
+  it('on approval, routes to Who\'s who when the helper says to offer it', async () => {
+    mockedGetPendingInviteCode.mockResolvedValue(null);
+    mockedUseAuth.mockReturnValue(authState({ user: { id: 'user-1' } as never }));
+    mockedShouldOfferWhosWho.mockResolvedValue(true);
+    mockedUseFamily.mockReturnValue(
+      familyState({
+        refetchMemberships: jest
+          .fn()
+          .mockResolvedValue([{ id: 'm1', familyId: 'family-new', role: 'viewer', name: 'Rivera Family' }]),
+      }),
+    );
+    mockedUseRedeemedInviteStatus.mockReturnValue({
+      outcome: { kind: 'approved', familyName: 'Rivera Family' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderWithQueryClient(<JoinWaitingScreen />);
+
+    await waitFor(() => {
+      expect(router.replace).toHaveBeenCalledWith(whosWhoSelfRoute('timeline'));
+    });
   });
 
   it('shows the rejected state', async () => {

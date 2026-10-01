@@ -128,3 +128,19 @@ export async function familyHasLinkableMember(familyId: string): Promise<boolean
   if (error || !data) return false;
   return data.some((member) => isLinkableMember(member));
 }
+
+/**
+ * Whether a just-approved account should be sent to "Are you in the family?".
+ * False when the invite already linked them to a person (invite-for-person,
+ * docs/plans/invite-for-person.md); otherwise the usual linkable check. A
+ * failed links read falls through to that check -- today's behaviour.
+ */
+export async function shouldOfferWhosWhoAfterJoin(familyId: string, userId: string | null | undefined): Promise<boolean> {
+  if (userId) {
+    const { data } = await fetchMembershipLinks(familyId);
+    if (data?.some((link) => link.userId === userId && link.familyMemberId !== null)) {
+      return false;
+    }
+  }
+  return familyHasLinkableMember(familyId);
+}

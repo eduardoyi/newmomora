@@ -23,6 +23,9 @@ export interface RedeemFamilyInviteResponse {
 export interface ResolveFamilyInviteResponse {
   success: true;
   status: 'approved' | 'rejected';
+  // Present only when approving an invite aimed at a person; false means the
+  // link was skipped or failed (docs/plans/invite-for-person.md D5).
+  linked?: boolean;
 }
 
 function mapSupabaseError(error: { message: string; code?: string }): ServiceError {
@@ -35,10 +38,13 @@ function mapSupabaseError(error: { message: string; code?: string }): ServiceErr
 export async function createFamilyInvite(
   familyId: string,
   role: 'manager' | 'viewer',
+  options: { inviteeName?: string; inviteeMemberId?: string } = {},
 ): Promise<{ data: FamilyInvite | null; error: ServiceError | null }> {
   const { data, error } = await supabase.rpc('create_family_invite', {
     fam: familyId,
     invite_role: role,
+    ...(options.inviteeName ? { p_invitee_name: options.inviteeName } : {}),
+    ...(options.inviteeMemberId ? { p_invitee_member_id: options.inviteeMemberId } : {}),
   });
 
   if (error) {

@@ -5,16 +5,19 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useRedeemedInviteStatus } from '@/hooks/useRedeemedInviteStatus';
 import { userProfileQueryKey } from '@/hooks/useUserProfile';
 import { noFamilyRoute, timelineRoute, whosWhoSelfRoute } from '@/lib/routes';
-import { familyHasLinkableMember } from '@/services/family-relationships';
+import { shouldOfferWhosWhoAfterJoin } from '@/services/family-relationships';
 import { pickNewlyJoinedFamilyId } from '@/utils/invites';
 
 export default function WaitingForApprovalScreen() {
   const params = useLocalSearchParams<{ familyName?: string }>();
   const { familyId, memberships, refetchMemberships, setActiveFamily } = useFamily();
+  const { user } = useAuth();
+  const userId = user?.id;
   const queryClient = useQueryClient();
   const [isFinishing, setIsFinishing] = useState(false);
   const handledApprovalRef = useRef(false);
@@ -71,14 +74,14 @@ export default function WaitingForApprovalScreen() {
       await queryClient.invalidateQueries({ queryKey: userProfileQueryKey });
       // "Are you in the family?" (docs/features/family-relationships.md) when
       // there is someone to pick; that screen says who they joined. Skippable.
-      if (newFamilyId && (await familyHasLinkableMember(newFamilyId))) {
+      if (newFamilyId && (await shouldOfferWhosWhoAfterJoin(newFamilyId, userId))) {
         router.replace(whosWhoSelfRoute('timeline'));
         return;
       }
       router.replace(timelineRoute);
       Alert.alert('Welcome!', `You've joined ${familyName}.`);
     })();
-  }, [outcome.kind, familyName, queryClient, refetchMemberships, setActiveFamily]);
+  }, [outcome.kind, familyName, queryClient, refetchMemberships, setActiveFamily, userId]);
 
   const handleLeave = () => {
     router.replace(familyId ? timelineRoute : noFamilyRoute);

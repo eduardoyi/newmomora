@@ -26,8 +26,10 @@ export default function JoinNameScreen() {
     let isMounted = true;
 
     void getJoinDraft().then((draft) => {
-      if (isMounted && draft.displayName) {
-        setName(draft.displayName);
+      // A name the user typed themselves beats the inviter's label for them.
+      const prefill = draft.displayName ?? draft.inviteeName;
+      if (isMounted && prefill) {
+        setName(prefill);
       }
     });
 

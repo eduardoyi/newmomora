@@ -22,6 +22,9 @@ jest.mock('@/components/report-sheet', () => ({ ReportSheet: () => null }));
 
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
+jest.mock('@/hooks/useFamilyInvites', () => ({
+  useFamilyInvites: () => ({ invites: [], isLoading: false }),
+}));
 jest.mock('@/hooks/useFamilyRelationships', () => ({
   useFamilyRelationships: () => ({
     canEdit: false,
@@ -30,6 +33,7 @@ jest.mock('@/hooks/useFamilyRelationships', () => ({
     myLink: null,
     myMemberId: null,
     claimedByOthers: new Set(),
+    links: [],
     isLoadingLinks: false,
     resolve: jest.fn(),
     isResolving: false,

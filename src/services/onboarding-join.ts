@@ -33,6 +33,8 @@ const PREVIEW_FAMILY_INVITE_FUNCTION_NAME = 'preview-family-invite';
 export interface PreviewFamilyInviteResponse {
   familyName: string;
   inviterName: string;
+  /** Who the inviter said the invite is for, or null when they left it blank. */
+  inviteeName: string | null;
 }
 
 /**
@@ -60,6 +62,8 @@ export interface JoinDraft {
   displayName?: string;
   /** J2's preview response, carried forward so J5 can personalize "One sec. {name} just needs to wave you in." without a second lookup. */
   inviterName?: string;
+  /** Who the inviter said the invite is for (J2's preview); prefills J3 unless the user already typed a name. */
+  inviteeName?: string;
 }
 
 function isJoinDraftShape(value: unknown): value is JoinDraft {
@@ -70,7 +74,11 @@ function isJoinDraftShape(value: unknown): value is JoinDraft {
   const candidate = value as Partial<JoinDraft>;
   return (
     (candidate.displayName === undefined || typeof candidate.displayName === 'string') &&
-    (candidate.inviterName === undefined || typeof candidate.inviterName === 'string')
+    (candidate.inviterName === undefined || typeof candidate.inviterName === 'string') &&
+    // Tolerate null so a stray null never fails the guard and wipes the draft.
+    (candidate.inviteeName === undefined ||
+      candidate.inviteeName === null ||
+      typeof candidate.inviteeName === 'string')
   );
 }
 

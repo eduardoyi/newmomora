@@ -8,13 +8,21 @@ appId: com.memora.app
 #
 # NOT executed as part of this change -- authored lint-by-eye only against
 # the testIDs in app/(app)/sharing/invite.tsx, pending-invites.tsx, and
-# app/(app)/(tabs)/settings.tsx. See docs/features/family-sharing.md.
+# app/(app)/(tabs)/settings.tsx (the name step added with docs/plans/invite-for-person.md
+# is likewise authored by eye, not yet run). See docs/features/family-sharing.md.
 - runFlow: ../auth/login.yaml
 
 - tapOn:
     id: tab-settings
 - tapOn:
     id: settings-invite-family-member
+# "Who's this for?" (docs/plans/invite-for-person.md): a typed name, shown
+# back on Pending invites below. Typing -- not a chip -- so it works whatever
+# people the account's family has.
+- tapOn:
+    id: sharing-invite-name-input
+- inputText: "Maestro Invitee"
+- hideKeyboard
 - tapOn:
     id: sharing-invite-role-viewer
 - tapOn:
@@ -29,6 +37,9 @@ appId: com.memora.app
     visible:
       id: pending-invites-back
     timeout: 10000
+
+# The invite is labelled with who it's for.
+- assertVisible: "Maestro Invitee"
 
 # Capture the freshly created code. Exactly one invite exists at this point
 # on a clean run, so a partial id match against the `pending-invite-<id>-code`

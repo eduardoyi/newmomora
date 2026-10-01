@@ -1197,8 +1197,10 @@ export type Database = {
           created_at: string
           expires_at: string
           family_id: string
+          family_member_id: string | null
           id: string
           invited_by: string
+          invitee_name: string | null
           redeemed_at: string | null
           redeemed_by: string | null
           resolved_at: string | null
@@ -1212,8 +1214,10 @@ export type Database = {
           created_at?: string
           expires_at?: string
           family_id: string
+          family_member_id?: string | null
           id?: string
           invited_by: string
+          invitee_name?: string | null
           redeemed_at?: string | null
           redeemed_by?: string | null
           resolved_at?: string | null
@@ -1227,8 +1231,10 @@ export type Database = {
           created_at?: string
           expires_at?: string
           family_id?: string
+          family_member_id?: string | null
           id?: string
           invited_by?: string
+          invitee_name?: string | null
           redeemed_at?: string | null
           redeemed_by?: string | null
           resolved_at?: string | null
@@ -1244,6 +1250,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "families"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "family_invites_family_member_fkey"
+            columns: ["family_member_id", "family_id"]
+            isOneToOne: false
+            referencedRelation: "family_members"
+            referencedColumns: ["id", "family_id"]
           },
         ]
       }
@@ -3882,6 +3895,10 @@ export type Database = {
         Args: { p_event_id: string }
         Returns: Json
       }
+      apply_invite_member_link: {
+        Args: { p_invite_id: string }
+        Returns: boolean
+      }
       assert_billing_write_access: {
         Args: {
           p_actor_user_id: string
@@ -4271,14 +4288,21 @@ export type Database = {
         }
       }
       create_family_invite: {
-        Args: { fam: string; invite_role: string }
+        Args: {
+          fam: string
+          invite_role: string
+          p_invitee_member_id?: string
+          p_invitee_name?: string
+        }
         Returns: {
           code: string
           created_at: string
           expires_at: string
           family_id: string
+          family_member_id: string | null
           id: string
           invited_by: string
+          invitee_name: string | null
           redeemed_at: string | null
           redeemed_by: string | null
           resolved_at: string | null
@@ -4832,6 +4856,10 @@ export type Database = {
       }
       is_anonymous_user: { Args: never; Returns: boolean }
       is_family_member: { Args: { fam: string }; Returns: boolean }
+      is_linkable_family_member: {
+        Args: { p_member_id: string }
+        Returns: boolean
+      }
       looking_back_timezone_is_valid: {
         Args: { p_timezone: string }
         Returns: boolean

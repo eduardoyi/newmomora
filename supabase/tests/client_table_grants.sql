@@ -8,7 +8,7 @@ select plan(27);
 select ok(has_table_privilege('authenticated', 'public.user_profiles', 'SELECT, UPDATE'), 'authenticated can read and update its RLS-scoped profile');
 select ok(has_table_privilege('authenticated', 'public.families', 'SELECT, UPDATE, DELETE'), 'authenticated has the family operations backed by RLS policies');
 select ok(has_table_privilege('authenticated', 'public.family_memberships', 'SELECT, UPDATE, DELETE'), 'authenticated has membership roster operations backed by RLS policies');
-select ok(has_table_privilege('authenticated', 'public.family_invites', 'SELECT, UPDATE'), 'authenticated has invite list and revoke operations backed by RLS policies');
+select ok(has_table_privilege('authenticated', 'public.family_invites', 'SELECT') and has_column_privilege('authenticated', 'public.family_invites', 'status', 'UPDATE'), 'authenticated can list invites and revoke them (update status only; the invitee columns are not client-writable)');
 select ok(has_table_privilege('authenticated', 'public.family_members', 'SELECT, INSERT, UPDATE, DELETE'), 'authenticated has family-member CRUD backed by RLS policies');
 select ok(has_table_privilege('authenticated', 'public.memories', 'SELECT, INSERT, UPDATE, DELETE'), 'authenticated has memory CRUD backed by RLS policies');
 select ok(has_table_privilege('authenticated', 'public.memory_family_members', 'SELECT, INSERT, DELETE'), 'authenticated has memory-tag operations backed by RLS policies');

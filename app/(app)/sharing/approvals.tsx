@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,10 +15,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { useContentSafety } from '@/hooks/useContentSafety';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
+import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import {
   familyInvitesQueryKey,
   familyMemberProfilesQueryKey,
+  familyMembershipLinksQueryKeyBase,
 } from '@/hooks/queryKeys';
 import { trackEvent } from '@/services/analytics';
 import {
@@ -26,6 +31,7 @@ import {
   type FamilyInvite,
   type InviteRedeemer,
 } from '@/services/invites';
+import { isInviteTargetEligible } from '@/utils/family-relationships';
 import { canEditFamilyContent } from '@/utils/roles';
 
 interface ApprovalEntry {
@@ -41,8 +47,45 @@ export default function ApprovalsScreen() {
   const { redeemedInvites, isLoading: isInvitesLoading } = useFamilyInvites(familyId, {
     enabled: canManage,
   });
+  const { members } = useFamilyMembers();
+  const relationships = useFamilyRelationships(members);
+  const contentSafety = useContentSafety();
+  const { refetchLinks } = relationships;
   const [resolvingInviteId, setResolvingInviteId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [linksRefreshed, setLinksRefreshed] = useState(false);
+
+  // The "Will be linked" line must not lie: links may have changed since the
+  // invite was created (someone claimed the person), so refetch on mount and
+  // hold the line back until that answer is in.
+  useEffect(() => {
+    if (!canManage) {
+      return;
+    }
+    let isCancelled = false;
+    void Promise.resolve(refetchLinks())
+      .catch(() => undefined)
+      .then(() => {
+        if (!isCancelled) {
+          setLinksRefreshed(true);
+        }
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [canManage, refetchLinks]);
+
+  const linkTargetFor = (invite: FamilyInvite) => {
+    if (!linksRefreshed || !invite.family_member_id) {
+      return null;
+    }
+    const person = members.find((member) => member.id === invite.family_member_id);
+    if (!person) {
+      return null;
+    }
+    const isHidden = contentSafety.isTargetReported('family_member_profile', person.id);
+    return isInviteTargetEligible(person, relationships.links, isHidden) ? person : null;
+  };
 
   // Guard on mount: viewers reaching this route directly get bounced back.
   useEffect(() => {
@@ -74,7 +117,7 @@ export default function ApprovalsScreen() {
     setResolvingInviteId(invite.id);
 
     try {
-      const { error } = await resolveFamilyInvite(invite.id, action);
+      const { data: result, error } = await resolveFamilyInvite(invite.id, action);
 
       if (error) {
         throw new Error(error.message);
@@ -86,11 +129,23 @@ export default function ApprovalsScreen() {
       queryClient.invalidateQueries({ queryKey: familyInvitesQueryKey(familyId) });
       if (action === 'approve') {
         queryClient.invalidateQueries({ queryKey: familyMemberProfilesQueryKey(user?.id, familyId) });
+        // Approval can now link the account to a person.
+        queryClient.invalidateQueries({ queryKey: [familyMembershipLinksQueryKeyBase] });
       }
       trackEvent('invite_resolved', {
         outcome: action === 'approve' ? 'approved' : 'rejected',
         family_id: invite.family_id,
       });
+
+      // Non-blocking: the approval itself succeeded, only the link didn't.
+      if (action === 'approve' && result?.linked === false) {
+        const personName =
+          members.find((member) => member.id === invite.family_member_id)?.name ?? 'that person';
+        Alert.alert(
+          "Couldn't link them",
+          `Approved. We couldn't link them to ${personName}; they can pick themselves when they open the app.`,
+        );
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Could not resolve the invite');
     } finally {
@@ -133,11 +188,22 @@ export default function ApprovalsScreen() {
           <View style={styles.list}>
             {entries.map(({ invite, redeemer }) => {
               const isResolving = resolvingInviteId === invite.id;
+              const linkTarget = linkTargetFor(invite);
 
               return (
                 <View key={invite.id} style={styles.card} testID={`approval-${invite.id}`}>
                   <Text style={styles.redeemerName}>{redeemer?.name ?? 'Unknown'}</Text>
                   {redeemer?.email ? <Text style={styles.redeemerEmail}>{redeemer.email}</Text> : null}
+                  {invite.invitee_name ? (
+                    <Text style={styles.meta} testID={`approval-${invite.id}-invitee`}>
+                      Invited as {invite.invitee_name}
+                    </Text>
+                  ) : null}
+                  {linkTarget ? (
+                    <Text style={styles.meta} testID={`approval-${invite.id}-link`}>
+                      Will be linked to {linkTarget.name} in the family
+                    </Text>
+                  ) : null}
                   <Text style={styles.meta}>
                     Joining as {invite.role === 'manager' ? 'manager' : 'viewer'} · code {invite.code}
                   </Text>

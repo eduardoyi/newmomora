@@ -23,6 +23,7 @@ import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { ReportSheet } from '@/components/report-sheet';
 import { SettingsBlock, SettingsRow } from '@/components/settings-row';
 import { useFamily } from '@/hooks/use-family';
+import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
 import { useContentSafety } from '@/hooks/useContentSafety';
@@ -30,14 +31,23 @@ import { useMemberMemories } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { useVideoThumbnail } from '@/hooks/useVideoThumbnail';
-import { editFamilyMemberRoute, memoryBooksRoute, memoryDetailRoute, portraitTimelineRoute } from '@/lib/routes';
+import {
+  editFamilyMemberRoute,
+  memoryBooksRoute,
+  memoryDetailRoute,
+  portraitTimelineRoute,
+  sharingApprovalsRoute,
+  sharingInviteForMemberRoute,
+  sharingPendingInvitesRoute,
+} from '@/lib/routes';
 import type { MemoryWithTags } from '@/services/memories';
 import type { ReportTargetType } from '@/services/content-safety';
 import { substituteLinkLabels, toLinkPreviewMap } from '@/utils/links';
 import { mediaImageSource } from '@/utils/media-image-source';
 import { resolvePreferredCoverKey, resolveVideoPosterKey } from '@/utils/media-preview';
 import { canEditFamilyContent } from '@/utils/roles';
-import { isLinkableMember, relationshipSubtitle } from '@/utils/family-relationships';
+import { isInviteTargetEligible, isLinkableMember, relationshipSubtitle } from '@/utils/family-relationships';
+import { formatInviteExpiry, liveInviteForMember } from '@/utils/invites';
 import { isAlreadyLinkedError } from '@/services/family-relationships';
 import { formatDisplayDate } from '@/utils/memories';
 
@@ -172,11 +182,13 @@ function MemoryRowSeparator() {
 
 export default function ViewFamilyMemberScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { role } = useFamily();
+  const { familyId, role } = useFamily();
   const canEdit = canEditFamilyContent(role);
   const contentSafety = useContentSafety();
   const { members, isLoading, deleteMember, isDeleting } = useFamilyMembers();
   const relationships = useFamilyRelationships(members);
+  // Only owners/managers can read invites (RLS), so viewers never fire this.
+  const { invites, isLoading: isLoadingInvites } = useFamilyInvites(familyId, { enabled: canEdit });
   const { versions: portraitVersions } = usePortraitVersions(id);
   // Server-filtered to this member (Workstream A6) instead of paging in and
   // client-filtering the whole timeline.
@@ -293,6 +305,7 @@ export default function ViewFamilyMemberScreen() {
 
   const isProfileHidden = contentSafety.isTargetReported('family_member_profile', member.id);
   const isPortraitHidden = contentSafety.isTargetReported('family_member_portrait', currentPortraitId);
+  const liveInvite = canEdit ? liveInviteForMember(invites, member.id) : null;
   const visibleMemberMemories = memberMemories.filter((memory) => !contentSafety.isUserBlocked(memory.user_id));
   const canReportProfile = !contentSafety.hasActiveReport('family_member_profile', member.id);
   const canReportPortrait = Boolean(
@@ -450,6 +463,45 @@ export default function ViewFamilyMemberScreen() {
               onPress={handleUnlinkAccount}
               testID="family-member-unlink-account"
             />
+          </SettingsBlock>
+        ) : null}
+
+        {/* Invite this person to Momora (docs/plans/invite-for-person.md D7):
+            owner/manager, only while the person could still be linked. A live
+            invite turns the row into its status. */}
+        {canEdit
+          && !isProfileHidden
+          && !relationships.isLoadingLinks
+          && !isLoadingInvites
+          && isInviteTargetEligible(member, relationships.links, isProfileHidden) ? (
+          <SettingsBlock title="Family sharing">
+            {liveInvite?.status === 'redeemed' ? (
+              <SettingsRow
+                chevron
+                first
+                label="Waiting for your approval"
+                onPress={() => router.push(sharingApprovalsRoute)}
+                testID="family-member-invite-approval"
+              />
+            ) : liveInvite ? (
+              <SettingsRow
+                chevron
+                first
+                label={`Invite sent · ${formatInviteExpiry(liveInvite.expires_at)}`}
+                onPress={() => router.push(sharingPendingInvitesRoute)}
+                testID="family-member-invite-pending"
+              />
+            ) : (
+              <SettingsRow
+                accessibilityLabel={`Invite ${member.name} to Momora`}
+                caption="They’ll see every memory once you approve them"
+                chevron
+                first
+                label={`Invite ${member.name} to Momora`}
+                onPress={() => router.push(sharingInviteForMemberRoute(member.id))}
+                testID="family-member-invite"
+              />
+            )}
           </SettingsBlock>
         ) : null}
 

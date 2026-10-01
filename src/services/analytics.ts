@@ -164,6 +164,9 @@ export interface AnalyticsEventMap {
   invite_created: {
     role: 'manager' | 'viewer';
     family_id: string;
+    // Booleans only -- never the name (docs/plans/invite-for-person.md D8).
+    has_invitee_name: boolean;
+    for_family_member: boolean;
   };
   invite_redeemed: {
     family_id: string;

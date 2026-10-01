@@ -4,6 +4,7 @@ import { join } from 'path';
 import {
   FAMILY_SIDES,
   groupByRelationship,
+  isInviteTargetEligible,
   isLinkableMember,
   isOwnChild,
   RELATIONSHIP_LABELS,
@@ -139,5 +140,32 @@ describe('isOwnChild (app mirror of the Edge rule)', () => {
     expect(isOwnChild({ relationship: null, date_of_birth: '2022-01-01' }, today)).toBe(true);
     expect(isOwnChild({ relationship: null, date_of_birth: '2010-01-01' }, today)).toBe(false);
     expect(isOwnChild({ relationship: null, date_of_birth: null }, today)).toBe(false);
+  });
+});
+
+describe('isInviteTargetEligible (invite picker, person detail, Approvals)', () => {
+  const ref = new Date(2026, 8, 30);
+  const grandma = { id: 'g1', name: 'Ana', relationship: 'grandparent' };
+
+  it('accepts a linkable, unclaimed, visible person', () => {
+    expect(isInviteTargetEligible(grandma, [], false, ref)).toBe(true);
+    expect(isInviteTargetEligible(grandma, [{ familyMemberId: 'other' }, { familyMemberId: null }], false, ref)).toBe(true);
+  });
+
+  it('rejects children and pets', () => {
+    expect(isInviteTargetEligible({ id: 'k', name: 'Enzo', relationship: 'child' }, [], false, ref)).toBe(false);
+    expect(isInviteTargetEligible({ id: 'p', name: 'Rex', relationship: 'pet' }, [], false, ref)).toBe(false);
+  });
+
+  it('rejects an unsorted person under 13', () => {
+    expect(isInviteTargetEligible({ id: 'u', name: 'Kid', relationship: null, date_of_birth: '2022-01-01' }, [], false, ref)).toBe(false);
+  });
+
+  it('rejects a person already linked to any account, including the caller\'s own', () => {
+    expect(isInviteTargetEligible(grandma, [{ familyMemberId: 'g1' }], false, ref)).toBe(false);
+  });
+
+  it('rejects a content-safety hidden profile', () => {
+    expect(isInviteTargetEligible(grandma, [], true, ref)).toBe(false);
   });
 });

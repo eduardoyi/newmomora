@@ -4,6 +4,7 @@ import {
   formatInviteCodeInput,
   formatInviteExpiry,
   isValidInviteCodeShape,
+  liveInviteForMember,
   normalizeInviteCode,
   pickNewlyJoinedFamilyId,
   type FamilyMembershipLike,
@@ -87,6 +88,72 @@ describe('buildInviteShareMessage', () => {
     const message = buildInviteShareMessage('brave-otter-moon', 'Any family');
     expect(message).toContain('https://usemomora.com/invite?code=brave-otter-moon');
     expect(message).toContain('Enter code: brave-otter-moon');
+  });
+});
+
+describe('buildInviteShareMessage with an invitee name', () => {
+  it('greets the invitee by name and leaves the rest unchanged', () => {
+    const named = buildInviteShareMessage('sunny-tiger-lake', 'Any family', 'Grandma Ana').split('\n');
+    const plain = buildInviteShareMessage('sunny-tiger-lake', 'Any family').split('\n');
+
+    expect(named[0]).toBe(
+      "Hi Grandma Ana! I'm journaling our family's memories with Momora and I'd love you to join.",
+    );
+    expect(named.slice(1)).toEqual(plain.slice(1));
+  });
+
+  it('falls back to the unnamed greeting for null, empty, or blank names', () => {
+    const plain = buildInviteShareMessage('sunny-tiger-lake', 'Any family');
+
+    expect(buildInviteShareMessage('sunny-tiger-lake', 'Any family', null)).toBe(plain);
+    expect(buildInviteShareMessage('sunny-tiger-lake', 'Any family', '')).toBe(plain);
+    expect(buildInviteShareMessage('sunny-tiger-lake', 'Any family', '   ')).toBe(plain);
+  });
+});
+
+describe('liveInviteForMember', () => {
+  const now = new Date('2026-09-30T12:00:00Z');
+  const invite = (over: Partial<{ id: string; family_member_id: string | null; status: string; expires_at: string; created_at: string }>) => ({
+    id: 'i',
+    family_member_id: 'm1',
+    status: 'pending',
+    expires_at: '2026-10-05T00:00:00Z',
+    created_at: '2026-09-29T00:00:00Z',
+    ...over,
+  });
+
+  it('returns null with no invites for the member', () => {
+    expect(liveInviteForMember([], 'm1', now)).toBeNull();
+    expect(liveInviteForMember([invite({ family_member_id: 'm2' })], 'm1', now)).toBeNull();
+    expect(liveInviteForMember([invite({ family_member_id: null })], 'm1', now)).toBeNull();
+  });
+
+  it('returns the newest unexpired pending invite', () => {
+    const older = invite({ id: 'older', created_at: '2026-09-27T00:00:00Z' });
+    const newer = invite({ id: 'newer', created_at: '2026-09-29T00:00:00Z' });
+
+    expect(liveInviteForMember([older, newer], 'm1', now)?.id).toBe('newer');
+  });
+
+  it('ignores expired pending, revoked, and approved invites', () => {
+    expect(
+      liveInviteForMember(
+        [
+          invite({ id: 'expired', expires_at: '2026-09-30T11:00:00Z' }),
+          invite({ id: 'revoked', status: 'revoked' }),
+          invite({ id: 'approved', status: 'approved' }),
+        ],
+        'm1',
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it('prefers a redeemed invite over a pending one (and keeps it past expires_at)', () => {
+    const pending = invite({ id: 'pending' });
+    const redeemed = invite({ id: 'redeemed', status: 'redeemed', expires_at: '2026-09-01T00:00:00Z' });
+
+    expect(liveInviteForMember([pending, redeemed], 'm1', now)?.id).toBe('redeemed');
   });
 });
 

@@ -19,6 +19,8 @@ interface FakeInvite {
   status: string;
   expires_at: string;
   invited_by: string;
+  invitee_name?: string | null;
+  family_member_id?: string | null;
 }
 
 interface FakeState {
@@ -153,7 +155,7 @@ Deno.test('preview-family-invite rejects unsupported methods', async () => {
   assertEquals(response.status, 405);
 });
 
-Deno.test('happy path: returns ONLY familyName + inviterName, never membership/email/role/family id', async () => {
+Deno.test('happy path: returns ONLY familyName + inviterName + inviteeName, never membership/email/role/family id', async () => {
   const state = baseState();
   const client = createFakeServiceClient(state);
 
@@ -161,8 +163,8 @@ Deno.test('happy path: returns ONLY familyName + inviterName, never membership/e
 
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body, { familyName: "Rosa's family", inviterName: 'Rosa' });
-  assertEquals(Object.keys(body).sort(), ['familyName', 'inviterName']);
+  assertEquals(body, { familyName: "Rosa's family", inviterName: 'Rosa', inviteeName: null });
+  assertEquals(Object.keys(body).sort(), ['familyName', 'inviteeName', 'inviterName']);
 
   // Attempt logged by normalized code, not raw input.
   assertEquals(state.attempts.length, 1);
@@ -178,7 +180,39 @@ Deno.test('falls back to a generic inviter label when the inviter profile is gon
 
   assertEquals(response.status, 200);
   const body = await response.json();
-  assertEquals(body, { familyName: "Rosa's family", inviterName: 'A family member' });
+  assertEquals(body, {
+    familyName: "Rosa's family",
+    inviterName: 'A family member',
+    inviteeName: null,
+  });
+});
+
+Deno.test('returns the invitee name when the invite has one, and never the invited person id', async () => {
+  const state = baseState();
+  state.invites[0].invitee_name = 'Grandma Ana';
+  state.invites[0].family_member_id = '44444444-4444-4444-8444-444444444444';
+  const client = createFakeServiceClient(state);
+
+  const response = await processPreview(client as never, 'sunny-tiger-lake', null);
+
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, {
+    familyName: "Rosa's family",
+    inviterName: 'Rosa',
+    inviteeName: 'Grandma Ana',
+  });
+  assertEquals('family_member_id' in body, false);
+});
+
+Deno.test('an invite with a null invitee_name previews as inviteeName null', async () => {
+  const state = baseState();
+  state.invites[0].invitee_name = null;
+  const client = createFakeServiceClient(state);
+
+  const response = await processPreview(client as never, 'sunny-tiger-lake', null);
+
+  assertEquals((await response.json()).inviteeName, null);
 });
 
 for (const [label, mutate] of [

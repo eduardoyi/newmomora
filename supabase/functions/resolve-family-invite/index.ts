@@ -3,6 +3,14 @@
 // the membership (the DB's 50-cap trigger enforces the member limit), ALWAYS
 // points the redeemer's active_family_id at this family, marks the invite
 // approved, and pushes to the redeemer. Reject just marks the invite.
+//
+// An invite created "for a person" (family_member_id) also links the redeemer
+// to that person ("this is me") via apply_invite_member_link, best-effort:
+// approval never fails because of the link, and the response's `linked` flag
+// tells the approver when it was skipped (docs/plans/invite-for-person.md
+// D5). Known trade-off, same as the membership insert: if the status flip
+// fails after the insert + link, the row stays `redeemed`, and a later Reject
+// leaves that account a member (now also linked). No compensation.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
@@ -22,6 +30,13 @@ export interface ResolveFamilyInviteRequest {
 export interface ResolveFamilyInviteResponse {
   success: true;
   status: 'approved' | 'rejected';
+  /**
+   * Present only when the invite was for a family person (approve path).
+   * True only when the account was linked to them; false when the link was
+   * skipped or failed (the person was claimed / no longer linkable / deleted,
+   * the redeemer already had a link, or the RPC errored). Old clients ignore it.
+   */
+  linked?: boolean;
 }
 
 interface InviteRow {
@@ -30,6 +45,7 @@ interface InviteRow {
   role: string;
   status: string;
   redeemed_by: string | null;
+  family_member_id: string | null;
 }
 
 function buildApprovalEmailHtml(familyName: string): string {
@@ -48,7 +64,7 @@ export async function processResolution(
 ): Promise<Response> {
   const { data: inviteData, error: inviteError } = await serviceClient
     .from('family_invites')
-    .select('id, family_id, role, status, redeemed_by')
+    .select('id, family_id, role, status, redeemed_by, family_member_id')
     .eq('id', inviteId)
     .maybeSingle();
 
@@ -154,6 +170,34 @@ export async function processResolution(
     return errorResponse('Failed to resolve the invite', 500, 'internal_error');
   }
 
+  // Invite-for-a-person: link the redeemer to that person. Best-effort -- any
+  // error (or a skipped link) is logged by code only and surfaced to the
+  // approver via `linked: false`, never as a failed approval. Runs after the
+  // membership insert (incl. the 23505 already-a-member path) and right
+  // before the status flip, so a retry after a partial failure re-runs it
+  // idempotently.
+  let linked: boolean | undefined;
+  if (invite.family_member_id) {
+    linked = false;
+    try {
+      const { data: linkResult, error: linkError } = await serviceClient.rpc(
+        'apply_invite_member_link',
+        { p_invite_id: inviteId },
+      );
+
+      if (linkError) {
+        console.error('resolve-family-invite member link failed', linkError.code ?? 'unknown');
+      } else {
+        linked = linkResult === true;
+      }
+    } catch (linkThrown) {
+      console.error(
+        'resolve-family-invite member link failed',
+        linkThrown instanceof Error ? linkThrown.name : 'unknown',
+      );
+    }
+  }
+
   const { error: approveError } = await serviceClient
     .from('family_invites')
     .update({ status: 'approved', resolved_by: callerId, resolved_at: nowIso })
@@ -229,6 +273,9 @@ export async function processResolution(
   }
 
   const response: ResolveFamilyInviteResponse = { success: true, status: 'approved' };
+  if (linked !== undefined) {
+    response.linked = linked;
+  }
   return jsonResponse(response);
 }
 

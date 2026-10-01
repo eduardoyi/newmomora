@@ -27,7 +27,7 @@ import { getPendingInviteCode } from '@/utils/pending-invite-code';
 type ScreenState =
   | { kind: 'loading' }
   | { kind: 'missing-code' }
-  | { kind: 'ready'; familyName: string; inviterName: string }
+  | { kind: 'ready'; familyName: string; inviterName: string; inviteeName: string | null }
   | { kind: 'degraded' };
 
 export default function JoinFoundScreen() {
@@ -49,6 +49,8 @@ export default function JoinFoundScreen() {
       const { error: sessionError } = await ensureAnonymousSession();
 
       if (sessionError) {
+        // Clear any name left over from a previously entered code.
+        void patchJoinDraft({ inviteeName: undefined });
         if (isMounted) {
           setState({ kind: 'degraded' });
         }
@@ -62,12 +64,21 @@ export default function JoinFoundScreen() {
       }
 
       if (error || !data) {
+        void patchJoinDraft({ inviteeName: undefined });
         setState({ kind: 'degraded' });
         return;
       }
 
-      void patchJoinDraft({ inviterName: data.inviterName });
-      setState({ kind: 'ready', familyName: data.familyName, inviterName: data.inviterName });
+      void patchJoinDraft({
+        inviterName: data.inviterName,
+        inviteeName: data.inviteeName ?? undefined,
+      });
+      setState({
+        kind: 'ready',
+        familyName: data.familyName,
+        inviterName: data.inviterName,
+        inviteeName: data.inviteeName ?? null,
+      });
     })();
 
     return () => {
@@ -120,6 +131,7 @@ export default function JoinFoundScreen() {
 
   const familyName = state.kind === 'ready' ? state.familyName : null;
   const inviterName = state.kind === 'ready' ? state.inviterName : null;
+  const inviteeName = state.kind === 'ready' ? state.inviteeName : null;
 
   return (
     <OnbShell
@@ -163,7 +175,7 @@ export default function JoinFoundScreen() {
         </OnbDisplay>
         <OnbBody muted size={15} style={styles.centerText}>
           {inviterName
-            ? `${inviterName} invited you to see and share the family's memories.`
+            ? `${inviteeName ? `Hi ${inviteeName} — ` : ''}${inviterName} invited you to see and share the family's memories.`
             : "We couldn't confirm the details right now. You can continue, and we'll double check once you're signed in."}
         </OnbBody>
       </View>

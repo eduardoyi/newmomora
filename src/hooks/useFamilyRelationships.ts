@@ -18,6 +18,7 @@ import {
   setMyFamilyMember,
   unlinkFamilyMemberAccount,
   type FamilyMemberSuggestion,
+  type MembershipLink,
 } from '@/services/family-relationships';
 import type { FamilyMember } from '@/services/family-members';
 import { sideKeyOf } from '@/utils/family-relationships';
@@ -42,6 +43,8 @@ export function isSuggestionCurrent(suggestion: FamilyMemberSuggestion, member: 
       return false;
   }
 }
+
+const EMPTY_LINKS: MembershipLink[] = [];
 
 export function useFamilyRelationships(members: FamilyMember[]) {
   const { user } = useAuth();
@@ -145,6 +148,9 @@ export function useFamilyRelationships(members: FamilyMember[]) {
     myLink,
     myMemberId: myLink?.familyMemberId ?? null,
     claimedByOthers,
+    /** Every account's link in the family (for `isInviteTargetEligible`). */
+    links: linksQuery.data ?? EMPTY_LINKS,
+    refetchLinks: linksQuery.refetch,
     isLoadingLinks: linksQuery.isLoading,
     resolve: resolveMutation.mutateAsync,
     isResolving: resolveMutation.isPending,
