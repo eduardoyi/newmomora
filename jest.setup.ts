@@ -1,5 +1,30 @@
 import '@testing-library/jest-native/extend-expect';
+import { timeoutManager } from '@tanstack/react-query';
 import { WebSocket as NodeWebSocket } from 'ws';
+
+// TanStack Query garbage-collects an unobserved query after its `gcTime`,
+// via a plain setTimeout. Some hooks set long per-query gcTimes (55 min for
+// signed media/poster URLs -- useMediaUrls, useYearFilms) that override a
+// test QueryClient's `gcTime: Infinity`, so every unmount left a 55-minute
+// timer behind. In a single Jest process (e.g. `--detectOpenHandles`, which
+// implies --runInBand) those timers kept Node alive long after the last test:
+// CI's App job passed in ~2 min, then hung until its 25-min timeout.
+// Unref'd timers still fire if the process is alive but never keep it alive.
+// Delegates to the CURRENT global setTimeout so jest fake timers still work.
+timeoutManager.setTimeoutProvider({
+  setTimeout: (callback, delay) => {
+    const id = globalThis.setTimeout(callback, delay);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return id;
+  },
+  clearTimeout: (id) => globalThis.clearTimeout(id),
+  setInterval: (callback, delay) => {
+    const id = globalThis.setInterval(callback, delay);
+    (id as unknown as { unref?: () => void })?.unref?.();
+    return id;
+  },
+  clearInterval: (id) => globalThis.clearInterval(id),
+});
 
 // Supabase Realtime expects a standards-compatible WebSocket transport.
 // React Native supplies it in the app, but Node 20 does not expose one
