@@ -1,6 +1,6 @@
 # Memory Book — Everything-scope incident fixes
 
-Status: **Phase 0 DONE — deployed + live-verified 2026-10-01** · Phase 1 code-complete · **Phase 2 code-complete 2026-10-01 (not deployed; pending owner items below)** · Phase 3 next · Owner: Eduardo · Opened 2026-09-30
+Status: **DONE — Everything un-paused for all families 2026-10-01** after Phases 0, 1, 2, 2b, 2c, 2d, 2e and five dogfood rounds (owner approved round 5). Follow-ups: milestone detector over-tagging (upstream, analyze-memory); year-book merged multi-month birthday wording.
 Related: [memory-book.md](memory-book.md) (§4 scope table, §10.3 open
 question now RESOLVED below), [../features/memory-book-generation.md](../features/memory-book-generation.md).
 

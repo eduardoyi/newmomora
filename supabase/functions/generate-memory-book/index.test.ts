@@ -4,6 +4,7 @@ import {
   isFreshGeneratingMemoryBook,
   MEMORY_BOOK_LEASE_MS,
   MEMORY_BOOK_RECOVERY_GRACE_MS,
+  PAUSED_SCOPE_KINDS,
 } from './index.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -199,6 +200,7 @@ Deno.test('a paused scope (everything) is parked as failed and never dispatched'
           { onUpdate: (patch) => patches.push(patch) },
         ),
         getCallerFamilyRole: async () => 'owner',
+        pausedScopeKinds: new Set(['everything']),
         fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
       },
     );
@@ -223,6 +225,7 @@ Deno.test('a paused scope retried from failed is refused without another write',
         { onUpdate: () => { updates++; } },
       ),
       getCallerFamilyRole: async () => 'owner',
+        pausedScopeKinds: new Set(['everything']),
       fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
     },
   );
@@ -238,6 +241,7 @@ Deno.test('an already-ready book of a paused scope still reports ready', async (
       getAuthenticatedUser: async () => fakeUser(),
       createServiceClient: createStubClient({ id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status: 'ready', workflow_instance_id: 'x', generation_attempt_id: 'x', generation_started_at: null }),
       getCallerFamilyRole: async () => 'owner',
+        pausedScopeKinds: new Set(['everything']),
     },
   );
   assertEquals(response.status, 200);
@@ -291,6 +295,22 @@ Deno.test('never dispatches when the Cloudflare Worker is unconfigured (missing 
   assertEquals(response.status, 500);
 });
 
+Deno.test('production pauses nothing: an everything book dispatches normally (un-paused 2026-10-01)', async () => {
+  assertEquals(PAUSED_SCOPE_KINDS.size, 0);
+  await withDispatchEnv(async () => {
+    const response = await handleGenerateMemoryBook(
+      new Request('http://localhost', { method: 'POST', body: JSON.stringify({ memoryBookId: BOOK_ID }) }),
+      {
+        getAuthenticatedUser: async () => fakeUser(),
+        createServiceClient: createStubClient({ id: BOOK_ID, family_id: FAMILY_ID, scope_kind: 'everything', status: 'queued', workflow_instance_id: null, generation_attempt_id: null, generation_started_at: null }),
+        getCallerFamilyRole: async () => 'owner',
+        fetch: async () => new Response('{}', { status: 202 }),
+      },
+    );
+    assertEquals(response.status, 202);
+  });
+});
+
 Deno.test('isFreshGeneratingMemoryBook', () => {
   const now = Date.now();
   assertEquals(isFreshGeneratingMemoryBook(null, now), false);
@@ -325,6 +345,7 @@ async function runEverything(status: string) {
         { onUpdate: (patch) => patches.push(patch) },
       ),
       getCallerFamilyRole: async () => 'owner',
+        pausedScopeKinds: new Set(['everything']),
       fetch: async () => { dispatched = true; return new Response('{}', { status: 202 }); },
     },
   );

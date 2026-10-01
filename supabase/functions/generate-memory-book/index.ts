@@ -47,12 +47,27 @@ interface MemoryBookRow {
   generation_started_at: string | null;
 }
 
+// Server-side kill switch: scope kinds listed here are refused before any
+// claim/dispatch, for every app version (row parked failed/SCOPE_PAUSED, 409).
+// History: 'everything' was paused 2026-09-30 (multi-year window broke the
+// bridge's `.in(memoryIds)` sub-queries and the layout assumed one year) and
+// UN-PAUSED 2026-10-01 after Phases 0-2e (docs/plans/memory-book-everything-*.md)
+// passed owner review on dogfood books. Kept as an empty set so a scope can be
+// paused again with a one-line change + deploy.
+// Owner-only bypass: families listed (comma-separated ids) in the
+// MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST secret skip the pause and
+// generate normally, so a fix can be validated live before the pause is
+// lifted for everyone. Unset/empty = nobody; read per request.
+export const PAUSED_SCOPE_KINDS: ReadonlySet<string> = new Set<string>();
+
 export interface GenerateMemoryBookDependencies {
   getAuthenticatedUser: typeof getAuthenticatedUser;
   createServiceClient: typeof createServiceClient;
   getCallerFamilyRole: typeof getCallerFamilyRole;
   fetch: typeof fetch;
   now: () => number;
+  /** Scope kinds refused before claim/dispatch (test seam; defaults to PAUSED_SCOPE_KINDS). */
+  pausedScopeKinds: ReadonlySet<string>;
 }
 
 export const DEFAULT_DEPENDENCIES: GenerateMemoryBookDependencies = {
@@ -61,6 +76,7 @@ export const DEFAULT_DEPENDENCIES: GenerateMemoryBookDependencies = {
   getCallerFamilyRole,
   fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
   now: () => Date.now(),
+  pausedScopeKinds: PAUSED_SCOPE_KINDS,
 };
 
 // Provisional -- not yet measured against real production runs (this
@@ -70,17 +86,6 @@ export const DEFAULT_DEPENDENCIES: GenerateMemoryBookDependencies = {
 // this change's own report gives a real duration to calibrate against, per
 // docs/durable-ai-generation-workflows.md's warning against copying another
 // pipeline's lease "without measuring that pipeline").
-// Server-side kill switch (2026-09-30): scopes listed here are refused
-// before any claim/dispatch, for every app version. 'everything' is paused
-// because its multi-year window breaks the bridge's `.in(memoryIds)`
-// sub-queries (URL too long -> media/tags/milestones silently empty) and the
-// fitter/outline still assume a single year. Remove from this set once those
-// are fixed (docs/features/memory-book-generation.md).
-// Owner-only bypass: families listed (comma-separated ids) in the
-// MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST secret skip the pause and
-// generate normally, so a fix can be validated live before the pause is
-// lifted for everyone. Unset/empty = nobody; read per request.
-export const PAUSED_SCOPE_KINDS: ReadonlySet<string> = new Set(['everything']);
 
 /** Family ids exempt from PAUSED_SCOPE_KINDS. Entries are trimmed; empty
  * entries are dropped, so an unset/empty/garbage value allows nobody (a
@@ -195,7 +200,7 @@ export async function handleGenerateMemoryBook(
 
   const now = dependencies.now();
 
-  if (PAUSED_SCOPE_KINDS.has(row.scope_kind) && !pausedScopeAllowlist().has(row.family_id)) {
+  if (dependencies.pausedScopeKinds.has(row.scope_kind) && !pausedScopeAllowlist().has(row.family_id)) {
     // Park the row as failed (never left queued, which the app renders as
     // "making it now" forever). A status-matched update so it can't clobber
     // a concurrent transition; an in-flight attempt's publish is then
