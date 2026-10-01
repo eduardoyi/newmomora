@@ -1,9 +1,11 @@
 /**
- * Firsts selection for multi-year ("everything") books --
- * docs/plans/memory-book-everything-phase2.md §2.6 (D5 Firsts cap). Pure and
- * deterministic: no env, no IO, no clock. Not yet wired into outline.ts
- * (WP-B1 does that; Everything scope only, so year books keep ALL milestone
- * memories in firsts, unchanged).
+ * Firsts selection and the explicit-evidence gate --
+ * docs/plans/memory-book-everything-phase2.md §2.6 (D5 Firsts cap) and
+ * docs/plans/memory-book-everything-phase2d.md (Phase 2e: the book NEVER
+ * asserts a "first" without the parent's own words or a parent
+ * confirmation). Pure and deterministic: no env, no IO, no clock.
+ * `hasExplicitFirstLanguage` / `gateFirstsMilestones` apply to ALL scopes
+ * (year books and Everything); the cap/selection below is Everything-only.
  *
  * A multi-year book holds hundreds of milestone rows; the Firsts spread is
  * capped to the few most meaningful memories, then re-sorted
@@ -107,4 +109,53 @@ export function selectMultiYearFirsts(
     .slice(0, Math.max(0, maxMemories))
     .sort(compareChronological)
     .map((m) => m.id);
+}
+
+// ── Explicit-evidence gate (Phase 2e owner rule) ───────────────────────────
+//
+// Milestone detector rows are over-inferred (a haircut memory tagged
+// first-haircut). A memory may sit in the Firsts section for a milestone only
+// if (a) the milestone row is parent-`confirmed`, or (b) the memory's OWN text
+// contains explicit first-time language. Nothing is inferred from milestone
+// ids, photos, dates or the AI.
+
+/** Single words are enough: "por primera vez", "la primera vez", "el primer",
+ * "first time", "for the first time", "pela primeira vez" all contain one of
+ * these. Matched case/diacritic-insensitively on word boundaries, for the
+ * journal languages es / en / pt. */
+const EXPLICIT_FIRST_WORDS = [
+  'primer',
+  'primera',
+  'primeros',
+  'primeras',
+  'first',
+  'primeiro',
+  'primeira',
+  'primeiros',
+  'primeiras',
+];
+const EXPLICIT_FIRST_RE = new RegExp(`\\b(?:${EXPLICIT_FIRST_WORDS.join('|')})\\b`);
+
+function foldForMatch(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+/** True when the memory's own text explicitly says "first" (es/en/pt). */
+export function hasExplicitFirstLanguage(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return EXPLICIT_FIRST_RE.test(foldForMatch(text));
+}
+
+/**
+ * The milestones of a memory that may appear in Firsts: every one if the
+ * memory's text carries explicit first-time language, otherwise only the
+ * parent-`confirmed` ones.
+ */
+export function gateFirstsMilestones<M extends { status?: string | null }>(
+  milestones: ReadonlyArray<M>,
+  memoryText: string | null | undefined,
+): M[] {
+  if (milestones.length === 0) return [];
+  if (hasExplicitFirstLanguage(memoryText)) return [...milestones];
+  return milestones.filter((m) => m.status === 'confirmed');
 }

@@ -351,6 +351,11 @@ export interface OutlineSkeletonSummaryInput {
    * these memory ids (the capped Firsts set). `undefined` lists every row, as
    * single-year books always have. */
   firstsMemoryIds?: string[];
+  /** Phase 2e: when set, a FIRSTS MILESTONES row is listed ONLY for a
+   * `memoryId::milestoneId` key in this set (milestones with explicit
+   * evidence: parent-confirmed, or first-time language in the memory's own
+   * text). `undefined` lists every row of the listed memories. */
+  firstsMilestoneKeys?: string[];
   /** Multi-year books: the age-year chapters. When set, a CHAPTERS block is
    * printed and each BACKBONE SEGMENT line is tagged with its chapter. */
   chapters?: Array<{ ageYear: number; startMonth: string; endMonth: string }>;
@@ -397,9 +402,11 @@ export function buildOutlineUserPrompt(
     lines.push('FIRSTS MILESTONES (write a warm_name for EACH row -- see FIRSTS WARM NAMES above):');
     const sortedFeatures = [...features.values()].sort((a, b) => a.date.localeCompare(b.date));
     const firstsIdFilter = skeleton.firstsMemoryIds ? new Set(skeleton.firstsMemoryIds) : null;
+    const firstsKeyFilter = skeleton.firstsMilestoneKeys ? new Set(skeleton.firstsMilestoneKeys) : null;
     for (const feature of sortedFeatures) {
       if (firstsIdFilter && !firstsIdFilter.has(feature.id)) continue;
       for (const milestone of feature.milestones) {
+        if (firstsKeyFilter && !firstsKeyFilter.has(`${feature.id}::${milestone.milestoneId}`)) continue;
         lines.push(`- memory_id="${feature.id}" milestone_id="${milestone.milestoneId}" ("${milestone.name}")`);
       }
     }

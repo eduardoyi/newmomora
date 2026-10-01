@@ -30,6 +30,11 @@ Round 3 (Enzo c880ecf3: 102 kept, chapter keep-rates .167–.173; Mara 1e504065:
    c. worker emits `firstsWarmNames` on the firsts element, fitter reads
       `firstsEntries` → AI warm names never reach the renderer. Fix in the
       fitter by accepting the stored key (fixes existing books too).
+      **REVERTED in Phase 2e (2026-10-01, owner rule):** the book must never
+      assert a "first" in AI wording or without explicit parent evidence. The
+      fitter no longer reads `firstsWarmNames`; Firsts membership now requires a
+      parent-confirmed milestone or first-time language in the memory's own text
+      (all scopes). See docs/features/memory-book-generation.md changelog.
    d. `illustrated-stack-overflow`: a long illustrated story with a section
       header overflows when parity blocks the split.
 

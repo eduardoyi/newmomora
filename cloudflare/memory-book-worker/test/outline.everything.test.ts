@@ -340,12 +340,17 @@ describe('Everything outline + manifest (synthetic 4-year context)', () => {
     }
   });
 
-  it('caps Firsts at 6 memories, chronological, and lists only those in the prompt', async () => {
+  it('Firsts holds only memories with explicit evidence (confirmed row or first-time text), chronological, and the prompt lists only those', async () => {
     const context = buildContext();
     const { result, user } = await runEverything(context);
     const firsts = result.elements.find((e) => e.kind === 'firsts')!;
     expect(firsts.title).toBe('Big and small victories');
-    expect(firsts.memoryIds.length).toBeGreaterThan(0);
+    // The synthetic text is lorem ipsum (no first-time language): only the 5 parent-confirmed rows qualify.
+    const confirmedIds = new Set(
+      context.milestones.filter((m) => m.milestone_id !== 'birthday' && m.status === 'confirmed').map((m) => m.memory_id),
+    );
+    expect(confirmedIds.size).toBe(5);
+    expect(new Set(firsts.memoryIds)).toEqual(confirmedIds);
     expect(firsts.memoryIds.length).toBeLessThanOrEqual(6);
     const dateOf = new Map(context.memories.map((m) => [m.id, m.memory_date]));
     const dates = firsts.memoryIds.map((id) => dateOf.get(id)!);
@@ -353,10 +358,38 @@ describe('Everything outline + manifest (synthetic 4-year context)', () => {
 
     const promptRows = [...user.matchAll(/^- memory_id="([^"]+)" milestone_id="/gm)].map((m) => m[1]);
     expect(new Set(promptRows)).toEqual(new Set(firsts.memoryIds));
-    expect(user).toContain('Firsts (non-birthday explicit milestones) in scope: 6');
-    // Every non-selected milestone memory stays in the book's backbone, not Firsts.
+    expect(user).toContain('Firsts (non-birthday explicit milestones) in scope: 5');
+    // Every non-qualifying milestone memory stays in the book's backbone, not Firsts.
     const milestoneMemoryIds = new Set(context.milestones.filter((m) => m.milestone_id !== 'birthday').map((m) => m.memory_id));
     expect(milestoneMemoryIds.size).toBe(15);
+    // ...i.e. placed in a normal section (backbone, or a themed spread they belong to), never in Firsts.
+    const placedElsewhere = new Set(result.elements.filter((e) => e.kind === 'backbone' || e.kind === 'themed').flatMap((e) => e.memoryIds));
+    for (const id of milestoneMemoryIds) if (!confirmedIds.has(id)) expect(placedElsewhere.has(id)).toBe(true);
+  });
+
+  it('a candidate milestone whose memory text says "primer"/"first" qualifies; one without stays out of Firsts and the prompt rows', async () => {
+    const context = buildContext();
+    const candidateRows = context.milestones.filter((m) => m.milestone_id !== 'birthday' && m.status !== 'confirmed');
+    const withText = candidateRows[0];
+    const withoutText = candidateRows[1];
+    const memory = context.memories.find((m) => m.id === withText.memory_id)!;
+    memory.content = 'Hoy fue su primer corte de pelo y estuvo muy valiente.';
+    const { result, user } = await runEverything(context);
+    const firsts = result.elements.find((e) => e.kind === 'firsts')!;
+    expect(firsts.memoryIds).toContain(withText.memory_id);
+    expect(firsts.memoryIds).not.toContain(withoutText.memory_id);
+    expect(user).toContain(`memory_id="${withText.memory_id}" milestone_id="${withText.milestone_id}"`);
+    expect(user).not.toContain(`memory_id="${withoutText.memory_id}" milestone_id=`);
+    expect(user).toContain('Firsts (non-birthday explicit milestones) in scope: 6');
+  });
+
+  it('with no explicit evidence at all, no firsts element is emitted and the prompt has no FIRSTS MILESTONES block', async () => {
+    const context = buildContext();
+    for (const m of context.milestones) if (m.status === 'confirmed' && m.milestone_id !== 'birthday') m.status = 'candidate';
+    const { result, user } = await runEverything(context);
+    expect(result.elements.some((e) => e.kind === 'firsts')).toBe(false);
+    expect(user).toContain('Firsts (non-birthday explicit milestones) in scope: 0');
+    expect(user).not.toContain('FIRSTS MILESTONES');
   });
 
   it('admits <= 8 themed spreads (budget floor(min(600,122)/15)), <= 2 per chapter, none adjacent, placed by the worker (not the AI index)', async () => {

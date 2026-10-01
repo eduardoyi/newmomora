@@ -41,8 +41,8 @@ export function AudioNote({ page, manifest, showGuides }: TemplateProps) {
       <SafeArea isSpread={false}>
         <div className="audio-note" data-testid="audio-note">
           {sectionHeader && <SectionHeader {...sectionHeader} isSpread={false} />}
-          {notes.map((note, i) => (
-            <div key={note.id} className={`audio-note__entry${i > 0 ? ' audio-note__entry--ruled' : ''}`}>
+          {notes.map((note) => (
+            <div key={note.id} className="audio-note__entry">
               {textByMemory.get(note.content.memoryId) && (
                 <>
                   <span className="audio-note__date" style={{ fontSize: ptCqw(canvasPxToPt(9.5), false), color: colors.numeral }}>

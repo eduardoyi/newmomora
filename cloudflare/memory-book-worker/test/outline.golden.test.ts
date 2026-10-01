@@ -236,10 +236,17 @@ function buildContext(spec: ContextSpec): GenerationContextResponse {
   // Milestones on child-tagged memories: 9 "firsts" rows, plus birthday rows (age 1 x2 -> dissolves; age 2 x4 -> survives as birthday-2).
   const childTagged = memories.filter((m) => tags.some((t) => t.memory_id === m.id && t.family_member_id === CHILD_ID));
   let cursor = 0;
-  for (const milestoneId of [...FIRSTS_IDS, 'first-steps', 'first-word', 'crawling']) {
+  // Phase 2e: Firsts require explicit evidence. Every other row is
+  // parent-confirmed (qualifies); the rest are detector candidates on lorem
+  // text with no first-time language (must NOT become firsts) -- so the
+  // golden covers both sides of the gate.
+  for (const [i, milestoneId] of [...FIRSTS_IDS, 'first-steps', 'first-word', 'crawling'].entries()) {
     const m = childTagged[cursor];
     cursor += 7;
-    milestones.push({ memory_id: m.id, family_member_id: CHILD_ID, milestone_id: milestoneId, detail: null, out_of_band: false });
+    milestones.push({
+      memory_id: m.id, family_member_id: CHILD_ID, milestone_id: milestoneId, detail: null, out_of_band: false,
+      status: i % 2 === 0 ? 'confirmed' : 'candidate',
+    });
   }
   for (const age of [1, 1, 2, 2, 2, 2]) {
     const m = childTagged[cursor];

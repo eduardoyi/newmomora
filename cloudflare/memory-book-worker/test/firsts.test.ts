@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   FIRSTS_MAX_MEMORIES_MULTI_YEAR,
+  gateFirstsMilestones,
+  hasExplicitFirstLanguage,
   scoreFirstsMemory,
   selectMultiYearFirsts,
   type FirstsMemoryInput,
@@ -151,5 +153,67 @@ describe('selectMultiYearFirsts', () => {
     const memories = [mem('b', '2023-02-01', [ms('x')]), mem('a', '2023-01-01', [ms('y')])];
     selectMultiYearFirsts(memories);
     expect(memories.map((m) => m.id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('hasExplicitFirstLanguage (Phase 2e: explicit-text-only firsts)', () => {
+  it.each([
+    'Hoy fue su primer corte de pelo',
+    'Su primera palabra fue mamá',
+    'Los primeros pasos!',
+    'Las primeras gotas de lluvia',
+    'Lo probó por primera vez',
+    'Fue la primera vez que se rió',
+    'Ayer, el primer día de escuela',
+    'Her first haircut today',
+    'It was the first time he walked',
+    'He tried it for the first time',
+    'Foi o primeiro banho de mar',
+    'Ela deu a primeira risada',
+    'Provou pela primeira vez',
+    'PRIMER CUMPLEAÑOS',
+    'PRIMÉR dia',
+    'First!',
+    'the-first-step',
+  ])('matches %j', (text) => {
+    expect(hasExplicitFirstLanguage(text)).toBe(true);
+  });
+
+  it.each([
+    '',
+    'Fuimos a cortarnos el pelo',
+    'Se subió a la bici sin pedales',
+    'Firstborn of the family tree',
+    'Firsts and seconds',
+    'reprimer imprimer',
+    'comprimera',
+    'primavera en el parque',
+    'Primo Luis vino a verlo',
+    'primero fue el helado, luego el parque',
+  ])('does not match %j', (text) => {
+    expect(hasExplicitFirstLanguage(text)).toBe(false);
+  });
+
+  it('null / undefined are not explicit', () => {
+    expect(hasExplicitFirstLanguage(null)).toBe(false);
+    expect(hasExplicitFirstLanguage(undefined)).toBe(false);
+  });
+});
+
+describe('gateFirstsMilestones', () => {
+  const rows = [
+    { milestoneId: 'first-haircut', status: 'candidate' },
+    { milestoneId: 'first-steps', status: 'confirmed' },
+    { milestoneId: 'first-word' },
+  ];
+  it('without first-time language only parent-confirmed rows pass', () => {
+    expect(gateFirstsMilestones(rows, 'Fuimos a la peluquería').map((m) => m.milestoneId)).toEqual(['first-steps']);
+  });
+  it('with explicit first-time language in the memory text, every row passes', () => {
+    expect(gateFirstsMilestones(rows, 'Su primer corte de pelo').map((m) => m.milestoneId)).toEqual(['first-haircut', 'first-steps', 'first-word']);
+  });
+  it('no inference from milestone ids: candidate rows with no text never pass', () => {
+    expect(gateFirstsMilestones(rows.filter((r) => r.status !== 'confirmed'), null)).toEqual([]);
+    expect(gateFirstsMilestones([], 'primer')).toEqual([]);
   });
 });

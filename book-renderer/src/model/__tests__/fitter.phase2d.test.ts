@@ -174,7 +174,7 @@ describe('3b: birthday-N outline elements (year books) are laid out as a themed-
 // 3c. Firsts warm names: the worker's stored key
 // ---------------------------------------------------------------------------
 
-describe('3c: Firsts warm names are read from the worker\'s stored `firstsWarmNames` key', () => {
+describe('3c (reverted in Phase 2e): AI `firstsWarmNames` are NEVER rendered', () => {
   const book = (extra: Record<string, unknown>) => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ text: 'mama said she rode without training wheels', assets: [makeAsset()] }),
@@ -186,35 +186,27 @@ describe('3c: Firsts warm names are read from the worker\'s stored `firstsWarmNa
   const notes = (document: BookDocument) =>
     document.pages.flatMap((p) => ((p.params.footerIndex as Array<{ note: string | null }> | undefined) ?? []).map((e) => e.note));
 
-  it('uses firstsWarmNames (worker shape: memoryId + milestoneId + warmName) as the caption, and prints no raw text', () => {
+  it('ignores firstsWarmNames (worker shape) and prints the parent\'s own verbatim text instead', () => {
     const { manifest, outline } = book({
       firstsWarmNames: [
         { memoryId: 'mem-1', milestoneId: 'first-bike', warmName: 'Aprendiste a montar bicicleta sin pedales.' },
         { memoryId: 'mem-2', milestoneId: 'first-haircut', warmName: 'Tu primer corte de pelo.' },
       ],
     });
-    const { document } = fitBook(outline, manifest);
-    const printed = notes(document);
-    expect(printed).toContain('Aprendiste a montar bicicleta sin pedales.');
-    expect(printed).toContain('Tu primer corte de pelo.');
-    expect(printed.join(' ')).not.toContain('training wheels');
+    const printed = notes(fitBook(outline, manifest).document);
+    expect(printed.join(' ')).not.toContain('Aprendiste a montar bicicleta');
+    expect(printed.join(' ')).not.toContain('Tu primer corte de pelo');
+    expect(printed).toContain('mama said she rode without training wheels');
+    expect(printed).toContain('first haircut today');
   });
 
-  it('keeps reading the older `firstsEntries` key, which wins on conflict with firstsWarmNames', () => {
+  it('firstsWarmNames is also ignored when firstsEntries is present (only the contract key is read)', () => {
     const { manifest, outline } = book({
       firstsWarmNames: [{ memoryId: 'mem-1', milestoneId: 'x', warmName: 'From the worker key.' }],
       firstsEntries: [{ memoryId: 'mem-1', warmName: 'From the contract key.' }],
     });
     const printed = notes(fitBook(outline, manifest).document);
-    expect(printed).toContain('From the contract key.');
     expect(printed).not.toContain('From the worker key.');
-  });
-
-  it('a memory with no entry (or an empty warmName) falls back to its own verbatim text', () => {
-    const { manifest, outline } = book({ firstsWarmNames: [{ memoryId: 'mem-1', milestoneId: 'x', warmName: '  ' }] });
-    const printed = notes(fitBook(outline, manifest).document);
-    expect(printed).toContain('mama said she rode without training wheels');
-    expect(printed).toContain('first haircut today');
   });
 });
 

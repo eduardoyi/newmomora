@@ -46,7 +46,7 @@ import {
   suppressSurvivingBirthdaySpecialTitles,
 } from './backbone';
 import { chapterIndexOfMonth, computeBirthdayMonthsFromDob, resolveChapters, type AgeYearChapter } from './chapters';
-import { selectMultiYearFirsts } from './firsts';
+import { gateFirstsMilestones, selectMultiYearFirsts } from './firsts';
 import {
   admitThemedSpreads,
   capThemedSpreadsPerChapter,
@@ -233,13 +233,25 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   ];
 
   // ── Firsts (non-birthday milestones) ─────────────────────────────────────
-  // Everything: capped to the most meaningful few, chronological (D5);
-  // year books keep every milestone memory.
+  // Phase 2e owner rule (ALL scopes): a memory is a "first" only with explicit
+  // evidence -- a parent-`confirmed` milestone row, or first-time language in
+  // the memory's own text. Everything else stays in its backbone section.
+  // Everything: then capped to the most meaningful few, chronological (D5);
+  // year books keep every qualifying milestone memory.
+  const memoryTextById = new Map(context.memories.map((m) => [m.id, m.content]));
+  const gatedFirstsFeatures: MemoryFeatureWithStatus[] = [];
+  for (const f of features.values()) {
+    const gated = gateFirstsMilestones(f.milestones, memoryTextById.get(f.id));
+    if (gated.length > 0) gatedFirstsFeatures.push({ ...f, milestones: gated });
+  }
   const firstsMemoryIds = isEverything
-    ? selectMultiYearFirsts([...features.values()])
-    : [...features.values()]
-      .filter((f) => f.milestones.length > 0)
-      .map((f) => f.id);
+    ? selectMultiYearFirsts(gatedFirstsFeatures)
+    : gatedFirstsFeatures.map((f) => f.id);
+  const firstsMemoryIdSet = new Set(firstsMemoryIds);
+  // `memoryId::milestoneId` of every milestone row that may be listed as a first.
+  const firstsMilestoneKeys = gatedFirstsFeatures
+    .filter((f) => firstsMemoryIdSet.has(f.id))
+    .flatMap((f) => f.milestones.map((m) => `${f.id}::${m.milestoneId}`));
   const firstsCount = firstsMemoryIds.length;
   const firstsPresent = firstsCount >= FIRSTS_MIN_MILESTONES;
 
@@ -274,7 +286,9 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
     specialSegments: originalSpecialFlags,
     configuredLanguage: context.configuredLanguage,
     languageEvidenceCaptions: context.languageEvidenceCaptions,
-    ...(isEverything ? { firstsMemoryIds, multiYear: true } : {}),
+    firstsMemoryIds,
+    firstsMilestoneKeys,
+    ...(isEverything ? { multiYear: true } : {}),
     ...(chapters.length > 0 ? { chapters } : {}),
   };
 
@@ -292,12 +306,7 @@ export async function runOutlineStage(env: Env, context: GenerationContextRespon
   const wideOrientationMemoryIds = new Set(
     [...features.values()].filter((f) => f.photoOrientation?.orientation === 'wide').map((f) => f.id),
   );
-  const firstsMemoryIdSet = new Set(firstsMemoryIds);
-  const validMilestoneKeys = new Set(
-    [...features.values()]
-      .filter((f) => !isEverything || firstsMemoryIdSet.has(f.id))
-      .flatMap((f) => f.milestones.map((m) => `${f.id}::${m.milestoneId}`)),
-  );
+  const validMilestoneKeys = new Set(firstsMilestoneKeys);
 
   let parsedRaw: unknown = {};
   try {

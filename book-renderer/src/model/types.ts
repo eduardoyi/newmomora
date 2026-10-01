@@ -227,11 +227,10 @@ export interface OutlineElement {
    */
   firstsEntries?: OutlineFirstsEntry[];
   /**
-   * The key the memory-book worker ACTUALLY stores on a `firsts` element
-   * (`reading-order.ts`: `firstsWarmNames`, same `{ memoryId, milestoneId,
-   * warmName }` entry shape). The fitter reads both keys (`firstsEntries`
-   * wins on conflict), so books already stored with this key get their AI
-   * warm names without regeneration.
+   * The key the memory-book worker stores on a `firsts` element
+   * (`reading-order.ts`: `firstsWarmNames`). DELIBERATELY NEVER READ FOR
+   * DISPLAY (Phase 2e owner rule): the book never asserts a "first" in
+   * AI-written wording. Kept only so stored outlines type-check.
    */
   firstsWarmNames?: OutlineFirstsEntry[];
 }

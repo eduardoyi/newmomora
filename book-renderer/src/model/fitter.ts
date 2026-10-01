@@ -4658,9 +4658,12 @@ function runFit(
         // memories flow through the SAME content-page machinery as any
         // other section — no bespoke ruled index-list, no repeated
         // caption. The one twist: a memory with an AI-written `warm_name`
-        // (outline.json `firstsWarmNames` — or `firstsEntries`) uses that as its
+        // (outline.json `firstsEntries`, still arriving) uses that as its
         // footer caption instead of its own raw text (see
         // `buildFirstsTitlePage` and the caption-override map below).
+        // Phase 2e: the worker's stored `firstsWarmNames` key is deliberately
+        // NEVER read for display (the Phase 2d fix-c read was reverted) — AI
+        // wording must not assert a "first" on the page.
         // Round-5 item 2b: same dissolve-if-empty guard as 'themed' above —
         // firsts memories are never demoted (see the comment on
         // `EMPTY_ID_SET` below), but an upstream outline-integrity
@@ -4668,12 +4671,7 @@ function runFit(
         const titlePage = buildFirstsTitlePage(element, manifest);
         const priorLastTemplateId = state.lastTemplateId;
         state.lastTemplateId = titlePage.templateId;
-        // The worker stores `firstsWarmNames` (same entry shape); `firstsEntries`
-        // is the older renderer-contract key and wins on conflict.
-        const warmNames = new Map<string, string>();
-        for (const e of [...(element.firstsWarmNames ?? []), ...(element.firstsEntries ?? [])]) {
-          if (e && typeof e.memoryId === 'string' && typeof e.warmName === 'string' && e.warmName.trim() !== '') warmNames.set(e.memoryId, e.warmName);
-        }
+        const warmNames = new Map((element.firstsEntries ?? []).map((e) => [e.memoryId, e.warmName]));
         const contentPages = buildContentPages(
           element,
           manifest,
