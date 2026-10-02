@@ -1,10 +1,15 @@
 // S11 -- Notification question, an embedded permission (docs/plans/
 // onboarding-design-brief.md S11, docs/plans/onboarding-implementation.md
-// WP2). The first three option cards write `notificationChoice` and
-// immediately fire the real OS permission prompt via
-// `useNotificationsRegistration().requestRegistration()`, which now reads
-// as confirming the choice rather than a cold ask; the fourth skips the
-// prompt entirely -- no penalty, no re-ask this session.
+// WP2). Every option card writes `notificationChoice` and immediately fires
+// the real OS permission prompt via `requestPushPermission()`, which reads as
+// confirming the choice rather than a cold ask. The fourth turns off only the
+// daily reminder: it used to skip the prompt entirely, which left those
+// owners with no way to hear about their trial ending, a finished film, or
+// family comments (none of which had shipped when this screen was designed).
+// Its label and the reassurance line say exactly that, so the prompt that
+// follows is never a surprise -- and the OS dialog itself is still the user's
+// real choice. Permission only: there's no account yet to store a token on;
+// usePushTokenSync (app/(app)/_layout.tsx) does that after sign-in.
 //
 // Copy is the handoff's verbatim OnbNotify options (src/screens/
 // onboarding-capture.jsx in the extracted design bundle), not the design
@@ -27,7 +32,7 @@ import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbDisplay } from '@/components/onboarding/onb-typography';
 import { colors, emotionColors, fonts, radius, type EmotionName } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
-import { useNotificationsRegistration } from '@/hooks/useNotifications';
+import { requestPushPermission } from '@/hooks/useNotifications';
 import { onboardingEmailRoute } from '@/lib/onboarding-routes';
 import { trackEvent } from '@/services/analytics';
 import type { OnboardingNotificationChoice } from '@/utils/onboarding-progress';
@@ -35,7 +40,7 @@ import type { OnboardingNotificationChoice } from '@/utils/onboarding-progress';
 interface NotificationOption {
   id: OnboardingNotificationChoice;
   label: string;
-  /** Right-aligned time chip -- absent for 'none' (no reminder to promise a time for). */
+  /** Right-aligned time chip -- absent for 'none' (no daily reminder to promise a time for). */
   meta?: string;
   tint: EmotionName;
   Icon: typeof Moon;
@@ -45,12 +50,11 @@ const OPTIONS: NotificationOption[] = [
   { id: 'eve', label: "Evenings, once they're finally asleep", meta: '8:00 pm', tint: 'wonder', Icon: Moon },
   { id: 'late', label: 'Later, when the dishes are done', meta: '10:00 pm', tint: 'mischief', Icon: Moon },
   { id: 'morn', label: 'Mornings, coffee in hand', meta: '8:00 am', tint: 'joy', Icon: Sun },
-  { id: 'none', label: "No reminders. I'll show up on my own", tint: 'calm', Icon: X },
+  { id: 'none', label: "No daily reminder. I'll show up on my own", tint: 'calm', Icon: X },
 ];
 
 export default function OnboardingNotificationsScreen() {
   const { patch } = useOnboardingFlow();
-  const { requestRegistration } = useNotificationsRegistration(false);
   const [selected, setSelected] = useState<OnboardingNotificationChoice | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -63,15 +67,10 @@ export default function OnboardingNotificationsScreen() {
     setIsSubmitting(true);
     patch({ notificationChoice: option.id, step: 'email' });
 
-    // os_granted is null-safe for 'none' (no registration attempt to report
-    // an OS outcome for) and for a device where notifications aren't
-    // available at all (requestRegistration resolves null).
-    let osGranted: boolean | null = null;
-    if (option.id !== 'none') {
-      const result = await requestRegistration();
-      osGranted = result?.granted ?? null;
-    }
-    trackEvent('notification_choice', { choice: option.id, os_granted: osGranted });
+    // os_granted is null on a device where notifications aren't available
+    // at all (requestPushPermission resolves null).
+    const result = await requestPushPermission();
+    trackEvent('notification_choice', { choice: option.id, os_granted: result?.granted ?? null });
 
     router.push(onboardingEmailRoute);
   };
@@ -109,7 +108,7 @@ export default function OnboardingNotificationsScreen() {
       </View>
 
       <OnbBody muted size={12.5} style={styles.reassurance}>
-        Gentle nudges only. Never a notification that starts with &ldquo;Don&rsquo;t forget&hellip;&rdquo;
+        Either way, we&rsquo;ll tell you when a film is ready or your free week is ending. Never a notification that starts with &ldquo;Don&rsquo;t forget&hellip;&rdquo;
       </OnbBody>
     </OnbShell>
   );

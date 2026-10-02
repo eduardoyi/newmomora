@@ -16,6 +16,7 @@ import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typo
 import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useAuth } from '@/hooks/use-auth';
+import { useAttachmentPreviewUri } from '@/hooks/useVideoThumbnail';
 import { discardAnonymousSession } from '@/lib/anonymous-session';
 import { possessive } from '@/utils/onboarding-copy';
 
@@ -28,6 +29,9 @@ function normalizeEmail(email: string): string {
 export default function OnboardingEmailScreen() {
   const { draft } = useOnboardingFlow();
   const { requestSignUpOtp } = useAuth();
+
+  // A video capture shows its first frame (expo-image can't draw the file).
+  const { isVideo, previewUri } = useAttachmentPreviewUri(draft.capture?.mediaUri, draft.capture?.mediaContentType);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -92,11 +96,11 @@ export default function OnboardingEmailScreen() {
       <View style={styles.body}>
         <View style={styles.thumbnailRow}>
           <View style={styles.thumbnailFrame}>
-            {draft.capture?.mediaUri ? (
+            {previewUri ? (
               <Image
-                accessibilityLabel="Your captured memory"
+                accessibilityLabel={isVideo ? 'Your captured video' : 'Your captured memory'}
                 contentFit="cover"
-                source={{ uri: draft.capture.mediaUri }}
+                source={{ uri: previewUri }}
                 style={styles.thumbnailImage}
               />
             ) : (

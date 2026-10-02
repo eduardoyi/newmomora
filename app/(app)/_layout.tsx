@@ -6,7 +6,7 @@ import { OfflineBanner, OfflineBannerProvider } from '@/components/offline-banne
 import { colors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { useNotificationResponseRouting } from '@/hooks/useNotifications';
+import { useNotificationResponseRouting, usePushTokenSync } from '@/hooks/useNotifications';
 import { useAiUsageLimitNotices } from '@/hooks/useAiUsageLimitNotices';
 import { useGalleryImportDriver } from '@/hooks/useGalleryImportDriver';
 import { LookingBackSessionProvider } from '@/hooks/useLookingBackSession';
@@ -30,6 +30,11 @@ export default function AppLayout() {
   // renders only a spinner, so navigating any earlier would target routes
   // that aren't mounted yet.
   useNotificationResponseRouting(!isAuthLoading && Boolean(session) && !isFamilyLoading);
+  // Stores this device's push token whenever OS permission is already
+  // granted (never prompts). Onboarding asks for permission before the user
+  // has an account, so this is what actually connects that grant to their
+  // profile -- see syncPushTokenIfPermitted.
+  usePushTokenSync(!isAuthLoading && Boolean(session) && !session?.user.is_anonymous);
   const segments = useSegments();
   // expo-router's typed useSegments() return type is a union of per-depth
   // literal tuples, which collapses .includes()'s element type to `never`

@@ -1,6 +1,8 @@
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useEffect, useState } from 'react';
 
+import { isVideoContentType } from '@/utils/media-validation';
+
 export interface VideoThumbnailResult {
   uri: string;
   width: number;
@@ -84,4 +86,19 @@ export function useVideoThumbnail(
   cacheKey = videoUrl,
 ) {
   return useVideoThumbnailResult(videoUrl, cacheKey)?.uri ?? null;
+}
+
+/**
+ * A still that expo-image can actually draw for a local attachment: the file
+ * itself for a photo, a generated first frame for a video (null until it's
+ * ready). expo-image can't decode a video file, so handing it the raw .mov/.mp4
+ * URI renders an empty frame on iOS.
+ */
+export function useAttachmentPreviewUri(
+  uri: string | null | undefined,
+  contentType: string | null | undefined,
+): { isVideo: boolean; previewUri: string | null } {
+  const isVideo = Boolean(uri && contentType && isVideoContentType(contentType));
+  const thumbnailUri = useVideoThumbnail(isVideo ? uri : null);
+  return { isVideo, previewUri: isVideo ? thumbnailUri : uri ?? null };
 }

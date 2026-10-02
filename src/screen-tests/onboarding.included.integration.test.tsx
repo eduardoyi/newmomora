@@ -87,7 +87,9 @@ describe('IncludedScreen (S14)', () => {
 
     expect(getByText("Everything Lila's journal comes with:")).toBeTruthy();
     expect(getByText("Lila's illustrated portrait and storybook pages")).toBeTruthy();
-    expect(getByText('Unlimited memories: talk, type, photos, video')).toBeTruthy();
+    expect(getByText('Unlimited memories: talk, type, photos, video, even their little voice')).toBeTruthy();
+    expect(getByText('Little films of your months and birthdays')).toBeTruthy();
+    expect(getByText("Lila's story as a real printed book, whenever you want one (printing is extra)")).toBeTruthy();
     expect(getByText('The whole family can join, grandparents included, free')).toBeTruthy();
     expect(getByText('Every memory searchable, finally out of the camera roll')).toBeTruthy();
     expect(getByTestId('onb-included-promise')).toBeTruthy();
@@ -108,6 +110,7 @@ describe('IncludedScreen (S14)', () => {
     expect(getByText('Everything your journal comes with:')).toBeTruthy();
     expect(queryByText('Everything their journal comes with:')).toBeNull();
     expect(getByText('Their illustrated portrait and storybook pages')).toBeTruthy();
+    expect(getByText('Their story as a real printed book, whenever you want one (printing is extra)')).toBeTruthy();
   });
 
   it('uses "your journal" in the headline when three or more kids are tagged', () => {

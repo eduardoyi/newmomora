@@ -3,6 +3,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 
 import {
   clearVideoThumbnailCache,
+  useAttachmentPreviewUri,
   useVideoThumbnail,
   useVideoThumbnailResult,
 } from '@/hooks/useVideoThumbnail';
@@ -74,5 +75,36 @@ describe('useVideoThumbnail', () => {
 
     expect(second.result.current?.uri).toBe('file:///cached-frame.jpg');
     expect(mockedGetThumbnailAsync).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useAttachmentPreviewUri', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearVideoThumbnailCache();
+  });
+
+  it('passes a photo URI straight through without generating anything', () => {
+    const { result } = renderHook(() => useAttachmentPreviewUri('file:///photo.jpg', 'image/jpeg'));
+
+    expect(result.current).toEqual({ isVideo: false, previewUri: 'file:///photo.jpg' });
+    expect(mockedGetThumbnailAsync).not.toHaveBeenCalled();
+  });
+
+  it('swaps a video URI for its generated first frame (null until it is ready)', async () => {
+    mockedGetThumbnailAsync.mockResolvedValue({ uri: 'file:///frame.jpg', width: 1920, height: 1080 });
+
+    const { result } = renderHook(() => useAttachmentPreviewUri('file:///clip.mov', 'video/quicktime'));
+
+    expect(result.current).toEqual({ isVideo: true, previewUri: null });
+    await waitFor(() => {
+      expect(result.current).toEqual({ isVideo: true, previewUri: 'file:///frame.jpg' });
+    });
+  });
+
+  it('returns no preview when there is no attachment', () => {
+    const { result } = renderHook(() => useAttachmentPreviewUri(undefined, undefined));
+
+    expect(result.current).toEqual({ isVideo: false, previewUri: null });
   });
 });

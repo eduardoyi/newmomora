@@ -6,9 +6,12 @@ import { Platform } from 'react-native';
 
 import {
   isNotificationsAvailable,
+  requestPushPermission,
   routeFromPushData,
+  syncPushTokenIfPermitted,
   useNotificationResponseRouting,
   useNotificationsRegistration,
+  usePushTokenSync,
 } from '@/hooks/useNotifications';
 import { useFamily } from '@/hooks/use-family';
 import { useUserProfile } from '@/hooks/useUserProfile';
@@ -687,6 +690,141 @@ describe('useNotificationsRegistration requestRegistration', () => {
       isRegistered: false,
     });
     expect(mockedGetExpoPushToken).not.toHaveBeenCalled();
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestPushPermission (onboarding S11, pre-auth)', () => {
+  const originalOS = Platform.OS;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Platform.OS = 'ios';
+    mockedRequireOptionalNativeModule.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+  });
+
+  it('prompts when undetermined and never fetches or stores a token', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'undetermined', canAskAgain: true } as never);
+    mockedRequestPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+
+    await expect(requestPushPermission()).resolves.toEqual({ granted: true, canAskAgain: true });
+    expect(mockedRequestPermissions).toHaveBeenCalledTimes(1);
+    expect(mockedGetExpoPushToken).not.toHaveBeenCalled();
+  });
+
+  it('does not re-prompt when permission is already granted', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+
+    await expect(requestPushPermission()).resolves.toEqual({ granted: true, canAskAgain: true });
+    expect(mockedRequestPermissions).not.toHaveBeenCalled();
+  });
+
+  it('resolves null when notifications are unavailable in this build', async () => {
+    mockedRequireOptionalNativeModule.mockReturnValue(null);
+
+    await expect(requestPushPermission()).resolves.toBeNull();
+    expect(mockedGetPermissions).not.toHaveBeenCalled();
+  });
+
+  it('resolves not-granted instead of rejecting when the permission API throws', async () => {
+    mockedGetPermissions.mockRejectedValue(new Error('permissions unavailable'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
+
+    await expect(requestPushPermission()).resolves.toEqual({ granted: false, canAskAgain: true });
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('syncPushTokenIfPermitted', () => {
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedGetExpoPushToken.mockResolvedValue({ data: 'ExponentPushToken[new]' } as never);
+  });
+
+  it('stores the token when permission is already granted and the profile has none', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+
+    await expect(syncPushTokenIfPermitted(null, updateProfile)).resolves.toBe(true);
+    expect(updateProfile).toHaveBeenCalledWith({ expoPushToken: 'ExponentPushToken[new]' });
+  });
+
+  it('never prompts when permission is not granted', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'undetermined', canAskAgain: true } as never);
+
+    await expect(syncPushTokenIfPermitted(null, updateProfile)).resolves.toBe(false);
+    expect(mockedRequestPermissions).not.toHaveBeenCalled();
+    expect(mockedGetExpoPushToken).not.toHaveBeenCalled();
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('skips the write when the profile already holds this token', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+
+    await expect(syncPushTokenIfPermitted('ExponentPushToken[new]', updateProfile)).resolves.toBe(false);
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('resolves false instead of rejecting when the token fetch fails', async () => {
+    mockedGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+    mockedGetExpoPushToken.mockRejectedValue(new Error('Default FirebaseApp is not initialized'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(jest.fn());
+
+    await expect(syncPushTokenIfPermitted(null, updateProfile)).resolves.toBe(false);
+    expect(updateProfile).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('usePushTokenSync', () => {
+  const originalOS = Platform.OS;
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Platform.OS = 'ios';
+    mockedRequireOptionalNativeModule.mockReturnValue({});
+    mockedGetPermissions.mockResolvedValue({ status: 'granted', canAskAgain: true } as never);
+    mockedGetExpoPushToken.mockResolvedValue({ data: 'ExponentPushToken[new]' } as never);
+  });
+
+  afterEach(() => {
+    Platform.OS = originalOS;
+  });
+
+  it('syncs once per profile, not on every re-render', async () => {
+    mockedUseUserProfile.mockReturnValue({
+      profile: { id: 'user-1', expo_push_token: null },
+      updateProfile,
+    } as never);
+
+    const { rerender } = renderHook(() => usePushTokenSync(true));
+    await flushPromises();
+    rerender(undefined);
+    await flushPromises();
+
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+    expect(updateProfile).toHaveBeenCalledWith({ expoPushToken: 'ExponentPushToken[new]' });
+  });
+
+  it('does nothing while disabled or before the profile loads', async () => {
+    mockedUseUserProfile.mockReturnValue({ profile: undefined, updateProfile } as never);
+    renderHook(() => usePushTokenSync(true));
+    mockedUseUserProfile.mockReturnValue({
+      profile: { id: 'user-1', expo_push_token: null },
+      updateProfile,
+    } as never);
+    renderHook(() => usePushTokenSync(false));
+    await flushPromises();
+
+    expect(mockedGetPermissions).not.toHaveBeenCalled();
     expect(updateProfile).not.toHaveBeenCalled();
   });
 });

@@ -14,23 +14,32 @@
 //    normal-flow watermark (the app/(app)/memory/[id]/index.tsx editorial
 //    detail screen's treatment -- src/components/memory-card.tsx's own
 //    QuoteCard has no such glyph at all).
+// 4. (2026-10-02) A video capture was handed to expo-image as-is, which
+//    can't draw a video file -- an empty card on iOS. It now shows the
+//    generated first frame with a play badge and duration chip.
 // 3. The media card's photo used to be force-cropped to a hardcoded 4:3
 //    aspectRatio. It must measure the real image (aspectRatioFromDimensions
 //    + clampMediaAspectRatio, same helpers app/(app)/memory/[id]/index.tsx
 //    uses for its framed illustration) and fall back to the same neutral
 //    DEFAULT_MEDIA_ASPECT_RATIO placeholder before it has.
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import OnboardingAhaScreen from '../../app/(onboarding)/aha';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
+import { clearVideoThumbnailCache } from '@/hooks/useVideoThumbnail';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
 import { DEFAULT_MEDIA_ASPECT_RATIO, MIN_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
 import { createEmptyOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
 
 jest.mock('expo-router', () => ({
   router: { replace: jest.fn(), push: jest.fn(), back: jest.fn() },
+}));
+
+jest.mock('expo-video-thumbnails', () => ({
+  getThumbnailAsync: jest.fn(),
 }));
 
 jest.mock('@/hooks/use-onboarding-flow', () => ({
@@ -127,7 +136,7 @@ describe('OnboardingAhaScreen (S10) -- media card', () => {
   it('starts at the neutral 4:3 placeholder ratio before the image has measured, with no fixed crop applied', () => {
     const { getByTestId } = renderScreen();
 
-    expect(getByTestId('onboarding-aha-media-image')).toHaveStyle({
+    expect(getByTestId('onboarding-aha-media-frame')).toHaveStyle({
       aspectRatio: DEFAULT_MEDIA_ASPECT_RATIO,
     });
   });
@@ -142,7 +151,7 @@ describe('OnboardingAhaScreen (S10) -- media card', () => {
     // 1080/1920 = 0.5625, narrower than MIN_MEDIA_ASPECT_RATIO (3/4) -- clamped
     // up to the minimum rather than left uncropped-but-extreme, same as
     // app/(app)/memory/[id]/index.tsx's framed illustration.
-    expect(getByTestId('onboarding-aha-media-image')).toHaveStyle({
+    expect(getByTestId('onboarding-aha-media-frame')).toHaveStyle({
       aspectRatio: MIN_MEDIA_ASPECT_RATIO,
     });
   });
@@ -154,7 +163,7 @@ describe('OnboardingAhaScreen (S10) -- media card', () => {
       nativeEvent: { source: { width: 1200, height: 1200 } },
     });
 
-    expect(getByTestId('onboarding-aha-media-image')).toHaveStyle({ aspectRatio: 1 });
+    expect(getByTestId('onboarding-aha-media-frame')).toHaveStyle({ aspectRatio: 1 });
   });
 });
 
@@ -163,6 +172,49 @@ describe('OnboardingAhaScreen (S10) -- media card', () => {
 // pronoun choice, wrong pronoun *person*. journalPossessive flavors the
 // neutral multi-kid case "Your" instead (see its doc comment in
 // onboarding-copy.ts for the full reconciliation).
+describe('OnboardingAhaScreen (S10) -- video card', () => {
+  const mockedGetThumbnailAsync = VideoThumbnails.getThumbnailAsync as jest.MockedFunction<
+    typeof VideoThumbnails.getThumbnailAsync
+  >;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearVideoThumbnailCache();
+    mockDraft({
+      kidNames: ['Lila'],
+      capture: {
+        text: 'First time on the big slide.',
+        mediaUri: 'file:///var/mobile/onboarding-capture.mov',
+        mediaContentType: 'video/quicktime',
+        mediaAspectRatio: 16 / 9,
+        mediaDurationMs: 14_000,
+        taggedKidIndexes: [0],
+      },
+    });
+  });
+
+  it('shows the generated first frame, never the raw video file, with a play badge and duration', async () => {
+    mockedGetThumbnailAsync.mockResolvedValue({ uri: 'file:///frame.jpg', width: 1920, height: 1080 });
+    const { getByTestId, getByText } = renderScreen();
+
+    await waitFor(() => {
+      expect([getByTestId('onboarding-aha-media-image').props.source].flat()).toEqual([{ uri: 'file:///frame.jpg' }]);
+    });
+    expect(mockedGetThumbnailAsync).toHaveBeenCalledWith('file:///var/mobile/onboarding-capture.mov', { time: 0 });
+    expect(getByTestId('onboarding-aha-video-badge')).toBeTruthy();
+    expect(getByText('0:14')).toBeTruthy();
+  });
+
+  it('holds the frame at the picker ratio with a placeholder while the frame is generating', () => {
+    mockedGetThumbnailAsync.mockReturnValue(new Promise(() => undefined));
+    const { getByTestId, queryByTestId } = renderScreen();
+
+    expect(queryByTestId('onboarding-aha-media-image')).toBeNull();
+    expect(getByTestId('onboarding-aha-media-placeholder')).toBeTruthy();
+    expect(getByTestId('onboarding-aha-media-frame')).toHaveStyle({ aspectRatio: 16 / 9 });
+  });
+});
+
 describe('OnboardingAhaScreen (S10) -- saved caption journal wording', () => {
   beforeEach(() => {
     jest.clearAllMocks();

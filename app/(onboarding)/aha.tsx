@@ -7,7 +7,7 @@
 // looks like the app it leads into.
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Heart } from 'lucide-react-native';
+import { Heart, Play } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 
@@ -17,8 +17,10 @@ import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbEyebrow, OnbScript } from '@/components/onboarding/onb-typography';
 import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
+import { useAttachmentPreviewUri } from '@/hooks/useVideoThumbnail';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
 import { aspectRatioFromDimensions, clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
+import { formatVideoDurationLabel } from '@/utils/memories';
 import { capitalizeFragment, firstPageCaption, journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
 
 function TaggedAvatars({ names }: { names: string[] }) {
@@ -104,7 +106,16 @@ export default function OnboardingAhaScreen() {
   // reports natural width/height for local sources the same way -- no
   // network round trip needed, so this settles essentially immediately and
   // there is no empty/blank frame while waiting.
-  const [mediaAspectRatio, setMediaAspectRatio] = useState(DEFAULT_MEDIA_ASPECT_RATIO);
+  // Seeded from the picker's own ratio when the draft has one -- a video's
+  // first-frame still is generated asynchronously, so this keeps the card
+  // from resizing when it arrives.
+  const [mediaAspectRatio, setMediaAspectRatio] = useState(() =>
+    capture?.mediaAspectRatio ? clampMediaAspectRatio(capture.mediaAspectRatio) : DEFAULT_MEDIA_ASPECT_RATIO,
+  );
+  // expo-image can't draw a video file -- a video capture shows its
+  // generated first frame instead of an empty card on the one screen whose
+  // whole job is the payoff.
+  const { isVideo, previewUri } = useAttachmentPreviewUri(capture?.mediaUri, capture?.mediaContentType);
 
   useEffect(() => {
     Animated.timing(settleAnim, {
@@ -178,19 +189,37 @@ export default function OnboardingAhaScreen() {
           <View style={styles.card} testID="onboarding-aha-card">
             {capture?.mediaUri ? (
               <>
-                <Image
-                  accessibilityLabel="Your captured photo"
-                  contentFit="cover"
-                  onLoad={(event) => {
-                    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
-                    if (ratio) {
-                      setMediaAspectRatio(clampMediaAspectRatio(ratio));
-                    }
-                  }}
-                  source={{ uri: capture.mediaUri }}
-                  style={[styles.cardImage, { aspectRatio: mediaAspectRatio }]}
-                  testID="onboarding-aha-media-image"
-                />
+                <View style={[styles.cardImage, { aspectRatio: mediaAspectRatio }]} testID="onboarding-aha-media-frame">
+                  {previewUri ? (
+                    <Image
+                      accessibilityLabel={isVideo ? 'Your captured video' : 'Your captured photo'}
+                      contentFit="cover"
+                      onLoad={(event) => {
+                        const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                        if (ratio) {
+                          setMediaAspectRatio(clampMediaAspectRatio(ratio));
+                        }
+                      }}
+                      source={{ uri: previewUri }}
+                      style={StyleSheet.absoluteFill}
+                      testID="onboarding-aha-media-image"
+                    />
+                  ) : (
+                    <View style={[StyleSheet.absoluteFill, styles.mediaPlaceholder]} testID="onboarding-aha-media-placeholder" />
+                  )}
+                  {isVideo ? (
+                    <>
+                      {capture.mediaDurationMs ? (
+                        <View style={styles.durationChip}>
+                          <Text style={styles.durationChipText}>{formatVideoDurationLabel(capture.mediaDurationMs)}</Text>
+                        </View>
+                      ) : null}
+                      <View style={styles.playButton} testID="onboarding-aha-video-badge">
+                        <Play color={colors.white} fill={colors.white} size={16} />
+                      </View>
+                    </>
+                  ) : null}
+                </View>
                 {capture.text ? (
                   <View style={styles.captionWrap}>
                     <OnbBody size={14.5} style={styles.caption}>{capture.text}</OnbBody>
@@ -276,6 +305,37 @@ const styles = StyleSheet.create({
   },
   cardImage: {
     width: '100%',
+  },
+  mediaPlaceholder: {
+    backgroundColor: emotionColors.joy.soft,
+  },
+  // Same video affordances as the S10b showcase cards (year.tsx).
+  playButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(44,36,24,0.5)',
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    left: '50%',
+    marginLeft: -22,
+    marginTop: -22,
+    position: 'absolute',
+    top: '50%',
+    width: 44,
+  },
+  durationChip: {
+    backgroundColor: 'rgba(44,36,24,0.62)',
+    borderRadius: 999,
+    bottom: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    position: 'absolute',
+    right: 10,
+  },
+  durationChipText: {
+    color: colors.white,
+    fontFamily: fonts.sansBold,
+    fontSize: 11,
   },
   captionWrap: {
     paddingHorizontal: spacing.md,

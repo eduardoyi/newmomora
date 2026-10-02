@@ -168,6 +168,7 @@ jest.mock('lucide-react-native', () => ({
   MessageCircle: () => null,
   Mic: () => null,
   Moon: () => null,
+  Play: () => null,
   Search: () => null,
   Send: () => null,
   Sparkles: () => null,

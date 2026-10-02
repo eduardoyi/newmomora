@@ -84,39 +84,129 @@ function loadNotifications(): typeof import('expo-notifications') {
   return require('expo-notifications');
 }
 
+type Notifications = ReturnType<typeof loadNotifications>;
+type UpdateProfile = ReturnType<typeof useUserProfile>['updateProfile'];
+
+function installForegroundHandler(Notifications: Notifications): void {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+async function getOrRequestPermission(
+  Notifications: Notifications,
+): Promise<{ granted: boolean; canAskAgain: boolean }> {
+  const permissions = await Notifications.getPermissionsAsync();
+
+  if (permissions.status === 'granted') {
+    return { granted: true, canAskAgain: permissions.canAskAgain };
+  }
+
+  const requested = await Notifications.requestPermissionsAsync();
+  return { granted: requested.status === 'granted', canAskAgain: requested.canAskAgain };
+}
+
+/**
+ * OS permission prompt only -- no token is stored. For onboarding's S11,
+ * which runs before the user has an account (there's no profile to write a
+ * token to yet); `usePushTokenSync` stores the token once they're signed in.
+ * Resolves null when notifications aren't available in this build. Never
+ * throws.
+ */
+export async function requestPushPermission(): Promise<{ granted: boolean; canAskAgain: boolean } | null> {
+  if (!isNotificationsAvailable()) {
+    return null;
+  }
+
+  try {
+    const Notifications = loadNotifications();
+    installForegroundHandler(Notifications);
+    return await getOrRequestPermission(Notifications);
+  } catch (error) {
+    warnRegistrationFailure('permission request', error);
+    return { granted: false, canAskAgain: true };
+  }
+}
+
+/**
+ * Stores this device's push token on the signed-in profile when permission
+ * is ALREADY granted -- never prompts. Without this, a token only reached the
+ * profile when the Settings tab mounted, so an owner who granted permission
+ * during onboarding (pre-auth, nothing to write to) got no pushes at all --
+ * daily reminders, trial-ending, film-ready -- until they happened to open
+ * Settings. Running it per signed-in launch also makes the most recently
+ * opened device the one that receives pushes (single-token column, see
+ * docs/features/family-sharing.md). Resolves whether a token was written.
+ * Never throws.
+ */
+export async function syncPushTokenIfPermitted(
+  currentToken: string | null | undefined,
+  updateProfile: UpdateProfile,
+): Promise<boolean> {
+  try {
+    const Notifications = loadNotifications();
+    const permissions = await Notifications.getPermissionsAsync();
+
+    if (permissions.status !== 'granted') {
+      return false;
+    }
+
+    installForegroundHandler(Notifications);
+    const token = await Notifications.getExpoPushTokenAsync();
+
+    if (token.data === currentToken) {
+      return false;
+    }
+
+    await updateProfile({ expoPushToken: token.data });
+    return true;
+  } catch (error) {
+    warnRegistrationFailure('token sync', error);
+    return false;
+  }
+}
+
+/** Mount once for the signed-in app session (app/(app)/_layout.tsx). */
+export function usePushTokenSync(enabled: boolean): void {
+  const { profile, updateProfile } = useUserProfile();
+  const syncedProfileIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !profile || !isNotificationsAvailable()) {
+      return;
+    }
+
+    if (syncedProfileIdRef.current === profile.id) {
+      return;
+    }
+
+    syncedProfileIdRef.current = profile.id;
+    void syncPushTokenIfPermitted(profile.expo_push_token, updateProfile);
+  }, [enabled, profile, updateProfile]);
+}
+
 // Never throws: the mount-time effect fires this as a fire-and-forget `void`
 // call, so any rejection would surface as an unhandled rejection (dev
 // red-box). E.g. getExpoPushTokenAsync throws on Android when the binary
 // predates google-services.json ("Default FirebaseApp is not initialized").
 async function registerForPushNotifications(
-  updateProfile: ReturnType<typeof useUserProfile>['updateProfile'],
+  updateProfile: UpdateProfile,
 ): Promise<PushRegistrationResult> {
   let canAskAgain = true;
 
   try {
     const Notifications = loadNotifications();
+    installForegroundHandler(Notifications);
 
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-      }),
-    });
+    const permission = await getOrRequestPermission(Notifications);
+    canAskAgain = permission.canAskAgain;
 
-    const permissions = await Notifications.getPermissionsAsync();
-
-    let finalStatus = permissions.status;
-    canAskAgain = permissions.canAskAgain;
-
-    if (finalStatus !== 'granted') {
-      const requested = await Notifications.requestPermissionsAsync();
-      finalStatus = requested.status;
-      canAskAgain = requested.canAskAgain;
-    }
-
-    if (finalStatus !== 'granted') {
+    if (!permission.granted) {
       return { granted: false, canAskAgain, isRegistered: false };
     }
 

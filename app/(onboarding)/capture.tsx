@@ -9,7 +9,7 @@
 // KeyboardAwareScrollView handles keyboard avoidance for the compose state.
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Mic, Square, Type, X } from 'lucide-react-native';
+import { Mic, Play, Square, Type, X } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -35,6 +35,7 @@ import { OnbBody, OnbDisplay, OnbScript } from '@/components/onboarding/onb-typo
 import { colors, fonts, radius } from '@/constants/theme';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
+import { useAttachmentPreviewUri } from '@/hooks/useVideoThumbnail';
 import { ensureAnonymousSession } from '@/lib/anonymous-session';
 import { onboardingAhaRoute } from '@/lib/onboarding-routes';
 import { processOnboardingVoiceMemory } from '@/services/ai';
@@ -207,6 +208,13 @@ export default function OnboardingCaptureScreen() {
       void recorder.stop();
     }
   }, [recorder, recorderState.durationMillis, recorderState.isRecording]);
+
+  // expo-image can't draw a video file; a video attachment shows its
+  // generated first frame instead.
+  const { isVideo: isAttachedVideo, previewUri: attachedPreviewUri } = useAttachmentPreviewUri(
+    attachedMedia?.uri,
+    attachedMedia?.contentType,
+  );
 
   const nameHints = useMemo(() => buildNameHints(kidNames), [kidNames]);
   const prompt = capturePrompt(kidNames, selectedKidIndexes);
@@ -435,14 +443,24 @@ export default function OnboardingCaptureScreen() {
         <View style={styles.composeBody}>
           {attachedMedia ? (
             <View style={styles.photoThumbWrap}>
-              <Image
-                accessibilityLabel="Attached photo"
-                contentFit="cover"
-                source={{ uri: attachedMedia.uri }}
-                style={styles.photoThumb}
-              />
+              {attachedPreviewUri ? (
+                <Image
+                  accessibilityLabel={isAttachedVideo ? 'Attached video' : 'Attached photo'}
+                  contentFit="cover"
+                  source={{ uri: attachedPreviewUri }}
+                  style={styles.photoThumb}
+                  testID="onboarding-capture-media-thumb"
+                />
+              ) : (
+                <View style={[styles.photoThumb, styles.photoThumbPlaceholder]} />
+              )}
+              {isAttachedVideo ? (
+                <View pointerEvents="none" style={styles.videoBadge} testID="onboarding-capture-video-badge">
+                  <Play color={colors.white} fill={colors.white} size={14} />
+                </View>
+              ) : null}
               <Pressable
-                accessibilityLabel="Remove photo"
+                accessibilityLabel={isAttachedVideo ? 'Remove video' : 'Remove photo'}
                 accessibilityRole="button"
                 onPress={handleRemoveMedia}
                 style={styles.photoRemoveBtn}
@@ -621,6 +639,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     height: '100%',
     width: '100%',
+  },
+  photoThumbPlaceholder: {
+    backgroundColor: colors.primaryTint,
+  },
+  videoBadge: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(44,36,24,0.5)',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    left: '50%',
+    marginLeft: -18,
+    marginTop: -18,
+    position: 'absolute',
+    top: '50%',
+    width: 36,
   },
   photoRemoveBtn: {
     alignItems: 'center',

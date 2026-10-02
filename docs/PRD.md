@@ -638,7 +638,7 @@ The following are **post-MVP**. They must not block or expand MVP scope:
 | AI moderation blocks innocent parenting content | Failed illustrations, user frustration | Pre-check + rewrite pipeline; retry with softened prompt |
 | Character inconsistency across memories | Breaks core value prop | Fixed style reference + portrait-as-anchor workflow |
 | Slow/unreliable image generation | Poor UX, abandonment | Async jobs, status polling, retry UX; text always saves first |
-| App becomes "another chore" — the category-wide failure pattern (abandoned baby books, churned prompt apps) | Abandonment, and the app itself becomes a new guilt source | Forgiving capture (backdating first-class, no streaks, lapses invisible); onboarding aha moment; single gentle daily reminder, easily disabled |
+| App becomes "another chore" — the category-wide failure pattern (abandoned baby books, churned prompt apps) | Abandonment, and the app itself becomes a new guilt source | Forgiving capture (backdating first-class, no streak shaming, lapses invisible); onboarding aha moment; single gentle daily reminder, easily disabled |
 | Sensitive child data exposure | Trust/legal risk | Private buckets, RLS, no public links in MVP |
 | Voice transcription inaccuracy | Wrong tags, editing burden | Family-name context prompt + editable transcript + manual tag override |
 | Expo Go unavailable for SDK 56 | Dev friction | EAS development builds from day one |

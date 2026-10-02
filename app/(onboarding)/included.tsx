@@ -44,12 +44,20 @@ export default function IncludedScreen() {
 
   const items = useMemo(
     () => [
-      'Unlimited memories: talk, type, photos, video',
+      'Unlimited memories: talk, type, photos, video, even their little voice',
       // Sentence-initial in a bullet, so it needs capitalizing: this used to
       // always be a proper name ("Lila's") and read correctly by accident.
       // Multi-child families now resolve to the neutral fragment, which is
       // lowercase by design (see kidsPossessive's doc comment).
       `${capitalizeFragment(resolvedPossessive)} illustrated portrait and storybook pages`,
+      // Year Film (docs/features/year-film.md). Deliberately not "every
+      // month": a monthly recap needs 10+ memories, and thin periods are
+      // skipped.
+      'Little films of your months and birthdays',
+      // Memory Book: generating it is included, printing is a separate
+      // purchase (docs/features/memory-book-orders.md) -- say so here rather
+      // than let a "comes with" list imply free printing.
+      `${capitalizeFragment(resolvedPossessive)} story as a real printed book, whenever you want one (printing is extra)`,
       'The whole family can join, grandparents included, free',
       'Every memory searchable, finally out of the camera roll',
     ],

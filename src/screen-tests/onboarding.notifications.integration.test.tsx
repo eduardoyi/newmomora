@@ -2,18 +2,18 @@
 // no-family.test.tsx for why screen tests live here and import the screen
 // via a relative path instead.
 //
-// Covers WP2's S11 (docs/plans/onboarding-implementation.md): the first
-// three option cards write `notificationChoice` and fire the real OS
-// permission prompt via useNotificationsRegistration().requestRegistration();
-// the fourth ("No reminders") skips the prompt entirely -- no penalty, no
-// re-ask this session.
+// Covers WP2's S11 (docs/plans/onboarding-implementation.md): every option
+// card writes `notificationChoice` and fires the real OS permission prompt
+// via requestPushPermission(). The fourth ("No daily reminder") only turns
+// off the daily reminder -- it still asks, so trial-ending and film-ready
+// pushes can reach the owner (2026-10-02).
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import OnboardingNotificationsScreen from '../../app/(onboarding)/notifications';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
-import { useNotificationsRegistration } from '@/hooks/useNotifications';
+import { requestPushPermission } from '@/hooks/useNotifications';
 import { onboardingEmailRoute } from '@/lib/onboarding-routes';
 import { trackEvent } from '@/services/analytics';
 import { createEmptyOnboardingDraft } from '@/utils/onboarding-progress';
@@ -27,7 +27,7 @@ jest.mock('@/hooks/use-onboarding-flow', () => ({
 }));
 
 jest.mock('@/hooks/useNotifications', () => ({
-  useNotificationsRegistration: jest.fn(),
+  requestPushPermission: jest.fn(),
 }));
 
 jest.mock('@/services/analytics', () => ({
@@ -47,9 +47,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof useOnboardingFlow>;
-const mockedUseNotificationsRegistration = useNotificationsRegistration as jest.MockedFunction<
-  typeof useNotificationsRegistration
->;
+const requestRegistration = requestPushPermission as jest.MockedFunction<typeof requestPushPermission>;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen() {
@@ -67,7 +65,6 @@ function renderScreen() {
 
 describe('OnboardingNotificationsScreen (S11)', () => {
   const patch = jest.fn();
-  const requestRegistration = jest.fn().mockResolvedValue(null);
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -78,13 +75,6 @@ describe('OnboardingNotificationsScreen (S11)', () => {
       clear: jest.fn(),
     });
     requestRegistration.mockResolvedValue(null);
-    mockedUseNotificationsRegistration.mockReturnValue({ requestRegistration });
-  });
-
-  it('disables the automatic mount-time registration effect (passes enabled: false)', () => {
-    renderScreen();
-
-    expect(mockedUseNotificationsRegistration).toHaveBeenCalledWith(false);
   });
 
   it('renders the handoff\'s verbatim option copy with an honest time chip on each real option', () => {
@@ -96,11 +86,11 @@ describe('OnboardingNotificationsScreen (S11)', () => {
     expect(getByText('10:00 pm')).toBeTruthy();
     expect(getByText('Mornings, coffee in hand')).toBeTruthy();
     expect(getByText('8:00 am')).toBeTruthy();
-    expect(getByText("No reminders. I'll show up on my own")).toBeTruthy();
+    expect(getByText("No daily reminder. I'll show up on my own")).toBeTruthy();
   });
 
   it.each(['eve', 'morn', 'late'])('selecting a real option writes notificationChoice %s, fires the OS prompt, and advances to email', async (choiceId) => {
-    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true, isRegistered: true });
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true });
     const screen = renderScreen();
 
     fireEvent.press(screen.getByTestId(`onboarding-notifications-option-${choiceId}`));
@@ -118,7 +108,7 @@ describe('OnboardingNotificationsScreen (S11)', () => {
   });
 
   it('reports os_granted: false when the OS prompt is denied', async () => {
-    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: true, isRegistered: false });
+    requestRegistration.mockResolvedValue({ granted: false, canAskAgain: true });
     const screen = renderScreen();
 
     fireEvent.press(screen.getByTestId('onboarding-notifications-option-eve'));
@@ -139,19 +129,26 @@ describe('OnboardingNotificationsScreen (S11)', () => {
     });
   });
 
-  it('selecting "No reminders" writes notificationChoice: none, never calls requestRegistration, and advances to email', async () => {
+  it('selecting "No daily reminder" writes notificationChoice: none, still asks the OS, and advances to email', async () => {
+    requestRegistration.mockResolvedValue({ granted: true, canAskAgain: true });
     const screen = renderScreen();
 
     fireEvent.press(screen.getByTestId('onboarding-notifications-option-none'));
 
     expect(patch).toHaveBeenCalledWith({ notificationChoice: 'none', step: 'email' });
-    expect(requestRegistration).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(requestRegistration).toHaveBeenCalledTimes(1);
+    });
     await waitFor(() => {
       expect(router.push).toHaveBeenCalledWith(onboardingEmailRoute);
     });
-    // 'none' never attempts registration, so os_granted is null-safe rather
-    // than reporting a false OS denial that never happened.
-    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: 'none', os_granted: null });
+    expect(mockedTrackEvent).toHaveBeenCalledWith('notification_choice', { choice: 'none', os_granted: true });
+  });
+
+  it('tells the user what still gets through before they pick, so the prompt after "No daily reminder" is not a surprise', () => {
+    const { getByText } = renderScreen();
+
+    expect(getByText(/tell you when a film is ready or your free week is ending/)).toBeTruthy();
   });
 
   it('ignores a second tap while the first selection is still processing', async () => {
