@@ -361,6 +361,7 @@ export default function OnboardingCaptureScreen() {
         // OnboardingDraftCapture's doc comment for why this matters.
         mediaAspectRatio: attachedMedia?.aspectRatio,
         mediaDurationMs: attachedMedia?.durationMs,
+        mediaCapturedAtIso: attachedMedia?.capturedAtIso,
         taggedKidIndexes: selectedKidIndexes,
       },
       step: 'aha',
@@ -382,6 +383,7 @@ export default function OnboardingCaptureScreen() {
             {!attachedMedia ? (
               <MemoryMediaPicker
                 compact
+                includeCaptureDate
                 onError={setMediaError}
                 onSelect={handleAddMedia}
                 remainingSlots={1}

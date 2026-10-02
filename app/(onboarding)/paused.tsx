@@ -36,6 +36,7 @@ import { DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
 import { isVideoContentType } from '@/utils/media-validation';
 import { formatDisplayDate } from '@/utils/memories';
 import { capitalizeFragment, journalPossessive } from '@/utils/onboarding-copy';
+import { onboardingCaptureMemoryDate } from '@/utils/onboarding-progress';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 const CARD_TEXT_LINES = 4;
@@ -101,7 +102,7 @@ function useFirstPage(): { page: FirstPage | null; hasMedia: boolean } {
         taggedNames: capture.taggedKidIndexes
           .map((index) => draft.kidNames[index])
           .filter((name): name is string => Boolean(name)),
-        dayLabel: formatDisplayDate(getLocalTodayIso()),
+        dayLabel: formatDisplayDate(onboardingCaptureMemoryDate(capture, getLocalTodayIso())),
       },
     };
   }

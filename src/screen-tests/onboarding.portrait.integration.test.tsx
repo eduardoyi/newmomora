@@ -28,7 +28,9 @@ import type { ReactNode } from 'react';
 
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useFamily } from '@/hooks/use-family';
 import { startPendingOnboardingIllustration } from '@/services/billing';
+import { ensureOwnerFamilyPerson } from '@/services/family-relationships';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { onboardingRevealRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
@@ -59,6 +61,10 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
 
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(() => ({ familyId: 'family-1' })),
+}));
+
+jest.mock('@/services/family-relationships', () => ({
+  ensureOwnerFamilyPerson: jest.fn(),
 }));
 
 jest.mock('@/services/billing', () => ({
@@ -188,6 +194,8 @@ describe('PortraitScreen (S16)', () => {
     mockedGetPendingResultAsync.mockResolvedValue(null);
     mockedParsePendingPickerResult.mockReturnValue({});
     mockedStartIllustration.mockResolvedValue({ data: null, error: null });
+    (ensureOwnerFamilyPerson as jest.Mock).mockResolvedValue({ memberId: null, skipped: 'already_set' });
+    (useFamily as jest.Mock).mockReturnValue({ familyId: 'family-1' });
     mockPickerControls.pick = null;
   });
 
@@ -611,6 +619,51 @@ describe('PortraitScreen (S16)', () => {
       });
 
       expect(getByTestId('onb-portrait-before-image').props.source[0]).toBe(onboardingPortraitPairs[0].photo);
+    });
+  });
+
+  describe("owner's own person (2026-10-02)", () => {
+    it('creates and links it once for an owner, never for a manager', () => {
+      mockedUseFamilyMembers.mockReturnValue({ members: [LILA_MEMBER], isLoading: false } as unknown as ReturnType<
+        typeof useFamilyMembers
+      >);
+      mockDraft({ kidNames: ['Lila'], capture: null });
+
+      (useFamily as jest.Mock).mockReturnValue({ familyId: 'family-1', role: 'owner' });
+      const screen = renderScreen();
+      screen.rerender(
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            insets: { bottom: 34, left: 0, right: 0, top: 47 },
+          }}
+        >
+          <PortraitScreen />
+        </SafeAreaProvider>,
+      );
+      expect(ensureOwnerFamilyPerson).toHaveBeenCalledTimes(1);
+      expect(ensureOwnerFamilyPerson).toHaveBeenCalledWith('family-1');
+
+      jest.clearAllMocks();
+      (useFamily as jest.Mock).mockReturnValue({ familyId: 'family-1', role: 'manager' });
+      renderScreen();
+      expect(ensureOwnerFamilyPerson).not.toHaveBeenCalled();
+    });
+
+    it('never targets the parent person for a portrait, even though it has none', () => {
+      mockedUseFamilyMembers.mockReturnValue({
+        members: [
+          { ...LILA_MEMBER, illustrated_profile_key: 'portraits/lila.webp', illustrated_profile_status: 'ready', portraitVersions: [{ id: 'v1' }] },
+          { ...LILA_MEMBER, id: 'person-owner', name: 'Eduardo', relationship: 'parent', date_of_birth: null },
+        ],
+        isLoading: false,
+      } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockDraft({ kidNames: [], capture: null });
+
+      const { getByText, queryByTestId } = renderScreen();
+
+      expect(getByText("Let's make Lila's portrait.")).toBeTruthy();
+      expect(queryByTestId('onb-portrait-multi-kid-note')).toBeNull();
     });
   });
 });

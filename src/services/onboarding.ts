@@ -21,7 +21,12 @@ import { createMemory } from '@/services/memories';
 import type { PostMediaMemoryInput } from '@/services/memory-posting';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
 import { defaultFamilyName } from '@/utils/onboarding-copy';
-import { patchOnboardingDraft, type OnboardingDraft, type OnboardingNotificationChoice } from '@/utils/onboarding-progress';
+import {
+  onboardingCaptureMemoryDate,
+  patchOnboardingDraft,
+  type OnboardingDraft,
+  type OnboardingNotificationChoice,
+} from '@/utils/onboarding-progress';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 export interface ServiceError {
@@ -143,7 +148,7 @@ async function createFirstMemory(
   }
 
   const text = capture.text.trim();
-  const memoryDate = getLocalTodayIso();
+  const memoryDate = onboardingCaptureMemoryDate(capture, getLocalTodayIso());
 
   if (capture.mediaUri) {
     const memoryId = pendingMediaMemoryId ?? createUuid();
@@ -213,7 +218,7 @@ function buildOnboardingMediaUpload(
       },
     ],
     content: capture.text.trim() || undefined,
-    memoryDate: getLocalTodayIso(),
+    memoryDate: onboardingCaptureMemoryDate(capture, getLocalTodayIso()),
     taggedMemberIds,
   };
 }
@@ -512,7 +517,8 @@ export async function commitOnboarding(
           p_kid_names: draft.kidNames,
           p_capture: capture,
           p_tagged_kid_indexes: draft.capture?.taggedKidIndexes ?? [],
-          p_memory_date: getLocalTodayIso(),
+          // An attached photo/video keeps its own capture date (2026-10-02).
+          p_memory_date: onboardingCaptureMemoryDate(draft.capture, getLocalTodayIso()),
         },
       );
 

@@ -80,7 +80,15 @@ need to know who "I/me" is.
   when the account is already linked (`shouldOfferWhosWhoAfterJoin` in
   `src/services/family-relationships.ts`, which reads the links first and
   falls through to the old behaviour if that read fails).
-- **Onboarding** kids are created as "Our child" (`commit_onboarding`).
+- **Onboarding** kids are created as "Our child" (`commit_onboarding`). The
+  owner gets their own person too (2026-10-02): once they have access, S16
+  (`app/(onboarding)/portrait.tsx`) calls `ensureOwnerFamilyPerson`
+  (`src/services/family-relationships.ts`), which creates a `parent` person
+  named from their account and links it with `set_my_family_member` -- a
+  no-op when the account is already linked or chose "not in the list".
+  Onboarding copy and the portrait sibling chain count only kids
+  (`isOnboardingKid`), so that person never turns "Lila's" into "their" or
+  gets queued for a portrait.
 
 ## Architecture
 
@@ -228,6 +236,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/family-relati
 
 | Date | Change |
 |------|--------|
+| 2026-10-02 | New owners get their own `parent` person linked as "this is me" at the end of onboarding (`ensureOwnerFamilyPerson`); `isOnboardingKid` keeps onboarding's kid logic to the kids. |
 | 2026-10-01 | Manager-linked "this is me": owner/manager link / change / unlink an already-joined account's person from the Family members screen, plus "Already on Momora? Link their account" on person detail; `link_family_member_account` RPC, `LinkPersonSheet`, `canLinkMemberAccount`. See [manager-account-linking](../plans/manager-account-linking.md). |
 | 2026-09-30 | Invite-for-person: invite-time "this is me" link on approval, waiting screens skip Who's who when already linked, person-detail invite entry point, shared `isInviteTargetEligible` predicate. See [family-sharing.md](./family-sharing.md). |
 | 2026-09-28 | Initial build: roles + sides, "this is me", AI suggestions + Who's who, Year Film and voice consumers |

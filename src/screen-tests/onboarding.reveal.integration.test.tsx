@@ -16,7 +16,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import OnboardingRevealScreen from '../../app/(onboarding)/reveal';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
-import { onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
+import { onboardingImportOfferRoute, onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
 import { familyRosterRoute, timelineRoute } from '@/lib/routes';
 
 jest.mock('expo-router', () => ({
@@ -30,6 +30,13 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
 
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(),
+}));
+
+let mockGalleryImportEnabled = false;
+jest.mock('@/utils/gallery-import-flags', () => ({
+  get isGalleryImportFeatureEnabled() {
+    return mockGalleryImportEnabled;
+  },
 }));
 
 // The native picker itself is DatePickerField's concern; "opening" it here
@@ -81,6 +88,7 @@ function renderScreen() {
 describe('OnboardingRevealScreen (S17)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGalleryImportEnabled = false;
     mockedUseLocalSearchParams.mockReturnValue({ memberId: 'member-lila' });
     mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/lila-portrait.webp', isLoading: false, isError: false });
   });
@@ -266,6 +274,36 @@ describe('OnboardingRevealScreen (S17)', () => {
       const { queryByTestId } = renderScreen();
 
       expect(queryByTestId('onb-reveal-birthday')).toBeNull();
+    });
+  });
+
+  describe('2026-10-02', () => {
+    it('offers gallery import (S18) after the last reveal when it is enabled', () => {
+      mockGalleryImportEnabled = true;
+      mockedUseFamilyMembers.mockReturnValue({
+        members: [{ ...LILA_MEMBER, date_of_birth: '2023-01-01' }],
+        isLoading: false,
+      } as unknown as ReturnType<typeof useFamilyMembers>);
+
+      const { getByTestId } = renderScreen();
+      fireEvent.press(getByTestId('onb-reveal-done-button'));
+
+      expect(router.replace).toHaveBeenCalledWith(onboardingImportOfferRoute);
+    });
+
+    it("never chains to the owner's own parent person, who also has no portrait", () => {
+      mockedUseFamilyMembers.mockReturnValue({
+        members: [
+          { ...LILA_MEMBER, date_of_birth: '2023-01-01' },
+          { id: 'person-owner', name: 'Eduardo', relationship: 'parent', updated_at: '2026-10-02T00:00:00.000Z' },
+        ],
+        isLoading: false,
+      } as unknown as ReturnType<typeof useFamilyMembers>);
+
+      const { getByTestId, queryByTestId } = renderScreen();
+
+      expect(queryByTestId('onb-reveal-next-sibling-button')).toBeNull();
+      expect(getByTestId('onb-reveal-done-button')).toBeTruthy();
     });
   });
 });

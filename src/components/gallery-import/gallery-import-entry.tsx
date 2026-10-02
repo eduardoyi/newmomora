@@ -35,7 +35,7 @@ import { GalleryImportExceptionScreen } from './gallery-import-exception';
 import { GalleryImportTopBar, PrimaryButton, gi } from './gallery-import-shared';
 import { GalleryImportPermissionOutcome, GalleryImportTrustExplainer, type GalleryImportPermissionOutcomeKind } from './gallery-import-trust';
 
-export type GalleryImportSurface = 'offer' | 'settings' | 'timeline' | 'glyph';
+export type GalleryImportSurface = 'offer' | 'settings' | 'timeline' | 'glyph' | 'keepsakes' | 'onboarding';
 
 type EntryOverlay =
   | { kind: 'trust' }

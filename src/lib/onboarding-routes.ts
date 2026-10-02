@@ -21,6 +21,7 @@ const POST_AUTH_ONBOARDING_PATHNAMES = new Set([
   '/included',
   '/paywall',
   '/paused',
+  '/import-offer',
   '/portrait',
   '/reveal',
   '/join/email',
@@ -57,6 +58,9 @@ export const onboardingPaywallRoute = '/(onboarding)/paywall' as Href;
 export const onboardingPortraitRoute = '/(onboarding)/portrait' as Href;
 
 /** The resubscribe variant must retain its mode across a cold-launch resume. */
+/** S18 -- the gallery-import offer after the last portrait reveal (2026-10-02). */
+export const onboardingImportOfferRoute = '/(onboarding)/import-offer' as Href;
+
 /** S15b -- where the paywall's "Leave" lands, still signed in. */
 export function onboardingPausedRoute(mode: OnboardingPaywallMode): Href {
   return { pathname: '/(onboarding)/paused', params: { mode } } as unknown as Href;
@@ -252,6 +256,10 @@ export function onboardingAnalyticsStepFromPathname(
       return { step: 'portrait', flow: 'owner' };
     case '/reveal':
       return { step: 'reveal', flow: 'owner' };
+    case '/paused':
+      return { step: 'paused', flow: 'owner' };
+    case '/import-offer':
+      return { step: 'import-offer', flow: 'owner' };
     case '/join/code':
       return { step: 'join-code', flow: 'joiner' };
     case '/join/found':

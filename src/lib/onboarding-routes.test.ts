@@ -22,6 +22,7 @@ describe('isOnboardingRouteAllowedAfterAuth', () => {
     expect(isOnboardingRouteAllowedAfterAuth('/trial', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/paywall', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/paused', 'paywall')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/import-offer', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/portrait', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/code', 'code')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/code', 'welcome')).toBe(false);
@@ -33,6 +34,8 @@ describe('onboardingAnalyticsStepFromPathname', () => {
     expect(onboardingAnalyticsStepFromPathname('/welcome')).toEqual({ step: 'welcome', flow: 'owner' });
     expect(onboardingAnalyticsStepFromPathname('/capture')).toEqual({ step: 'capture', flow: 'owner' });
     expect(onboardingAnalyticsStepFromPathname('/paywall')).toEqual({ step: 'paywall', flow: 'owner' });
+    expect(onboardingAnalyticsStepFromPathname('/paused')).toEqual({ step: 'paused', flow: 'owner' });
+    expect(onboardingAnalyticsStepFromPathname('/import-offer')).toEqual({ step: 'import-offer', flow: 'owner' });
   });
 
   it('maps a nested joiner route to the joiner flow', () => {

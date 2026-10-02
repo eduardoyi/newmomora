@@ -41,9 +41,11 @@ import { OnbBody, OnbDisplay } from '@/components/onboarding/onb-typography';
 import { colors, fonts, radius } from '@/constants/theme';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
-import { onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
+import { onboardingImportOfferRoute, onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
 import { familyRosterRoute, timelineRoute } from '@/lib/routes';
 import { hasNoPortraitYet } from '@/utils/family-members';
+import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
+import { isOnboardingKid } from '@/utils/family-relationships';
 import { mediaImageSource } from '@/utils/media-image-source';
 
 interface LoadedPortraitImageProps {
@@ -88,7 +90,10 @@ export default function OnboardingRevealScreen() {
   // Same "unpainted" definition S16 falls back to (src/utils/family-members.ts),
   // in the same tag-count-then-created-at order fetchFamilyMembers returns.
   const nextMember = useMemo(
-    () => members.find((candidate) => candidate.id !== memberId && hasNoPortraitYet(candidate)),
+    () =>
+      members.find(
+        (candidate) => candidate.id !== memberId && isOnboardingKid(candidate) && hasNoPortraitYet(candidate),
+      ),
     [members, memberId],
   );
 
@@ -181,7 +186,10 @@ export default function OnboardingRevealScreen() {
   };
 
   const handleLater = () => router.replace(familyRosterRoute);
-  const handleDone = () => router.replace(timelineRoute);
+  // The last reveal offers gallery import (S18) before the journal, where
+  // it's enabled -- a brand-new journal otherwise starts with one page.
+  const handleDone = () =>
+    router.replace(isGalleryImportFeatureEnabled ? onboardingImportOfferRoute : timelineRoute);
 
   if (isLoading || !member) {
     return (

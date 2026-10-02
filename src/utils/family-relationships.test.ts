@@ -6,6 +6,7 @@ import {
   groupByRelationship,
   isInviteTargetEligible,
   isLinkableMember,
+  isOnboardingKid,
   isOwnChild,
   RELATIONSHIP_LABELS,
   RELATIONSHIPS,
@@ -167,5 +168,21 @@ describe('isInviteTargetEligible (invite picker, person detail, Approvals)', () 
 
   it('rejects a content-safety hidden profile', () => {
     expect(isInviteTargetEligible(grandma, [], true, ref)).toBe(false);
+  });
+});
+
+describe('isOnboardingKid (onboarding copy + portrait sibling chain)', () => {
+  const now = new Date('2026-10-02T12:00:00Z');
+
+  it('counts an explicit child, and a name-only kid with no role or birthday', () => {
+    expect(isOnboardingKid({ relationship: 'child', date_of_birth: null }, now)).toBe(true);
+    expect(isOnboardingKid({ relationship: null, date_of_birth: null }, now)).toBe(true);
+    expect(isOnboardingKid({ relationship: null, date_of_birth: '2023-04-01' }, now)).toBe(true);
+  });
+
+  it("never counts the owner's parent person or any other role, or an unsorted adult", () => {
+    expect(isOnboardingKid({ relationship: 'parent', date_of_birth: null }, now)).toBe(false);
+    expect(isOnboardingKid({ relationship: 'grandparent', date_of_birth: null }, now)).toBe(false);
+    expect(isOnboardingKid({ relationship: null, date_of_birth: '1988-04-01' }, now)).toBe(false);
   });
 });

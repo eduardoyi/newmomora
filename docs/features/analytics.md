@@ -54,7 +54,7 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 
 | Event | Properties | Fires from |
 |---|---|---|
-| `onboarding_step_viewed` | `step` (every `OnboardingStepId`, plus `reveal` for S17, plus `join-code\|join-found\|join-name\|join-email\|join-waiting` for the join arc), `flow: 'owner'\|'joiner'` | `app/(onboarding)/_layout.tsx` — one hook for the whole S0–S17 + J1–J5 arc, mapping `usePathname()` (bare, group-stripped) via `onboardingAnalyticsStepFromPathname` |
+| `onboarding_step_viewed` | `step` (every `OnboardingStepId`, plus `reveal` for S17, `paused` for S15b and `import-offer` for S18 (2026-10-02), plus `join-code\|join-found\|join-name\|join-email\|join-waiting` for the join arc), `flow: 'owner'\|'joiner'` | `app/(onboarding)/_layout.tsx` — one hook for the whole S0–S17 + J1–J5 arc, mapping `usePathname()` (bare, group-stripped) via `onboardingAnalyticsStepFromPathname` |
 | `onboarding_capture_completed` | `method: 'voice'\|'typed'`, `has_media: boolean`, `transcription_failed: boolean` | `app/(onboarding)/capture.tsx` — S9, on "Keep it" |
 | `onboarding_committed` | `kid_count: number`, `is_new_family: boolean` | `app/(onboarding)/code.tsx` (primary commit path) **and** `app/(onboarding)/paywall.tsx` (the pending-capture commit after purchase, for owners whose `code.tsx` commit deferred) — both call sites fire on `commitOnboarding` success |
 | `paywall_viewed` | `mode: OnboardingPaywallMode`, `trial_eligible: boolean`, `has_monthly: boolean`, `source: 'onboarding'\|'new_memory_bounce'\|'resume'` | `app/(onboarding)/paywall.tsx` — gated on `serverPaywallMode !== null` **and** `offerings` loaded (excludes entitled pass-throughs/access handoffs, for whom `mode` would be null, and never fires while offerings are still loading or failed — a failed load reports `paywall_error_shown` instead); once per mount |
@@ -107,7 +107,7 @@ No film title, member name, scope label or film id is sent.
 
 | Event | Properties | Fires from |
 |---|---|---|
-| `gallery_import_opened` | `surface: offer\|settings\|timeline\|glyph` | Gallery import entry points |
+| `gallery_import_opened` | `surface: offer\|settings\|timeline\|glyph\|keepsakes\|onboarding` | Gallery import entry points (`keepsakes`: the not-enough-memories create-book sheet; `onboarding`: S18, both 2026-10-02) |
 | `gallery_import_permission_resolved` | `outcome: full\|limited\|denied\|blocked` | Immediately after the real OS permission result |
 | `gallery_import_run_started` | `permission_mode`, `scanned_asset_count`, `cluster_count` | On device-bound run creation/scan start |
 | `gallery_import_candidate_actioned` | `action: keep\|skip\|restore` | Read-only review deck |

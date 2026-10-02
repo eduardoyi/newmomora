@@ -39,7 +39,7 @@ function mockDraft(overrides: Partial<OnboardingDraft>) {
   });
 }
 
-function mockMembers(members: { id: string; name: string }[]) {
+function mockMembers(members: { id: string; name: string; relationship?: string | null }[]) {
   mockedUseFamilyMembers.mockReturnValue({
     members,
     isLoading: false,
@@ -110,5 +110,17 @@ describe('useOnboardingKidPossessive', () => {
     const { result } = renderHook(() => useOnboardingKidPossessive());
 
     expect(result.current).toBe('their');
+  });
+
+  it("still names the one kid once the owner's own parent person exists (2026-10-02)", () => {
+    mockDraft({ kidNames: [], capture: null });
+    mockMembers([
+      { id: 'member-lila', name: 'Lila', relationship: 'child' },
+      { id: 'person-owner', name: 'Eduardo', relationship: 'parent' },
+    ]);
+
+    const { result } = renderHook(() => useOnboardingKidPossessive());
+
+    expect(result.current).toBe("Lila's");
   });
 });

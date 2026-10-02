@@ -80,7 +80,29 @@ export interface OnboardingDraftCapture {
   mediaAspectRatio?: number;
   /** Same rationale as `mediaAspectRatio`, for attached videos only -- mirrors `MediaAttachment.durationMs`. */
   mediaDurationMs?: number;
+  /**
+   * The picked photo/video's own capture date (`MediaAttachment.capturedAtIso`,
+   * EXIF / MP4 metadata), so a photo from last summer isn't saved as today
+   * (2026-10-02). Absent for typed/voice captures, camera-less picks, and
+   * drafts written before this field -- all of which mean "today".
+   */
+  mediaCapturedAtIso?: string;
   taggedKidIndexes: number[];
+}
+
+/**
+ * The first memory's date: the attached media's capture date when it's a
+ * valid date no later than today, otherwise today.
+ */
+export function onboardingCaptureMemoryDate(
+  capture: Pick<OnboardingDraftCapture, 'mediaCapturedAtIso'> | null | undefined,
+  todayIso: string,
+): string {
+  const captured = capture?.mediaCapturedAtIso;
+  if (captured && /^\d{4}-\d{2}-\d{2}$/.test(captured) && captured <= todayIso) {
+    return captured;
+  }
+  return todayIso;
 }
 
 export interface OnboardingDraft {

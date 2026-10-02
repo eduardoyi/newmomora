@@ -4,6 +4,7 @@ import {
   clearOnboardingDraft,
   createEmptyOnboardingDraft,
   getOnboardingDraft,
+  onboardingCaptureMemoryDate,
   ONBOARDING_DRAFT_STORAGE_KEY,
   patchOnboardingDraft,
   type OnboardingDraft,
@@ -200,5 +201,18 @@ describe('onboarding draft storage', () => {
 
     expect(result.step).toBe('welcome');
     expect(result.familyName).toBe("Lila's Family");
+  });
+});
+
+describe('onboardingCaptureMemoryDate', () => {
+  it("uses the attached media's own capture date", () => {
+    expect(onboardingCaptureMemoryDate({ mediaCapturedAtIso: '2025-07-14' }, '2026-10-02')).toBe('2025-07-14');
+  });
+
+  it('falls back to today with no capture date, a malformed one, or one in the future', () => {
+    expect(onboardingCaptureMemoryDate({}, '2026-10-02')).toBe('2026-10-02');
+    expect(onboardingCaptureMemoryDate(null, '2026-10-02')).toBe('2026-10-02');
+    expect(onboardingCaptureMemoryDate({ mediaCapturedAtIso: 'July 14' }, '2026-10-02')).toBe('2026-10-02');
+    expect(onboardingCaptureMemoryDate({ mediaCapturedAtIso: '2026-12-25' }, '2026-10-02')).toBe('2026-10-02');
   });
 });

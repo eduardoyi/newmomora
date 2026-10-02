@@ -4,6 +4,7 @@
 // role/side still go through updateFamilyMember (src/services/family-members.ts).
 import { supabase } from '@/lib/supabase';
 import { invokeEdgeFunction } from '@/services/ai';
+import { createFamilyMember } from '@/services/family-members';
 import type { Database } from '@/types/database';
 import { isLinkableMember } from '@/utils/family-relationships';
 
@@ -114,6 +115,50 @@ export async function linkFamilyMemberAccount(
     p_member_id: memberId,
   });
   return { error: error ? mapError(error) : null };
+}
+
+/**
+ * Gives a new owner their own person in the family -- a "parent" named from
+ * their account (S12A's "Your name") -- and links it as "this is me", so
+ * voice memories know who "I" is and the Family tab shows them under Parents
+ * with a "You" badge (2026-10-02). Onboarding only ever created the kids.
+ * Runs after access (S16): family_members inserts are billing-gated. A no-op
+ * when the account is already linked or chose "I'm not in the list", or
+ * there's no name to use; every failure is swallowed into `skipped` -- this
+ * must never block onboarding. Reads the signed-in account and its profile
+ * name itself, so the caller only passes the family.
+ */
+export async function ensureOwnerFamilyPerson(
+  familyId: string,
+): Promise<{ memberId: string | null; skipped: string | null }> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || user.is_anonymous) return { memberId: null, skipped: 'no_user' };
+  const userId = user.id;
+
+  const { data: profile } = await supabase.from('user_profiles').select('name').eq('id', userId).maybeSingle();
+  const trimmed = profile?.name?.trim() ?? '';
+  if (!trimmed) return { memberId: null, skipped: 'no_name' };
+
+  const links = await fetchMembershipLinks(familyId);
+  if (links.error || !links.data) return { memberId: null, skipped: 'links_unavailable' };
+  const own = links.data.find((link) => link.userId === userId);
+  if (!own) return { memberId: null, skipped: 'not_a_member' };
+  if (own.familyMemberId || own.notInList) return { memberId: null, skipped: 'already_set' };
+
+  const created = await createFamilyMember({
+    userId,
+    familyId,
+    name: trimmed,
+    dateOfBirth: null,
+    relationship: 'parent',
+  });
+  if (created.error || !created.data) return { memberId: null, skipped: 'create_failed' };
+
+  const linked = await setMyFamilyMember(familyId, created.data.id);
+  if (linked.error) return { memberId: created.data.id, skipped: 'link_failed' };
+  return { memberId: created.data.id, skipped: null };
 }
 
 export function isAlreadyLinkedError(error: RelationshipServiceError | null): boolean {

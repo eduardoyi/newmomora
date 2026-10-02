@@ -116,6 +116,25 @@ describe('commitOnboarding', () => {
     });
   });
 
+  it("dates the first memory with an attached photo's own capture date, not today", async () => {
+    await commitOnboarding(
+      buildDraft({
+        kidNames: ['Lila'],
+        capture: {
+          text: '',
+          mediaUri: 'file:///beach.jpg',
+          mediaContentType: 'image/jpeg',
+          mediaCapturedAtIso: '2025-07-14',
+          taggedKidIndexes: [0],
+        },
+      }),
+    );
+
+    expect(mockedSupabase.rpc).toHaveBeenCalledWith('commit_onboarding', expect.objectContaining({
+      p_memory_date: '2025-07-14',
+    }));
+  });
+
   it('falls back to tagging the first kid when no chip is selected', async () => {
     await commitOnboarding(
       buildDraft({ kidNames: ['Lila'], capture: { text: 'Said a new word.', taggedKidIndexes: [] } }),

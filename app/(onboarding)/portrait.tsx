@@ -47,6 +47,7 @@ import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { onboardingRevealRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
 import { startPendingOnboardingIllustration } from '@/services/billing';
+import { ensureOwnerFamilyPerson } from '@/services/family-relationships';
 import type { FamilyMember } from '@/services/family-members';
 import {
   getPortraitStatusLabel,
@@ -54,6 +55,7 @@ import {
   isPortraitInProgress,
   type IllustratedProfileStatus,
 } from '@/utils/family-members';
+import { isOnboardingKid } from '@/utils/family-relationships';
 import { possessive } from '@/utils/onboarding-copy';
 import type { OnboardingDraft } from '@/utils/onboarding-progress';
 import {
@@ -141,7 +143,10 @@ function resolveTargetMember(
     }
   }
 
-  return members.find(hasNoPortraitYet) ?? members[0];
+  // Kids only: the owner's "parent" person (also portrait-less) is never
+  // painted in this sequence (adults are out of the trial sequence).
+  const kids = members.filter((member) => isOnboardingKid(member));
+  return kids.find(hasNoPortraitYet) ?? kids[0] ?? members[0];
 }
 
 // Halved after device testing: at 4s a viewer only ever saw two of the eight
@@ -275,7 +280,19 @@ export default function PortraitScreen() {
   const { draft, patch } = useOnboardingFlow();
   const params = useLocalSearchParams<{ memberId?: string }>();
   const { members, isLoading: isLoadingMembers, updateMember } = useFamilyMembers();
-  const { familyId } = useFamily();
+  const { familyId, role } = useFamily();
+
+  // The owner's own "parent" person + "this is me" link (2026-10-02). S16 is
+  // the first screen after access (the insert is billing-gated); fire and
+  // forget, once per screen instance -- the service no-ops when already set.
+  const ownerPersonRequestedRef = useRef(false);
+  useEffect(() => {
+    if (ownerPersonRequestedRef.current || role !== 'owner' || !familyId) {
+      return;
+    }
+    ownerPersonRequestedRef.current = true;
+    void ensureOwnerFamilyPerson(familyId).catch(() => undefined);
+  }, [familyId, role]);
   const [screenState, setScreenState] = useState<PortraitScreenState>('pick');
   const [errorMessage, setErrorMessage] = useState('');
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
@@ -315,7 +332,7 @@ export default function PortraitScreen() {
   }, [params.memberId, pinnedMemberId, targetMember]);
 
   const targetName = targetMember?.name ?? resolveTargetKidName(draft);
-  const hasMultipleKids = members.length > 1;
+  const hasMultipleKids = members.filter((member) => isOnboardingKid(member)).length > 1;
 
   // targetMember.id is the pinned id once resolved (resolveTargetMember's
   // priority 2 above), so this stays keyed to the kid this screen actually

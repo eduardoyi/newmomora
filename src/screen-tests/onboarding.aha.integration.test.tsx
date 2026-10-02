@@ -265,3 +265,36 @@ describe('OnboardingAhaScreen (S10) -- saved caption journal wording', () => {
     expect(getByText('saved · Your journal')).toBeTruthy();
   });
 });
+
+describe('OnboardingAhaScreen (S10) -- media capture date (2026-10-02)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("shows an older photo's own date instead of 'Tonight'", () => {
+    mockDraft({
+      kidNames: ['Lila'],
+      capture: {
+        text: 'Beach day.',
+        mediaUri: 'file:///var/mobile/onboarding-capture.jpg',
+        mediaContentType: 'image/jpeg',
+        mediaCapturedAtIso: '2025-07-14',
+        taggedKidIndexes: [0],
+      },
+    });
+
+    const { queryByText } = renderScreen();
+
+    expect(queryByText('Tonight')).toBeNull();
+    expect(queryByText(/2025/)).toBeTruthy();
+  });
+
+  it("keeps 'Tonight' for a typed capture", () => {
+    mockDraft({ kidNames: ['Lila'], capture: { text: 'Robot voice.', taggedKidIndexes: [0] } });
+
+    const { getByText } = renderScreen();
+
+    expect(getByText('Tonight')).toBeTruthy();
+  });
+});
+

@@ -18,6 +18,9 @@ import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useAttachmentPreviewUri } from '@/hooks/useVideoThumbnail';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
 import { clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
+import { formatDisplayDate } from '@/utils/memories';
+import { onboardingCaptureMemoryDate } from '@/utils/onboarding-progress';
+import { getLocalTodayIso } from '@/utils/portrait-versions';
 import { capitalizeFragment, firstPageCaption, journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
 
 export default function OnboardingAhaScreen() {
@@ -103,6 +106,12 @@ export default function OnboardingAhaScreen() {
     router.push(onboardingYearRoute);
   };
 
+  // A photo/video keeps its own capture date (2026-10-02), so a picture from
+  // last summer reads as that day, not "Tonight".
+  const todayIso = getLocalTodayIso();
+  const memoryDate = onboardingCaptureMemoryDate(capture, todayIso);
+  const dayLabel = memoryDate === todayIso ? 'Tonight' : formatDisplayDate(memoryDate);
+
   // Device-reported bug (2026-07-31): several-tagged-kids used to render
   // "saved · Their journal" here -- correct pronoun choice, wrong pronoun
   // *person*. journalPossessive flavors the neutral case "Your" instead
@@ -127,7 +136,7 @@ export default function OnboardingAhaScreen() {
       <View style={styles.cardStage}>
         <Animated.View style={[styles.cardWrap, cardStyle]}>
           <OnbMemoryCard
-            dayLabel="Tonight"
+            dayLabel={dayLabel}
             hasMedia={Boolean(capture?.mediaUri)}
             heartScale={heartScale}
             imageUri={previewUri}

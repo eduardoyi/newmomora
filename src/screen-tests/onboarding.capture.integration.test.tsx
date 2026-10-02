@@ -104,6 +104,7 @@ jest.mock('@/components/memory-media-picker', () => {
         aspectRatio?: number;
         durationMs?: number;
         sizeBytes: number;
+        capturedAtIso?: string;
       }>) => void;
     }) => (
       <Pressable
@@ -115,6 +116,7 @@ jest.mock('@/components/memory-media-picker', () => {
               contentType: 'image/jpeg',
               aspectRatio: 0.75,
               sizeBytes: 1000,
+              capturedAtIso: '2025-07-14',
             },
           ])
         }
@@ -218,6 +220,8 @@ describe('OnboardingCaptureScreen (S9) -- typed path', () => {
         mediaContentType: 'image/jpeg',
         mediaAspectRatio: 0.75,
         mediaDurationMs: undefined,
+        // The picked photo's own date (2026-10-02), not today.
+        mediaCapturedAtIso: '2025-07-14',
         taggedKidIndexes: [0],
       },
       step: 'aha',

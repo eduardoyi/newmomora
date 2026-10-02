@@ -126,6 +126,7 @@ function OnboardingLayoutContent() {
       <Stack.Screen name="paused" />
       <Stack.Screen name="portrait" />
       <Stack.Screen name="reveal" />
+      <Stack.Screen name="import-offer" />
       {/* WP4 */}
       <Stack.Screen name="join/code" />
       <Stack.Screen name="join/found" />

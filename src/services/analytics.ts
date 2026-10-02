@@ -46,6 +46,8 @@ type AnalyticsEventProperties = Record<string, AnalyticsPropertyValue>;
 type OnboardingAnalyticsStep =
   | OnboardingStepId
   | 'reveal'
+  | 'paused'
+  | 'import-offer'
   | 'join-code'
   | 'join-found'
   | 'join-name'
@@ -183,7 +185,7 @@ export interface AnalyticsEventMap {
     target: NonNullable<PushRouteData['route']>;
   };
   gallery_import_opened: {
-    surface: 'offer' | 'settings' | 'timeline' | 'glyph';
+    surface: 'offer' | 'settings' | 'timeline' | 'glyph' | 'keepsakes' | 'onboarding';
   };
   gallery_import_permission_resolved: {
     outcome: 'full' | 'limited' | 'denied' | 'blocked';

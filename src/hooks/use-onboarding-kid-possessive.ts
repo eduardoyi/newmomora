@@ -30,6 +30,7 @@ import { useMemo } from 'react';
 
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { isOnboardingKid } from '@/utils/family-relationships';
 import { possessive } from '@/utils/onboarding-copy';
 import type { OnboardingDraft } from '@/utils/onboarding-progress';
 
@@ -113,10 +114,13 @@ export function useOnboardingKidPossessive(): string {
     // decision 8 exists to avoid. The tag-count sort makes `members[0]`
     // *a* reasonable kid, but on these screens there is no reason to choose
     // at all: the neutral phrase reads correctly for any family size.
-    if (members.length !== 1) {
+    // Only the kids count: the owner's own "parent" person (created at S16)
+    // must not turn a one-kid family into "their".
+    const kids = members.filter((member) => isOnboardingKid(member));
+    if (kids.length !== 1) {
       return NEUTRAL_POSSESSIVE;
     }
 
-    return possessive(members[0].name);
+    return possessive(kids[0].name);
   }, [draft, members]);
 }

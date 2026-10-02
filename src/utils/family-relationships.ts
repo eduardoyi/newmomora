@@ -171,6 +171,23 @@ export function isOwnChild(
   return age !== null && age.years < 13;
 }
 
+/**
+ * Onboarding's notion of "one of the kids": an explicit `child` role, or an
+ * unsorted person who isn't known to be 13+ -- name-only onboarding kids from
+ * before roles existed have no role and no birthday, and must still count.
+ * Anyone with another role (the owner's own "parent" person created after
+ * onboarding, a grandparent) never does. Onboarding copy and the portrait
+ * sibling chain use this instead of "every family member" (2026-10-02).
+ */
+export function isOnboardingKid(
+  member: { relationship?: string | null; date_of_birth?: string | null },
+  referenceDate = new Date(),
+): boolean {
+  if (member.relationship) return member.relationship === 'child';
+  if (!member.date_of_birth) return true;
+  return isOwnChild(member, referenceDate);
+}
+
 export interface RelationshipGroup<T> {
   key: string;
   title: string;

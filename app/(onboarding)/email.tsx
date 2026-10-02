@@ -122,7 +122,7 @@ export default function OnboardingEmailScreen() {
               autoCapitalize="words"
               autoComplete="name"
               onChangeText={setName}
-              placeholder="Grandma Ana, Uncle Rob, Dad…"
+              placeholder="Ana, Mom, Dad…"
               placeholderTextColor={colors.ink3}
               style={styles.input}
               testID="onboarding-email-name-input"

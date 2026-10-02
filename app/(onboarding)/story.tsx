@@ -49,7 +49,10 @@ const STORY_BEATS: readonly StoryBeatContent[] = [
   {
     slot: 'story-babble',
     headline: 'The camera caught the first steps.',
-    body: "Nobody caught the word she invented for helicopter. That's the stuff that goes, and 20,000 photos won't bring it back.",
+    // 2026-10-02: no longer "20,000 photos won't bring it back" -- gallery
+    // import now turns those photos into memories, so the beat is about what
+    // a camera roll can't hold (the words), not that photos are useless.
+    body: "Nobody caught the word she invented for helicopter. Your camera roll has the faces. The little words are the stuff that goes.",
     cta: "That's the stuff I want to keep",
     step: 'story-2',
     nextRoute: onboardingFoundersRoute,
