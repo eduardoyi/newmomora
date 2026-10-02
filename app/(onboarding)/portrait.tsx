@@ -34,16 +34,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Platform, StyleSheet, View } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
+import { OnbBirthdayAsk } from '@/components/onboarding/onb-birthday-ask';
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbBody, OnbDisplay, OnbScript, OnbTitle } from '@/components/onboarding/onb-typography';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors } from '@/constants/theme';
 import { onboardingPortraitPairs } from '@/constants/onboarding-portrait-pairs';
+import { useFamily } from '@/hooks/use-family';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { onboardingRevealRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
+import { startPendingOnboardingIllustration } from '@/services/billing';
 import type { FamilyMember } from '@/services/family-members';
 import {
   getPortraitStatusLabel,
@@ -271,7 +274,8 @@ type PortraitScreenState = 'pick' | 'painting';
 export default function PortraitScreen() {
   const { draft, patch } = useOnboardingFlow();
   const params = useLocalSearchParams<{ memberId?: string }>();
-  const { members, isLoading: isLoadingMembers } = useFamilyMembers();
+  const { members, isLoading: isLoadingMembers, updateMember } = useFamilyMembers();
+  const { familyId } = useFamily();
   const [screenState, setScreenState] = useState<PortraitScreenState>('pick');
   const [errorMessage, setErrorMessage] = useState('');
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
@@ -335,11 +339,35 @@ export default function PortraitScreen() {
   // re-render), that's fine too -- generation continues server-side and the
   // portrait simply shows up ready wherever they look next (the family tab,
   // the cast card, etc.).
+  //
+  // Two additions (2026-10-02): the first memory's illustration starts here,
+  // not at purchase -- it needs this portrait (see
+  // startPendingOnboardingIllustration's comment) -- and the hand-off waits
+  // while the birthday picker is open, so a portrait finishing mid-pick
+  // never yanks the screen away.
+  const [isBirthdayPickerOpen, setIsBirthdayPickerOpen] = useState(false);
+  const startedIllustrationForMemberRef = useRef<string | null>(null);
   useEffect(() => {
-    if (screenState === 'painting' && targetMember && portraitStatus === 'ready') {
-      router.replace(onboardingRevealRoute(targetMember.id));
+    if (screenState !== 'painting' || !targetMember || portraitStatus !== 'ready') {
+      return;
     }
-  }, [screenState, targetMember, portraitStatus]);
+    if (familyId && startedIllustrationForMemberRef.current !== targetMember.id) {
+      startedIllustrationForMemberRef.current = targetMember.id;
+      void startPendingOnboardingIllustration(familyId).catch(() => undefined);
+    }
+    if (isBirthdayPickerOpen) {
+      return;
+    }
+    router.replace(onboardingRevealRoute(targetMember.id));
+  }, [screenState, targetMember, portraitStatus, familyId, isBirthdayPickerOpen]);
+
+  // Latched like S17's: ask while painting only if this kid had no birthday
+  // when the screen resolved them, and keep the card (with "Saved") after the
+  // save refetches the member. S17 asks again only if it's still missing.
+  const [birthdayAskMemberId, setBirthdayAskMemberId] = useState<string | null>(null);
+  if (targetMember && !targetMember.date_of_birth && birthdayAskMemberId !== targetMember.id) {
+    setBirthdayAskMemberId(targetMember.id);
+  }
 
   const applyPhotoSelection = useCallback(
     async (result: FamilyProfilePhotoPickResult) => {
@@ -472,6 +500,16 @@ export default function PortraitScreen() {
               <OnbBody muted size={14.5} style={styles.paintingBody}>
                 {"This takes less than a minute. Stick around and watch, or wander off and it'll be waiting."}
               </OnbBody>
+              {targetMember && birthdayAskMemberId === targetMember.id ? (
+                <OnbBirthdayAsk
+                  key={targetMember.id}
+                  memberId={targetMember.id}
+                  name={targetMember.name}
+                  onPickerOpenChange={setIsBirthdayPickerOpen}
+                  testIDPrefix="onb-portrait-birthday"
+                  updateMember={updateMember}
+                />
+              ) : null}
             </>
           )}
           <OnbButton

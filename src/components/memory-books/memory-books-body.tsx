@@ -40,6 +40,7 @@ import { trackEvent } from '@/services/analytics';
 import type { FamilyMember } from '@/services/family-members';
 import { fetchExampleCoverAssetKey, memoryBookWebUrl } from '@/services/memory-books';
 import { familyRosterRoute } from '@/lib/routes';
+import { getMemberAvatarImageKey } from '@/utils/family-members';
 import { isOwnChild } from '@/utils/family-relationships';
 import {
   buildMemoryBookScopeOptions,
@@ -49,6 +50,7 @@ import {
   pickSuggestedScopes,
   type MemoryBookScopeOption,
 } from '@/utils/memory-book-scope';
+import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { canEditFamilyContent } from '@/utils/roles';
 import { buildKeepsakeYears } from '@/utils/year-films';
 
@@ -180,7 +182,16 @@ function MemoryBookFlowHost({
   return (
     <>
       <CreateBookSheet
+        childFirstName={member.name}
         onClose={onClose}
+        onImportPhotos={
+          isGalleryImportFeatureEnabled
+            ? () => {
+                onClose();
+                router.push({ pathname: '/(app)/gallery-import' as never, params: { surface: 'keepsakes' } });
+              }
+            : undefined
+        }
         onSelect={(option) => {
           onClose();
           void generate(option);
@@ -294,12 +305,21 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
   // The example cover: one real photo of the (first) child -- the pitch's
   // personalized touch. Loaded only while the pitch is on screen.
   const exampleMember = shelves[0]?.member ?? null;
+  // A found photo/illustration stays put for 30 minutes (the random pick
+  // shouldn't reshuffle on every visit). While there's none yet -- the
+  // portrait fallback below is showing -- re-check on every tab focus, so the
+  // first illustration replaces the portrait as soon as it lands.
   const exampleCoverQuery = useQuery({
     queryKey: ['memory-book-example-cover', familyId, exampleMember?.id],
     queryFn: async () => (await fetchExampleCoverAssetKey(familyId!, exampleMember!.id)).data,
-    enabled: Boolean(familyId && exampleMember && !hasBooks && !hasFilms && !isLoading),
-    staleTime: 30 * 60 * 1000,
+    enabled: Boolean(familyId && exampleMember && !hasBooks && !hasFilms && !isLoading && isFocused),
+    staleTime: (query) => (query.state.data ? 30 * 60 * 1000 : 0),
   });
+  const exampleCoverKey =
+    exampleCoverQuery.data ??
+    (exampleMember
+      ? exampleMember.resolvedPortraitVersion?.illustrated_profile_key ?? getMemberAvatarImageKey(exampleMember)
+      : null);
 
   const [flow, setFlow] = useState<BookFlow | null>(null);
   const [isChildPickerVisible, setIsChildPickerVisible] = useState(false);
@@ -364,9 +384,31 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
     </Pressable>
   );
 
+  // The tab holds films too (2026-10-02). Once films are really coming
+  // (`year_films_enabled`: 10+ moments this month and a kid with a birthday)
+  // the current year's section already shows the dated upcoming-recap card;
+  // before that -- every brand-new family -- this pitch is the whole tab, so
+  // it says what makes a film instead of promising one. The Family-page
+  // stack variant stays books-only.
+  const hasKidBirthday = members.some((member) => isOwnChild(member) && Boolean(member.date_of_birth));
+  const filmsIntro =
+    variant === 'tab' && !upcomingEnabled ? (
+      <View style={[styles.emptyState, styles.filmsIntro]} testID="keepsakes-films-intro">
+        <Text style={styles.emptyEyebrow}>FILMS</Text>
+        <Text style={styles.emptyHeadline}>A little film of your month.</Text>
+        <Text style={styles.emptyBody}>
+          Any month with 10 or more moments becomes a short film on the 1st.{' '}
+          {hasKidBirthday
+            ? 'Birthdays get their own film too.'
+            : 'Birthdays get their own film too, once your kids’ birthdays are in Family.'}
+        </Text>
+      </View>
+    ) : null;
+
   const pitch = (
     <View style={styles.emptyState} testID="memory-books-empty">
-      <Text style={styles.emptyEyebrow}>KEEPSAKES</Text>
+      {filmsIntro}
+      <Text style={styles.emptyEyebrow}>{filmsIntro ? 'BOOKS' : 'KEEPSAKES'}</Text>
       <Text style={styles.emptyHeadline}>
         {singleShelf
           ? `A year of ${singleShelf.member.name}, printed and bound.`
@@ -383,7 +425,7 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
         <View style={styles.exampleCoverWrap}>
           <BookCoverTile
             childFirstName={exampleMember.name}
-            coverAssetKey={exampleCoverQuery.data ?? null}
+            coverAssetKey={exampleCoverKey}
             scopeLabel="Year One"
             status="ready"
             testID="memory-books-example-cover"
@@ -683,6 +725,7 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   emptyState: { gap: 20 },
+  filmsIntro: { marginBottom: 16 },
   emptyEyebrow: {
     fontFamily: fonts.sansBold,
     fontSize: 13,

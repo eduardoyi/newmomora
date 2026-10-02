@@ -50,6 +50,7 @@
     "eval:year-film-assets": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-assets.ts",
     "year-film:queue": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/queue-year-film.ts",
     "eval:milestone-honesty": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/milestone-honesty-backfill.ts",
+    "eval:onboarding-illustration-state": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-onboarding-illustration-state.ts",
     "eval:memory-book-coverage": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-coverage.ts",
     "import:printed-memory-book": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/import-printed-memory-book.ts"
   },

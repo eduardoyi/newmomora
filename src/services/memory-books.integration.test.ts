@@ -256,15 +256,29 @@ describe('memory-books service integration', () => {
   });
 
   describe('fetchExampleCoverAssetKey', () => {
-    function mockExampleCoverQuery(rows: unknown[], error: { message: string; code?: string } | null = null) {
+    // First call: the photo query. Second call: the illustrated-memory query
+    // (2026-10-02), empty unless a test passes `illustrated`.
+    function mockExampleCoverQuery(
+      rows: unknown[],
+      error: { message: string; code?: string } | null = null,
+      illustrated: unknown[] = [],
+    ) {
       const limit = jest.fn().mockResolvedValue({ data: error ? null : rows, error });
       const order = jest.fn().mockReturnValue({ limit });
       const like = jest.fn().mockReturnValue({ order });
       const eqMember = jest.fn().mockReturnValue({ like });
       const eqFamily = jest.fn().mockReturnValue({ eq: eqMember });
       const select = jest.fn().mockReturnValue({ eq: eqFamily });
-      mockedSupabase.from.mockReturnValue({ select } as never);
-      return { select, eqFamily, eqMember, like, order, limit };
+
+      const illustrated_ = { data: illustrated, error: null };
+      const illustratedBuilder: Record<string, jest.Mock> = {};
+      for (const method of ['select', 'eq', 'not', 'order']) {
+        illustratedBuilder[method] = jest.fn(() => illustratedBuilder);
+      }
+      illustratedBuilder.limit = jest.fn().mockResolvedValue(illustrated_);
+
+      mockedSupabase.from.mockReturnValueOnce({ select } as never).mockReturnValueOnce(illustratedBuilder as never);
+      return { select, eqFamily, eqMember, like, order, limit, illustratedBuilder };
     }
 
     it('queries the last 30 image memories tagged to this child, newest first', async () => {
@@ -304,6 +318,16 @@ describe('memory-books service integration', () => {
       const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
 
       expect(result.data).toBe('orig-1');
+    });
+
+    it('uses a finished illustration of this child when there are no photos (a family fresh out of onboarding)', async () => {
+      const { illustratedBuilder } = mockExampleCoverQuery([], null, [{ id: 'm1', illustration_key: 'illustrations/m1.webp' }]);
+
+      const result = await fetchExampleCoverAssetKey('family-1', 'child-1');
+
+      expect(result.data).toBe('illustrations/m1.webp');
+      expect(illustratedBuilder.eq).toHaveBeenCalledWith('illustration_status', 'ready');
+      expect(illustratedBuilder.eq).toHaveBeenCalledWith('memory_family_members.family_member_id', 'child-1');
     });
 
     it('returns null (never an error) when there are no eligible photos', async () => {

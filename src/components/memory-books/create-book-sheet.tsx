@@ -4,6 +4,12 @@
 // dependencies). Two layers: a short SUGGESTIONS list (up to 3 rows, from
 // `pickSuggestedScopes`), then an expandable grouped list covering every
 // scope option -- "More options"/"Fewer options".
+//
+// Not enough yet (2026-10-02): when no book exists and no stretch of time
+// has the ~30 memories a book needs (a family fresh out of onboarding), the
+// list is all dead ends. The sheet instead says how far along they are and,
+// where available, offers gallery import as the fast way there; the full
+// list stays one quiet tap away.
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -14,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
 import {
+  MEMORY_BOOK_THIN_THRESHOLD,
   memoryBookScopeKey,
   parseDateParts,
   thinPeriodReason,
@@ -35,6 +42,73 @@ export interface CreateBookSheetProps {
    * the caller runs `generate(option)`, dismisses the sheet, and shows the
    * toast; this component doesn't do any of that itself. */
   onSelect: (option: MemoryBookScopeOption) => void;
+  childFirstName: string;
+  /** Offered in the not-enough-yet state when gallery import is available; the caller closes the sheet and navigates. */
+  onImportPhotos?: () => void;
+}
+
+/**
+ * True when nothing can be made yet: no book has ever been requested and
+ * every scope's eligibility count has loaded and sits under the threshold.
+ * Unknown (still-loading) counts never trigger it.
+ */
+export function hasNoBookReadyScope(rows: MemoryBookScopeRow[]): boolean {
+  return (
+    rows.length > 0 &&
+    rows.every((row) => row.book === null && row.eligibleCount !== null && row.eligibleCount < MEMORY_BOOK_THIN_THRESHOLD)
+  );
+}
+
+function NotEnoughYet({
+  childFirstName,
+  memoryCount,
+  onImportPhotos,
+  onShowOptions,
+}: {
+  childFirstName: string;
+  memoryCount: number;
+  onImportPhotos?: () => void;
+  onShowOptions: () => void;
+}) {
+  const noun = memoryCount === 1 ? 'memory' : 'memories';
+  const progress = Math.min(1, memoryCount / MEMORY_BOOK_THIN_THRESHOLD);
+
+  return (
+    <View style={styles.notEnough} testID="create-book-not-enough">
+      <Text style={styles.notEnoughHeadline}>{`${childFirstName}’s first book needs a few more memories.`}</Text>
+      <Text style={styles.notEnoughBody}>
+        {`A book gathers about ${MEMORY_BOOK_THIN_THRESHOLD} memories from a stretch of time. You have ${memoryCount} ${noun} so far. No rush, every one you add gets it closer.`}
+      </Text>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: `${Math.max(progress, 0.04) * 100}%` }]} />
+      </View>
+      <Text style={styles.progressLabel} testID="create-book-not-enough-count">
+        {`${memoryCount} of ~${MEMORY_BOOK_THIN_THRESHOLD}`}
+      </Text>
+
+      {onImportPhotos ? (
+        <View style={styles.importCard}>
+          <Text style={styles.importTitle}>The quick way there</Text>
+          <Text style={styles.importBody}>
+            Your camera roll is full of them already. Momora can turn the photos on your phone into memories.
+            Nothing in your camera roll changes.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={onImportPhotos}
+            style={({ pressed }) => [styles.importButton, pressed && styles.rowPressed]}
+            testID="create-book-import-photos"
+          >
+            <Text style={styles.importButtonText}>Look through my photos</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      <Pressable accessibilityRole="button" onPress={onShowOptions} style={styles.moreToggle} testID="create-book-show-options">
+        <Text style={styles.moreToggleText}>See all options anyway</Text>
+      </Pressable>
+    </View>
+  );
 }
 
 function rangeAndCountMeta(row: MemoryBookScopeRow): string | null {
@@ -123,18 +197,41 @@ function CreateBookSheetBody({
   rows,
   todayIso,
   onSelect,
+  childFirstName,
+  onImportPhotos,
 }: {
   suggestions: MemoryBookScopeOption[];
   rows: MemoryBookScopeRow[];
   todayIso: string;
   onSelect: (option: MemoryBookScopeOption) => void;
+  childFirstName: string;
+  onImportPhotos?: () => void;
 }) {
   const [expanded, setExpanded] = useState(suggestions.length === 0);
+  const [showOptionsAnyway, setShowOptionsAnyway] = useState(false);
   const currentYear = parseDateParts(todayIso).year;
 
   const ageYearRows = rows.filter((row) => row.option.kind === 'age_year');
   const calendarYearRows = rows.filter((row) => row.option.kind === 'calendar_year');
   const everythingRow = rows.find((row) => row.option.kind === 'everything');
+
+  if (!showOptionsAnyway && hasNoBookReadyScope(rows)) {
+    const memoryCount = Math.max(...rows.map((row) => row.eligibleCount ?? 0));
+    return (
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <Text style={styles.title}>Create a book</Text>
+        <NotEnoughYet
+          childFirstName={childFirstName}
+          memoryCount={memoryCount}
+          onImportPhotos={onImportPhotos}
+          onShowOptions={() => {
+            setShowOptionsAnyway(true);
+            setExpanded(true);
+          }}
+        />
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -202,7 +299,16 @@ function CreateBookSheetBody({
   );
 }
 
-export function CreateBookSheet({ visible, onClose, suggestions, rows, todayIso, onSelect }: CreateBookSheetProps) {
+export function CreateBookSheet({
+  visible,
+  onClose,
+  suggestions,
+  rows,
+  todayIso,
+  onSelect,
+  childFirstName,
+  onImportPhotos,
+}: CreateBookSheetProps) {
   const insets = useSafeAreaInsets();
   const drawerTranslateY = useSharedValue(0);
 
@@ -259,6 +365,8 @@ export function CreateBookSheet({ visible, onClose, suggestions, rows, todayIso,
 
           {visible ? (
             <CreateBookSheetBody
+              childFirstName={childFirstName}
+              onImportPhotos={onImportPhotos}
               onSelect={(option) => onSelect(option)}
               rows={rows}
               suggestions={suggestions}
@@ -326,6 +434,35 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   moreToggleText: { color: colors.primary, fontFamily: fonts.sansBold, fontSize: 13.5 },
+  notEnough: { gap: 10 },
+  notEnoughHeadline: { color: colors.ink, fontFamily: fonts.display, fontSize: 19, lineHeight: 25 },
+  notEnoughBody: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 13, lineHeight: 19 },
+  progressTrack: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.pill,
+    height: 8,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+  progressFill: { backgroundColor: colors.primary, borderRadius: radius.pill, height: '100%' },
+  progressLabel: { color: colors.ink3, fontFamily: fonts.sansBold, fontSize: 11.5 },
+  importCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    gap: 6,
+    marginTop: 8,
+    padding: 16,
+  },
+  importTitle: { color: colors.ink, fontFamily: fonts.sansBold, fontSize: 14 },
+  importBody: { color: colors.ink2, fontFamily: fonts.sans, fontSize: 12.5, lineHeight: 18 },
+  importButton: {
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    marginTop: 8,
+    paddingVertical: 12,
+  },
+  importButtonText: { color: colors.white, fontFamily: fonts.sansBold, fontSize: 14.5 },
   groupedList: { gap: 20, marginTop: 14 },
   groupedSection: { gap: 8 },
   groupedSectionTitle: {

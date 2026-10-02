@@ -29,6 +29,8 @@ interface DatePickerFieldProps {
   /** Announced by screen readers alongside the field's accessibility label
    * (e.g. to note that the current value is a suggestion). */
   accessibilityHint?: string;
+  /** Fires true when the picker opens and false when it closes (picked, cancelled or dismissed). */
+  onPickerOpenChange?: (isOpen: boolean) => void;
   renderTrigger?: (options: {
     displayValue: string | null;
     openPicker: () => void;
@@ -66,6 +68,7 @@ export function DatePickerField({
   maximumDate,
   defaultPickerDate,
   accessibilityHint,
+  onPickerOpenChange,
   renderTrigger,
 }: DatePickerFieldProps) {
   const insets = useSafeAreaInsets();
@@ -85,6 +88,7 @@ export function DatePickerField({
   const openPicker = () => {
     const nextDraftDate = resolvePickerDate(value, defaultPickerDate, maximumDate);
     setDraftDate(nextDraftDate);
+    onPickerOpenChange?.(true);
 
     if (Platform.OS === 'android') {
       DateTimePickerAndroid.open({
@@ -97,6 +101,7 @@ export function DatePickerField({
           if (event.type === 'set' && selectedDate) {
             onChange(toIsoDate(selectedDate));
           }
+          onPickerOpenChange?.(false);
         },
       });
       return;
@@ -107,6 +112,7 @@ export function DatePickerField({
 
   const closeIosPicker = () => {
     setShowIosPicker(false);
+    onPickerOpenChange?.(false);
   };
 
   const confirmIosPicker = () => {

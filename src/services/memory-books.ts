@@ -216,7 +216,8 @@ interface ExampleCoverRow {
 }
 
 /**
- * Picks one real photo of this child at random, for the empty-state's
+ * Picks one real photo or finished illustration of this child at random,
+ * for the empty-state's
  * personalized example book cover (shelf-redesign, owner-approved
  * picker-redesign brief). Reads only the last 30 (by `memory_date`) image
  * memories tagged to this exact child -- `memory_family_members!inner` +
@@ -245,7 +246,26 @@ export async function fetchExampleCoverAssetKey(
   }
 
   const rows = (data ?? []) as unknown as ExampleCoverRow[];
-  const candidates = rows.flatMap((row) => (row.memory_media ?? []).map((media) => media.preview_object_key ?? media.object_key));
+  const photoKeys = rows.flatMap((row) => (row.memory_media ?? []).map((media) => media.preview_object_key ?? media.object_key));
+
+  // Illustrated text memories count too (2026-10-02): a family fresh out of
+  // onboarding usually has exactly one memory, an illustrated one, and the
+  // photo-only lookup left their example cover blank. A failure here only
+  // drops the illustrations; the photos still stand.
+  const { data: illustratedRows } = await supabase
+    .from('memories')
+    .select('id, illustration_key, memory_family_members!inner(family_member_id)')
+    .eq('family_id', familyId)
+    .eq('memory_family_members.family_member_id', memberId)
+    .eq('illustration_status', 'ready')
+    .not('illustration_key', 'is', null)
+    .order('memory_date', { ascending: false })
+    .limit(30);
+  const illustrationKeys = ((illustratedRows ?? []) as { illustration_key: string | null }[])
+    .map((row) => row.illustration_key)
+    .filter((key): key is string => Boolean(key));
+
+  const candidates = [...photoKeys, ...illustrationKeys];
 
   if (candidates.length === 0) {
     return { data: null, error: null };

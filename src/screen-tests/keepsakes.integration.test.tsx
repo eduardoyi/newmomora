@@ -8,6 +8,7 @@ import MemberKeepsakesScreen from '../../app/(app)/keepsakes/[memberId]';
 import KeepsakeRecapsScreen from '../../app/(app)/keepsakes/recaps/[year]';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useFamilyMemoryBooks, useMemoryBooks, type MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
 import { useFamilyYearFilms, useYearFilmsEnabled } from '@/hooks/useYearFilms';
 import type { MemoryBookListRow } from '@/services/memory-books';
@@ -23,6 +24,13 @@ import type { YearFilm } from '@/services/year-films';
 const mockRouter = { back: jest.fn(), canGoBack: jest.fn(() => true), replace: jest.fn(), navigate: jest.fn(), push: jest.fn() };
 let mockMemberId = 'child-1';
 let mockYear = '2026';
+
+let mockGalleryImportEnabled = true;
+jest.mock('@/utils/gallery-import-flags', () => ({
+  get isGalleryImportFeatureEnabled() {
+    return mockGalleryImportEnabled;
+  },
+}));
 
 jest.mock('expo-router', () => ({
   get router() {
@@ -194,6 +202,7 @@ function renderWithQuery(ui: ReactElement) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGalleryImportEnabled = true;
   mockMemberId = 'child-1';
   mockYear = '2026';
   mockFilms([]);
@@ -571,5 +580,112 @@ describe('Recaps grid (keepsakes/recaps/[year])', () => {
     expect(getByTestId('keepsakes-recaps-empty')).toBeTruthy();
     fireEvent.press(getByTestId('keepsakes-recaps-back'));
     expect(mockRouter.back).toHaveBeenCalled();
+  });
+});
+
+describe('Keepsakes for a brand-new family (2026-10-02)', () => {
+  it('explains what makes a film when films are not coming yet, above the book pitch', () => {
+    mockBooks([]);
+    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+
+    expect(getByTestId('keepsakes-films-intro')).toBeTruthy();
+    expect(getByText('A little film of your month.')).toBeTruthy();
+    // Lila already has a birthday, so no "add birthdays" nudge.
+    expect(getByText(/Birthdays get their own film too\.$/)).toBeTruthy();
+    expect(getByText('BOOKS')).toBeTruthy();
+  });
+
+  it('nudges for birthdays when no kid has one yet', () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [{ ...lila, date_of_birth: null, relationship: 'child' }],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+    mockBooks([]);
+    const { getByText } = renderWithQuery(<KeepsakesScreen />);
+
+    expect(getByText(/once your kids’ birthdays are in Family/)).toBeTruthy();
+  });
+
+  it('leaves films to the dated upcoming-recap card once they are really coming', () => {
+    mockFilms([], { upcoming: true });
+    mockBooks([]);
+    const { queryByTestId, getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+    expect(queryByTestId('keepsakes-films-intro')).toBeNull();
+    expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+  });
+
+  describe('create-book drawer with nothing makeable yet', () => {
+    function mockThinRows() {
+      mockedUseMemoryBooks.mockReturnValue({
+        rows: [
+          sheetRow({ status: 'thin', eligibleCount: 0 }),
+          sheetRow({
+            key: 'everything',
+            option: { kind: 'everything', label: 'Everything', eraLine: null } as never,
+            status: 'thin',
+            eligibleCount: 1,
+          }),
+        ],
+        isLoading: false,
+        isError: false,
+        isEligibilityLoading: false,
+        exampleCoverAssetKey: null,
+        generate,
+        retryDispatch: jest.fn(),
+        refresh: jest.fn(),
+      } as ReturnType<typeof useMemoryBooks>);
+    }
+
+    it('explains how far along they are instead of listing dead ends, and offers gallery import', async () => {
+      mockBooks([]);
+      mockThinRows();
+      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('memory-books-create'));
+
+      await waitFor(() => expect(getByTestId('create-book-not-enough')).toBeTruthy());
+      expect(getByText('Lila’s first book needs a few more memories.')).toBeTruthy();
+      expect(getByTestId('create-book-not-enough-count')).toHaveTextContent('1 of ~30');
+      expect(queryByTestId('create-book-more-toggle')).toBeNull();
+
+      fireEvent.press(getByTestId('create-book-import-photos'));
+      expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/(app)/gallery-import', params: { surface: 'keepsakes' } });
+    });
+
+    it('keeps the full list one tap away', async () => {
+      mockBooks([]);
+      mockThinRows();
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('memory-books-create'));
+
+      fireEvent.press(await waitFor(() => getByTestId('create-book-show-options')));
+
+      expect(queryByTestId('create-book-not-enough')).toBeNull();
+      expect(getByTestId('create-book-row-age_year:2022-06-01:2023-05-31')).toBeTruthy();
+    });
+
+    it('hides the import offer when gallery import is off', async () => {
+      mockGalleryImportEnabled = false;
+      mockBooks([]);
+      mockThinRows();
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('memory-books-create'));
+
+      await waitFor(() => expect(getByTestId('create-book-not-enough')).toBeTruthy());
+      expect(queryByTestId('create-book-import-photos')).toBeNull();
+    });
+  });
+
+  it("uses the kid's portrait on the example cover until a photo or illustration exists", async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [{ ...lila, resolvedPortraitVersion: { illustrated_profile_key: 'portraits/lila.webp' } }],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+    mockBooks([]);
+    renderWithQuery(<KeepsakesScreen />);
+
+    await waitFor(() =>
+      expect(useMediaUrl as jest.Mock).toHaveBeenCalledWith('portraits/lila.webp', undefined),
+    );
   });
 });

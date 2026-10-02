@@ -3,6 +3,7 @@ import NetInfo from '@react-native-community/netinfo';
 import Purchases from 'react-native-purchases';
 
 import {
+  startPendingOnboardingIllustration,
   configureRevenueCat,
   fetchBillingOfferings,
   fetchFamilyBillingStatus,
@@ -49,6 +50,7 @@ jest.mock('@react-native-community/netinfo', () => ({
 jest.mock('@/lib/supabase', () => ({
   supabase: {
     rpc: jest.fn(),
+    from: jest.fn(),
   },
 }));
 
@@ -60,6 +62,7 @@ const mockPurchases = Purchases as jest.Mocked<typeof Purchases>;
 const mockedNetInfo = NetInfo as jest.Mocked<typeof NetInfo>;
 const mockedSupabase = supabase as unknown as {
   rpc: jest.Mock;
+  from: jest.Mock;
 };
 const mockedInvokeEdgeFunction = invokeEdgeFunction as jest.MockedFunction<typeof invokeEdgeFunction>;
 
@@ -501,5 +504,77 @@ describe('billing service', () => {
     mockedSupabase.rpc.mockRejectedValue(new Error('network failure'));
 
     await expect(hasComplimentaryFamilyAccess('family-1')).resolves.toBe(false);
+  });
+});
+
+/** A chainable PostgREST stub that resolves `result` however the query ends. */
+function queryResult(result: { data: unknown; error: unknown }) {
+  const builder: Record<string, unknown> = {};
+  for (const method of ['select', 'eq', 'in', 'match', 'order', 'limit']) {
+    builder[method] = jest.fn(() => builder);
+  }
+  builder.maybeSingle = jest.fn(() => Promise.resolve(result));
+  builder.then = (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+    Promise.resolve(result).then(resolve, reject);
+  return builder;
+}
+
+describe('startPendingOnboardingIllustration', () => {
+  function mockTables(tables: Record<string, { data: unknown; error: unknown }>) {
+    mockedSupabase.from.mockImplementation((table: string) => queryResult(tables[table] ?? { data: null, error: null }));
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedInvokeEdgeFunction.mockResolvedValue({ data: { success: true }, error: null } as never);
+  });
+
+  it('leaves the memory pending while no tagged kid has a ready portrait (onboarding: photo not picked yet)', async () => {
+    mockTables({
+      memories: { data: { id: 'memory-1' }, error: null },
+      memory_family_members: { data: [{ family_member_id: 'member-lila' }], error: null },
+      family_member_portrait_versions: { data: [], error: null },
+    });
+
+    const result = await startPendingOnboardingIllustration('family-1');
+
+    expect(result).toEqual({ data: { deferred: 'awaiting_portrait' }, error: null });
+    expect(mockedInvokeEdgeFunction).not.toHaveBeenCalled();
+  });
+
+  it('requests the illustration once a tagged kid has a ready portrait', async () => {
+    mockTables({
+      memories: { data: { id: 'memory-1' }, error: null },
+      memory_family_members: { data: [{ family_member_id: 'member-lila' }], error: null },
+      family_member_portrait_versions: { data: [{ id: 'version-1' }], error: null },
+    });
+
+    await startPendingOnboardingIllustration('family-1');
+
+    expect(mockedInvokeEdgeFunction).toHaveBeenCalledWith('generate-illustration', {
+      memoryId: 'memory-1',
+      requestIntent: 'initial',
+    });
+  });
+
+  it('falls back to requesting directly when the portrait lookup fails', async () => {
+    mockTables({
+      memories: { data: { id: 'memory-1' }, error: null },
+      memory_family_members: { data: [{ family_member_id: 'member-lila' }], error: null },
+      family_member_portrait_versions: { data: null, error: { message: 'boom' } },
+    });
+
+    await startPendingOnboardingIllustration('family-1');
+
+    expect(mockedInvokeEdgeFunction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when there is no pending onboarding memory', async () => {
+    mockTables({ memories: { data: null, error: null } });
+
+    const result = await startPendingOnboardingIllustration('family-1');
+
+    expect(result).toEqual({ data: null, error: null });
+    expect(mockedInvokeEdgeFunction).not.toHaveBeenCalled();
   });
 });

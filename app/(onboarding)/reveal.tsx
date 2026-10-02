@@ -23,22 +23,20 @@
 // roster tab, which already invites the user to add a photo for any
 // unpainted kid ("Edit their photo to redraw it").
 //
-// Birthday ask (2026-10-02): onboarding creates kids name-only (spec decision
-// 8, to keep the pre-paywall path light), but birthday films, age-aware
-// captions and milestone age bands all need a date of birth. This is the
-// first post-paywall moment that's about one specific kid, so it asks here
-// -- optional, saved the moment a date is picked, and only for a kid who
-// doesn't have one yet. Skipping it costs nothing: the Family tab already
-// flags a kid with no birthday as incomplete.
+// Birthday ask (2026-10-02, OnbBirthdayAsk): S16's painting state asks
+// first, while the parent waits. This screen asks again only for a kid who
+// still has no date of birth -- optional, saved the moment a date is picked.
+// Skipping it costs nothing: the Family tab already flags a kid with no
+// birthday as incomplete.
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Heart } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { OnbBirthdayAsk } from '@/components/onboarding/onb-birthday-ask';
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbShell } from '@/components/onboarding/onb-shell';
-import { DatePickerField } from '@/components/date-picker-field';
 import { OnbBody, OnbDisplay } from '@/components/onboarding/onb-typography';
 import { colors, fonts, radius } from '@/constants/theme';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
@@ -47,77 +45,6 @@ import { onboardingPortraitRouteForMember } from '@/lib/onboarding-routes';
 import { familyRosterRoute, timelineRoute } from '@/lib/routes';
 import { hasNoPortraitYet } from '@/utils/family-members';
 import { mediaImageSource } from '@/utils/media-image-source';
-import { possessive } from '@/utils/onboarding-copy';
-
-const BIRTHDAY_SAVE_ERROR = "Couldn't save that. Try again?";
-
-function defaultBirthdayPickerDate(): Date {
-  // Same starting point as the Add person form's date of birth field.
-  const date = new Date();
-  date.setFullYear(date.getFullYear() - 3);
-  return date;
-}
-
-interface RevealBirthdayAskProps {
-  memberId: string;
-  name: string;
-  updateMember: ReturnType<typeof useFamilyMembers>['updateMember'];
-}
-
-function RevealBirthdayAsk({ memberId, name, updateMember }: RevealBirthdayAskProps) {
-  const [birthday, setBirthday] = useState('');
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [today] = useState(() => new Date());
-  const [defaultPickerDate] = useState(defaultBirthdayPickerDate);
-
-  const save = async (isoDate: string) => {
-    setBirthday(isoDate);
-    setStatus('saving');
-    try {
-      await updateMember({ memberId, dateOfBirth: isoDate });
-      setStatus('saved');
-    } catch {
-      setStatus('error');
-    }
-  };
-
-  return (
-    <View style={styles.birthday} testID="onb-reveal-birthday">
-      <Text style={styles.birthdayTitle}>{`When's ${possessive(name)} birthday?`}</Text>
-      <OnbBody muted size={13}>{`${name} gets a little film every birthday.`}</OnbBody>
-      <DatePickerField
-        defaultPickerDate={defaultPickerDate}
-        maximumDate={today}
-        onChange={(isoDate) => void save(isoDate)}
-        renderTrigger={({ displayValue, openPicker }) => (
-          <Pressable
-            accessibilityLabel={displayValue ? `Birthday, ${displayValue}. Change it` : 'Add birthday'}
-            accessibilityRole="button"
-            disabled={status === 'saving'}
-            onPress={openPicker}
-            style={styles.birthdayButton}
-            testID="onb-reveal-birthday-button"
-          >
-            <Text style={styles.birthdayButtonText}>{displayValue ?? 'Add birthday'}</Text>
-          </Pressable>
-        )}
-        testID="onb-reveal-birthday-picker"
-        value={birthday}
-      />
-      {status === 'saving' ? (
-        <ActivityIndicator color={colors.ink3} size="small" style={styles.birthdayStatus} testID="onb-reveal-birthday-saving" />
-      ) : null}
-      {status === 'saved' ? (
-        <Text style={styles.birthdayStatusText} testID="onb-reveal-birthday-saved">Saved</Text>
-      ) : null}
-      {status === 'error' ? (
-        <Text style={[styles.birthdayStatusText, styles.birthdayErrorText]} testID="onb-reveal-birthday-error">
-          {BIRTHDAY_SAVE_ERROR}
-        </Text>
-      ) : null}
-    </View>
-  );
-}
 
 interface LoadedPortraitImageProps {
   name: string;
@@ -336,7 +263,13 @@ export default function OnboardingRevealScreen() {
             {`Painted from the photo you picked. This is how ${name} shows up in the journal from now on.`}
           </OnbBody>
           {birthdayAskMemberId === member.id ? (
-            <RevealBirthdayAsk key={member.id} memberId={member.id} name={name} updateMember={updateMember} />
+            <OnbBirthdayAsk
+              key={member.id}
+              memberId={member.id}
+              name={name}
+              testIDPrefix="onb-reveal-birthday"
+              updateMember={updateMember}
+            />
           ) : null}
         </View>
       </View>
@@ -404,47 +337,6 @@ const styles = StyleSheet.create({
   },
   fullWidthButton: {
     width: '100%',
-  },
-  birthday: {
-    backgroundColor: colors.white,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    gap: 4,
-    marginTop: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  birthdayTitle: {
-    color: colors.ink,
-    fontFamily: fonts.sansBold,
-    fontSize: 15,
-  },
-  birthdayButton: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.primaryTint,
-    borderRadius: radius.pill,
-    marginTop: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-  },
-  birthdayButtonText: {
-    color: colors.primary,
-    fontFamily: fonts.sansBold,
-    fontSize: 14,
-  },
-  birthdayStatus: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-  },
-  birthdayStatusText: {
-    color: colors.ink3,
-    fontFamily: fonts.sansBold,
-    fontSize: 12.5,
-    marginTop: 6,
-  },
-  birthdayErrorText: {
-    color: colors.error,
   },
   laterLink: {
     alignItems: 'center',

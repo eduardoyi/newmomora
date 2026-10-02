@@ -12,6 +12,10 @@
 // WP6 extends this suite: "painting" reads the real portrait status instead
 // of a purely decorative pulse -- `ready` hands off to S17's reveal, `failed`
 // surfaces a retry.
+//
+// 2026-10-02: `ready` also starts the first memory's illustration (it needs
+// this portrait), and "painting" asks for the kid's birthday while the parent
+// waits -- the ready hand-off holds while that date picker is open.
 import * as ImagePicker from 'expo-image-picker';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { router, useFocusEffect } from 'expo-router';
@@ -20,8 +24,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import PortraitScreen, { PORTRAIT_ROTATION_INTERVAL_MS } from '../../app/(onboarding)/portrait';
 import { onboardingPortraitPairs } from '@/constants/onboarding-portrait-pairs';
+import type { ReactNode } from 'react';
+
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { startPendingOnboardingIllustration } from '@/services/billing';
 import { usePortraitVersions } from '@/hooks/usePortraitVersions';
 import { onboardingRevealRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
@@ -50,6 +57,43 @@ jest.mock('@/hooks/useFamilyMembers', () => ({
   useFamilyMembers: jest.fn(),
 }));
 
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(() => ({ familyId: 'family-1' })),
+}));
+
+jest.mock('@/services/billing', () => ({
+  startPendingOnboardingIllustration: jest.fn(),
+}));
+
+// The native picker is DatePickerField's concern. "Opening" it here reports
+// open without picking; mockPickerControls.pick() then picks and closes, so
+// a test can hold the picker open across a portrait finishing.
+const mockPickerControls: { pick: (() => void) | null } = { pick: null };
+jest.mock('@/components/date-picker-field', () => ({
+  DatePickerField: ({
+    onChange,
+    onPickerOpenChange,
+    renderTrigger,
+    value,
+  }: {
+    onChange: (isoDate: string) => void;
+    onPickerOpenChange?: (isOpen: boolean) => void;
+    renderTrigger: (options: { displayValue: string | null; openPicker: () => void; placeholder: string }) => ReactNode;
+    value: string;
+  }) =>
+    renderTrigger({
+      displayValue: value || null,
+      openPicker: () => {
+        onPickerOpenChange?.(true);
+        mockPickerControls.pick = () => {
+          onChange('2023-03-04');
+          onPickerOpenChange?.(false);
+        };
+      },
+      placeholder: '',
+    }),
+}));
+
 jest.mock('@/hooks/usePortraitVersions', () => ({
   usePortraitVersions: jest.fn(),
 }));
@@ -76,6 +120,9 @@ const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof 
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUsePortraitVersions = usePortraitVersions as jest.MockedFunction<typeof usePortraitVersions>;
 const mockedUseFocusEffect = useFocusEffect as jest.MockedFunction<typeof useFocusEffect>;
+const mockedStartIllustration = startPendingOnboardingIllustration as jest.MockedFunction<
+  typeof startPendingOnboardingIllustration
+>;
 const mockedPickFromLibrary = pickFamilyProfilePhotoFromLibrary as jest.MockedFunction<typeof pickFamilyProfilePhotoFromLibrary>;
 const mockedParsePendingPickerResult = parsePendingPickerResult as jest.MockedFunction<typeof parsePendingPickerResult>;
 const mockedGetPendingResultAsync = ImagePicker.getPendingResultAsync as jest.MockedFunction<typeof ImagePicker.getPendingResultAsync>;
@@ -140,6 +187,8 @@ describe('PortraitScreen (S16)', () => {
     } as unknown as ReturnType<typeof usePortraitVersions>);
     mockedGetPendingResultAsync.mockResolvedValue(null);
     mockedParsePendingPickerResult.mockReturnValue({});
+    mockedStartIllustration.mockResolvedValue({ data: null, error: null });
+    mockPickerControls.pick = null;
   });
 
   afterEach(() => {
@@ -315,6 +364,102 @@ describe('PortraitScreen (S16)', () => {
 
     await waitFor(() => {
       expect(router.replace).toHaveBeenCalledWith(onboardingRevealRoute('member-lila'));
+    });
+  });
+
+  describe('painting: first illustration + birthday ask', () => {
+    // A fresh element per render: re-rendering the same element object lets
+    // React bail out, so the mocked hooks' new return values never apply.
+    const screenTree = () => (
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <PortraitScreen />
+      </SafeAreaProvider>
+    );
+
+    async function startPainting(member: typeof LILA_MEMBER, updateMember = jest.fn().mockResolvedValue({})) {
+      mockedUseFamilyMembers.mockReturnValue({
+        members: [member],
+        isLoading: false,
+        updateMember,
+      } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockDraft({ kidNames: [member.name], capture: null });
+      mockedPickFromLibrary.mockResolvedValue({
+        selection: {
+          uri: 'file:///kid.jpg',
+          contentType: 'image/jpeg',
+          captureDate: null,
+          referenceDate: '2026-10-02',
+          dateSource: 'default_today',
+        },
+      });
+      mockCreateVersion.mockResolvedValue({ id: 'version-1', illustrated_profile_status: 'pending' });
+      const screen = render(screenTree());
+      fireEvent.press(screen.getByTestId('onb-portrait-choose-photo-button'));
+      expect(await screen.findByText("We're painting.")).toBeTruthy();
+      return { screen, updateMember };
+    }
+
+    function finishPortrait(screen: ReturnType<typeof render>) {
+      mockedUsePortraitVersions.mockReturnValue({
+        createVersion: mockCreateVersion,
+        isCreating: false,
+        versions: [{ id: 'version-1', illustrated_profile_status: 'ready' }],
+        retryVersion: jest.fn(),
+      } as unknown as ReturnType<typeof usePortraitVersions>);
+      screen.rerender(screenTree());
+    }
+
+    it('starts the first memory illustration once, when the portrait is ready (never before)', async () => {
+      const { screen } = await startPainting(LILA_MEMBER);
+      expect(mockedStartIllustration).not.toHaveBeenCalled();
+
+      finishPortrait(screen);
+      screen.rerender(screenTree());
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith(onboardingRevealRoute('member-lila')));
+      expect(mockedStartIllustration).toHaveBeenCalledTimes(1);
+      expect(mockedStartIllustration).toHaveBeenCalledWith('family-1');
+    });
+
+    it('asks for the birthday while painting when the kid has none, and saves the pick', async () => {
+      const { screen, updateMember } = await startPainting({ ...LILA_MEMBER, date_of_birth: null } as never);
+
+      expect(screen.getByText("When's Lila's birthday?")).toBeTruthy();
+      fireEvent.press(screen.getByTestId('onb-portrait-birthday-button'));
+      await act(async () => {
+        mockPickerControls.pick?.();
+      });
+
+      expect(updateMember).toHaveBeenCalledWith({ memberId: 'member-lila', dateOfBirth: '2023-03-04' });
+      expect(screen.getByTestId('onb-portrait-birthday-saved')).toBeTruthy();
+    });
+
+    it('does not ask while painting when the kid already has a birthday', async () => {
+      const { screen } = await startPainting(LILA_MEMBER);
+
+      expect(screen.queryByTestId('onb-portrait-birthday')).toBeNull();
+    });
+
+    it('holds the reveal hand-off while the birthday picker is open, then continues once a date is picked', async () => {
+      const { screen } = await startPainting({ ...LILA_MEMBER, date_of_birth: null } as never);
+
+      fireEvent.press(screen.getByTestId('onb-portrait-birthday-button'));
+      finishPortrait(screen);
+
+      // The illustration still starts; only the navigation waits.
+      await waitFor(() => expect(mockedStartIllustration).toHaveBeenCalledTimes(1));
+      expect(router.replace).not.toHaveBeenCalledWith(onboardingRevealRoute('member-lila'));
+
+      await act(async () => {
+        mockPickerControls.pick?.();
+      });
+
+      await waitFor(() => expect(router.replace).toHaveBeenCalledWith(onboardingRevealRoute('member-lila')));
     });
   });
 

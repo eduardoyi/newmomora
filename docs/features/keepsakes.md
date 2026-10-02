@@ -1,7 +1,7 @@
 # Feature: Keepsakes
 
 **Status:** `in-progress` (books shipped; films land with Year Film P2)
-**Last updated:** 2026-09-29
+**Last updated:** 2026-10-02
 **PRD reference:** [Memory Book plan](../plans/memory-book.md), [Year Film plan](../plans/year-film.md) §8
 **Plan:** [timeline-calendar-keepsakes.md](../plans/timeline-calendar-keepsakes.md) Phase C
 
@@ -59,14 +59,35 @@ keepsakes" link into that child's shelf.
 - **Empty state** (no books **and** no films anywhere): **one family-level
   pitch**, not one per child, below whatever year sections exist (e.g. the
   upcoming card).
+  - **Films first (2026-10-02):** until films are really coming
+    (`year_films_enabled`: 10+ moments this month and a kid with a birthday,
+    when the current year's section shows the dated upcoming card instead),
+    the pitch opens with a FILMS block (`keepsakes-films-intro`): "A little
+    film of your month." -- any month with 10+ moments becomes a film on the
+    1st, birthdays get their own (plus "once your kids' birthdays are in
+    Family" when no own child has one). It explains, never promises. The
+    book part follows under a BOOKS eyebrow. The Family-page stack variant
+    stays books-only.
   - Headline: "Your family's years, printed and bound." The layflat bullets
-    are unchanged, and the example cover is a real photo of the first
-    child.
+    are unchanged, and the example cover is a real photo **or finished
+    illustration** of the first child (`fetchExampleCoverAssetKey`), falling
+    back to their portrait until one exists. While the cover is the portrait
+    fallback, the lookup re-runs on every tab focus, so the first
+    illustration replaces it as soon as it lands (2026-10-02; illustrations
+    were missing, so a family fresh out of onboarding got a blank cover).
   - The CTA "Create a book" opens a **"Whose book?"** picker when there's
     more than one shelf. It goes straight to the create sheet for a
     one-child family.
   - With no child at all, the CTA reads "Go to Family" and shows a hint to
     add the child with their birthday.
+- **Create sheet with nothing makeable yet (2026-10-02):** when no book was
+  ever requested and every scope's loaded count is under the ~30-memory
+  threshold (`hasNoBookReadyScope`, `create-book-sheet.tsx`), the sheet
+  replaces the list of dead-end options with "{name}'s first book needs a
+  few more memories", the count against ~30 with a progress bar, a "Look
+  through my photos" gallery-import offer (only when gallery import is
+  enabled; it closes the sheet and opens `/(app)/gallery-import` with
+  `surface: 'keepsakes'`), and a quiet "See all options anyway".
 - **Tiles:** ready book → opens the web book (`shop.usemomora.com/b/<id>`);
   failed → the retry sheet; generating → not tappable (it polls).
 - **Viewers:** see the **films** (year sections, recaps, birthday films, the
@@ -219,4 +240,5 @@ generation pipeline.
 |------|--------|
 | 2026-09-29 | Keepsakes tab replaces Calendar; books move off the child profile (plan Phase C) |
 | 2026-09-29 | Year Film P2: tab restructured into year sections (Family films, upcoming-recap card, child shelves with birthday films + books), recaps grid route, films on the child page, viewers see films (books still hidden), `MemoryBooksBody` → `KeepsakesBody`, shelf test ids → `keepsakes-shelf-{year}-{memberId}` |
+| 2026-10-02 | Example book cover uses illustrations too, with the kid's portrait as a fallback (was blank for a new family). New-family empty state: a films intro that explains what makes a film (until the dated upcoming card takes over), and a "not enough memories yet" create sheet with progress and a gallery-import offer instead of a list of options that can't work |
 | 2026-09-30 | Film tiles get *remaking* (placeholder, not pressable) and *updating* (badge) states; the films query polls every 20 s while focused and any film is in progress |

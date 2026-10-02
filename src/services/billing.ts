@@ -524,6 +524,33 @@ export async function startPendingOnboardingIllustration(
   if (pendingError) return { data: null, error: mapError(pendingError, 'Could not start your first illustration') };
   if (!pending?.id) return { data: null, error: null };
 
+  // Onboarding kids are created name-only, so at purchase time nobody tagged
+  // on the first memory has a portrait yet -- the photo is picked on the
+  // very next screen. Requesting the illustration then could only fail
+  // (NO_PORTRAITS) or race, and it spent the one-time onboarding admission
+  // and left the memory out of 'pending', where the portrait-completion
+  // retrigger (workflow-portrait-bridge) looks for it -- the memory sat
+  // "Generating illustration…" until client stale-recovery (2026-10-02).
+  // Leave it pending until a tagged kid has a ready portrait: S16 calls this
+  // again on ready, and the server retrigger covers a parent who left S16
+  // early. A lookup error falls through to the old direct request.
+  const { data: tags, error: tagsError } = await (supabase as any)
+    .from('memory_family_members')
+    .select('family_member_id')
+    .eq('memory_id', pending.id);
+  const taggedMemberIds: string[] = (tags ?? []).map((tag: { family_member_id: string }) => tag.family_member_id);
+  if (!tagsError && taggedMemberIds.length > 0) {
+    const { data: readyPortraits, error: readyError } = await (supabase as any)
+      .from('family_member_portrait_versions')
+      .select('id')
+      .in('family_member_id', taggedMemberIds)
+      .eq('illustrated_profile_status', 'ready')
+      .limit(1);
+    if (!readyError && (readyPortraits ?? []).length === 0) {
+      return { data: { deferred: 'awaiting_portrait' }, error: null };
+    }
+  }
+
   const result = await invokeEdgeFunction('generate-illustration', {
     memoryId: pending.id,
     requestIntent: 'initial',
