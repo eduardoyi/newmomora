@@ -19,7 +19,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useOnboardingKidPossessive } from '@/hooks/use-onboarding-kid-possessive';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
-import { onboardingPortraitRoute, onboardingWelcomeRoute } from '@/lib/onboarding-routes';
+import { onboardingPausedRoute, onboardingPortraitRoute } from '@/lib/onboarding-routes';
 import { resolveOwnerPaywallMode } from '@/lib/onboarding-routing';
 import { timelineRoute } from '@/lib/routes';
 import { MOMORA_ENTITLEMENT_ID, WrongAccountRestoreError } from '@/constants/billing';
@@ -122,7 +122,7 @@ export default function PaywallScreen() {
   const resolvedPossessive = useOnboardingKidPossessive();
   const { draft, clear, patch } = useOnboardingFlow();
   const { enqueue } = usePendingMemoryUploads();
-  const { user, signOut } = useAuth();
+  const { user } = useAuth();
   const billingUserId = user?.id;
   const { familyId, role } = useFamily();
   const {
@@ -478,7 +478,7 @@ export default function PaywallScreen() {
   };
 
   const dismissCloseSheet = () => setIsCloseSheetVisible(false);
-  const leavePaywall = async () => {
+  const leavePaywall = () => {
     if (isPaywallBusy) return;
     setIsLeaving(true);
     setIsCloseSheetVisible(false);
@@ -486,16 +486,12 @@ export default function PaywallScreen() {
     // known, else the URL/draft's requested mode (billing may still be
     // unsettled at the moment "Leave" is confirmed).
     trackEvent('paywall_abandoned', { mode: serverPaywallMode ?? requestedPaywallMode });
-    try {
-      await signOut();
-      // Keep the paywall marker in device storage so signing back in can
-      // resume the purchase step. Never expose the unpaid owner to the
-      // journal as a side effect of leaving this screen.
-      router.replace(onboardingWelcomeRoute);
-    } catch {
-      setIsLeaving(false);
-      setErrorMessage('Could not log you out. Please try again.');
-    }
+    // Stay signed in (2026-10-02): leaving used to sign the owner out, which
+    // made seeing the price again cost a fresh OTP. The paused screen is the
+    // way out instead -- never the journal -- and keeps "Log out" for anyone
+    // who wants it. The paywall marker stays, so the next cold launch resumes
+    // here.
+    router.replace(onboardingPausedRoute(serverPaywallMode ?? requestedPaywallMode));
   };
 
   const retryOptions = async () => {

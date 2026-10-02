@@ -27,7 +27,7 @@ import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
-import { onboardingPortraitRoute, onboardingWelcomeRoute } from '@/lib/onboarding-routes';
+import { onboardingPausedRoute, onboardingPortraitRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
 import { setPersonProperties, trackEvent } from '@/services/analytics';
 import { commitOnboarding } from '@/services/onboarding';
@@ -615,7 +615,7 @@ describe('PaywallScreen (S15)', () => {
     expect(router.push).not.toHaveBeenCalled();
   });
 
-  it('signs out and returns to the welcome screen when the user leaves', async () => {
+  it('stays signed in and lands on the paused screen when the user leaves (never the journal)', async () => {
     const { getByTestId, queryByTestId } = renderScreen();
     await waitFor(() => expect(getByTestId('onb-paywall-close-button').props.accessibilityState?.disabled).toBeFalsy());
 
@@ -624,10 +624,11 @@ describe('PaywallScreen (S15)', () => {
 
     await waitFor(() => {
       expect(queryByTestId('onb-paywall-sheet')).toBeNull();
-      expect(mockedUseAuth().signOut).toHaveBeenCalledTimes(1);
-      expect(router.push).not.toHaveBeenCalled();
-      expect(router.replace).toHaveBeenCalledWith(onboardingWelcomeRoute);
+      expect(router.replace).toHaveBeenCalledWith(onboardingPausedRoute('new-owner'));
     });
+    expect(mockedUseAuth().signOut).not.toHaveBeenCalled();
+    expect(router.push).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalledWith(timelineRoute);
   });
 
   it('restores an active subscription and resumes onboarding', async () => {

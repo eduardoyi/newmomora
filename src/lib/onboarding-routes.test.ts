@@ -21,6 +21,7 @@ describe('isOnboardingRouteAllowedAfterAuth', () => {
   it('keeps the post-auth arc and an active code retry available', () => {
     expect(isOnboardingRouteAllowedAfterAuth('/trial', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/paywall', 'welcome')).toBe(true);
+    expect(isOnboardingRouteAllowedAfterAuth('/paused', 'paywall')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/portrait', 'welcome')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/code', 'code')).toBe(true);
     expect(isOnboardingRouteAllowedAfterAuth('/code', 'welcome')).toBe(false);

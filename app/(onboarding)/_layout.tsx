@@ -123,6 +123,7 @@ function OnboardingLayoutContent() {
       <Stack.Screen name="trial" />
       <Stack.Screen name="included" />
       <Stack.Screen name="paywall" />
+      <Stack.Screen name="paused" />
       <Stack.Screen name="portrait" />
       <Stack.Screen name="reveal" />
       {/* WP4 */}

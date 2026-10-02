@@ -110,7 +110,12 @@ export default function TrialScreen() {
 
   useEffect(() => {
     if (billingDecision === 'paywall') {
-      router.replace(onboardingPaywallRouteForMode(paywallMode));
+      // No free week to explain, but a first-time owner still needs S14's
+      // "what you're paying for" before the price -- arguably more than a
+      // trial user, since they'd pay from day one. Only S13 (this screen) is
+      // trial-specific, so skip just this one. A lapsed owner (resubscribe)
+      // already knows the product and goes straight to the paywall.
+      router.replace(paywallMode === 'new-owner' ? onboardingIncludedRoute : onboardingPaywallRouteForMode(paywallMode));
     } else if (billingDecision === 'access') {
       router.replace(timelineRoute);
     }
