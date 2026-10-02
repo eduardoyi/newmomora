@@ -22,7 +22,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { familyMembershipsQueryKey, useFamily } from '@/hooks/use-family';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
-import { onboardingPaywallRoute, onboardingPortraitRoute, onboardingTrialRoute } from '@/lib/onboarding-routes';
+import { onboardingIncludedRoute, onboardingPaywallRoute, onboardingPortraitRoute } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
 import {
   fetchFamilyBillingStatus,
@@ -201,7 +201,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
 
     await waitFor(() => {
-      expect(router.replace).toHaveBeenCalledWith(onboardingTrialRoute);
+      expect(router.replace).toHaveBeenCalledWith(onboardingIncludedRoute);
     });
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: familyMembershipsQueryKey });
@@ -284,7 +284,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     });
 
     expect(invalidateSpy).not.toHaveBeenCalled();
-    expect(router.replace).not.toHaveBeenCalledWith(onboardingTrialRoute);
+    expect(router.replace).not.toHaveBeenCalledWith(onboardingIncludedRoute);
     expect(router.replace).not.toHaveBeenCalledWith(timelineRoute);
     expect(mockedTrackEvent).not.toHaveBeenCalledWith('onboarding_committed', expect.anything());
   });
@@ -420,7 +420,7 @@ describe('OnboardingCodeScreen (S12B) -- membership query invalidation', () => {
     fireEvent.changeText(screen.getByTestId('onboarding-code-input'), '123456');
 
     await waitFor(() => {
-      expect(router.replace).toHaveBeenCalledWith(onboardingTrialRoute);
+      expect(router.replace).toHaveBeenCalledWith(onboardingIncludedRoute);
     });
 
     expect(enqueue).toHaveBeenCalledWith(pendingMediaUpload);

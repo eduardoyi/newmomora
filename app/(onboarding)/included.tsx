@@ -14,7 +14,7 @@ import { OnbShell } from '@/components/onboarding/onb-shell';
 import { colors, radius } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useOnboardingKidPossessive } from '@/hooks/use-onboarding-kid-possessive';
-import { onboardingPaywallRoute } from '@/lib/onboarding-routes';
+import { onboardingTrialRoute } from '@/lib/onboarding-routes';
 import { capitalizeFragment, journalPossessive } from '@/utils/onboarding-copy';
 
 const PROMISE_TITLE = 'Your memories are always yours.';
@@ -69,7 +69,10 @@ export default function IncludedScreen() {
       footer={
         <OnbButton
           label="Almost done"
-          onPress={() => router.push(onboardingPaywallRoute)}
+          // S14 now comes first (2026-10-02): S12B -> S14 -> S13 -> S15. S13
+          // decides on billing state whether there's a free week to explain
+          // or it's straight to the price.
+          onPress={() => router.push(onboardingTrialRoute)}
           style={styles.fullWidthButton}
           testID="onb-included-cta-button"
         />

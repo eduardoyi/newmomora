@@ -8,20 +8,20 @@ appId: com.memora.app
 - inputText: ${TEST_ONBOARDING_OWNER_OTP}
 - extendedWaitUntil:
     visible:
-      id: onb-trial-screen
+      id: onb-included-screen
     timeout: 20000
 - waitForAnimationToEnd
-- takeScreenshot: 22-trial
-- tapOn:
-    id: onb-trial-cta-button
-- extendedWaitUntil:
-    visible:
-      id: onb-included-screen
-    timeout: 10000
-- waitForAnimationToEnd
-- takeScreenshot: 23-whats-included
+- takeScreenshot: 22-whats-included
 - tapOn:
     id: onb-included-cta-button
+- extendedWaitUntil:
+    visible:
+      id: onb-trial-screen
+    timeout: 10000
+- waitForAnimationToEnd
+- takeScreenshot: 23-trial
+- tapOn:
+    id: onb-trial-cta-button
 - extendedWaitUntil:
     visible:
       id: onb-paywall-screen

@@ -16,6 +16,7 @@ import IndexScreen from '../../app/index';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
+import { onboardingIncludedRoute, onboardingPaywallRouteForMode } from '@/lib/onboarding-routes';
 import { timelineRoute } from '@/lib/routes';
 import { setPersonProperties, trackEvent } from '@/services/analytics';
 import { getOnboardingDraft } from '@/utils/onboarding-progress';
@@ -191,5 +192,47 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
 
     expect(mockedTrackEvent).not.toHaveBeenCalled();
     expect(mockedSetPersonProperties).not.toHaveBeenCalled();
+  });
+
+  describe('unpaid owner resume', () => {
+    function mockUnpaidOwner({ hasEverHadAccess }: { hasEverHadAccess: boolean }) {
+      mockedUseFamily.mockReturnValue({
+        memberships: [{ id: 'm1', familyId: 'family-1', role: 'owner', name: 'Our Family' }],
+        isLoading: false,
+        role: 'owner',
+      } as never);
+      mockedUseBilling.mockReturnValue({
+        status: {
+          family_id: 'family-1',
+          owner_user_id: 'user-1',
+          has_write_access: false,
+          has_ever_had_access: hasEverHadAccess,
+          trial_eligible: !hasEverHadAccess,
+          access_reason: null,
+        },
+        billingStatusError: null,
+        isLoading: false,
+        refresh: jest.fn(),
+      } as never);
+    }
+
+    it('re-runs the pitch from "what\'s included" for a first-time owner, not a cold price screen', async () => {
+      mockUnpaidOwner({ hasEverHadAccess: false });
+
+      render(<IndexScreen />);
+
+      await waitFor(() => expect(wasRedirectedTo(onboardingIncludedRoute)).toBe(true));
+    });
+
+    it('sends a lapsed owner straight to the resubscribe paywall', async () => {
+      mockUnpaidOwner({ hasEverHadAccess: true });
+
+      render(<IndexScreen />);
+
+      await waitFor(() => {
+        const hrefs = mockedRedirect.mock.calls.map((call) => (call[0] as { href: unknown }).href);
+        expect(hrefs).toContainEqual(onboardingPaywallRouteForMode('resubscribe', 'resume'));
+      });
+    });
   });
 });

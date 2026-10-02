@@ -115,4 +115,48 @@ describe('OnboardingFlowProvider account-bound resume state', () => {
 
     screen.unmount();
   });
+
+  it('signing in over the device\'s own pre-auth draft never drops back to the unhydrated gate', async () => {
+    // A fresh pre-auth draft (no account yet), exactly what S12B holds when
+    // the OTP verifies.
+    await patchOnboardingDraft({
+      ownerUserId: undefined,
+      committedFamilyId: undefined,
+      paywallMode: undefined,
+      step: 'code',
+      kidNames: ['Lila'],
+    });
+    currentUser = null;
+    const hydratedStates: boolean[] = [];
+    let latest: ReturnType<typeof useOnboardingFlow> | null = null;
+    const onCapture = (flow: ReturnType<typeof useOnboardingFlow>) => {
+      latest = flow;
+      hydratedStates.push(flow.isHydrated);
+    };
+    const screen = render(
+      <OnboardingFlowProvider>
+        <Probe onCapture={onCapture} />
+      </OnboardingFlowProvider>,
+    );
+
+    await waitFor(() => expect(latest?.isHydrated).toBe(true));
+    const firstHydratedIndex = hydratedStates.indexOf(true);
+
+    currentUser = { id: 'user-a' };
+    await act(async () => {
+      screen.rerender(
+        <OnboardingFlowProvider>
+          <Probe onCapture={onCapture} />
+        </OnboardingFlowProvider>,
+      );
+    });
+
+    // Once hydrated, the sign-in must not flip it back -- the layout would
+    // swap its Stack for a spinner and remount at S0.
+    expect(hydratedStates.slice(firstHydratedIndex)).not.toContain(false);
+    expect(latest?.draft.step).toBe('code');
+    expect(latest?.draft.kidNames).toEqual(['Lila']);
+
+    screen.unmount();
+  });
 });

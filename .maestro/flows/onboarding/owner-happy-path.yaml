@@ -118,19 +118,19 @@ appId: com.memora.app
 - inputText: ${TEST_ONBOARDING_OWNER_OTP}
 
 # commitOnboarding runs here (creates the family, the kid, the first memory)
-# before S13 renders -- give it real network round-trip time.
+# before S14 renders -- give it real network round-trip time.
 - extendedWaitUntil:
     visible:
-      id: onb-trial-screen
+      id: onb-included-screen
     timeout: 20000
 
-# S13 -> S14 -> S15. The paywall is a real RevenueCat purchase flow. Run this
+# S14 -> S13 -> S15 (S14 first since 2026-10-02). The paywall is a real RevenueCat purchase flow. Run this
 # smoke path only with a store-configured Apple sandbox or Play internal-test
 # account; it must never use a production account or a real purchase.
 - tapOn:
-    id: onb-trial-cta-button
-- tapOn:
     id: onb-included-cta-button
+- tapOn:
+    id: onb-trial-cta-button
 - tapOn:
     id: onb-paywall-cta-button
 

@@ -9,12 +9,12 @@ appId: com.memora.app
 - inputText: ${TEST_ONBOARDING_OWNER_OTP}
 - extendedWaitUntil:
     visible:
-      id: onb-trial-screen
+      id: onb-included-screen
     timeout: 20000
 - tapOn:
-    id: onb-trial-cta-button
-- tapOn:
     id: onb-included-cta-button
+- tapOn:
+    id: onb-trial-cta-button
 - tapOn:
     id: onb-paywall-cta-button
 - extendedWaitUntil:

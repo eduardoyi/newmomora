@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
 import {
+  onboardingIncludedRoute,
   onboardingJoinCodeRoute,
   onboardingJoinFoundRoute,
   onboardingPaywallRouteForMode,
@@ -186,7 +187,19 @@ export default function IndexScreen() {
     case 'resume-onboarding':
       return <Redirect href={onboardingStepRoute(destination.step)} />;
     case 'resume-paywall':
-      return <Redirect href={onboardingPaywallRouteForMode(destination.mode, 'resume')} />;
+      // A first-time owner coming back (relaunch after leaving the paywall,
+      // or a direct sign-in) gets the pitch again -- S14 -> S13 -> S15 --
+      // not a cold price screen (2026-10-02). A lapsed owner already knows
+      // the product and goes straight to the resubscribe paywall.
+      return (
+        <Redirect
+          href={
+            destination.mode === 'new-owner'
+              ? onboardingIncludedRoute
+              : onboardingPaywallRouteForMode(destination.mode, 'resume')
+          }
+        />
+      );
     case 'finish-join':
       return <Redirect href={onboardingJoinFoundRoute} />;
     case 'ask-invite-code':

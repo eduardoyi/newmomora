@@ -5,80 +5,20 @@
 // the same card language as src/components/memory-card.tsx (quote treatment
 // for text-only, media treatment when a photo was attached) so onboarding
 // looks like the app it leads into.
-import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Heart, Play } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, StyleSheet, View } from 'react-native';
 
-import { kidTint } from '@/components/onboarding/onb-illustration';
 import { OnbButton } from '@/components/onboarding/onb-button';
+import { OnbMemoryCard } from '@/components/onboarding/onb-memory-card';
 import { OnbShell } from '@/components/onboarding/onb-shell';
 import { OnbBody, OnbEyebrow, OnbScript } from '@/components/onboarding/onb-typography';
-import { colors, emotionColors, fonts, radius, spacing } from '@/constants/theme';
+import { colors } from '@/constants/theme';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useAttachmentPreviewUri } from '@/hooks/useVideoThumbnail';
 import { onboardingYearRoute } from '@/lib/onboarding-routes';
-import { aspectRatioFromDimensions, clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
-import { formatVideoDurationLabel } from '@/utils/memories';
+import { clampMediaAspectRatio, DEFAULT_MEDIA_ASPECT_RATIO } from '@/utils/media-aspect';
 import { capitalizeFragment, firstPageCaption, journalPossessive, kidsPossessive } from '@/utils/onboarding-copy';
-
-function TaggedAvatars({ names }: { names: string[] }) {
-  return (
-    <View style={styles.avatarCluster}>
-      {names.map((name, index) => {
-        const tint = emotionColors[kidTint(index)];
-        return (
-          <View
-            key={`${name}-${index}`}
-            style={[
-              styles.avatarCircle,
-              { backgroundColor: tint.soft, marginLeft: index === 0 ? 0 : -7 },
-            ]}
-          >
-            <Text style={[styles.avatarInitial, { color: tint.ink }]}>{name.charAt(0).toUpperCase()}</Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-function CardFooter({
-  names,
-  liked,
-  heartScale,
-}: {
-  names: string[];
-  liked: boolean;
-  heartScale: Animated.Value;
-}) {
-  return (
-    <View style={styles.footer}>
-      <Text style={styles.footerDay}>Tonight</Text>
-      {names.length > 0 ? <TaggedAvatars names={names} /> : null}
-      <View style={styles.footerSpacer} />
-      {/* No emotion chip here: emotion analysis is a fire-and-forget kicked
-          off by commitOnboarding's createMemory, post-auth -- nothing has
-          run yet at this point in the flow, so there is no real emotion to
-          show (see docs/features/onboarding.md decision 10). This mirrors
-          src/components/memory-card.tsx's real CardFooter, which likewise
-          renders no chip when `memory.emotion` is null. */}
-      {/* Same animation composition as the real like button
-          (src/components/memory-engagement-bar.tsx): a scale pop
-          (1 -> 1.32 -> spring back to 1, friction 4/tension 180) timed to
-          the heart's liked/unliked color+fill swap, not a bespoke curve. */}
-      <Animated.View style={{ transform: [{ scale: heartScale }] }}>
-        <Heart
-          color={liked ? colors.primary : colors.ink2}
-          fill={liked ? colors.primary : 'transparent'}
-          size={22}
-          strokeWidth={1.9}
-        />
-      </Animated.View>
-    </View>
-  );
-}
 
 export default function OnboardingAhaScreen() {
   const { draft } = useOnboardingFlow();
@@ -186,57 +126,20 @@ export default function OnboardingAhaScreen() {
 
       <View style={styles.cardStage}>
         <Animated.View style={[styles.cardWrap, cardStyle]}>
-          <View style={styles.card} testID="onboarding-aha-card">
-            {capture?.mediaUri ? (
-              <>
-                <View style={[styles.cardImage, { aspectRatio: mediaAspectRatio }]} testID="onboarding-aha-media-frame">
-                  {previewUri ? (
-                    <Image
-                      accessibilityLabel={isVideo ? 'Your captured video' : 'Your captured photo'}
-                      contentFit="cover"
-                      onLoad={(event) => {
-                        const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
-                        if (ratio) {
-                          setMediaAspectRatio(clampMediaAspectRatio(ratio));
-                        }
-                      }}
-                      source={{ uri: previewUri }}
-                      style={StyleSheet.absoluteFill}
-                      testID="onboarding-aha-media-image"
-                    />
-                  ) : (
-                    <View style={[StyleSheet.absoluteFill, styles.mediaPlaceholder]} testID="onboarding-aha-media-placeholder" />
-                  )}
-                  {isVideo ? (
-                    <>
-                      {capture.mediaDurationMs ? (
-                        <View style={styles.durationChip}>
-                          <Text style={styles.durationChipText}>{formatVideoDurationLabel(capture.mediaDurationMs)}</Text>
-                        </View>
-                      ) : null}
-                      <View style={styles.playButton} testID="onboarding-aha-video-badge">
-                        <Play color={colors.white} fill={colors.white} size={16} />
-                      </View>
-                    </>
-                  ) : null}
-                </View>
-                {capture.text ? (
-                  <View style={styles.captionWrap}>
-                    <OnbBody size={14.5} style={styles.caption}>{capture.text}</OnbBody>
-                  </View>
-                ) : null}
-                <CardFooter heartScale={heartScale} liked={liked} names={taggedNames} />
-              </>
-            ) : (
-              <>
-                <View style={styles.quoteBody}>
-                  <Text style={styles.quoteMark} testID="onboarding-aha-quote-mark">&ldquo;</Text>
-                  <Text style={styles.quoteText}>{capture?.text ?? ''}</Text>
-                </View>
-                <CardFooter heartScale={heartScale} liked={liked} names={taggedNames} />
-              </>
-            )}
-          </View>
+          <OnbMemoryCard
+            dayLabel="Tonight"
+            hasMedia={Boolean(capture?.mediaUri)}
+            heartScale={heartScale}
+            imageUri={previewUri}
+            isVideo={isVideo}
+            liked={liked}
+            mediaAspectRatio={mediaAspectRatio}
+            mediaDurationMs={capture?.mediaDurationMs}
+            onMediaAspectRatio={setMediaAspectRatio}
+            taggedNames={taggedNames}
+            testIDPrefix="onboarding-aha"
+            text={capture?.text ?? ''}
+          />
 
           <OnbScript color={colors.ink3} size={17} style={styles.savedCaption}>
             saved · {journalOwner} journal
@@ -264,121 +167,6 @@ const styles = StyleSheet.create({
   },
   cardWrap: {
     width: '100%',
-  },
-  card: {
-    backgroundColor: colors.white,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    overflow: 'hidden',
-    shadowColor: '#2C2418',
-    shadowOffset: { width: 0, height: 18 },
-    shadowOpacity: 0.12,
-    shadowRadius: 44,
-  },
-  quoteBody: {
-    padding: 18,
-    paddingBottom: 4,
-  },
-  // Matches app/(app)/memory/[id]/index.tsx's MemoryDetailEditorial
-  // treatment (editorialQuote/editorialText): a normal-flow watermark glyph
-  // sized and clipped (fixed height, negative marginBottom) to sit above the
-  // quote text and pull it in close, not absolutely positioned behind it.
-  // src/components/memory-card.tsx's QuoteCard (the timeline card) has no
-  // such glyph at all -- this is the one place in the app the mark exists,
-  // so it's the treatment to converge on. Color falls back to the same
-  // neutral colors.ink3 that screen uses when there's no emotion to tint it.
-  quoteMark: {
-    color: colors.ink3,
-    fontFamily: fonts.display,
-    fontSize: 56,
-    height: 34,
-    lineHeight: 56,
-    marginBottom: -6,
-    opacity: 0.18,
-  },
-  quoteText: {
-    color: colors.ink,
-    fontFamily: fonts.displayItalic,
-    fontSize: 22,
-    lineHeight: 1.28 * 22,
-  },
-  cardImage: {
-    width: '100%',
-  },
-  mediaPlaceholder: {
-    backgroundColor: emotionColors.joy.soft,
-  },
-  // Same video affordances as the S10b showcase cards (year.tsx).
-  playButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(44,36,24,0.5)',
-    borderRadius: 22,
-    height: 44,
-    justifyContent: 'center',
-    left: '50%',
-    marginLeft: -22,
-    marginTop: -22,
-    position: 'absolute',
-    top: '50%',
-    width: 44,
-  },
-  durationChip: {
-    backgroundColor: 'rgba(44,36,24,0.62)',
-    borderRadius: 999,
-    bottom: 10,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    position: 'absolute',
-    right: 10,
-  },
-  durationChipText: {
-    color: colors.white,
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
-  },
-  captionWrap: {
-    paddingHorizontal: spacing.md,
-    paddingTop: 13,
-  },
-  caption: {
-    lineHeight: 22,
-  },
-  footer: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-    paddingBottom: 16,
-    paddingHorizontal: spacing.md,
-    paddingTop: 12,
-  },
-  footerDay: {
-    color: colors.ink3,
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
-    letterSpacing: 0.14 * 10,
-    textTransform: 'uppercase',
-  },
-  footerSpacer: {
-    flex: 1,
-  },
-  avatarCluster: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    marginLeft: 4,
-  },
-  avatarCircle: {
-    alignItems: 'center',
-    borderColor: colors.white,
-    borderRadius: 11,
-    borderWidth: 1.5,
-    height: 22,
-    justifyContent: 'center',
-    width: 22,
-  },
-  avatarInitial: {
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
   },
   savedCaption: {
     marginTop: 8,

@@ -23,12 +23,12 @@ import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import {
   onboardingEmailRoute,
+  onboardingIncludedRoute,
   onboardingJoinCodeRoute,
   onboardingJoinFoundRoute,
   onboardingPaywallRouteForMode,
   onboardingPortraitRoute,
   onboardingStepRoute,
-  onboardingTrialRoute,
 } from '@/lib/onboarding-routes';
 import { resolveOwnerPaywallMode, resolvePostAuthDestination } from '@/lib/onboarding-routing';
 import { timelineRoute } from '@/lib/routes';
@@ -280,7 +280,8 @@ export default function OnboardingCodeScreen() {
         await startPendingOnboardingIllustration(data.familyId, data.memoryId).catch(() => undefined);
       }
       await clear();
-      router.replace(hasComplimentaryAccess ? onboardingPortraitRoute : onboardingTrialRoute);
+      // S14 ("what's included") first, then S13 (free week), then S15.
+      router.replace(hasComplimentaryAccess ? onboardingPortraitRoute : onboardingIncludedRoute);
       return;
     }
 

@@ -20,7 +20,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import IncludedScreen from '../../app/(onboarding)/included';
 import { useOnboardingFlow } from '@/hooks/use-onboarding-flow';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { onboardingPaywallRoute } from '@/lib/onboarding-routes';
+import { onboardingTrialRoute } from '@/lib/onboarding-routes';
 import { createEmptyOnboardingDraft, type OnboardingDraft } from '@/utils/onboarding-progress';
 
 jest.mock('expo-router', () => ({
@@ -125,11 +125,11 @@ describe('IncludedScreen (S14)', () => {
     expect(getByText('Their illustrated portrait and storybook pages')).toBeTruthy();
   });
 
-  it('advances "Almost done" to the paywall route', () => {
+  it('advances "Almost done" to the free-week screen (S14 now comes before S13)', () => {
     const { getByTestId } = renderScreen();
 
     fireEvent.press(getByTestId('onb-included-cta-button'));
 
-    expect(router.push).toHaveBeenCalledWith(onboardingPaywallRoute);
+    expect(router.push).toHaveBeenCalledWith(onboardingTrialRoute);
   });
 });

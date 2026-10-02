@@ -51,15 +51,42 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
   const [isHydrated, setIsHydrated] = useState(false);
   const [isAccountDraftHidden, setIsAccountDraftHidden] = useState(false);
   const isFirstPersistableChangeRef = useRef(true);
+  const previousAccountUserIdRef = useRef<string | null | undefined>(undefined);
+  const hasHydratedRef = useRef(false);
+  const isAccountDraftHiddenRef = useRef(false);
 
   useEffect(() => {
     if (isAuthLoading) {
       return;
     }
 
+    const previousAccountUserId = previousAccountUserIdRef.current;
+    previousAccountUserIdRef.current = accountUserId;
+
+    // Signing in over this device's own visible pre-auth draft (S12B / J4's
+    // OTP verify) is not an account switch: the in-memory draft already IS
+    // the hydrated one, so there is nothing to gate. Re-gating here made the
+    // onboarding layout swap its Stack for a spinner mid-verify, which
+    // remounted the Stack at its first route -- new owners saw S0 (welcome)
+    // for a few seconds after entering their code (2026-10-02). Keep the
+    // draft and apply only the same ownerUserId binding the read path does.
+    // Sign-out, an account switch, and a hidden account-bound draft still
+    // take the gated re-read below.
+    if (
+      hasHydratedRef.current &&
+      previousAccountUserId === null &&
+      accountUserId &&
+      !isAccountDraftHiddenRef.current
+    ) {
+      setDraft((current) =>
+        current.committedFamilyId && !current.ownerUserId ? { ...current, ownerUserId: accountUserId } : current,
+      );
+      return;
+    }
+
     let isMounted = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- account changes must gate the previous user's draft before rendering it
     setIsHydrated(false);
+    isAccountDraftHiddenRef.current = false;
     setIsAccountDraftHidden(false);
     isFirstPersistableChangeRef.current = true;
 
@@ -77,6 +104,7 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
         // Keep the signed-in user's resume marker on disk so the same account
         // can continue after Leave, but never expose its child/capture data to
         // an unauthenticated session using the device.
+        isAccountDraftHiddenRef.current = true;
         setIsAccountDraftHidden(true);
         setDraft(createEmptyOnboardingDraft());
       } else if (stored?.ownerUserId && accountUserId && stored.ownerUserId !== accountUserId) {
@@ -90,6 +118,7 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
         );
       }
 
+      hasHydratedRef.current = true;
       setIsHydrated(true);
     });
 
