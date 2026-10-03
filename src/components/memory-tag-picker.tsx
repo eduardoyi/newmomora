@@ -11,6 +11,7 @@ import {
 
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FamilyRosterSheet } from '@/components/family-roster-sheet';
+import { PlusGlyph } from '@/components/plus-glyph';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { registerFamilyMemberCreationRequest } from '@/lib/family-member-creation-requests';
 import { addFamilyMemberRouteFor } from '@/lib/routes';
@@ -22,9 +23,10 @@ import { runAfterNativeChooserDismisses } from '@/utils/native-permissions';
 const CHIP_GAP = spacing.sm;
 const CHIP_HEIGHT = 36;
 const FALLBACK_INLINE_CHIP_LIMIT = 3;
-// The round "+" add chip always sits at the end of the row, so its width
-// (plus one gap) is reserved before fitting member chips.
-const ADD_CHIP_RESERVED_WIDTH = CHIP_HEIGHT + CHIP_GAP;
+// The round "+" add chip ends the row only when every member fits beside it;
+// once anything overflows, "add someone new" lives in the roster sheet
+// instead (one entry point at a time, never both).
+const ADD_CHIP_WIDTH = CHIP_HEIGHT;
 
 interface MemoryTagPickerProps {
   members: FamilyMember[];
@@ -117,9 +119,10 @@ export function MemoryTagPicker({
     () =>
       calculateInlineTagCount({
         chipWidths: measuredChipWidths,
-        containerWidth: Math.max(containerWidth - ADD_CHIP_RESERVED_WIDTH, 0),
+        containerWidth,
         gap: CHIP_GAP,
         moreChipWidth,
+        trailingChipWidth: ADD_CHIP_WIDTH,
       }),
     [containerWidth, measuredChipWidths, moreChipWidth],
   );
@@ -254,20 +257,23 @@ export function MemoryTagPicker({
           </Pressable>
         ) : null}
 
-        <Pressable
-          accessibilityLabel="Add someone new to your family"
-          accessibilityRole="button"
-          onPress={handleAddChipPress}
-          style={({ pressed }) => [
-            orderedMembers.length === 0 ? styles.addChipWide : styles.addChip,
-            pressed && styles.chipPressed,
-          ]}
-          testID="memory-tag-add"
-        >
-          <Text style={styles.addChipText}>
-            {orderedMembers.length === 0 ? '+ Add someone' : '+'}
-          </Text>
-        </Pressable>
+        {!hasOverflow ? (
+          <Pressable
+            accessibilityLabel="Add someone new to your family"
+            accessibilityRole="button"
+            onPress={handleAddChipPress}
+            style={({ pressed }) => [
+              orderedMembers.length === 0 ? styles.addChipWide : styles.addChip,
+              pressed && styles.chipPressed,
+            ]}
+            testID="memory-tag-add"
+          >
+            <PlusGlyph size={12} />
+            {orderedMembers.length === 0 ? (
+              <Text style={styles.addChipText}>Add someone</Text>
+            ) : null}
+          </Pressable>
+        ) : null}
       </View>
 
       <View
@@ -420,6 +426,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderStyle: 'dashed',
     borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
     justifyContent: 'center',
     minHeight: CHIP_HEIGHT,
     paddingHorizontal: spacing.md,
@@ -427,8 +435,7 @@ const styles = StyleSheet.create({
   addChipText: {
     color: colors.primary,
     fontFamily: fonts.sansBold,
-    fontSize: 15,
-    lineHeight: 18,
+    fontSize: 14,
   },
   moreChipSelected: {
     backgroundColor: colors.primaryDark,

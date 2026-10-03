@@ -254,7 +254,26 @@ describe('MemoryTagPicker', () => {
         <MemoryTagPicker members={[]} onToggleMember={jest.fn()} selectedMemberIds={[]} />,
       );
 
-      expect(screen.getByText('+ Add someone')).toBeTruthy();
+      expect(screen.getByText('Add someone')).toBeTruthy();
+    });
+
+    it('drops the inline add chip once members overflow into the roster sheet', () => {
+      // Unmeasured fallback shows three chips inline, so four members overflow.
+      const screen = render(
+        <MemoryTagPicker
+          members={[
+            ...members,
+            createMember('member-3', 'Jordan'),
+            createMember('member-4', 'Taylor'),
+          ]}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={[]}
+        />,
+      );
+
+      expect(screen.getByTestId('memory-tag-more')).toBeTruthy();
+      expect(screen.queryByTestId('memory-tag-add')).toBeNull();
+      expect(mockRosterProps.current?.onAddMember).toEqual(expect.any(Function));
     });
 
     it('waits for the roster sheet to close before opening the form with the searched name', () => {

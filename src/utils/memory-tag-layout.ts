@@ -3,6 +3,10 @@ export interface CalculateInlineTagCountInput {
   containerWidth: number;
   gap: number;
   moreChipWidth: number;
+  /** A chip shown at the end of the row only when nothing overflows (the
+   * "add someone" chip). It must fit alongside every member chip; if it
+   * doesn't, the row switches to overflow mode and it moves into the sheet. */
+  trailingChipWidth?: number;
 }
 
 function isMeasuredWidth(width: number | undefined): width is number {
@@ -18,6 +22,7 @@ export function calculateInlineTagCount({
   containerWidth,
   gap,
   moreChipWidth,
+  trailingChipWidth = 0,
 }: CalculateInlineTagCountInput): number | null {
   const totalMembers = chipWidths.length;
   const rowGap = Math.max(gap, 0);
@@ -38,7 +43,8 @@ export function calculateInlineTagCount({
   const allChipsWidth =
     sumWidths(measuredChipWidths, totalMembers) + rowGap * Math.max(totalMembers - 1, 0);
 
-  if (allChipsWidth <= containerWidth) {
+  const trailingWidth = trailingChipWidth > 0 ? trailingChipWidth + rowGap : 0;
+  if (allChipsWidth + trailingWidth <= containerWidth) {
     return totalMembers;
   }
 

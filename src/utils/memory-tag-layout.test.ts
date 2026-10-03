@@ -46,6 +46,34 @@ describe('calculateInlineTagCount', () => {
   });
 });
 
+describe('calculateInlineTagCount with a trailing chip', () => {
+  it('shows every member when they fit together with the trailing chip', () => {
+    expect(
+      calculateInlineTagCount({
+        chipWidths: [80, 80],
+        containerWidth: 220,
+        gap: 8,
+        moreChipWidth: 60,
+        trailingChipWidth: 36,
+      }),
+    ).toBe(2);
+  });
+
+  it('switches to overflow when members fit but the trailing chip does not', () => {
+    // 80 + 8 + 80 = 168 fits in 200, but + 8 + 36 = 212 does not, so the row
+    // falls back to one chip + the more chip (80 + 8 + 60 = 148).
+    expect(
+      calculateInlineTagCount({
+        chipWidths: [80, 80],
+        containerWidth: 200,
+        gap: 8,
+        moreChipWidth: 60,
+        trailingChipWidth: 36,
+      }),
+    ).toBe(1);
+  });
+});
+
 describe('formatMoreTagLabel', () => {
   it('keeps the default label when no selected members are hidden', () => {
     expect(formatMoreTagLabel(0)).toBe('+ More');

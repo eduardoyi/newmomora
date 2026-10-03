@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
+import { PlusGlyph } from '@/components/plus-glyph';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
 
@@ -284,7 +285,7 @@ export function FamilyRosterSheet({
                 testID="roster-add-member"
               >
                 <View style={styles.addAvatar}>
-                  <Text style={styles.addAvatarText}>+</Text>
+                  <PlusGlyph size={14} />
                 </View>
                 <View style={rowStyles.info}>
                   <Text numberOfLines={1} style={styles.addName}>
@@ -415,12 +416,6 @@ const styles = StyleSheet.create({
     height: 38,
     justifyContent: 'center',
     width: 38,
-  },
-  addAvatarText: {
-    color: colors.primary,
-    fontFamily: fonts.sansBold,
-    fontSize: 20,
-    lineHeight: 22,
   },
   addName: {
     color: colors.primary,
