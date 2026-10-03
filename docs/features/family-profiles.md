@@ -15,6 +15,7 @@ Family profiles power memory tagging and age-aware AI character portraits. Each 
 - **Family tab:** list members or empty state — “Add your child first”
 - **Member ordering:** everywhere `useFamilyMembers()` renders members (family tab, memory tag chips in new/edit memory), the list is ordered by how often each member is tagged in memories (most-tagged first, ties by `created_at`). `fetchFamilyMembers` embeds a `memory_family_members(count)` aggregate and sorts client-side; memory create/update/delete invalidates the `family-members` query so the order stays fresh.
 - **Add member modal:** name, DOB (YYYY-MM-DD), optional gender/notes, required photo from camera or library
+- **Add from the memory tag picker:** the composer's "Who's in it" row and roster sheet open the same modal with the name pre-filled from the roster search; the created member returns already tagged on the memory being composed (see [memories.md](./memories.md) "Add someone new from the tag picker").
 - **Edit member:** profile fields remain editable independently. Adding a newer or backdated photo creates a portrait version without replacing history.
 - **Keyboard-safe forms:** add/edit forms use `react-native-keyboard-controller`'s edge-to-edge-aware `KeyboardAwareScrollView`. It follows native IME insets and focused-input layout changes on Android instead of relying on legacy `adjustResize`, React Native keyboard screen coordinates, or manual scroll measurements.
 - **Profile photo source chooser:** tapping the photo circle shows **Take photo** and **Choose from library**. iOS uses a native action sheet; Android uses a standard alert chooser.
@@ -109,6 +110,7 @@ Library picker options request EXIF (never base64) only to read a trustworthy ca
 2. Tag memories with member ids (unlimited for text-only/media; max 6 for AI illustrations).
 3. Resolve private images with `useMediaUrl(key)` or `getMediaUrls([...keys])`.
 4. On create, portrait generation runs automatically after version creation. Add/edit visual history through `usePortraitVersions`; do not write legacy photo/portrait columns.
+5. To let a user create a person mid-flow and get it back, register a listener with `registerFamilyMemberCreationRequest` (`src/lib/family-member-creation-requests.ts`), push `addFamilyMemberRouteFor({ name, requestId })` (`src/lib/routes.ts`), and unregister on unmount. The modal resolves the request with the new member id after a successful save, before `router.back()`. Close any RN `Modal` (and let it finish animating) before pushing. `MemoryTagPicker` is the reference caller.
 
 ## Extension guide
 
@@ -213,6 +215,7 @@ maestro test -e TEST_EMAIL=... -e TEST_PASSWORD=... .maestro/flows/onboarding/ad
 
 | Date | Change |
 |------|--------|
+| 2026-10-03 | Add-person modal accepts `name`/`requestId` params and hands the created member back to the opener; memory tag picker uses it ("add someone new" without leaving the memory) |
 | 2026-09-28 | Add/Edit person gained optional role + side chips; cards show side and a "You" badge — see [family-relationships.md](./family-relationships.md) |
 | 2026-07-31 | Added an inline "incomplete profile" state (name-only onboarding kids missing DOB and/or photo): a shared `isFamilyMemberProfileIncomplete` predicate, a dashed sketch-outline ring (shown to every role) plus a quiet Caveat-script prompt gated on a new `CastCard` `canEdit` prop (defaults `false`; only owners/managers see the actionable text, so a viewer is never told to do something their tap can't reach), edit-screen routing for owners/managers via `resolveMemberDestination` (viewers always land on the normal detail screen), and a much lighter dashed-avatar hint on the memory tag picker's chips (never disabled, shown to every role since tagging itself isn't role-gated) |
 | 2026-07-22 | Moved portrait execution to the existing Cloudflare Worker/Workflow with a Supabase publication bridge, 3:00/5:30 recovery, and signed dependent-memory retriggering |

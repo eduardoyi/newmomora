@@ -1,9 +1,10 @@
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 import { Keyboard, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import {
   FamilyRosterSheet,
+  getRosterAddLabel,
   getRosterBottomPadding,
   getRosterKeyboardAvoidingBehavior,
 } from './family-roster-sheet';
@@ -162,5 +163,75 @@ describe('FamilyRosterSheet', () => {
 
     expect(getByTestId('roster-member-enzo-id').props.accessibilityState.disabled).toBe(true);
     expect(getByText('1 of 1')).toBeTruthy();
+  });
+
+  it('offers to add the searched name and closes before handing it off', () => {
+    const members = [createMember('enzo-id', 'Enzo')];
+    const onClose = jest.fn();
+    const onAddMember = jest.fn();
+
+    const { getByTestId, getByText } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <FamilyRosterSheet
+          members={members}
+          onAddMember={onAddMember}
+          onClose={onClose}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={[]}
+          visible
+        />
+      </SafeAreaProvider>,
+    );
+
+    expect(getByText('Add someone new')).toBeTruthy();
+    fireEvent.changeText(getByTestId('roster-search-input'), '  Grandma Rose ');
+    expect(getByText('Add “Grandma Rose”')).toBeTruthy();
+
+    fireEvent.press(getByTestId('roster-add-member'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onAddMember).toHaveBeenCalledWith('Grandma Rose');
+  });
+
+  it('replaces the empty-family message with the add row when adding is available', () => {
+    const { getByTestId, queryByText } = render(
+      <SafeAreaProvider
+        initialMetrics={{
+          frame: { height: 844, width: 390, x: 0, y: 0 },
+          insets: { bottom: 34, left: 0, right: 0, top: 47 },
+        }}
+      >
+        <FamilyRosterSheet
+          members={[]}
+          onAddMember={jest.fn()}
+          onClose={jest.fn()}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={[]}
+          visible
+        />
+      </SafeAreaProvider>,
+    );
+
+    expect(getByTestId('roster-add-member')).toBeTruthy();
+    expect(queryByText('Add family members before tagging memories.')).toBeNull();
+  });
+});
+
+describe('getRosterAddLabel', () => {
+  const members = [createMember('enzo-id', 'Enzo')];
+
+  it('uses a generic label with no search or an exact match', () => {
+    expect(getRosterAddLabel('', members)).toBe('Add someone new');
+    expect(getRosterAddLabel('   ', members)).toBe('Add someone new');
+    expect(getRosterAddLabel(' enzo ', members)).toBe('Add someone new');
+  });
+
+  it('names a partial or unknown search', () => {
+    expect(getRosterAddLabel('En', members)).toBe('Add “En”');
+    expect(getRosterAddLabel('Grandma', members)).toBe('Add “Grandma”');
   });
 });

@@ -1,16 +1,39 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { router } from 'expo-router';
 import { Keyboard } from 'react-native';
 
 import { MemoryTagPicker } from '@/components/memory-tag-picker';
+import { resolveFamilyMemberCreationRequest } from '@/lib/family-member-creation-requests';
 import type { FamilyMember } from '@/services/family-members';
+
+jest.mock('expo-router', () => ({
+  router: { push: jest.fn() },
+}));
 
 jest.mock('@/components/family-member-avatar', () => ({
   FamilyMemberAvatar: () => null,
 }));
 
+const mockRosterProps: { current: { onAddMember?: (name: string) => void } | null } = {
+  current: null,
+};
 jest.mock('@/components/family-roster-sheet', () => ({
-  FamilyRosterSheet: () => null,
+  FamilyRosterSheet: (props: { onAddMember?: (name: string) => void }) => {
+    mockRosterProps.current = props;
+    return null;
+  },
 }));
+
+const mockedPush = router.push as jest.Mock;
+
+function lastPushedParams(): { name?: string; requestId?: string } {
+  const href = mockedPush.mock.calls.at(-1)?.[0] as {
+    pathname: string;
+    params: { name?: string; requestId?: string };
+  };
+  expect(href.pathname).toBe('/(app)/add-family-member');
+  return href.params;
+}
 
 function createMember(
   id: string,
@@ -44,6 +67,8 @@ const members = [
 describe('MemoryTagPicker', () => {
   afterEach(() => {
     jest.restoreAllMocks();
+    jest.useRealTimers();
+    mockedPush.mockClear();
   });
 
   it('allows unlimited selection when no illustration cap is supplied', () => {
@@ -142,5 +167,109 @@ describe('MemoryTagPicker', () => {
     fireEvent.press(screen.getByTestId('memory-tag-more'));
 
     expect(dismissSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('adding someone new', () => {
+    it('opens the add-person form and tags the created member when it comes back', () => {
+      const onToggleMember = jest.fn();
+      const screen = render(
+        <MemoryTagPicker
+          members={members}
+          onToggleMember={onToggleMember}
+          selectedMemberIds={[]}
+        />,
+      );
+
+      fireEvent.press(screen.getByTestId('memory-tag-add'));
+      const { name, requestId } = lastPushedParams();
+      expect(name).toBeUndefined();
+      expect(requestId).toEqual(expect.any(String));
+
+      act(() => resolveFamilyMemberCreationRequest(requestId, 'member-new'));
+      expect(onToggleMember).toHaveBeenCalledWith('member-new');
+    });
+
+    it('pins the created member to the front of the row once it loads', () => {
+      const screen = render(
+        <MemoryTagPicker
+          members={members}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={[]}
+        />,
+      );
+
+      fireEvent.press(screen.getByTestId('memory-tag-add'));
+      act(() => resolveFamilyMemberCreationRequest(lastPushedParams().requestId, 'member-new'));
+      screen.rerender(
+        <MemoryTagPicker
+          members={[...members, createMember('member-new', 'Grandma Rose')]}
+          onToggleMember={jest.fn()}
+          selectedMemberIds={['member-new']}
+        />,
+      );
+
+      // Fallback (unmeasured) layout shows the first three members inline.
+      const chipIds = screen
+        .getAllByTestId(/^memory-tag-member-/)
+        .map((node) => node.props.testID as string)
+        .filter((id) => !id.endsWith('-incomplete-hint'));
+      expect(chipIds[0]).toBe('memory-tag-member-new');
+    });
+
+    it('does not tag the created member when the illustration cap is full', () => {
+      const onToggleMember = jest.fn();
+      const screen = render(
+        <MemoryTagPicker
+          maxSelected={1}
+          members={members}
+          onToggleMember={onToggleMember}
+          selectedMemberIds={['member-1']}
+        />,
+      );
+
+      fireEvent.press(screen.getByTestId('memory-tag-add'));
+      act(() => resolveFamilyMemberCreationRequest(lastPushedParams().requestId, 'member-new'));
+      expect(onToggleMember).not.toHaveBeenCalled();
+    });
+
+    it('ignores a creation that finishes after the picker unmounted', () => {
+      const onToggleMember = jest.fn();
+      const screen = render(
+        <MemoryTagPicker
+          members={members}
+          onToggleMember={onToggleMember}
+          selectedMemberIds={[]}
+        />,
+      );
+
+      fireEvent.press(screen.getByTestId('memory-tag-add'));
+      const { requestId } = lastPushedParams();
+      screen.unmount();
+      resolveFamilyMemberCreationRequest(requestId, 'member-new');
+      expect(onToggleMember).not.toHaveBeenCalled();
+    });
+
+    it('shows a labelled add chip when the family is empty', () => {
+      const screen = render(
+        <MemoryTagPicker members={[]} onToggleMember={jest.fn()} selectedMemberIds={[]} />,
+      );
+
+      expect(screen.getByText('+ Add someone')).toBeTruthy();
+    });
+
+    it('waits for the roster sheet to close before opening the form with the searched name', () => {
+      jest.useFakeTimers();
+      render(
+        <MemoryTagPicker members={members} onToggleMember={jest.fn()} selectedMemberIds={[]} />,
+      );
+
+      act(() => mockRosterProps.current?.onAddMember?.('Grandma Rose'));
+      expect(mockedPush).not.toHaveBeenCalled();
+
+      act(() => {
+        jest.runAllTimers();
+      });
+      expect(lastPushedParams().name).toBe('Grandma Rose');
+    });
   });
 });

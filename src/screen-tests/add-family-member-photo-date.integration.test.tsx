@@ -1,13 +1,15 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
 import AddFamilyMemberScreen from '../../app/(app)/add-family-member';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { registerFamilyMemberCreationRequest } from '@/lib/family-member-creation-requests';
 
 jest.mock('expo-router', () => ({
   router: { back: jest.fn() },
+  useLocalSearchParams: jest.fn(() => ({})),
 }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useFamilyMembers', () => ({ useFamilyMembers: jest.fn() }));
@@ -61,11 +63,13 @@ jest.mock('@/components/date-picker-field', () => ({
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseUserProfile = useUserProfile as jest.MockedFunction<typeof useUserProfile>;
-const mockCreateMember = jest.fn(async () => ({}));
+const mockCreateMember = jest.fn(async (): Promise<{ member?: { id: string } }> => ({}));
+const mockedUseLocalSearchParams = useLocalSearchParams as jest.Mock;
 
 describe('initial family member photo date', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedUseLocalSearchParams.mockReturnValue({});
     mockedUseFamily.mockReturnValue({ role: 'manager' } as ReturnType<typeof useFamily>);
     mockedUseFamilyMembers.mockReturnValue({
       members: [],
@@ -95,6 +99,25 @@ describe('initial family member photo date', () => {
       photoReferenceDate: '2024-07-01',
       photoDateSource: 'manual',
     })));
+    expect(router.back).toHaveBeenCalled();
+  });
+
+  it('pre-fills the name and hands the created member back to the opener', async () => {
+    const onCreated = jest.fn();
+    const request = registerFamilyMemberCreationRequest(onCreated);
+    mockedUseLocalSearchParams.mockReturnValue({ name: 'Grandma Rose', requestId: request.requestId });
+    mockCreateMember.mockResolvedValueOnce({ member: { id: 'member-new' } });
+
+    const { getByTestId } = render(<AddFamilyMemberScreen />);
+    expect(getByTestId('add-family-member-name').props.value).toBe('Grandma Rose');
+
+    // The fixture fills the rest of the required fields (and overwrites the
+    // name, which is fine -- the pre-fill was asserted above).
+    fireEvent.press(getByTestId('add-family-member-photo-fixture'));
+    await waitFor(() => expect(getByTestId('add-family-member-photo-date')).toBeTruthy());
+    fireEvent.press(getByTestId('add-family-member-save'));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('member-new'));
     expect(router.back).toHaveBeenCalled();
   });
 });

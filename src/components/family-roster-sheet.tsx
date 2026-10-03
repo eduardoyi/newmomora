@@ -94,6 +94,22 @@ export interface FamilyRosterSheetProps {
   maxSelected?: number;
   onToggleMember: (memberId: string) => void;
   onClose: () => void;
+  /** Shows an "add someone new" row; receives the trimmed search text as a
+   * name suggestion (empty when nothing was typed). The sheet closes itself
+   * before calling this. */
+  onAddMember?: (prefillName: string) => void;
+}
+
+/** Label for the add row: names the typed search when it isn't already an
+ * exact (case-insensitive) match for someone in the family. */
+export function getRosterAddLabel(searchQuery: string, members: FamilyMember[]): string {
+  const name = searchQuery.trim();
+  if (!name) return 'Add someone new';
+  const lower = name.toLowerCase();
+  if (members.some((member) => member.name.trim().toLowerCase() === lower)) {
+    return 'Add someone new';
+  }
+  return `Add “${name}”`;
 }
 
 export function getRosterKeyboardAvoidingBehavior(
@@ -119,6 +135,7 @@ export function FamilyRosterSheet({
   maxSelected,
   onToggleMember,
   onClose,
+  onAddMember,
 }: FamilyRosterSheetProps) {
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
@@ -159,6 +176,12 @@ export function FamilyRosterSheet({
     setIsKeyboardVisible(false);
     setSearchQuery('');
     onClose();
+  };
+
+  const handleAddMember = () => {
+    const prefillName = searchQuery.trim();
+    handleClose();
+    onAddMember?.(prefillName);
   };
 
   return (
@@ -245,12 +268,30 @@ export function FamilyRosterSheet({
               </>
             ) : null}
 
-            {hasNoFamilyMembers ? (
+            {hasNoFamilyMembers && !onAddMember ? (
               <Text style={styles.emptyText}>Add family members before tagging memories.</Text>
             ) : null}
 
             {hasNoResults ? (
               <Text style={styles.emptyText}>No family members match “{searchQuery}”</Text>
+            ) : null}
+
+            {onAddMember ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={handleAddMember}
+                style={({ pressed }) => [rowStyles.row, pressed && rowStyles.rowPressed]}
+                testID="roster-add-member"
+              >
+                <View style={styles.addAvatar}>
+                  <Text style={styles.addAvatarText}>+</Text>
+                </View>
+                <View style={rowStyles.info}>
+                  <Text numberOfLines={1} style={styles.addName}>
+                    {getRosterAddLabel(searchQuery, members)}
+                  </Text>
+                </View>
+              </Pressable>
             ) : null}
           </ScrollView>
 
@@ -364,6 +405,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
     textAlign: 'center',
+  },
+  addAvatar: {
+    alignItems: 'center',
+    borderColor: colors.borderStrong,
+    borderRadius: 19,
+    borderStyle: 'dashed',
+    borderWidth: 1.5,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  addAvatarText: {
+    color: colors.primary,
+    fontFamily: fonts.sansBold,
+    fontSize: 20,
+    lineHeight: 22,
+  },
+  addName: {
+    color: colors.primary,
+    fontFamily: fonts.sansBold,
+    fontSize: 15,
   },
   doneBtn: {
     alignItems: 'center',

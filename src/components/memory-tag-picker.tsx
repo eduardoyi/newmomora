@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from 'react';
+import { router } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Keyboard,
   type LayoutChangeEvent,
@@ -11,13 +12,19 @@ import {
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { FamilyRosterSheet } from '@/components/family-roster-sheet';
 import { colors, fonts, spacing } from '@/constants/theme';
+import { registerFamilyMemberCreationRequest } from '@/lib/family-member-creation-requests';
+import { addFamilyMemberRouteFor } from '@/lib/routes';
 import type { FamilyMember } from '@/services/family-members';
 import { isFamilyMemberProfileIncomplete } from '@/utils/family-members';
 import { calculateInlineTagCount, formatMoreTagLabel } from '@/utils/memory-tag-layout';
+import { runAfterNativeChooserDismisses } from '@/utils/native-permissions';
 
 const CHIP_GAP = spacing.sm;
 const CHIP_HEIGHT = 36;
 const FALLBACK_INLINE_CHIP_LIMIT = 3;
+// The round "+" add chip always sits at the end of the row, so its width
+// (plus one gap) is reserved before fitting member chips.
+const ADD_CHIP_RESERVED_WIDTH = CHIP_HEIGHT + CHIP_GAP;
 
 interface MemoryTagPickerProps {
   members: FamilyMember[];
@@ -78,27 +85,49 @@ export function MemoryTagPicker({
   const [containerWidth, setContainerWidth] = useState(0);
   const [moreChipWidth, setMoreChipWidth] = useState(0);
   const [chipWidths, setChipWidths] = useState<Record<string, number>>({});
+  // People created from this picker (newest first). They're pinned to the
+  // front of the row for this compose session; otherwise a brand-new member
+  // (zero tags) would sort last and land hidden behind "+ More".
+  const [recentlyAddedIds, setRecentlyAddedIds] = useState<string[]>([]);
 
   const atLimit = maxSelected !== undefined && selectedMemberIds.length >= maxSelected;
+
+  const orderedMembers = useMemo(() => {
+    if (recentlyAddedIds.length === 0) return members;
+    const recent = recentlyAddedIds.flatMap((id) => members.filter((member) => member.id === id));
+    if (recent.length === 0) return members;
+    return [...recent, ...members.filter((member) => !recentlyAddedIds.includes(member.id))];
+  }, [members, recentlyAddedIds]);
+
+  const onToggleMemberRef = useRef(onToggleMember);
+  const atLimitRef = useRef(atLimit);
+  useEffect(() => {
+    onToggleMemberRef.current = onToggleMember;
+    atLimitRef.current = atLimit;
+  }, [atLimit, onToggleMember]);
+
+  const creationRequestRef = useRef<{ unregister: () => void } | null>(null);
+  useEffect(() => () => creationRequestRef.current?.unregister(), []);
+
   const measuredChipWidths = useMemo(
-    () => members.map((member) => chipWidths[member.id]),
-    [chipWidths, members],
+    () => orderedMembers.map((member) => chipWidths[member.id]),
+    [chipWidths, orderedMembers],
   );
   const measuredInlineCount = useMemo(
     () =>
       calculateInlineTagCount({
         chipWidths: measuredChipWidths,
-        containerWidth,
+        containerWidth: Math.max(containerWidth - ADD_CHIP_RESERVED_WIDTH, 0),
         gap: CHIP_GAP,
         moreChipWidth,
       }),
     [containerWidth, measuredChipWidths, moreChipWidth],
   );
   const inlineCount =
-    measuredInlineCount ?? Math.min(members.length, FALLBACK_INLINE_CHIP_LIMIT);
-  const inlineMembers = members.slice(0, inlineCount);
-  const hiddenMembers = members.slice(inlineCount);
-  const hasOverflow = inlineCount < members.length;
+    measuredInlineCount ?? Math.min(orderedMembers.length, FALLBACK_INLINE_CHIP_LIMIT);
+  const inlineMembers = orderedMembers.slice(0, inlineCount);
+  const hiddenMembers = orderedMembers.slice(inlineCount);
+  const hasOverflow = inlineCount < orderedMembers.length;
   const hiddenSelectedCount = hiddenMembers.filter((member) =>
     selectedMemberIds.includes(member.id),
   ).length;
@@ -138,6 +167,35 @@ export function MemoryTagPicker({
     Keyboard.dismiss();
     setIsRosterOpen(true);
   }, []);
+
+  // Opens the full add-person form over the composer. The composer stays
+  // mounted underneath, so the created member is handed back here and tagged
+  // (unless the illustration cap is already full).
+  const openAddMember = useCallback((prefillName: string) => {
+    creationRequestRef.current?.unregister();
+    const request = registerFamilyMemberCreationRequest((memberId) => {
+      setRecentlyAddedIds((current) => [memberId, ...current.filter((id) => id !== memberId)]);
+      if (!atLimitRef.current) {
+        onToggleMemberRef.current(memberId);
+      }
+    });
+    creationRequestRef.current = request;
+    router.push(addFamilyMemberRouteFor({ name: prefillName, requestId: request.requestId }));
+  }, []);
+
+  const handleAddChipPress = useCallback(() => {
+    Keyboard.dismiss();
+    openAddMember('');
+  }, [openAddMember]);
+
+  // The roster sheet is an RN Modal; pushing a route while it's still
+  // animating out would present the form underneath it on iOS.
+  const handleRosterAddMember = useCallback(
+    (prefillName: string) => {
+      runAfterNativeChooserDismisses(() => openAddMember(prefillName));
+    },
+    [openAddMember],
+  );
 
   return (
     <View style={styles.container}>
@@ -195,6 +253,21 @@ export function MemoryTagPicker({
             </Text>
           </Pressable>
         ) : null}
+
+        <Pressable
+          accessibilityLabel="Add someone new to your family"
+          accessibilityRole="button"
+          onPress={handleAddChipPress}
+          style={({ pressed }) => [
+            orderedMembers.length === 0 ? styles.addChipWide : styles.addChip,
+            pressed && styles.chipPressed,
+          ]}
+          testID="memory-tag-add"
+        >
+          <Text style={styles.addChipText}>
+            {orderedMembers.length === 0 ? '+ Add someone' : '+'}
+          </Text>
+        </Pressable>
       </View>
 
       <View
@@ -203,7 +276,7 @@ export function MemoryTagPicker({
         pointerEvents="none"
         style={styles.measurementChips}
       >
-        {members.map((member) => (
+        {orderedMembers.map((member) => (
           <View key={member.id} onLayout={(event) => handleChipLayout(member.id, event)}>
             <MemberChip
               isDisabled={false}
@@ -229,8 +302,9 @@ export function MemoryTagPicker({
       </View>
 
       <FamilyRosterSheet
-        members={members}
+        members={orderedMembers}
         maxSelected={maxSelected}
+        onAddMember={handleRosterAddMember}
         onClose={() => setIsRosterOpen(false)}
         onToggleMember={onToggleMember}
         selectedMemberIds={selectedMemberIds}
@@ -329,6 +403,32 @@ const styles = StyleSheet.create({
     minHeight: CHIP_HEIGHT,
     paddingHorizontal: spacing.md,
     paddingVertical: 0,
+  },
+  addChip: {
+    alignItems: 'center',
+    borderColor: colors.borderStrong,
+    borderRadius: 999,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    height: CHIP_HEIGHT,
+    justifyContent: 'center',
+    width: CHIP_HEIGHT,
+  },
+  addChipWide: {
+    alignItems: 'center',
+    borderColor: colors.borderStrong,
+    borderRadius: 999,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: CHIP_HEIGHT,
+    paddingHorizontal: spacing.md,
+  },
+  addChipText: {
+    color: colors.primary,
+    fontFamily: fonts.sansBold,
+    fontSize: 15,
+    lineHeight: 18,
   },
   moreChipSelected: {
     backgroundColor: colors.primaryDark,

@@ -941,6 +941,145 @@ Deno.test(
   },
 );
 
+// --- Partial-readiness deferral (person added from the composer) ---------
+
+const NEW_MEMBER_ID = '88888888-8888-4888-8888-888888888888';
+
+function newMemberFreshPortraitRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return freshUnclaimedPendingPortraitRow({
+    id: '99999999-9999-4999-8999-999999999999',
+    family_member_id: NEW_MEMBER_ID,
+    profile_picture_key: `${USER_ID}/family/${NEW_MEMBER_ID}/portraits/99999999-9999-4999-8999-999999999999/photo.jpg`,
+    ...overrides,
+  });
+}
+
+Deno.test(
+  'generate-illustration defers a keyless memory while a tagged member\'s first portrait is still painting',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'Grandma Rose read Avery a story.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 409);
+        assertEquals(body.code, 'PORTRAITS_NOT_READY');
+        assertEquals(network.openAiImagePrompts.length, 0);
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'pending' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+
+        // Recheck still sees the new member waiting -- stays parked.
+        await retrigger.backgroundTask();
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID, NEW_MEMBER_ID],
+      {},
+      { portraitVersions: () => [readyPortraitRow(), newMemberFreshPortraitRow()] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration self-retriggers a partial deferral once the late portrait is ready on recheck',
+  async () => {
+    let portraitQueries = 0;
+    await withMockedIllustrationNetwork(
+      'Grandma Rose read Avery a story.',
+      async () => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+
+        assertEquals(response.status, 409);
+        await retrigger.backgroundTask();
+        assertEquals(retrigger.calls.length, 1);
+      },
+      [MEMBER_ID, NEW_MEMBER_ID],
+      {},
+      {
+        portraitVersions: () => {
+          portraitQueries += 1;
+          return portraitQueries === 1
+            ? [readyPortraitRow(), newMemberFreshPortraitRow()]
+            : [
+              readyPortraitRow(),
+              newMemberFreshPortraitRow({
+                illustrated_profile_status: 'ready',
+                illustrated_profile_key: `${USER_ID}/family/${NEW_MEMBER_ID}/portraits/99999999-9999-4999-8999-999999999999/portrait/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.webp`,
+              }),
+            ];
+        },
+      },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration draws with ready members when the late portrait has gone stale',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'Grandma Rose read Avery a story.',
+      async (network) => {
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          getObjectBytes: async () => TINY_IMAGE_BYTES,
+        });
+        const body = await response.json();
+
+        // The mock fails image generation after capturing prompts; reaching
+        // it at all proves there was no deferral.
+        assertEquals(body.code === 'PORTRAITS_NOT_READY', false);
+        assertEquals(network.openAiImagePrompts.length > 0, true);
+      },
+      [MEMBER_ID, NEW_MEMBER_ID],
+      {},
+      {
+        portraitVersions: () => [
+          readyPortraitRow(),
+          newMemberFreshPortraitRow({ created_at: new Date(Date.now() - 4 * 60 * 1000).toISOString() }),
+        ],
+      },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration does not partially defer a memory with a retained illustration',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'Grandma Rose read Avery a story.',
+      async (network) => {
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          getObjectBytes: async () => TINY_IMAGE_BYTES,
+        });
+        const body = await response.json();
+
+        assertEquals(body.code === 'PORTRAITS_NOT_READY', false);
+        assertEquals(network.openAiImagePrompts.length > 0, true);
+      },
+      [MEMBER_ID, NEW_MEMBER_ID],
+      {
+        illustration_key: 'existing-illustration.webp',
+        illustration_generation_id: '77777777-7777-4777-8777-777777777777',
+      },
+      { portraitVersions: () => [readyPortraitRow(), newMemberFreshPortraitRow()] },
+    );
+  },
+);
+
 Deno.test(
   'generate-illustration treats a stale claimed portrait as NO_PORTRAITS, not a deferral',
   async () => {

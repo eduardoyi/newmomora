@@ -1,4 +1,4 @@
-import type { PortraitVersionCandidate } from './portrait-versions.ts';
+import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from './portrait-versions.ts';
 
 /** Adds the claim columns needed to judge freshness, not just usability. */
 export interface PortraitFreshnessCandidate extends PortraitVersionCandidate {
@@ -52,4 +52,27 @@ export function hasFreshInFlightPortraitVersion(
   now = Date.now(),
 ): boolean {
   return versions.some((version) => isFreshInFlightPortraitVersion(version, now));
+}
+
+/**
+ * True when at least one member has no usable (ready, date-resolved)
+ * portrait yet but does have a fresh in-flight one -- typically a person
+ * added moments ago from the memory composer whose first portrait is still
+ * painting. Waiting is then likely to put them in the illustration; drawing
+ * now would silently leave them out. A member that already has a usable
+ * portrait never counts, even with a newer version generating.
+ */
+export function hasMemberAwaitingFreshPortrait(
+  memberIds: string[],
+  versionsByMember: Map<string, PortraitFreshnessCandidate[]>,
+  memoryDate: string,
+  now = Date.now(),
+): boolean {
+  return memberIds.some((memberId) => {
+    const versions = versionsByMember.get(memberId) ?? [];
+    return (
+      resolvePortraitVersionAtDate(versions, memoryDate) === null &&
+      hasFreshInFlightPortraitVersion(versions, now)
+    );
+  });
 }

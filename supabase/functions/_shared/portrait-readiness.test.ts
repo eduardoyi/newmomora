@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1';
 
 import {
   hasFreshInFlightPortraitVersion,
+  hasMemberAwaitingFreshPortrait,
   isFreshInFlightPortraitVersion,
   PORTRAIT_CLAIM_RECLAIM_WINDOW_MS,
   PORTRAIT_UNCLAIMED_PENDING_GRACE_MS,
@@ -107,4 +108,36 @@ Deno.test('hasFreshInFlightPortraitVersion is false when no version in the set i
   ];
 
   assertEquals(hasFreshInFlightPortraitVersion(versions, NOW), false);
+});
+
+Deno.test('hasMemberAwaitingFreshPortrait flags a member with only a fresh in-flight portrait', () => {
+  const versions = new Map([
+    ['ready-member', [version({ family_member_id: 'ready-member', illustrated_profile_status: 'ready', illustrated_profile_key: 'p.webp' })]],
+    ['new-member', [version({ family_member_id: 'new-member', illustrated_profile_status: 'pending' })]],
+  ]);
+  assertEquals(hasMemberAwaitingFreshPortrait(['ready-member', 'new-member'], versions, '2026-07-01', NOW), true);
+});
+
+Deno.test('hasMemberAwaitingFreshPortrait ignores a member that already has a usable portrait', () => {
+  const versions = new Map([
+    ['member', [
+      version({ id: 'old', illustrated_profile_status: 'ready', illustrated_profile_key: 'p.webp' }),
+      version({ id: 'new', illustrated_profile_status: 'pending' }),
+    ]],
+  ]);
+  assertEquals(hasMemberAwaitingFreshPortrait(['member'], versions, '2026-07-01', NOW), false);
+});
+
+Deno.test('hasMemberAwaitingFreshPortrait ignores stale attempts and members with no portraits', () => {
+  const versions = new Map([
+    ['stale-member', [version({
+      family_member_id: 'stale-member',
+      illustrated_profile_status: 'pending',
+      created_at: new Date(NOW - PORTRAIT_UNCLAIMED_PENDING_GRACE_MS - 1).toISOString(),
+    })]],
+  ]);
+  assertEquals(
+    hasMemberAwaitingFreshPortrait(['stale-member', 'no-portrait-member'], versions, '2026-07-01', NOW),
+    false,
+  );
 });

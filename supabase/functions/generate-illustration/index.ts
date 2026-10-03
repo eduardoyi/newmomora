@@ -30,6 +30,7 @@ import { resolveMemberIdsForIllustration } from '../_shared/illustration-members
 import { isIllustrationGenerationStale } from '../_shared/illustration-status.ts';
 import {
   hasFreshInFlightPortraitVersion,
+  hasMemberAwaitingFreshPortrait,
   type PortraitFreshnessCandidate,
 } from '../_shared/portrait-readiness.ts';
 import {
@@ -789,14 +790,12 @@ export async function handleGenerateIllustration(
         versionsByMemberRecheck.set(version.family_member_id, current);
       }
 
-      const someMemberNowReady = memberIds.some(
-        (id) =>
-          resolvePortraitVersionAtDate(versionsByMemberRecheck.get(id) ?? [], memoryDateForRetriggerRecheck) !==
-          null,
-      );
-      const stillFreshInFlight = hasFreshInFlightPortraitVersion(versions);
-
-      if (!someMemberNowReady && stillFreshInFlight) {
+      // Same predicate as the deferral itself (this only runs for keyless
+      // deferrals): stay parked while any member is still waiting on a
+      // fresh first portrait. Subsumes the old "nobody ready yet" case.
+      if (
+        hasMemberAwaitingFreshPortrait(memberIds, versionsByMemberRecheck, memoryDateForRetriggerRecheck)
+      ) {
         // Genuinely still generating -- the portrait pipeline's own
         // completion retrigger (out of scope here) will resume this memory.
         return;
@@ -943,6 +942,25 @@ export async function handleGenerateIllustration(
         return errorResponse('Character portraits are still generating', 409, 'PORTRAITS_NOT_READY');
       }
       return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
+    }
+
+    // Partial readiness: someone else is ready, but a member's first portrait
+    // is still painting (typically a person just added from the memory
+    // composer). Drawing now would leave them out for good, so a keyless
+    // memory parks at 'pending' the same way as above and resumes when that
+    // portrait lands (portrait-completion retrigger / recovery loop), or
+    // proceeds without them once the in-flight version goes stale. A memory
+    // with a retained illustration keeps today's behavior (draw with whoever
+    // is ready): its deferral restores the old image and never resumes.
+    const hasRetainedIllustrationForDeferral = Boolean(
+      memory.illustration_key && memory.illustration_generation_id,
+    );
+    if (
+      !hasRetainedIllustrationForDeferral &&
+      hasMemberAwaitingFreshPortrait(memberIds, versionsByMember, memory.memory_date)
+    ) {
+      deferredForPortraits = true;
+      return errorResponse('Character portraits are still generating', 409, 'PORTRAITS_NOT_READY');
     }
 
     // A URL-only memory passes the raw-content check at the top of the

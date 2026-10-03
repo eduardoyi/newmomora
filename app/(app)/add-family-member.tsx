@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActionSheetIOS,
@@ -24,6 +24,7 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { resolveFamilyMemberCreationRequest } from '@/lib/family-member-creation-requests';
 import { parseIsoDate } from '@/utils/dates';
 import { canEditFamilyContent } from '@/utils/roles';
 import {
@@ -58,6 +59,12 @@ export default function AddFamilyMemberScreen() {
   const { role } = useFamily();
   const { members, createMember, isCreating } = useFamilyMembers();
   const { updateProfile } = useUserProfile();
+  // Set when opened from another flow (the memory tag picker): `name`
+  // pre-fills the field, `requestId` hands the created member back so it
+  // returns already tagged (see src/lib/family-member-creation-requests.ts).
+  const params = useLocalSearchParams<{ name?: string; requestId?: string }>();
+  const prefillName = typeof params.name === 'string' ? params.name : '';
+  const requestId = typeof params.requestId === 'string' ? params.requestId : undefined;
 
   // Guard on mount: viewers reaching this route directly get bounced back.
   useEffect(() => {
@@ -65,7 +72,7 @@ export default function AddFamilyMemberScreen() {
       router.back();
     }
   }, [role]);
-  const [name, setName] = useState('');
+  const [name, setName] = useState(prefillName);
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [gender, setGender] = useState('');
   const [additionalInfo, setAdditionalInfo] = useState('');
@@ -208,7 +215,7 @@ export default function AddFamilyMemberScreen() {
     if (photoDateError) { setErrorMessage(photoDateError); return; }
 
     try {
-      await createMember({
+      const created = await createMember({
         name,
         dateOfBirth: dateOfBirth.trim(),
         gender: gender.trim() || undefined,
@@ -222,6 +229,9 @@ export default function AddFamilyMemberScreen() {
         photoReferenceDate,
         photoDateSource,
       });
+      if (created?.member?.id) {
+        resolveFamilyMemberCreationRequest(requestId, created.member.id);
+      }
       void updateProfile({ hasCompletedOnboarding: true });
       router.back();
     } catch (error) {

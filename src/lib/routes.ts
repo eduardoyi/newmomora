@@ -3,6 +3,24 @@ import type { Href } from 'expo-router';
 export const rootRoute = '/' as Href;
 export const addFamilyMemberRoute = '/(app)/add-family-member' as Href;
 
+/**
+ * Add-person modal opened from another flow (the memory tag picker).
+ * `name` pre-fills the name field; `requestId` comes from
+ * `registerFamilyMemberCreationRequest` so the created member is handed back
+ * to the opener.
+ */
+export function addFamilyMemberRouteFor(options: { name?: string; requestId?: string }): Href {
+  const params: Record<string, string> = {};
+  const name = options.name?.trim();
+  if (name) params.name = name;
+  if (options.requestId) params.requestId = options.requestId;
+
+  return {
+    pathname: '/(app)/add-family-member',
+    params,
+  } as Href;
+}
+
 // `memory_saved.source` (docs/plans/analytics-tracking.md Tier 2) needs to
 // know which entry point opened the composer -- carried as a route param
 // (read by new-memory.tsx, defaults to `'other'` when omitted) rather than
