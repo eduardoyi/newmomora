@@ -18,10 +18,35 @@
  * Examples:
  *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:4 --film month:2026-08
  *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:3 --subsample 60 --seed 1
+ *   npm run eval:year-film-script -- --children Enzo,Mara --film holiday:2026 [--today 2026-11-10] [--subsample 30 --seed 1]
+ *
+ * `holiday:YYYY` is the Holiday Card film (docs/plans/holiday-cards.md §6 C2):
+ * Jan 1 → `--today` inclusive, share-safe pool only, floors 20 moments / 12
+ * visuals (no film, and no model calls, below them). Its film-script.json is
+ * what `npm run eval:holiday-card-letters -- --script <path>` writes letters from.
+ * Extra flags for it:
+ *   --confirm-milestones <memoryId:milestoneId,...>  treat those candidate
+ *     milestones as confirmed for the run (previews the firsts scene; the
+ *     storyboard lists every unconfirmed candidate with ids to copy from)
+ *   --preferred-close <mediaId,...>  the card front's top picks (media ids or
+ *     object keys): the close uses them first when they qualify
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import { resolvePortraitVersionAtDate } from '../functions/_shared/portrait-versions.ts';
-import { birthdayFilmScope, birthdayPool, chapterChildren, familyPool, familyYearScope, isFilmChild, monthScope } from '../functions/_shared/year-film-eligibility.ts';
+import {
+  birthdayFilmScope,
+  birthdayPool,
+  chapterChildren,
+  evaluateHolidayFilm,
+  familyPool,
+  familyYearScope,
+  HOLIDAY_MIN_POOL,
+  HOLIDAY_MIN_VISUALS,
+  holidayFilmScope,
+  holidayPool,
+  isFilmChild,
+  monthScope,
+} from '../functions/_shared/year-film-eligibility.ts';
 import { detectJournalLanguage, type FilmLanguage, resolveFilmLanguage } from '../functions/_shared/year-film-i18n.ts';
 import {
   buildQuotePrompt,
@@ -37,6 +62,7 @@ import {
   birthdayVisionCandidates,
   buildBirthdayScript,
   buildFamilyYearScript,
+  buildHolidayScript,
   buildMonthlyScript,
   checkKey,
   type FilmMemorySource,
@@ -47,9 +73,13 @@ import {
   type FrameRef,
   type FamilyYearInput,
   familyYearVisionCandidates,
+  type HolidayInput,
+  holidayVisionCandidates,
   type MonthlyInput,
   monthlyVisionCandidates,
   shareSensitiveIds,
+  type UnconfirmedFirst,
+  unconfirmedFirsts,
   type VerifiedQuote,
 } from '../functions/_shared/year-film-script.ts';
 import {
@@ -67,7 +97,8 @@ import { formatUsage, recordUsage, resetUsage, usageSummary } from './year-film-
 type FilmRequest =
   | { kind: 'birthday'; childName: string; ageYear: number }
   | { kind: 'month'; yearMonth: string }
-  | { kind: 'family'; year: number };
+  | { kind: 'family'; year: number }
+  | { kind: 'holiday'; year: number };
 
 interface Options {
   children: string[] | null;
@@ -79,6 +110,9 @@ interface Options {
   model: string;
   visionModel: string;
   today: string;
+  /** Holiday film: candidate milestones to treat as confirmed. */
+  confirm: { memoryId: string; milestoneId: string }[];
+  preferredClose: string[];
 }
 
 function parseArgs(args: string[]): Options {
@@ -92,6 +126,8 @@ function parseArgs(args: string[]): Options {
     model: QUOTE_MODEL,
     visionModel: CLAIM_CHECK_MODEL,
     today: new Date().toISOString().slice(0, 10),
+    confirm: [],
+    preferredClose: [],
   };
   for (let i = 0; i < args.length; i += 1) {
     const next = args[i + 1];
@@ -108,8 +144,10 @@ function parseArgs(args: string[]): Options {
           options.films.push({ kind: 'month', yearMonth: parts[1] });
         } else if (parts[0] === 'family' && /^\d{4}$/.test(parts[1] ?? '')) {
           options.films.push({ kind: 'family', year: Number(parts[1]) });
+        } else if (parts[0] === 'holiday' && /^\d{4}$/.test(parts[1] ?? '')) {
+          options.films.push({ kind: 'holiday', year: Number(parts[1]) });
         } else {
-          throw new Error(`Bad --film "${next}". Use birthday:<Name>:<ageYear>, month:YYYY-MM or family:YYYY`);
+          throw new Error(`Bad --film "${next}". Use birthday:<Name>:<ageYear>, month:YYYY-MM, family:YYYY or holiday:YYYY`);
         }
         i += 1;
         break;
@@ -139,6 +177,17 @@ function parseArgs(args: string[]): Options {
         break;
       case '--today':
         options.today = next ?? options.today;
+        i += 1;
+        break;
+      case '--confirm-milestones':
+        options.confirm = (next ?? '').split(',').flatMap((pair) => {
+          const [memoryId, milestoneId] = pair.trim().split(':');
+          return memoryId && milestoneId ? [{ memoryId, milestoneId }] : [];
+        });
+        i += 1;
+        break;
+      case '--preferred-close':
+        options.preferredClose = (next ?? '').split(',').map((v) => v.trim()).filter(Boolean);
         i += 1;
         break;
     }
@@ -478,11 +527,26 @@ function sceneBody(scene: FilmScene, ctx: Ctx): string {
         scene.source === 'portraits' ? `<div class="pairs">${scene.frames.map((f) => pair(f, 'portrait', ctx)).join('')}</div>` : grid(scene.frames)
       }`;
     case 'end_card':
-      return `${tiles(scene.grid, ctx)}<p class="note">+ “made with Momora” m. mark</p>`;
+      return `${scene.greeting ? `<p class="big">${esc(scene.greeting)}</p><p>${esc(scene.from ?? '')}</p>` : ''}${tiles(scene.grid, ctx)}<p class="note">+ “made with Momora” m. mark</p>`;
   }
 }
 
-function renderStoryboard(script: FilmScript, label: string, quotes: QuoteResult, vision: VisionResult, ctx: Ctx): string {
+function unconfirmedSection(list: UnconfirmedFirst[], ctx: Ctx): string {
+  const rows = list.map((f) => {
+    const text = ctx.textById.get(f.memoryId) ?? '';
+    return `<tr><td>${esc(f.childName ?? '—')}</td><td><b>${esc(f.label)}</b></td><td>${esc(f.date)}</td><td>${f.gatePasses ? '<span class="warn">gate passes</span>' : 'no'}<div class="note">${
+      esc(f.reason)
+    }</div></td><td class="txt">${esc(text.slice(0, 160))}${text.length > 160 ? '…' : ''}</td><td><code>${esc(f.memoryId)}:${esc(f.milestoneId)}</code></td></tr>`;
+  }).join('');
+  return `<section><h2>Unconfirmed milestones this year (${list.length})</h2>
+<p class="note">Candidates the film does NOT show: a first appears only when it is confirmed, or the memory's own words say it is a first inside the age band. Tell us which are true, or re-run with <code>--confirm-milestones memoryId:milestoneId,…</code> to preview the scene.</p>${
+    list.length
+      ? `<table><thead><tr><th>Child</th><th>Milestone</th><th>Date</th><th>Text gate</th><th>The memory says</th><th>Confirm with</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<p class="note">None.</p>'
+  }</section>`;
+}
+
+function renderStoryboard(script: FilmScript, label: string, quotes: QuoteResult, vision: VisionResult, ctx: Ctx, unconfirmed?: UnconfirmedFirst[]): string {
   const rejectionCounts = quotes.rejected.reduce<Record<string, number>>((acc, r) => {
     acc[r.reason] = (acc[r.reason] ?? 0) + 1;
     return acc;
@@ -540,6 +604,7 @@ figcaption{font-size:11px;color:#6b6280;margin-top:4px}
 .counters div{font-size:13px;color:#6b6280}
 .counters span{display:block;font-family:Newsreader,serif;font-size:40px;color:#2a2438}
 .clip{max-height:420px;border-radius:10px}
+table{border-collapse:collapse;font-size:12px;width:100%}th,td{border-top:1px solid #eee;padding:6px 8px;text-align:left;vertical-align:top}code{font-size:11px;word-break:break-all}
 audio{width:100%}
 </style></head><body>
 <h1>${esc(script.title)}</h1>
@@ -551,6 +616,7 @@ ${scenes}
 <section><h2>Dropped</h2>${
     script.dropped.length ? `<ul>${script.dropped.map((d) => `<li><b>${esc(d.scene)}</b>: ${esc(d.reason)}</li>`).join('')}</ul>` : '<p class="note">None.</p>'
   }</section>
+${unconfirmed ? unconfirmedSection(unconfirmed, ctx) : ''}
 <section><h2>Quote pick & vision</h2><p class="note">Quotes: ${
     quotes.skipped
       ? `skipped (${esc(quotes.skipped)})`
@@ -588,7 +654,7 @@ function languageFor(pool: FilmMemorySource[], quotes: QuoteResult): FilmLanguag
   return resolveFilmLanguage(quotes.language, detectJournalLanguage(pool.map((m) => m.text)), data.language);
 }
 
-async function emit(slug: string, label: string, script: FilmScript, quotes: QuoteResult, vision: VisionResult) {
+async function emit(slug: string, label: string, script: FilmScript, quotes: QuoteResult, vision: VisionResult, unconfirmed?: UnconfirmedFirst[]) {
   const dir = new URL(`${slug}/`, runDir);
   const frames = allFrames(script);
   const stills = frames.flatMap((f) => [thumbKey(f), f.pairKey ?? null].filter((k): k is string => !!k));
@@ -602,7 +668,7 @@ async function emit(slug: string, label: string, script: FilmScript, quotes: Quo
   await Deno.writeTextFile(new URL('usage.json', dir), JSON.stringify(usageSummary(), null, 2));
   console.log(formatUsage(`${slug} F1 models`));
   resetUsage();
-  await Deno.writeTextFile(new URL('storyboard.html', dir), renderStoryboard(script, label, quotes, vision, { local, textById }));
+  await Deno.writeTextFile(new URL('storyboard.html', dir), renderStoryboard(script, label, quotes, vision, { local, textById }, unconfirmed));
   index.push({ slug, title: script.title, label, seconds: script.estimatedSeconds, scenes: script.scenes.length, frames: script.stats.frames });
   const m = script.stats.mix;
   console.log(
@@ -643,6 +709,60 @@ for (const film of options.films) {
         ? `Birthday film · ${firstName(child.name)} · age-year ${film.ageYear}${scope.endExclusive > options.today ? ' (in progress)' : ''}`
         : `Birthday film · subsample ${n} of ${fullPool.length} (seed ${options.seed})`;
       await emit(slug, label, script, quotes, vision);
+    }
+  } else if (film.kind === 'holiday') {
+    // Jan 1 → the day the card is made, inclusive (default: today).
+    const madeOn = options.today.startsWith(String(film.year)) ? options.today : `${film.year}-12-31`;
+    const scope = holidayFilmScope(film.year, madeOn);
+    const fullPool = holidayPool(data.memories, scope, sensitive);
+    const variants = [null, ...options.subsample.filter((n) => n < fullPool.length)];
+    for (const n of variants) {
+      const memories = n === null ? data.memories : subsamplePool(data.memories, new Set(fullPool.map((m) => m.id)), n, options.seed);
+      const evaluation = evaluateHolidayFilm({ memories, children, scope, excludeIds: sensitive });
+      const slug = `holiday-${film.year}${n === null ? '' : `-sub${n}-seed${options.seed}`}`;
+      if (!evaluation.eligible) {
+        console.log(
+          `${slug}: NO FILM — ${evaluation.counts.moments} moments / ${evaluation.visuals} visuals ` +
+            `below the floor (${HOLIDAY_MIN_POOL} / ${HOLIDAY_MIN_VISUALS})`,
+        );
+        continue;
+      }
+      const pool = holidayPool(memories, scope, sensitive);
+      const kids = chapterChildren(children.map((c) => ({ id: c.id, dateOfBirth: c.dateOfBirth })), scope)
+        .map((k) => children.find((c) => c.id === k.id)!);
+      // --confirm-milestones: preview the firsts scene with these treated as confirmed.
+      const milestones = data.milestones.map((m) =>
+        options.confirm.some((c) => c.memoryId === m.memoryId && c.milestoneId === m.milestoneId) ? { ...m, status: 'confirmed' } : m
+      );
+      const quotes = await pickQuotes(pool, kids.map((k) => ({ id: k.id, name: firstName(k.name) })), options);
+      const input: HolidayInput = {
+        year: film.year,
+        scope,
+        familyName: data.familyName,
+        memories,
+        children,
+        members: data.members,
+        milestones,
+        quotes: quotes.accepted,
+        language: languageFor(pool, quotes),
+        ...(options.preferredClose.length ? { preferredCloseMedia: options.preferredClose } : {}),
+      };
+      const vision = await checkFrames(holidayVisionCandidates(input), kids, scope.endExclusive, options);
+      const script = buildHolidayScript({ ...input, checks: vision.checks });
+      const label = `Holiday card film (${scope.start} → ${madeOn})${n === null ? '' : ` · subsample ${n} of ${fullPool.length} (seed ${options.seed})`}${
+        options.confirm.length ? ` · ${options.confirm.length} milestone(s) confirmed for this run` : ''
+      }`;
+      const unconfirmed = unconfirmedFirsts(pool, milestones, data.members, script.language);
+      await emit(slug, label, script, quotes, vision, unconfirmed);
+      const close = script.scenes.find((s) => s.type === 'close');
+      if (close && close.type === 'close') {
+        const names = new Map(data.members.map((m) => [m.id, firstName(m.name)]));
+        const byId = new Map(memories.map((m) => [m.id, m]));
+        console.log(
+          `  close (${close.source}): ${close.frames.map((f) => `${f.memoryId ?? 'portrait'} [${(byId.get(f.memoryId ?? '')?.taggedMemberIds ?? []).map((id) => names.get(id) ?? '?').join(', ')}]`).join(' · ')}`,
+        );
+      }
+      console.log(`  firsts ${script.scenes.some((s) => s.type === 'firsts') ? 'in film' : 'none'} · ${unconfirmed.length} unconfirmed milestone(s), ${unconfirmed.filter((f) => f.gatePasses).length} pass the text gate`);
     }
   } else if (film.kind === 'family') {
     // Before the Dec 28 cut-off (dogfood), the film covers the year so far.

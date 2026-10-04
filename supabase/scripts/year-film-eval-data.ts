@@ -21,6 +21,8 @@ interface FamilyRow {
   id: string;
   name: string;
   gallery_caption_language: string | null;
+  /** families.gallery_caption_instructions: the family's own caption guidance (≤500 chars). */
+  gallery_caption_instructions?: string | null;
 }
 
 interface MemberRow {
@@ -29,6 +31,9 @@ interface MemberRow {
   date_of_birth: string | null;
   relationship: string | null;
   created_at: string;
+  user_id: string | null;
+  nicknames: string[] | null;
+  gender: string | null;
 }
 
 interface MemoryRow {
@@ -38,6 +43,8 @@ interface MemoryRow {
   memory_type: string;
   emotion: string | null;
   topics: string[] | null;
+  labels: string[] | null;
+  user_id: string | null;
   illustration_status: string;
   illustration_key: string | null;
   media_key: string | null;
@@ -161,6 +168,8 @@ export interface EvalFamilyData {
   familyId: string;
   familyName: string;
   language: string | null;
+  /** The family's caption instructions (free text), or null. User content. */
+  captionInstructions: string | null;
   members: FilmPerson[];
   memories: FilmMemorySource[];
   milestones: FilmMilestoneInput[];
@@ -169,7 +178,7 @@ export interface EvalFamilyData {
 export async function loadFamilies(supabase: AuthedClient): Promise<FamilyRow[]> {
   const { data, error } = await supabase
     .from('families')
-    .select('id, name, gallery_caption_language')
+    .select('id, name, gallery_caption_language, gallery_caption_instructions')
     .is('deleted_at', null);
   if (error) throw new Error(`Failed to load families: ${error.message}`);
   return (data ?? []) as FamilyRow[];
@@ -178,7 +187,7 @@ export async function loadFamilies(supabase: AuthedClient): Promise<FamilyRow[]>
 export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promise<EvalFamilyData> {
   const { data: members, error: membersError } = await supabase
     .from('family_members')
-    .select('id, name, date_of_birth, relationship, created_at')
+    .select('id, name, date_of_birth, relationship, created_at, user_id, nicknames, gender')
     .eq('family_id', family.id);
   if (membersError) throw new Error(`Failed to load family_members: ${membersError.message}`);
   const memberRows = (members ?? []) as MemberRow[];
@@ -188,7 +197,7 @@ export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow):
       supabase
         .from('memories')
         .select(
-          'id, content, memory_date, memory_type, emotion, topics, illustration_status, illustration_key, media_key, media_content_type, onboarding_media_pending',
+          'id, content, memory_date, memory_type, emotion, topics, labels, user_id, illustration_status, illustration_key, media_key, media_content_type, onboarding_media_pending',
         )
         .eq('family_id', family.id)
         .order('memory_date', { ascending: true })
@@ -255,7 +264,7 @@ export async function loadFamilyData(supabase: AuthedClient, family: FamilyRow):
     portraits: portraitRows as (PortraitVersionCandidate & { family_member_id: string })[],
     reports: reportRows,
   });
-  return mapped;
+  return { ...mapped, captionInstructions: family.gallery_caption_instructions?.trim() || null };
 }
 
 export function firstName(name: string): string {

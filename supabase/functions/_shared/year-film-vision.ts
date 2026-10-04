@@ -157,15 +157,19 @@ export type BurstVerdict = 'keep' | 'prefer_other_window' | 'remove';
  * can't overrule the tags on that: siblings look alike (F2 round 3 took a
  * Mara-only photo for Enzo), so it only counts when the memory is also
  * tagged with that sibling. A clip whose window shows no one tries its
- * other windows first. Fail-open: no verdict keeps the frame. */
+ * other windows first. Fail-open: no verdict keeps the frame — except
+ * `failClosed` (public audiences: the holiday card film, owner 2026-10-04),
+ * where no verdict removes it, and a crying/frowning face goes too. */
 export function burstFrameVerdict(
   check: FrameCheck | undefined,
   requiredChildId: string | null,
   ownChildIds: ReadonlySet<string>,
   frameTags?: readonly string[],
+  options: { failClosed?: boolean } = {},
 ): BurstVerdict {
-  if (!check) return 'keep';
+  if (!check) return options.failClosed ? 'remove' : 'keep';
   if (check.unsafe) return 'remove';
+  if (options.failClosed && check.expression === 'upset') return 'remove';
   if (requiredChildId !== null) {
     // The model sometimes names the main subject but leaves them off the
     // visible list — the main subject is visible by definition.

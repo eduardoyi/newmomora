@@ -3,10 +3,12 @@ import type { PortraitVersionCandidate } from './portrait-versions.ts';
 import {
   buildBirthdayScript,
   buildFamilyYearScript,
+  buildHolidayScript,
   buildMonthlyScript,
   birthdayCelebration,
   checkKey,
   distinctiveThemes,
+  familyDisplayName,
   type FilmMemorySource,
   type FilmPerson,
   type FilmScene,
@@ -14,7 +16,9 @@ import {
   firstNamedChild,
   type FrameChecks,
   isCertainFirst,
+  rankMemories,
   shareSensitiveIds,
+  unconfirmedFirsts,
 } from './year-film-script.ts';
 import type { FrameCheck } from './year-film-vision.ts';
 import { birthdayFilmScope, familyYearScope } from './year-film-eligibility.ts';
@@ -605,4 +609,180 @@ Deno.test('family year: firsts take turns across children and carry their name',
   assert(firsts.items.some((f) => f.childName === 'Mara'), firsts.items.map((f) => f.childName).join());
   assert(firsts.items.length <= 4);
   assert(firsts.items.every((f) => f.childName === 'Enzo' || f.childName === 'Mara'));
+});
+
+// ── Holiday card film ────────────────────────────────────────────────────
+
+const EDU = 'edu';
+const ADRI = 'adri';
+const edu = { ...person(EDU, '1985-05-05', '2024-01-01', [portrait('pe', EDU, '2026-01-01')]), relationship: 'parent' };
+const adri = { ...person(ADRI, '1987-03-14', '2024-01-02', [portrait('pa', ADRI, '2026-01-01')]), relationship: 'parent' };
+const CORE = [ENZO, MARA, EDU, ADRI];
+
+function holiday(memories: FilmMemorySource[], extra: Partial<Parameters<typeof buildHolidayScript>[0]> = {}) {
+  return buildHolidayScript({
+    year: 2026,
+    scope: { start: '2026-01-01', endExclusive: '2026-10-05' },
+    familyName: 'Rivera Soto',
+    memories,
+    children: [enzo, mara],
+    members: [gran, enzo, mara, edu, adri],
+    milestones: [],
+    quotes: [],
+    language: 'es',
+    ...extra,
+  });
+}
+
+function closeIds(script: FilmScript): string[] {
+  return scenes(script, 'close')[0].frames.map((f) => f.memoryId!);
+}
+
+Deno.test('holiday film: Jan 1 → the day it is made, ≤ 60 s, slower bursts, holiday theme and end card', () => {
+  const script = holiday(familyYear());
+  assertEquals(script.kind, 'family_holiday');
+  assertEquals(script.theme, 'holiday');
+  assertEquals(script.title, 'Nuestro 2026');
+  assertEquals(script.span, { from: '2026-01-01', to: '2026-10-04' });
+  const all = script.scenes.flatMap((sc) => ('frames' in sc ? sc.frames : []) as { date: string | null }[]);
+  assert(all.every((f) => (f.date ?? '') < '2026-10-05'), 'nothing after the day the card is made');
+  assertEquals(scenes(script, 'chapter').map((c) => c.name), ['Enzo', 'Mara']);
+  assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
+  assert(script.estimatedSeconds > 45, `a bit longer than before: ${script.estimatedSeconds}s`);
+  // No counters, emotion or "together" bursts.
+  for (const type of ['counters', 'award'] as const) assertEquals(scenes(script, type).length, 0, type);
+  const bursts = scenes(script, 'burst');
+  assertEquals(bursts.map((b) => b.role), ['first_half', 'second_half', 'finale']);
+  assert(bursts.every((b) => b.holdFactor === 1.5), 'each frame holds 1.5× longer');
+  // The estimate accounts for the slower hold.
+  const year = family(familyYear());
+  assert(scenes(year, 'burst').every((b) => b.holdFactor === undefined));
+  const end = scenes(script, 'end_card')[0];
+  assertEquals(end.greeting, 'Felices fiestas');
+  assertEquals(end.from, 'de parte de la familia Rivera Soto');
+  assertEquals(script.scenes.at(-1)?.type, 'end_card');
+  const en = holiday(familyYear(), { language: 'en', familyName: 'The Rivera Soto Family' });
+  assertEquals(scenes(en, 'end_card')[0].greeting, 'Happy holidays');
+  assertEquals(scenes(en, 'end_card')[0].from, 'from the Rivera Soto family');
+});
+
+Deno.test('holiday film: sensitive and worried/sad/weary memories never appear, holiday topics score up', () => {
+  const memories = familyYear();
+  memories.push(memory({ id: 'sad', date: '2026-03-04', emotion: 'sad', taggedMemberIds: CORE }));
+  memories.push(memory({ id: 'tired', date: '2026-04-04', emotion: 'weary', taggedMemberIds: CORE }));
+  memories.push(memory({ id: 'bath', date: '2026-05-04', topics: ['bath'], taggedMemberIds: CORE }));
+  const script = holiday(memories);
+  const ids = JSON.stringify(script.scenes);
+  for (const id of ['sad', 'tired', 'bath']) assert(!ids.includes(`"${id}"`), id);
+  assertEquals(script.stats.pool, familyYear().filter((m) => m.date < '2026-10-05').length);
+  const ranked = rankMemories(
+    [memory({ id: 'xmas', date: '2026-01-02', topics: ['christmas'] }), memory({ id: 'plain', date: '2026-01-03' })],
+    { scope: { start: '2026-01-01', endExclusive: '2026-10-05' }, milestones: [], ownChildIds: [ENZO, MARA], n: 1, holiday: true },
+  );
+  assertEquals(ranked[0].memory.id, 'xmas');
+});
+
+Deno.test('holiday film: the sound is dropped before a chapter would be, to stay under 60 s', () => {
+  const audio = memory({
+    id: 'audio1',
+    type: 'audio',
+    date: '2026-05-05',
+    taggedMemberIds: [ENZO],
+    media: [{ kind: 'audio', durationMs: 20000, hasPreview: false }],
+    assets: [{ kind: 'audio', key: 'a.m4a', previewKey: null, durationMs: 20000, aspectRatio: null }],
+  });
+  const withSound = holiday([...familyYear(), audio]);
+  assert(withSound.estimatedSeconds <= 60, `${withSound.estimatedSeconds}s`);
+  assertEquals(scenes(withSound, 'sound').length, 1);
+  const kidsOf = (n: number) => Array.from({ length: n }, (_, i) => person(`kid${i}`, `202${i % 6}-03-01`, `2024-01-0${i + 1}`, [portrait(`pk${i}`, `kid${i}`, '2026-03-01')]));
+  const many = kidsOf(6);
+  const crowded = holiday(
+    [...familyYear(), audio, ...many.flatMap((k) => [memory({ date: '2026-06-06', taggedMemberIds: [k.id] }), memory({ date: '2026-07-07', taggedMemberIds: [k.id] })])],
+    { children: many, members: [...many, edu, adri] },
+  );
+  assertEquals(scenes(crowded, 'chapter').length, 6); // never skip a child
+  assertEquals(scenes(crowded, 'sound').length, 0);
+  assert(crowded.dropped.some((d) => d.scene === 'sound' && d.reason.includes('60')));
+});
+
+/** A year of ordinary memories plus the close candidates under test. */
+function withClose(extra: FilmMemorySource[]): FilmMemorySource[] {
+  return [...familyYear(), ...extra];
+}
+
+const together = (id: string, date: string, tags: string[], extra: Partial<FilmMemorySource> = {}) =>
+  memory({ id, date, taggedMemberIds: tags, assets: [{ id: `media-${id}`, kind: 'image', key: `${id}.jpg`, previewKey: `${id}-p.jpg`, durationMs: null, aspectRatio: 1.5 }], ...extra });
+
+Deno.test('holiday film close: the whole core family and nobody else — never a photo without a parent or with an uncle', () => {
+  const script = holiday(withClose([
+    together('old-all', '2026-04-01', CORE),
+    together('new-all', '2026-09-01', CORE),
+    together('no-dad', '2026-09-20', [ENZO, MARA, ADRI]), // newer, but Eduardo is missing
+    together('uncle', '2026-09-25', [...CORE, GRAN]), // newer, but a non-core member is in it
+    together('kids-only', '2026-09-28', [ENZO, MARA]),
+  ]));
+  assertEquals(closeIds(script), ['new-all', 'old-all']);
+  const close = scenes(script, 'close')[0];
+  assertEquals(close.source, 'family');
+  assert(close.frames[0].why.includes('all 4 core members, nobody else'));
+  assert(!script.dropped.some((d) => d.scene === 'close'));
+});
+
+Deno.test('holiday film close: the card front\'s top picks go first, then vision-verified group frames', () => {
+  const memories = withClose([together('a', '2026-09-01', CORE), together('b', '2026-06-01', CORE), together('c', '2026-03-01', CORE)]);
+  // Newest first by default.
+  assertEquals(closeIds(holiday(memories)), ['a', 'b']);
+  // A top pick (by media id or object key) outranks recency.
+  assertEquals(closeIds(holiday(memories, { preferredCloseMedia: ['media-c'] })), ['c', 'a']);
+  assertEquals(closeIds(holiday(memories, { preferredCloseMedia: ['b.jpg'] }))[0], 'b');
+  // Vision: a frame showing both children beats a newer one that doesn't; a blurry one drops out.
+  const check = (children: string[], quality: 'good' | 'blurry' = 'good') => ({
+    mainSubject: 'group', childrenVisible: children, faceVisible: true, expression: 'smiling' as const, quality, unsafe: false, screenCapture: false,
+  });
+  const checks: FrameChecks = new Map([['a-p.jpg', check([ENZO])], ['b-p.jpg', check([ENZO, MARA])], ['c-p.jpg', check([ENZO, MARA], 'blurry')]]);
+  assertEquals(closeIds(holiday(memories, { checks })), ['b', 'a']);
+});
+
+Deno.test('holiday film close: falls back to the core plus others (recorded), then to everyone\'s portraits', () => {
+  const withOthers = holiday(withClose([together('uncle', '2026-09-25', [...CORE, GRAN]), together('no-dad', '2026-09-26', [ENZO, MARA, ADRI])]));
+  assertEquals(closeIds(withOthers), ['uncle']);
+  assert(scenes(withOthers, 'close')[0].frames[0].why.includes('fallback'));
+  assert(withOthers.dropped.some((d) => d.scene === 'close' && d.reason.includes('plus other people')));
+  const none = holiday(withClose([together('no-dad', '2026-09-26', [ENZO, MARA, ADRI])]));
+  const close = scenes(none, 'close')[0];
+  assertEquals(close.source, 'portraits');
+  assertEquals(close.frames.length, 4); // both children and both parents
+  assert(none.dropped.some((d) => d.scene === 'close' && d.reason.includes('core family')));
+});
+
+Deno.test('holiday film: certain firsts are in the film, by date, within the budget', () => {
+  const memories = withClose([
+    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [ENZO] }),
+    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [MARA] }),
+    memory({ id: 'unsure', date: '2026-05-11', taggedMemberIds: [ENZO], text: 'Hoy andó en bici otra vez, qué contento' }),
+  ]);
+  const milestones = [
+    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'first-steps', status: 'confirmed' as const },
+    { memoryId: 'unsure', familyMemberId: ENZO, milestoneId: 'balance-bike', status: 'candidate' as const },
+  ];
+  const script = holiday(memories, { milestones });
+  const firsts = scenes(script, 'firsts')[0];
+  assertEquals(firsts.items.map((f) => f.memoryId), ['steps', 'bike']);
+  assertEquals(firsts.items.map((f) => f.childName), ['Mara', 'Enzo']);
+  assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
+  assertEquals(scenes(holiday(memories), 'firsts').length, 0);
+  // The unconfirmed list: the candidate, with why the gate says no.
+  const list = unconfirmedFirsts(memories, milestones, [enzo, mara], 'es');
+  assertEquals(list.map((f) => [f.memoryId, f.childName, f.gatePasses]), [['unsure', 'Enzo', false]]);
+  assert(list[0].reason.includes('"first"'));
+  const said = [{ ...memories.at(-1)!, id: 'said', text: 'Primera vez que anda en bici sin ayuda' }];
+  const gate = unconfirmedFirsts(said, [{ memoryId: 'said', familyMemberId: ENZO, milestoneId: 'balance-bike', status: 'candidate' }], [enzo], 'en');
+  assertEquals(gate.map((f) => f.gatePasses), [true]);
+});
+
+Deno.test('familyDisplayName strips "The … Family" / "Familia …"', () => {
+  assertEquals(familyDisplayName('The Rivera Soto Family'), 'Rivera Soto');
+  assertEquals(familyDisplayName('Familia Rivera Soto'), 'Rivera Soto');
+  assertEquals(familyDisplayName('Rivera Soto'), 'Rivera Soto');
 });

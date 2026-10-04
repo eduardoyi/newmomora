@@ -45,3 +45,7 @@ Deno.test('defaultBed matches assemble.mjs for the same slugs', () => {
   assertEquals(isYearFilmBed('bright-pop'), true);
   assertEquals(isYearFilmBed('polka'), false);
 });
+
+Deno.test('defaultBed: the holiday card film borrows a year-end family bed', () => {
+  assertEquals(defaultBed('family_holiday', 'holiday-2026', '2026-01-01'), assemblePick('family_year', 'holiday-2026', '2026-01-01'));
+});

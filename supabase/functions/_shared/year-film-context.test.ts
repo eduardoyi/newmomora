@@ -86,3 +86,26 @@ Deno.test('mapFamilyRows: memories by a parent-blocked account are left out', ()
   assertEquals(mapFamilyRows({ ...r, blockedAuthorIds: ['blocked-aunt'] }).memories.map((m) => m.id), ['m2']);
   assertEquals(mapFamilyRows(r).memories.map((m) => m.id), ['m1', 'm2']);
 });
+
+Deno.test('planFilm: a holiday card film clears a lower floor on the share-safe pool', () => {
+  const r = rows();
+  r.memories = Array.from({ length: 22 }, (_, i) => ({
+    id: `c${i}`, content: `moment ${i}`, memory_date: '2026-09-10', memory_type: 'media', emotion: 'joy', topics: null,
+    illustration_status: 'none', illustration_key: null, media_key: null, media_content_type: null, onboarding_media_pending: false,
+  }));
+  r.media = r.memories.slice(0, 14).map((m, i) => ({ id: `x${i}`, memory_id: m.id, object_key: `u/${m.id}.jpg`, preview_object_key: null, content_type: 'image/jpeg', duration_ms: null, aspect_ratio: 1.5, position: 0 }));
+  r.tags = [{ memory_id: 'c0', family_member_id: 'kid' }];
+  r.milestones = [];
+  r.reports = [];
+  const holiday = { kind: 'family_holiday' as const, familyMemberId: null, ageYear: null, scopeStart: '2026-01-01', scopeEndExclusive: '2026-10-05' };
+  const planned = planFilm(mapFamilyRows(r), holiday);
+  assertEquals(planned.ok, true);
+  assertEquals(planned.ok && planned.plan.kind, 'family_holiday');
+  assertEquals(planned.ok && planned.plan.pool.length, 22);
+  // The year-end floors (60/40) are far away; sensitive text shrinks the pool to 19.
+  assertEquals(planFilm(mapFamilyRows(r), { ...holiday, kind: 'family_year' }), { ok: false, reason: 'BELOW_FLOORS' });
+  r.memories[3].content = 'fiebre y hospital';
+  r.memories[4].content = 'pipí en el parque';
+  r.memories[20].content = 'naked in the garden';
+  assertEquals(planFilm(mapFamilyRows(r), holiday), { ok: false, reason: 'BELOW_FLOORS' });
+});

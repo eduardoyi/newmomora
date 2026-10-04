@@ -28,6 +28,12 @@ export const FAMILY_MIN_POOL = 60;
 export const FAMILY_MIN_VISUALS = 40;
 /** A year-scale film must span the year, not one busy month. */
 export const YEAR_MIN_QUARTERS = 3;
+// Holiday-card film (docs/plans/holiday-cards.md §6 C0/C2, owner 2026-10-04):
+// a ~45 s film for a printed card. A family that started journaling in
+// September still gets one; below this the card ships without a QR. No
+// quarter rule: the scope is "Jan 1 → the day the card is made".
+export const HOLIDAY_MIN_POOL = 20;
+export const HOLIDAY_MIN_VISUALS = 12;
 
 /** Sound of the year needs at least this much clip (plan §5 scene 3). */
 export const SOUND_MIN_DURATION_MS = 2000;
@@ -137,14 +143,16 @@ export function ageYearScopes(dateOfBirth: string, today: string): AgeYearScope[
  * year_film_due and year_films.placement_date in SQL. */
 export const BIRTHDAY_FILM_DAYS_AFTER = 1;
 
+function daysInMonth(year: number, month: number): number {
+  return [31, (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+}
+
 /** YYYY-MM-DD + n days, pure string/calendar arithmetic (no Date objects). */
 export function addDays(date: string, days: number): string {
   let [y, m, d] = date.split('-').map(Number);
-  const dim = (yy: number, mm: number) =>
-    [31, (yy % 4 === 0 && yy % 100 !== 0) || yy % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mm - 1];
   for (let i = 0; i < days; i += 1) {
     d += 1;
-    if (d > dim(y, m)) {
+    if (d > daysInMonth(y, m)) {
       d = 1;
       m += 1;
       if (m > 12) {
@@ -152,6 +160,21 @@ export function addDays(date: string, days: number): string {
         y += 1;
       }
     }
+  }
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/** YYYY-MM-DD minus one day (addDays only counts forward). */
+export function previousDay(date: string): string {
+  let [y, m, d] = date.split('-').map(Number);
+  d -= 1;
+  if (d < 1) {
+    m -= 1;
+    if (m < 1) {
+      m = 12;
+      y -= 1;
+    }
+    d = daysInMonth(y, m);
   }
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
@@ -173,6 +196,12 @@ export function birthdayFilmScope(dateOfBirth: string, ageYear: number): FilmSco
 export const FAMILY_FILM_CUTOFF = '12-28';
 export function familyYearScope(year: number): FilmScope {
   return { start: `${year}-01-01`, endExclusive: `${year}-${FAMILY_FILM_CUTOFF}` };
+}
+
+/** The holiday card film's window: Jan 1 → the day the card is made,
+ * inclusive (so `endExclusive` is the day after). */
+export function holidayFilmScope(year: number, madeOn: string): FilmScope {
+  return { start: `${year}-01-01`, endExclusive: addDays(madeOn, 1) };
 }
 
 export function inScope(date: string, scope: FilmScope): boolean {
@@ -260,6 +289,40 @@ export function birthdayPool<T extends FilmMemoryInput>(
 
 export function familyPool<T extends FilmMemoryInput>(memories: T[], scope: FilmScope): T[] {
   return memories.filter((m) => !m.reported && inScope(m.date, scope));
+}
+
+/** Emotions a public holiday card never shows (owner, 2026-10-04: no
+ * sad/worried moments). Same set the film's frames already skip. */
+export const HOLIDAY_EXCLUDED_EMOTIONS: ReadonlySet<string> = new Set(['worry', 'sad', 'weary']);
+
+/** Topics that score up in the holiday film and letter (check
+ * memory-topics.ts: Occasions + snow + gatherings). Halloween is left out: a
+ * card goes out for the winter holidays. */
+export const HOLIDAY_TOPICS: ReadonlySet<string> = new Set([
+  'christmas',
+  'hanukkah',
+  'new-year',
+  'thanksgiving',
+  'snow-play',
+  'family-gathering',
+  'other-holiday',
+  'diwali',
+  'eid',
+  'lunar-new-year',
+]);
+
+/** The holiday card's pool: the family pool minus everything a public
+ * audience must not see — share-sensitive memories (`excludeIds`, from
+ * shareSensitiveIds) and worried/sad/weary moments. The film builder and the
+ * floor check both use it, so the floor counts what the film can show. */
+export function holidayPool<T extends FilmMemoryInput>(
+  memories: T[],
+  scope: FilmScope,
+  excludeIds: ReadonlySet<string> = new Set(),
+): T[] {
+  return familyPool(memories, scope).filter(
+    (m) => !excludeIds.has(m.id) && !(m.emotion && HOLIDAY_EXCLUDED_EMOTIONS.has(m.emotion)),
+  );
 }
 
 // ── Scene evaluation ─────────────────────────────────────────────────────
@@ -553,6 +616,31 @@ export function evaluateFamilyFilm(args: {
     quartersCovered: montage.quartersCovered,
     eligible: counts.moments >= FAMILY_MIN_POOL && montage.visuals >= FAMILY_MIN_VISUALS &&
       montage.quartersCovered >= YEAR_MIN_QUARTERS,
+    chapters,
+    sharedMoments: pool.filter((m) => m.taggedMemberIds.length >= 2).length,
+    siblingGapRatio: gapRatio(chapters),
+  };
+}
+
+/** Holiday card film floor: ≥ HOLIDAY_MIN_POOL moments and
+ * HOLIDAY_MIN_VISUALS visuals in the share-safe pool, no quarter rule.
+ * `excludeIds` = shareSensitiveIds(memories, milestones). */
+export function evaluateHolidayFilm(args: {
+  memories: FilmMemoryInput[];
+  children: FilmMemberInput[];
+  scope: FilmScope;
+  excludeIds?: ReadonlySet<string>;
+}): FamilyEvaluation {
+  const pool = holidayPool(args.memories, args.scope, args.excludeIds);
+  const counts = countPool(pool);
+  const montage = evaluateMontage(pool, args.scope);
+  const chapters = chapterChildren(args.children, args.scope).map((c) => chapterFor(pool, c.id));
+  return {
+    counts,
+    visuals: montage.visuals,
+    videoClips: pool.filter(hasVideoClip).length,
+    quartersCovered: montage.quartersCovered,
+    eligible: counts.moments >= HOLIDAY_MIN_POOL && montage.visuals >= HOLIDAY_MIN_VISUALS,
     chapters,
     sharedMoments: pool.filter((m) => m.taggedMemberIds.length >= 2).length,
     siblingGapRatio: gapRatio(chapters),

@@ -42,12 +42,14 @@ import {
   birthdayVisionCandidates,
   buildBirthdayScript,
   buildFamilyYearScript,
+  buildHolidayScript,
   buildMonthlyScript,
   checkKey,
   familyYearVisionCandidates,
   type FilmScript,
   type FrameChecks,
   type FrameRef,
+  holidayVisionCandidates,
   monthlyVisionCandidates,
   type VerifiedQuote,
 } from '../../../supabase/functions/_shared/year-film-script.ts';
@@ -145,6 +147,8 @@ function candidates(plan: FilmPlan): FrameRef[] {
       return monthlyVisionCandidates({ ...plan.input, ...base });
     case 'family_year':
       return familyYearVisionCandidates({ ...plan.input, ...base });
+    case 'family_holiday':
+      return holidayVisionCandidates({ ...plan.input, ...base });
   }
 }
 
@@ -362,6 +366,8 @@ export async function buildAndSave(deps: StageDeps): Promise<{ saved: boolean }>
     ? buildBirthdayScript({ ...plan.input, ...common })
     : plan.kind === 'family_month'
     ? buildMonthlyScript({ ...plan.input, ...common })
+    : plan.kind === 'family_holiday'
+    ? buildHolidayScript({ ...plan.input, ...common })
     : buildFamilyYearScript({ ...plan.input, ...common });
 
   const refs = scriptReferences(script, ctx.rows.portraits);

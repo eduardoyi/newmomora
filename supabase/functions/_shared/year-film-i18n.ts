@@ -213,10 +213,12 @@ const TOPIC_ACTIVITIES: Readonly<Record<FilmLanguage, Readonly<Record<string, st
 
 /** A topic as an activity in the film's voice, or null when it shouldn't be
  * called loved (see TOPIC_ACTIVITIES). Unknown topics fall back to null. */
-export function topicActivity(topicId: string, language: FilmLanguage, voice: 'child' | 'family'): string | null {
+export function topicActivity(topicId: string, language: FilmLanguage, voice: 'child' | 'family' | 'third'): string | null {
   const phrase = TOPIC_ACTIVITIES[language][topicId];
   if (!phrase) return null;
-  return phrase.replaceAll('{te}', voice === 'child' ? 'te' : 'nos');
+  // 'third': about a child, to others ("disfrazarse y jugar a imaginar") —
+  // the holiday letter's per-person profiles.
+  return phrase.replaceAll('{te}', voice === 'child' ? 'te' : voice === 'third' ? 'se' : 'nos');
 }
 
 /** Spanish milestone labels (share-sensitive ones included for

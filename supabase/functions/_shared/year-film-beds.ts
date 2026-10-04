@@ -5,7 +5,7 @@
 // renderer just plays what film.json names. The SQL allow-list
 // (public.year_film_bed_ids) and beds.json are parity-tested against this.
 
-export type FilmKind = 'birthday' | 'family_month' | 'family_year';
+export type FilmKind = 'birthday' | 'family_month' | 'family_year' | 'family_holiday';
 
 export const YEAR_FILM_BEDS: readonly { id: string; use: readonly string[] }[] = [
   { id: 'bells-and-claps', use: ['family_month'] },
@@ -30,7 +30,10 @@ export function isYearFilmBed(id: unknown): id is string {
  * slug (production passes the film id) so siblings don't always share one.
  */
 export function defaultBed(kind: FilmKind, slug: string, spanFrom: string): string {
-  const options = YEAR_FILM_BEDS.filter((b) => b.use.includes(kind)).map((b) => b.id).sort((x, y) => x.localeCompare(y));
+  // The holiday card film borrows the year-end family bed until C4 adds
+  // holiday music (docs/plans/holiday-cards.md §6); beds.json stays untouched.
+  const bedKind = kind === 'family_holiday' ? 'family_year' : kind;
+  const options = YEAR_FILM_BEDS.filter((b) => b.use.includes(bedKind)).map((b) => b.id).sort((x, y) => x.localeCompare(y));
   if (options.length === 0) throw new Error(`no bed for film kind ${kind}`);
   if (kind === 'family_month') {
     const [y, m] = spanFrom.split('-').map(Number);

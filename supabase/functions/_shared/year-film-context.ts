@@ -13,11 +13,13 @@ import {
   chapterChildren,
   evaluateBirthdayFilm,
   evaluateFamilyFilm,
+  evaluateHolidayFilm,
   evaluateMonthlyFilm,
   familyPool,
   type FilmMediaInput,
   type FilmMilestoneInput,
   type FilmScope,
+  holidayPool,
   isFilmChild,
 } from './year-film-eligibility.ts';
 import type { QuoteSubject } from './year-film-quotes.ts';
@@ -27,6 +29,7 @@ import {
   type FilmAssetRef,
   type FilmMemorySource,
   type FilmPerson,
+  type HolidayInput,
   type MonthlyInput,
   shareSensitiveIds,
   type VerifiedQuote,
@@ -46,6 +49,10 @@ export interface MemberRow {
   date_of_birth: string | null;
   relationship: string | null;
   created_at: string;
+  /** Optional: the holiday letter's voice and naming (eval + later production). */
+  user_id?: string | null;
+  nicknames?: string[] | null;
+  gender?: string | null;
 }
 
 export interface MemoryRow {
@@ -55,6 +62,8 @@ export interface MemoryRow {
   memory_type: string;
   emotion: string | null;
   topics: string[] | null;
+  /** Optional: open-vocabulary labels (holiday letter details). */
+  labels?: string[] | null;
   illustration_status: string;
   illustration_key: string | null;
   media_key: string | null;
@@ -166,7 +175,7 @@ export function mapFamilyRows(rows: FamilyRows, options: MapOptions = {}): Famil
     let assets: FilmAssetRef[] = media.flatMap((m) => {
       const kind = mediaKind(m.content_type);
       return kind
-        ? [{ kind, key: m.object_key, previewKey: m.preview_object_key, durationMs: m.duration_ms, aspectRatio: m.aspect_ratio }]
+        ? [{ id: m.id, kind, key: m.object_key, previewKey: m.preview_object_key, durationMs: m.duration_ms, aspectRatio: m.aspect_ratio }]
         : [];
     });
     // Legacy single-asset memories predate memory_media rows.
@@ -189,6 +198,8 @@ export function mapFamilyRows(rows: FamilyRows, options: MapOptions = {}): Famil
       media: assets.map((a) => ({ kind: a.kind, durationMs: a.durationMs, hasPreview: !!a.previewKey || a.kind === 'image' })),
       assets,
       reported: reportedMemories.has(row.id),
+      ...(row.labels ? { labels: row.labels } : {}),
+      ...(row.user_id ? { authorId: row.user_id } : {}),
     };
   });
 
@@ -203,6 +214,9 @@ export function mapFamilyRows(rows: FamilyRows, options: MapOptions = {}): Famil
       relationship: m.relationship,
       createdAt: m.created_at,
       portraits: portraitsByMember.get(m.id) ?? [],
+      ...(m.user_id ? { userId: m.user_id } : {}),
+      ...(m.nicknames?.length ? { nicknames: m.nicknames } : {}),
+      ...(m.gender ? { gender: m.gender } : {}),
     })),
     memories,
     milestones: rows.milestones
@@ -234,7 +248,7 @@ export async function yearFilmTextHash(content: string | null, transcript: strin
 // ── Film plan ─────────────────────────────────────────────────────────────
 
 export interface FilmRowForPlan {
-  kind: 'birthday' | 'family_month' | 'family_year';
+  kind: 'birthday' | 'family_month' | 'family_year' | 'family_holiday';
   familyMemberId: string | null;
   ageYear: number | null;
   scopeStart: string;
@@ -256,7 +270,8 @@ interface PlanBase {
 export type FilmPlan =
   | (PlanBase & { kind: 'birthday'; input: Omit<BirthdayInput, 'quotes' | 'language' | 'checks'> })
   | (PlanBase & { kind: 'family_month'; input: Omit<MonthlyInput, 'quotes' | 'language' | 'checks'> })
-  | (PlanBase & { kind: 'family_year'; input: Omit<FamilyYearInput, 'quotes' | 'language' | 'checks'> });
+  | (PlanBase & { kind: 'family_year'; input: Omit<FamilyYearInput, 'quotes' | 'language' | 'checks'> })
+  | (PlanBase & { kind: 'family_holiday'; input: Omit<HolidayInput, 'quotes' | 'language' | 'checks'> });
 
 export type PlanResult = { ok: true; plan: FilmPlan } | { ok: false; reason: string };
 
@@ -320,6 +335,36 @@ export function planFilm(data: FamilyFilmData, film: FilmRowForPlan): PlanResult
   const kids = chapterChildren(children.map((c) => ({ id: c.id, dateOfBirth: c.dateOfBirth })), scope)
     .map((k) => children.find((c) => c.id === k.id)!);
   const pool = familyPool(data.memories, scope);
+
+  if (film.kind === 'family_holiday') {
+    // A card film is watched publicly: the floors count only the share-safe
+    // pool (no sensitive memories, no worried/sad/weary), and the quote pick
+    // reads the same pool. No quarter rule (docs/plans/holiday-cards.md).
+    const holiday = holidayPool(data.memories, scope, sensitive);
+    const evaluation = evaluateHolidayFilm({ memories: data.memories, children, scope, excludeIds: sensitive });
+    if (!evaluation.eligible) return { ok: false, reason: 'BELOW_FLOORS' };
+    return {
+      ok: true,
+      plan: {
+        kind: 'family_holiday',
+        scope,
+        children,
+        subjects: kids,
+        pool: holiday,
+        quotable: holiday,
+        quoteSubjects: subjectsOf(kids),
+        input: {
+          year: Number(scope.start.slice(0, 4)),
+          scope,
+          familyName: data.familyName,
+          memories: data.memories,
+          children,
+          members: data.members,
+          milestones: data.milestones,
+        },
+      },
+    };
+  }
 
   if (film.kind === 'family_month') {
     const yearMonth = scope.start.slice(0, 7);

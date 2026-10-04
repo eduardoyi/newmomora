@@ -8,6 +8,12 @@ import {
   evaluateBirthdayFilm,
   evaluateColdOpen,
   evaluateFamilyFilm,
+  evaluateHolidayFilm,
+  HOLIDAY_MIN_POOL,
+  HOLIDAY_MIN_VISUALS,
+  holidayFilmScope,
+  holidayPool,
+  previousDay,
   evaluateFirsts,
   evaluateMontage,
   evaluateStarring,
@@ -279,4 +285,30 @@ Deno.test('film dates (owner 2026-09-29): birthday scope ends the day after, yea
   assertEquals(birthdayFilmScope('2022-10-23', 4), { start: '2025-10-23', endExclusive: '2026-10-25' });
   assertEquals(FAMILY_FILM_CUTOFF, '12-28');
   assertEquals(familyYearScope(2026), { start: '2026-01-01', endExclusive: '2026-12-28' });
+});
+
+Deno.test('holiday film scope runs Jan 1 → the day the card is made, inclusive', () => {
+  assertEquals(holidayFilmScope(2026, '2026-10-04'), { start: '2026-01-01', endExclusive: '2026-10-05' });
+  assertEquals(holidayFilmScope(2026, '2026-12-31'), { start: '2026-01-01', endExclusive: '2027-01-01' });
+  assertEquals(previousDay('2026-10-05'), '2026-10-04');
+  assertEquals(previousDay('2026-03-01'), '2026-02-28');
+  assertEquals(previousDay('2024-03-01'), '2024-02-29');
+  assertEquals(previousDay('2026-01-01'), '2025-12-31');
+});
+
+Deno.test('holiday film floor: 20 moments / 12 visuals of the share-safe pool, no quarter rule', () => {
+  const scope = holidayFilmScope(2026, '2026-10-04');
+  // 20 memories, all in one month, 12 with photos: passes (no quarter rule).
+  const memories = Array.from({ length: HOLIDAY_MIN_POOL }, (_, i) =>
+    memory({ id: `h${i}`, date: '2026-09-10', media: i < HOLIDAY_MIN_VISUALS ? [{ kind: 'image', durationMs: null, hasPreview: true }] : [] }));
+  assertEquals(evaluateHolidayFilm({ memories, children: KIDS, scope }).eligible, true);
+  assertEquals(evaluateFamilyFilm({ memories, children: KIDS, scope }).eligible, false);
+  // One short on visuals, or on moments: out.
+  assertEquals(evaluateHolidayFilm({ memories: memories.map((m, i) => (i === 0 ? { ...m, media: [] } : m)), children: KIDS, scope }).eligible, false);
+  assertEquals(evaluateHolidayFilm({ memories: memories.slice(1), children: KIDS, scope }).eligible, false);
+  // The floor counts what a public film can show: sensitive and sad ones don't.
+  assertEquals(evaluateHolidayFilm({ memories, children: KIDS, scope, excludeIds: new Set(['h0']) }).eligible, false);
+  const sad = memories.map((m, i) => (i === 15 ? { ...m, emotion: 'sad' } : m));
+  assertEquals(evaluateHolidayFilm({ memories: sad, children: KIDS, scope }).eligible, false);
+  assertEquals(holidayPool(sad, scope).length, HOLIDAY_MIN_POOL - 1);
 });

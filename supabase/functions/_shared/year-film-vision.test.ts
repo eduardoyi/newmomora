@@ -77,3 +77,12 @@ Deno.test('buildFrameCheckRequestBody labels references by name and candidates b
   const text = JSON.stringify(body.messages[1].content);
   assert(text.includes('REFERENCE — Enzo:') && text.includes('CANDIDATE index 0:'));
 });
+
+Deno.test('burstFrameVerdict: failClosed (public audience) drops unchecked and crying frames', () => {
+  const kids = new Set(['id-enzo']);
+  const base = { mainSubject: 'id-enzo', childrenVisible: ['id-enzo'], faceVisible: true, expression: 'smiling' as const, quality: 'good' as const, unsafe: false, screenCapture: false };
+  assertEquals(burstFrameVerdict(undefined, null, kids, undefined, { failClosed: true }), 'remove');
+  assertEquals(burstFrameVerdict({ ...base, expression: 'upset' }, null, kids, undefined, { failClosed: true }), 'remove');
+  assertEquals(burstFrameVerdict({ ...base, expression: 'upset' }, null, kids), 'keep');
+  assertEquals(burstFrameVerdict(base, null, kids, undefined, { failClosed: true }), 'keep');
+});

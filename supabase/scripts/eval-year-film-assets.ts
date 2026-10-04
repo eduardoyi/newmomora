@@ -513,7 +513,8 @@ for (const slug of slugs) {
     const verdicts = await checkFiles(list.map(({ p }) => ({ file: p.file!, clip: p.usage === 'still' ? null : p })));
     checkedCount = list.length;
     const verdictOf = (check: FrameCheck | undefined, tags?: string[]) =>
-      burstFrameVerdict(check, requiredChild, ownChildIds, tags);
+      // The holiday card film is public: no verdict means the frame goes.
+      burstFrameVerdict(check, requiredChild, ownChildIds, tags, { failClosed: film.kind === 'family_holiday' });
     const tagsOf = (t: (typeof list)[number]) => t.frames[0]?.frame.tags;
     const flagged: { t: (typeof list)[number]; verdict: ReturnType<typeof verdictOf> }[] = [];
     list.forEach((t, i) => {

@@ -33,10 +33,13 @@ import {
   type FilmMemoryInput,
   type FilmMilestoneInput,
   type FilmScope,
+  HOLIDAY_TOPICS,
   hasVideoClip,
+  holidayPool,
   isSoundCandidate,
   MONTAGE_EXCLUDED_EMOTIONS,
   monthScope,
+  previousDay,
   soundDurationMs,
   STARRING_MIN_SHARED,
   VIDEO_CLIP_MIN_DURATION_MS,
@@ -50,6 +53,9 @@ export type { FilmLanguage } from './year-film-i18n.ts';
 // ── Inputs ───────────────────────────────────────────────────────────────
 
 export interface FilmAssetRef {
+  /** memory_media.id when known (production + eval rows; legacy single-asset
+   * memories have none). The holiday card passes its front's top picks by it. */
+  id?: string;
   kind: FilmMediaKind;
   key: string;
   previewKey: string | null;
@@ -60,6 +66,11 @@ export interface FilmAssetRef {
 export interface FilmMemorySource extends FilmMemoryInput {
   assets: FilmAssetRef[];
   illustrationKey: string | null;
+  /** memories.labels: open-vocabulary search labels (holiday letter: the
+   * concrete words — a costume, a park). Not on screen. */
+  labels?: string[];
+  /** memories.user_id: who wrote it (holiday letter: the parents' voice). */
+  authorId?: string | null;
 }
 
 export interface FilmPerson {
@@ -70,6 +81,12 @@ export interface FilmPerson {
   relationship?: string | null;
   createdAt: string;
   portraits: PortraitVersionCandidate[];
+  /** family_members.user_id: the account this person is ("this is me"). */
+  userId?: string | null;
+  /** family_members.nicknames and gender (holiday letter: how the family
+   * names a child, and pronoun agreement). */
+  nicknames?: string[];
+  gender?: string | null;
 }
 
 /** A quote already verified against its memory's real text. */
@@ -128,6 +145,13 @@ export type FilmScene =
     frames: FrameRef[];
     /** Seconds each still stays on screen; clips hold ~2× this. */
     secondsPerFrame: number;
+    /** Slower pacing: how long each frame holds relative to the year film's
+     * approved pace (default 1). Holiday card film: 1.5. RENDERER CONTRACT
+     * (film-renderer/assemble.mjs `burst()`, C4): multiply the spare-quarter-
+     * beat target — `frames.length * (accelerate ? 0.6 : 1) * (holdFactor ?? 1)
+     * * 4 * TEMPO` — and scale the per-frame caps (6 quarter beats for clips, 4
+     * for stills) by the same factor so the extra time is not clipped away. */
+    holdFactor?: number;
   }
   | {
     type: 'sound';
@@ -187,13 +211,22 @@ export type FilmScene =
     celebrationDate: string | null;
     frames: FrameRef[];
   }
-  | { type: 'end_card'; grid: FrameRef[] };
+  | {
+    type: 'end_card';
+    grid: FrameRef[];
+    /** Holiday card film: the greeting and the family's sign-off, shown
+     * instead of the plain "made with Momora" close (C4 renders them). */
+    greeting?: string;
+    from?: string;
+  };
 
 export type FilmSceneType = FilmScene['type'];
 
 export interface FilmScript {
   version: 1;
-  kind: 'birthday' | 'family_month' | 'family_year';
+  kind: 'birthday' | 'family_month' | 'family_year' | 'family_holiday';
+  /** 'holiday': the card film's theme (palette, music, end card) — C4. */
+  theme?: 'holiday';
   language: FilmLanguage;
   title: string;
   scope: FilmScope;
@@ -247,6 +280,8 @@ const STRINGS = {
     birthdayClose: (name: string, n: number) => `Happy ${ORDINAL_EN_LOWER[n] ?? `${n}th`} birthday, ${name}.`,
     monthTitle: (month: number) => MONTHS_EN[month - 1],
     familyYearClose: (year: number) => `Here's to ${year + 1}, together`,
+    holidayGreeting: 'Happy holidays',
+    holidayFrom: (family: string) => `from the ${family} family`,
     counters: {
       moments: ['moment', 'moments'],
       photos: ['photo', 'photos'],
@@ -272,6 +307,8 @@ const STRINGS = {
     birthdayClose: (name: string, _n: number) => `¡Feliz cumpleaños, ${name}!`,
     monthTitle: (month: number) => MONTHS_ES[month - 1],
     familyYearClose: (year: number) => `¡Por un ${year + 1} juntos!`,
+    holidayGreeting: 'Felices fiestas',
+    holidayFrom: (family: string) => `de parte de la familia ${family}`,
     counters: {
       moments: ['momento', 'momentos'],
       photos: ['foto', 'fotos'],
@@ -379,7 +416,7 @@ export const SHARE_SENSITIVE_MILESTONES: ReadonlySet<string> = new Set([
 ]);
 /** Catalog entries that aren't "firsts" on screen. */
 const NOT_A_FIRST: ReadonlySet<string> = new Set(['birthday']);
-const SHARE_SENSITIVE_TEXT =
+export const SHARE_SENSITIVE_TEXT =
   /(?<!\p{L})(pip[ií]|pup[uú]|poceta|pa[ñn]al(?:es)?|caca|orinal|inodoro|potty|poop|pee|diapers?|nappy|nappies|toilet|v[oó]mit\w*|fiebre|fever|hospital|urgencias|desnud\w*|naked)(?!\p{L})/iu;
 /** A first is shown only when it is certain (owner, round 2: "Primera
  * pregunta" and "Primer corte de pelo" at age 3–4 were model inferences):
@@ -420,7 +457,13 @@ interface ScoreContext {
   focusChildId?: string;
   checks?: FrameChecks;
   names: Map<string, string>;
+  /** Holiday card film: holiday topics score up (HOLIDAY_TOPICS). */
+  holiday?: boolean;
 }
+
+/** How much a holiday topic lifts a memory in the holiday film (an emotion
+ * is worth up to 0.6, a caption 0.15): a nudge, not an override. */
+const HOLIDAY_BOOST = 0.35;
 
 function scoreMemory(memory: FilmMemoryInput, ctx: ScoreContext): { score: number; why: string } {
   const kind = visualKind(memory) ?? (memory.type === 'audio' ? 'audio' : 'none');
@@ -436,6 +479,10 @@ function scoreMemory(memory: FilmMemoryInput, ctx: ScoreContext): { score: numbe
   if (ctx.milestoneMemoryIds.has(memory.id)) {
     score += 0.4;
     parts.push('milestone');
+  }
+  if (ctx.holiday && memory.topics.some((t) => HOLIDAY_TOPICS.has(t))) {
+    score += HOLIDAY_BOOST;
+    parts.push('holiday');
   }
   const ownKids = memory.taggedMemberIds.filter((id) => ctx.ownChildIds.has(id));
   if (ctx.focusChildId) {
@@ -897,7 +944,7 @@ function estimateSeconds(scenes: FilmScene[]): number {
       case 'burst':
         seconds += scene.role === 'emotion' || scene.role === 'together'
           ? BEAT_SECONDS * (1 + Math.min(4, scene.frames.length)) // a title beat, then up to 4 cards
-          : scene.secondsPerFrame * scene.frames.length +
+          : scene.secondsPerFrame * (scene.holdFactor ?? 1) * scene.frames.length +
             BEAT_SECONDS * (scene.titlesKicker ? 1 + 1.5 * scene.titles.length : scene.titles.length); // heading beat + 1.5 per activity
         break;
       case 'sound':
@@ -1075,6 +1122,20 @@ function certainFirsts(
       const frame = visualKind(memory) !== null && usable(memory, ctx) ? frameFor(memory, 'the milestone\'s memory') : null;
       return frame ? { ...item, frame } : item;
     });
+}
+
+/** A child's certain firsts in a share-safe pool (confirmed, or the text says
+ * so inside the age band), oldest first — for the holiday letter's profile. */
+export function certainFirstsOf(
+  pool: FilmMemorySource[],
+  milestones: FilmMilestoneInput[],
+  childId: string,
+  language: FilmLanguage,
+): { milestoneId: string; label: string; date: string; memoryId: string; confirmed: boolean }[] {
+  const ctx: ScoreContext = { milestoneMemoryIds: new Set(), ownChildIds: new Set(), sensitive: new Set(), names: new Map() };
+  return certainFirsts(pool, milestones, childId, language, ctx)
+    .map(({ milestoneId, label, date, memoryId, confirmed }) => ({ milestoneId, label, date, memoryId, confirmed }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 export function birthdayCelebration(
@@ -1557,6 +1618,39 @@ export function familyYearVisionCandidates(input: FamilyYearInput): FrameRef[] {
   ].map((c) => c.frame)));
 }
 
+/** One chapter per child, equal length whatever the data (plan §3, the
+ * sibling trap): the portrait at the end of the scope, up to CHAPTER_FRAMES
+ * verified moments spread over it, and the child's verified line when there
+ * is one. Marks the moments used. */
+function buildChapters(
+  kids: FilmPerson[],
+  pool: FilmMemorySource[],
+  ctx: ScoreContext,
+  scope: FilmScope,
+  used: Set<string>,
+  quotes: VerifiedQuote[],
+  dropped: FilmScript['dropped'],
+): Extract<FilmScene, { type: 'chapter' }>[] {
+  const chapters: Extract<FilmScene, { type: 'chapter' }>[] = kids.map((kid) => {
+    const version = resolvePortraitVersionAtDate(kid.portraits, scope.endExclusive);
+    const portrait = version ? portraitFrame(version, 'portrait at the end of the year') : null;
+    const verified = verifiedFor(childFrameCandidates(pool, kid.id, ctx, used).slice(0, VISION_CANDIDATES_PER_SLOT * 3), kid.id, ctx);
+    const picked = spreadOverScope(verified, CHAPTER_FRAMES, scope);
+    for (const v of picked) used.add(v.memory.id);
+    const quote = quotes.find((q) => q.speakerId === kid.id && pool.some((m) => m.id === q.memoryId) && !ctx.sensitive.has(q.memoryId));
+    return {
+      type: 'chapter',
+      childId: kid.id,
+      name: firstNameOf(kid.name),
+      portrait,
+      frames: picked.map((v) => v.frame),
+      line: quote ? { quote: quote.quote, memoryId: quote.memoryId } : null,
+    };
+  });
+  for (const c of chapters) if (!c.portrait && c.frames.length === 0) dropped.push({ scene: 'chapter', reason: `${c.name}: no portrait and no verified frames` });
+  return chapters;
+}
+
 /** "Nuestro 2025" (plan §4.2): the family's year, with one equal chapter per
  * child. Scope Jan 1 → Dec 27; renders Dec 28, surfaces Dec 30. */
 export function buildFamilyYearScript(input: FamilyYearInput): FilmScript {
@@ -1576,23 +1670,7 @@ export function buildFamilyYearScript(input: FamilyYearInput): FilmScript {
   // Claims first, so bursts don't spend their frames. One chapter per child,
   // equal length whatever the data: a child with little still gets the
   // portrait and whatever verified moments exist (plan §3).
-  const chapters: Extract<FilmScene, { type: 'chapter' }>[] = kids.map((kid) => {
-    const version = resolvePortraitVersionAtDate(kid.portraits, scope.endExclusive);
-    const portrait = version ? portraitFrame(version, 'portrait at the end of the year') : null;
-    const verified = verifiedFor(childFrameCandidates(pool, kid.id, ctx, used).slice(0, VISION_CANDIDATES_PER_SLOT * 3), kid.id, ctx);
-    const picked = spreadOverScope(verified, CHAPTER_FRAMES, scope);
-    for (const v of picked) used.add(v.memory.id);
-    const quote = input.quotes.find((q) => q.speakerId === kid.id && pool.some((m) => m.id === q.memoryId) && !ctx.sensitive.has(q.memoryId));
-    return {
-      type: 'chapter',
-      childId: kid.id,
-      name: firstNameOf(kid.name),
-      portrait,
-      frames: picked.map((v) => v.frame),
-      line: quote ? { quote: quote.quote, memoryId: quote.memoryId } : null,
-    };
-  });
-  for (const c of chapters) if (!c.portrait && c.frames.length === 0) dropped.push({ scene: 'chapter', reason: `${c.name}: no portrait and no verified frames` });
+  const chapters = buildChapters(kids, pool, ctx, scope, used, input.quotes, dropped);
 
   // The year's sound: any child's audio memory, else a verified clip of a
   // child with their voice (oldest child first).
@@ -1694,6 +1772,386 @@ export function buildFamilyYearScript(input: FamilyYearInput): FilmScript {
 
   return finish({ kind: 'family_year', language, title: `${k.title} ${year}`, scope, pool, scenes, dropped, vision: !!input.checks, subjects: kids, references: kids,
     span: { from: scope.start, to: addDays(scope.endExclusive, -1) } });
+}
+
+// ── Holiday card film (docs/plans/holiday-cards.md §6 C2) ────────────────
+// The family year film's sibling for a printed card's QR: Jan 1 → the day
+// the card is made, up to 60 s, watched publicly, with slower bursts (owner
+// review, 2026-10-04: "a bit longer… a little more time to see each moment").
+// Same parts (chapters, the sound, themes, bursts) plus the family's certain
+// firsts, no counters / emotion / "together" bursts, a close made of the CORE
+// family (own children + parents) together, and an end card that greets and
+// signs. fitLength never trims focus scenes, so the length is kept by what
+// the film includes, then by the bursts, then by dropping the sound, then by
+// capping the firsts at two.
+
+export interface HolidayInput extends FamilyYearInput {
+  /** families.name: the end card's "from the {family} family". */
+  familyName: string;
+  /** The card front's top picks, as memory_media ids (object keys match too):
+   * the close uses them first when they qualify (tagged with the whole core
+   * family and nobody else). */
+  preferredCloseMedia?: string[];
+}
+
+/** Owner, 2026-10-04 (round 2): a card film runs up to ~60 s. */
+export const HOLIDAY_MAX_FILM_SECONDS = 60;
+/** Bursts hold each frame 1.5× longer than the year film (`holdFactor`). */
+export const HOLIDAY_HOLD_FACTOR = 1.5;
+/** Burst frames before fitLength trims to the cap (halves 30% each). */
+const HOLIDAY_BURST_TOTAL = 36;
+const HOLIDAY_FIRSTS_MAX = 4;
+const HOLIDAY_FIRSTS_MIN = 2;
+const CLOSE_FRAMES = 2;
+const CLOSE_VISION_CANDIDATES = 12;
+
+/** "Rivera Soto" from "The Rivera Soto Family" / "Familia Rivera Soto". */
+export function familyDisplayName(name: string): string {
+  const stripped = name
+    .trim()
+    .replace(/^(la\s+)?familia\s+/i, '')
+    .replace(/^the\s+/i, '')
+    .replace(/\s+family$/i, '')
+    .trim();
+  return stripped || name.trim();
+}
+
+function holidayScopeOf(input: HolidayInput): FilmScope {
+  return input.scope ?? { start: `${input.year}-01-01`, endExclusive: `${input.year + 1}-01-01` };
+}
+
+function holidayContext(input: HolidayInput): ScoreContext {
+  return { ...familyYearContext(input), holiday: true };
+}
+
+/** The holiday film's pool: the family pool minus share-sensitive memories
+ * and worried/sad/weary moments (eligibility's holidayPool). */
+function holidayFilmPool(input: HolidayInput, scope: FilmScope): FilmMemorySource[] {
+  return holidayPool(input.memories, scope, shareSensitiveIds(input.memories, input.milestones));
+}
+
+/** The core family: the own children of the film and the members whose role
+ * is 'parent' (never a child who is also marked parent). */
+function holidayCore(input: HolidayInput, kids: FilmPerson[]): { kids: FilmPerson[]; parents: FilmPerson[]; ids: string[] } {
+  const parents = input.members
+    .filter((m) => m.relationship === 'parent' && !kids.some((k) => k.id === m.id))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  return { kids, parents, ids: [...kids.map((k) => k.id), ...parents.map((p) => p.id)] };
+}
+
+type CloseMode = 'exact' | 'with_others' | 'legacy' | 'none';
+
+interface CloseCandidate {
+  memory: FilmMemorySource;
+  frame: FrameRef;
+  /** One of the card front's top picks. */
+  preferred: boolean;
+}
+
+/** Close candidates, best first, in the first mode that has any:
+ * 'exact' — tagged with ALL core members and nobody else;
+ * 'with_others' — all core members, others too (recorded as a fallback);
+ * 'legacy' — a core of one has no "together": ≥3 people tagged (year-film rule);
+ * 'none'. Ranking: front top picks, vision-verified group frames (every own
+ * child visible, sharp, safe), holiday topics, then the latest. */
+function closeCandidates(
+  pool: FilmMemorySource[],
+  core: string[],
+  preferred: ReadonlySet<string>,
+  ctx: ScoreContext,
+  kidIds: string[],
+): { mode: CloseMode; candidates: CloseCandidate[] } {
+  const visual = pool.filter((m) => visualKind(m) !== null && usable(m, ctx));
+  let mode: CloseMode;
+  let chosen: FilmMemorySource[];
+  if (core.length >= 2) {
+    const all = visual.filter((m) => core.every((id) => m.taggedMemberIds.includes(id)));
+    const exact = all.filter((m) => m.taggedMemberIds.every((id) => core.includes(id)));
+    mode = exact.length > 0 ? 'exact' : all.length > 0 ? 'with_others' : 'none';
+    chosen = exact.length > 0 ? exact : all;
+  } else {
+    chosen = visual.filter((m) => m.taggedMemberIds.length >= TOGETHER_MIN_TAGGED);
+    mode = chosen.length > 0 ? 'legacy' : 'none';
+  }
+  const label = mode === 'exact' ? `all ${core.length} core members, nobody else` : mode === 'with_others' ? 'all core members, others tagged too (fallback)' : 'the family together';
+  const items: (CloseCandidate & { score: number })[] = chosen.flatMap((memory) => {
+    const pick = memory.assets.find((a) => (a.id && preferred.has(a.id)) || preferred.has(a.key));
+    const pickFrame = pick && (pick.kind === 'image' || isClip(pick))
+      ? assetFrame(memory, pick, pick.kind === 'image' ? 'photo' : 'video', '')
+      : null;
+    // A real photo or clip of the family beats the memory's illustration.
+    const real = memory.assets.find((a) => a.kind === 'image') ?? memory.assets.find(isClip);
+    const frame = pickFrame ?? (real ? assetFrame(memory, real, real.kind === 'image' ? 'photo' : 'video', '') : frameFor(memory, ''));
+    if (!frame || frame.kind === 'audio') return [];
+    const check = ctx.checks?.get(checkKey(frame));
+    let score = (pickFrame ? 100 : 0) + (frame.kind === 'illustration' ? -5 : 0) + (memory.topics.some((t) => HOLIDAY_TOPICS.has(t)) ? 3 : 0);
+    let why = `${label}${pickFrame ? ' · front top pick' : ''}`;
+    if (check) {
+      const bad = check.unsafe || check.screenCapture || check.quality === 'blurry' || check.expression === 'upset';
+      const everyone = kidIds.every((id) => check.childrenVisible.includes(id) || check.mainSubject === id);
+      const smiling = check.expression === 'laughing' || check.expression === 'big_smile' || check.expression === 'smiling';
+      score += bad ? -50 : (everyone ? 10 : 0) + (check.faceVisible ? 3 : 0) + (smiling ? 2 : 0) + (check.quality === 'good' ? 1 : 0);
+      why += ` · ${describeCheck(check, ctx.names)}`;
+    }
+    return [{ memory, frame: { ...frame, why }, preferred: !!pickFrame, score }];
+  });
+  items.sort((a, b) => b.score - a.score || b.memory.date.localeCompare(a.memory.date) || a.memory.id.localeCompare(b.memory.id));
+  const sound = items.filter((i) => i.score > -40);
+  return { mode, candidates: (sound.length > 0 ? sound : items).map(({ memory, frame, preferred: p }) => ({ memory, frame, preferred: p })) };
+}
+
+/** Chapter, voice and close candidates for every child — for the vision check. */
+export function holidayVisionCandidates(input: HolidayInput): FrameRef[] {
+  const scope = holidayScopeOf(input);
+  const pool = holidayFilmPool(input, scope);
+  const ctx = holidayContext(input);
+  const kids = yearKids(input, scope);
+  const named = kids.map((k) => ({ id: k.id, name: k.name }));
+  const core = holidayCore(input, kids);
+  const close = closeCandidates(pool, core.ids, new Set(input.preferredCloseMedia ?? []), ctx, kids.map((k) => k.id));
+  return dedupeFrames([
+    ...kids.flatMap((kid) => [
+      ...childFrameCandidates(pool, kid.id, ctx, new Set()).slice(0, VISION_CANDIDATES_PER_SLOT * 3),
+      ...soundCandidates(pool, kid.id, ctx, named).videos.slice(0, VOICE_CANDIDATES),
+    ].map((c) => c.frame)),
+    ...close.candidates.slice(0, CLOSE_VISION_CANDIDATES).map((c) => c.frame),
+  ]);
+}
+
+/** Candidate firsts the film does NOT show, with why: for the owner (and, in
+ * P1, the card flow's "Did these happen this year?" step). Pool memories
+ * only; a first is shown once it is certain (isCertainFirst). */
+export interface UnconfirmedFirst {
+  memoryId: string;
+  milestoneId: string;
+  label: string;
+  date: string;
+  /** The milestone's own child, else null. */
+  childName: string | null;
+  /** True when the text-evidence gate would already show it. */
+  gatePasses: boolean;
+  reason: string;
+}
+
+export function unconfirmedFirsts(
+  pool: FilmMemorySource[],
+  milestones: FilmMilestoneInput[],
+  members: { id: string; name: string }[],
+  language: FilmLanguage,
+): UnconfirmedFirst[] {
+  const byId = new Map(pool.map((m) => [m.id, m]));
+  const names = new Map(members.map((m) => [m.id, firstNameOf(m.name)]));
+  return milestones
+    .flatMap((row) => {
+      const memory = byId.get(row.memoryId);
+      if (!memory || row.status !== 'candidate') return [];
+      if (SHARE_SENSITIVE_MILESTONES.has(row.milestoneId) || NOT_A_FIRST.has(row.milestoneId)) return [];
+      const label = milestoneLabel(row.milestoneId, language);
+      if (!label) return [];
+      const gatePasses = isCertainFirst(row, memory.text ?? null);
+      return [{
+        memoryId: row.memoryId,
+        milestoneId: row.milestoneId,
+        label,
+        date: memory.date,
+        childName: row.familyMemberId ? names.get(row.familyMemberId) ?? null : null,
+        gatePasses,
+        reason: gatePasses ? 'text says it is a first, inside the age band' : row.outOfBand ? 'outside the milestone\'s age band' : 'the text does not say "first"',
+      }];
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.milestoneId.localeCompare(b.milestoneId));
+}
+
+export function buildHolidayScript(input: HolidayInput): FilmScript {
+  const { language, year } = input;
+  const strings = STRINGS[language];
+  const scope = holidayScopeOf(input);
+  const pool = holidayFilmPool(input, scope);
+  const ctx = holidayContext(input);
+  const scenes: FilmScene[] = [];
+  const dropped: FilmScript['dropped'] = [];
+  const used = new Set<string>();
+  const kids = yearKids(input, scope);
+  const named = kids.map((k) => ({ id: k.id, name: k.name }));
+  const k = strings.kicker.family;
+  const [firstHalf, secondHalf] = halves(scope);
+  const core = holidayCore(input, kids);
+
+  // Claims first, so bursts don't spend their frames (same as the year film).
+  const chapters = buildChapters(kids, pool, ctx, scope, used, input.quotes, dropped);
+
+  let sound = soundScene(pool, null, ctx, false);
+  for (const kid of kids) {
+    if (sound) break;
+    sound = soundScene(pool, kid.id, ctx, true, named);
+  }
+  if (sound && sound.type === 'sound') used.add(sound.frame.memoryId!);
+
+  // Close: the CORE family together (owner, round 2) — every own child and
+  // every parent, nobody else — front top picks first.
+  const close = closeCandidates(pool, core.ids, new Set(input.preferredCloseMedia ?? []), ctx, kids.map((x) => x.id));
+  const closeFrames: FrameRef[] = [];
+  for (const c of close.candidates) {
+    if (closeFrames.length >= CLOSE_FRAMES) break;
+    if (!closeFrames.some((f) => f.memoryId === c.memory.id)) closeFrames.push(c.frame);
+  }
+  for (const f of closeFrames) used.add(f.memoryId!);
+  if (close.mode === 'with_others') {
+    dropped.push({ scene: 'close', reason: 'no memory tags the whole core family without others — used memories tagging all of them plus other people' });
+  }
+
+  // FOCUS — title over the year's cards.
+  const titleCards = pickBurst(pool, TITLE_CARDS, scope, ctx, new Set(used)).filter((f) => f.kind !== 'video').slice(0, TITLE_CARDS);
+  scenes.push({ type: 'title', title: String(year), subtitle: '', kicker: k.title, cards: titleCards });
+
+  const halfBurst = Math.round(HOLIDAY_BURST_TOTAL * 0.3);
+  const slow = { holdFactor: HOLIDAY_HOLD_FACTOR };
+
+  // BURST — first part of the year.
+  const firstHalfFrames = pushHalfBurst(scenes, dropped, used, {
+    type: 'burst',
+    role: 'first_half',
+    titles: [],
+    frames: pickBurst(pool, halfBurst, firstHalf, ctx, used),
+    secondsPerFrame: BURST_SECONDS_PER_FRAME,
+    ...slow,
+  });
+
+  // FOCUS — one chapter per child.
+  scenes.push(...chapters);
+
+  // BURST — second part, under what the family loved this year.
+  const themes = distinctiveThemes(pool, input.memories.filter((m) => !m.reported), 3, YEAR_THEME_MIN_MEMORIES, language, 'family');
+  const secondHalfFrames = pushHalfBurst(scenes, dropped, used, {
+    type: 'burst',
+    role: 'second_half',
+    titles: themes.length >= 2 ? themes.map((t) => t.title) : [],
+    ...(themes.length >= 2 ? { titlesKicker: k.yearThemes } : {}),
+    frames: pickBurst(pool, halfBurst, secondHalf, ctx, used),
+    secondsPerFrame: BURST_SECONDS_PER_FRAME,
+    ...slow,
+  });
+  if (themes.length < 2) dropped.push({ scene: 'burst', reason: `no theme titles: only ${themes.length} topics on ≥${YEAR_THEME_MIN_MEMORIES} memories` });
+
+  // FOCUS — the sound of the year (dropped below when the cap needs the room).
+  if (sound) scenes.push({ ...sound, kicker: `${k.sound} ${year}` } as FilmScene);
+  else dropped.push({ scene: 'sound', reason: 'no audio memory, and no video clip verified to show a child' });
+
+  // FOCUS — firsts: every child's certain ones, in turn, by date (milestones
+  // are part of the holiday film, owner round 2).
+  const perKid = kids.map((kid) => certainFirsts(pool, input.milestones, kid.id, language, ctx).map((f) => ({ ...f, childName: firstNameOf(kid.name) })));
+  const firsts: Extract<FilmScene, { type: 'firsts' }>['items'] = [];
+  for (let round = 0; firsts.length < HOLIDAY_FIRSTS_MAX && perKid.some((list) => list.length > round); round += 1) {
+    for (const list of perKid) {
+      if (firsts.length < HOLIDAY_FIRSTS_MAX && list[round] && !firsts.some((f) => f.memoryId === list[round].memoryId)) {
+        const { confirmed: _c, ...item } = list[round];
+        firsts.push(item);
+      }
+    }
+  }
+  firsts.sort((a, b) => a.date.localeCompare(b.date));
+  if (firsts.length > 0) scenes.push({ type: 'firsts', kicker: k.firsts, items: firsts });
+  else dropped.push({ scene: 'firsts', reason: 'no certain firsts this year (parent-confirmed, or the text says "first" within the age band)' });
+
+  // BURST — finale, taking up whatever the halves couldn't fill.
+  const finale = pickBurst(pool, HOLIDAY_BURST_TOTAL - firstHalfFrames - secondHalfFrames, scope, ctx, used);
+  scenes.push({ type: 'burst', role: 'finale', titles: [], frames: finale, secondsPerFrame: FINALE_SECONDS_PER_FRAME, ...slow });
+
+  // FOCUS — close: the core family together; else everyone's portraits
+  // (children AND parents — never a close without a parent when parents exist).
+  const closeLine = strings.familyYearClose(year);
+  if (closeFrames.length > 0) {
+    scenes.push({ type: 'close', line: closeLine, source: 'family', celebrationDate: null, frames: closeFrames });
+  } else {
+    const people = [...kids, ...core.parents];
+    const portraits = people.flatMap((p) => {
+      const version = resolvePortraitVersionAtDate(p.portraits, scope.endExclusive);
+      const frame = version ? portraitFrame(version, 'portrait at the end of the year') : null;
+      return frame ? [frame] : [];
+    });
+    if (portraits.length > 0) scenes.push({ type: 'close', line: closeLine, source: 'portraits', celebrationDate: null, frames: portraits });
+    dropped.push({ scene: 'close', reason: `no memory tags the whole core family (${core.ids.length} people) — portraits of everyone instead` });
+  }
+
+  // Length: trim the bursts; if that is not enough (several children's
+  // chapters are equal and untouchable), the sound goes, then the firsts are
+  // capped at HOLIDAY_FIRSTS_MIN.
+  const budget = HOLIDAY_MAX_FILM_SECONDS - 3; // the end card follows
+  const attempts: ((s: FilmScene[]) => string | null)[] = [
+    () => null,
+    (s) => {
+      const at = s.findIndex((x) => x.type === 'sound');
+      if (at < 0) return null;
+      s.splice(at, 1);
+      return `sound dropped to keep the film under ${HOLIDAY_MAX_FILM_SECONDS}s`;
+    },
+    (s) => {
+      const scene = s.find((x) => x.type === 'firsts');
+      if (!scene || scene.type !== 'firsts' || scene.items.length <= HOLIDAY_FIRSTS_MIN) return null;
+      scene.items = scene.items.slice(0, HOLIDAY_FIRSTS_MIN);
+      return `firsts capped at ${HOLIDAY_FIRSTS_MIN} to keep the film under ${HOLIDAY_MAX_FILM_SECONDS}s`;
+    },
+  ];
+  // Removals accumulate on `base`; the bursts are trimmed on a copy each time,
+  // so a removal gives its time back to the bursts.
+  const base = structuredClone(scenes);
+  let fitted = base;
+  const notes: string[] = [];
+  for (const attempt of attempts) {
+    const note = attempt(base);
+    if (note) notes.push(note);
+    fitted = structuredClone(base);
+    fitLength(fitted, budget);
+    if (estimateSeconds(fitted) <= budget) break;
+  }
+  scenes.splice(0, scenes.length, ...fitted);
+  for (const note of notes) dropped.push({ scene: note.startsWith('sound') ? 'sound' : 'firsts', reason: note });
+
+  const keptFinale = scenes.find((s) => s.type === 'burst' && s.role === 'finale');
+  const grid = (keptFinale && keptFinale.type === 'burst' ? keptFinale.frames : finale).slice(0, GRID_CARDS);
+  scenes.push({
+    type: 'end_card',
+    grid,
+    greeting: strings.holidayGreeting,
+    from: strings.holidayFrom(familyDisplayName(input.familyName)),
+  });
+
+  return {
+    ...finish({ kind: 'family_holiday', language, title: `${k.title} ${year}`, scope, pool, scenes, dropped, vision: !!input.checks, subjects: kids, references: kids,
+      span: { from: scope.start, to: previousDay(scope.endExclusive) } }),
+    theme: 'holiday',
+  };
+}
+
+// ── Digest support (holiday-card-digest.ts) ──────────────────────────────
+
+/** Ranks a share-safe pool the way the films do (scoreMemory, then the best
+ * of each part of the scope first — spreadMemories), for the holiday letter's
+ * year digest. `bonus` lifts memories (e.g. the ones already in the film). */
+export function rankMemories(
+  pool: FilmMemorySource[],
+  options: {
+    scope: FilmScope;
+    milestones: FilmMilestoneInput[];
+    ownChildIds: string[];
+    n: number;
+    holiday?: boolean;
+    bonus?: ReadonlyMap<string, number>;
+  },
+): { memory: FilmMemorySource; score: number; why: string }[] {
+  const ctx: ScoreContext = {
+    milestoneMemoryIds: milestoneIds(options.milestones),
+    ownChildIds: new Set(options.ownChildIds),
+    sensitive: new Set(),
+    names: new Map(),
+    holiday: options.holiday,
+  };
+  const scored = pool.map((memory) => {
+    const { score, why } = scoreMemory(memory, ctx);
+    const bonus = options.bonus?.get(memory.id) ?? 0;
+    return { memory, score: Math.round((score + bonus) * 100) / 100, why: bonus > 0 ? `${why} · in film` : why };
+  });
+  return spreadMemories(scored, options.n, options.scope, true);
 }
 
 function dedupeFrames(frames: FrameRef[]): FrameRef[] {
