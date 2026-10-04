@@ -6,8 +6,7 @@ After purchase, right after the last portrait reveal, a brand-new owner can have
 short live voice conversation with "Momora" (GPT-Live 1, female voice) that fills in
 the family: names (with spelling checks), nicknames, birthdays and relationships/
 sides. Momora only proposes; the parent reviews and confirms, then adds a photo per
-person (portraits start painting). Parents who can't or won't talk can **type instead**:
-the same conversation, tools and cards over text chat. Offered once, during onboarding only. Separately,
+person (portraits start painting). Offered once, during onboarding only. Separately,
 a one-time family-invite prompt appears after the parent approves their first
 gallery-imported memories or dismisses the timeline's gallery-import card. Ships in
 store build 1.4.4 behind a remote kill switch.
@@ -200,15 +199,6 @@ Codebase facts the plan relies on:
      - **When the guard exists:** the client path never finalizes. The guard/bridge finalizes with authoritative `session.closed.usage.seconds`, using a deterministic `ai_call_id` = session id.
      - **Without a guard:** `end-family-voice-session` finalizes with `max(client seconds, wall-clock from started_at to now)`, capped, and `cost_basis 'request_shape_estimate'`. Under-reporting gains nothing, because wall-clock is the floor.
      - Rows never finalized after 1 h are swept by the existing `run-ai-usage-alerts` cadence, or a small cleanup, at wall-clock cost.
-7b. **Edge function `supabase/functions/family-setup-chat/index.ts` ("Type instead").** It takes `POST {familyId, turns, draftCards, localDate, locale}`. Each call is one stateless turn.
-    - **Same gates as Step 6:** auth, owner role, billing write check, mode check, and family status not `completed` / `skipped`.
-    - **Same prompt:** the roster, brief, guardrails, compact checklist and tool definitions (`propose_person` / `update_person` / `remove_person`) live in one shared module, `_shared/family-setup-brief.ts`, used by both create functions. The brief and tool schema can't drift between voice and text.
-    - **Inputs are sanitized:**
-      - `turns`: the last 30 user/assistant turns, ≤ 500 characters each;
-      - `draftCards`: the same rules as Step 6.5.
-    - **The model call:** the OpenAI Responses API (the same backend model and effort as the voice delegation, `gpt-5.5` low), tools enabled, `store: false`, a timeout. It returns `{reply, toolCalls[]}`, and the client applies the tool calls through the Step 12 card reducer, exactly as for voice.
-    - **Limits:** a per-family turn budget (`text_turns_used` on the setup row, max 60, settings-driven) is reserved under the same advisory lock as Step 6.3. Past the budget, it returns `TEXT_LIMIT_REACHED`, and the screen moves the parent to review.
-    - **Usage:** one `ai_usage_events` row per turn with provider token usage (`cost_basis 'provider_usage'`). Nothing logs message text.
 8. **Secrets and deploy.** `OPENAI_API_KEY` already exists for edge functions; guard secrets per Step 6.7.
    - **Deploy order:** migration → `create-family-voice-session` + `end-family-voice-session` + `workflow-family-voice-bridge` → the worker with `FamilyVoiceGuardWorkflow` → store build.
    - The owner pushes the migration and deploys. Everything ships with `mode = 'off'`.
@@ -258,20 +248,13 @@ Codebase facts the plan relies on:
       - Copy: "Let's meet the rest of the family". It explains the parent talks for a few minutes, Momora fills in names, birthdays and who's who, and the parent checks everything before it's saved.
       - The AI and privacy disclosure (Apple 5.1.2(i)): the conversation is processed by OpenAI and the audio isn't stored.
       - Microphone denied (a parent may have denied it at S9): show "Momora needs the microphone for this" with **Open Settings** and the manual path. Never a dead end.
-      - Actions: **Start talking**, which requests the microphone; **I'll add them myself**, which sets `skipped`, clears the draft, then continues to S18 or the journal; and **Type it instead**, which opens `meet-family-type`. Choosing type spends the same one-time offer; there's no separate chance.
-      - On a binary without the WebRTC module (1.4.2 / 1.4.3 running an OTA), "Start talking" is hidden and "Type it instead" becomes the primary action.
+      - Actions: **Start talking**, which requests the microphone; **I'll add them myself**, which sets `skipped`, clears the draft, then continues to S18 or the journal; no text-chat mode (decided 2026-10-05). Parents who won't talk use **I'll add them myself** and add people in the app as today. On a binary without the WebRTC module, the step isn't offered at all (Step 16).
       - It shows "This is a one-time offer".
     - **`meet-family-talk.tsx`:**
       - live cards (tap a name to edit, which sends quiet context), captions, Mute, "I'm done";
       - a calm "about N minutes left" hint at T-60s;
       - reconnect UI ("Reconnect", using the one extra session) when the connection drops;
       - "Continue to review" after `session.closed`.
-      - A "Switch to typing" link ends the voice session (for a noisy room, or after the voice cap) and opens `meet-family-type` with the same draft cards.
-    - **`meet-family-type.tsx`:**
-      - A chat thread, the same live card strip as talk, and a composer pinned above the keyboard. It follows the keyboard rules in Step 14, and the composer and "I'm done" stay reachable while the keyboard is open.
-      - Momora's first message is the same opener as the voice version, rendered locally with no model call.
-      - Each send calls `family-setup-chat` (Step 7b) and shows a typing indicator; an error keeps the parent's text in the composer with a retry.
-      - "I'm done" → review. The draft is shared with voice (Step 13), and it's created on the first send.
     - **`meet-family-review.tsx`:**
       - Cards grouped like the Family tab (`groupByRelationship`), editable: name, nickname, role, side, and one `BirthdayField`. Removable.
       - "That's our family" → commit (Step 15) → status `completed` → photos.
@@ -351,9 +334,7 @@ Codebase facts the plan relies on:
 
 20. **Analytics** (`src/services/analytics.ts`), with no names or content:
     - `voice_setup_offered`;
-    - `voice_setup_started {resume, mode: voice|type}`;
-    - `voice_setup_mode_switched` (voice → type);
-    - `voice_setup_text_turn {turn, tool_calls}`, with no text;
+    - `voice_setup_started {resume}`;
     - `voice_setup_session_closed {seconds, reason, tool_calls, cards_proposed}`;
     - `voice_setup_skipped {where: intro|portrait}`;
     - `voice_setup_committed {people_added, people_updated}`;
@@ -368,10 +349,10 @@ Codebase facts the plan relies on:
     - **Service:** commit ordering and idempotency.
     - **Screen:** intro skip / start, review edit and confirm, photos push vs Later, reveal routing with available / unavailable / RPC error, portrait-journal skip.
     - **Keyboard:** open and closed assertions with a non-zero Android bottom inset for talk (card edit) and review, per `app/AGENTS.md`.
-    - **Deno:** every edge function (create, end, `family-setup-chat`, and the guard sweep/bridge), plus the shared brief module.
+    - **Deno:** every edge function (create, end, and the guard sweep/bridge).
     - **pgTAP:** Step 5.
     - The WebRTC session client is tested with a fake peer-connection injected through the lazy-require seam.
-    - Maestro: the skip path, plus the type path. The type path runs against local Supabase with `family-setup-chat` returning canned tool calls when the local-only env `FAMILY_SETUP_CHAT_FAKE=1` is set; the function refuses that flag outside local.
+    - Maestro: only the skip path, since voice can't be automated.
 23. **Release:**
     - Bump `app.json` `version` to **1.4.4**. The runtime policy is `appVersion`, so this is also a new OTA runtime: later updates go to 1.4.4, 1.4.3 and 1.4.2.
     - Store build iOS + Android with `family_voice_settings.mode = 'off'`.
@@ -398,7 +379,7 @@ Codebase facts the plan relies on:
 ## Out of scope
 
 - Using the voice setup outside onboarding (the Family tab, later re-entry).
-- Gemini or other voice vendors.
+- Gemini or other voice vendors; a text-chat version of the conversation (decided 2026-10-05).
 - A record-once monologue fallback (see the design note; live voice first, decided 2026-10-05).
 - Invites inside the voice conversation.
 - Streaming portrait previews.
@@ -406,11 +387,11 @@ Codebase facts the plan relies on:
 
 ## Design note: keep the core transport-agnostic
 
-The card model (Step 12), commit (Step 15), review/photos screens and birthday work (Steps 17–18) don't depend on WebRTC. Keep them that way, so a "Type instead" path, or a record-once fallback (one recording → the existing `process-voice-memory` transcription → a text model proposing cards), can reuse them. That fallback would also ship over the air and cost about 10× less, if live voice ever disappoints.
+The card model (Step 12), commit (Step 15), review/photos screens and birthday work (Steps 17–18) don't depend on WebRTC. Keep them that way, so a record-once fallback (one recording → the existing `process-voice-memory` transcription → a text model proposing cards), can reuse them. That fallback would also ship over the air and cost about 10× less, if live voice ever disappoints.
 
 ## Decisions (owner, 2026-10-05)
 
-1. **"Type instead" is in scope:** same tools over text chat (Steps 7b, 14). It spends the same one-time offer.
+1. **No text-chat mode.** Skipping means adding people manually in the app, as today.
 2. **The sibling-chain "Later" on S17 isn't a skip** (Step 16).
 3. **The 20/day image cap is not raised** for onboarding. The photos step handles 429 per tile (Step 14).
 4. **Live duplex voice first.** Record-once stays out of scope; the transport-agnostic core keeps it possible later.
