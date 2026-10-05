@@ -761,6 +761,21 @@ the deploy steps):
 - Rollback: `npx wrangler rollback 5c7e97be-7af3-49db-bd5c-033047e38b38` in
   `cloudflare/year-film-worker` (previous version, image `188c127c14d5`).
 
+### US 5R sample order (2026-10-06, owner-approved)
+
+- The US product (5R, separate `default` + `back` files) had never been
+  produced: both 5R attempts were refused for PT. Same saved card re-rendered
+  at 5R (`card-data/yi-2026-5r`, `format: "5R"`): letter fits at 10.75 pt,
+  front photo 551 dpi, fonts embedded, 185.8 × 135 mm with bleed.
+- Order `05f43f74-5e83-4fda-8712-b2f64e3d1096`: gloss-front 5R
+  (`…coated-silk_cl_4-4_ct_glossy-protection_prt_1-0…`), **1 pack of 10**,
+  made in US, USPS Ground Advantage (7–9 days) to the owner's Houston PO box.
+  $5.84 cards + $6.52 shipping = $13.38 incl. tax. Files under the R2 prefix
+  `…/holiday-cards/sample-2026/v6-5r-us/`.
+- P1 is planned in [holiday-cards-p1.md](holiday-cards-p1.md) (hardened
+  2026-10-06; v1 = US/CA only, no illustrated front, one card per family per
+  year, no letter rewrites or film refreshes).
+
 ### Product build (after C4 passes)
 
 | Phase | Build | Gate |
