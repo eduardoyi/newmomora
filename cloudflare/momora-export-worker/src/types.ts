@@ -141,7 +141,7 @@ export type ExportAssetKind =
 export interface ExportYearFilm {
   id: string;
   family_id: string;
-  kind: 'birthday' | 'family_month' | 'family_year';
+  kind: 'birthday' | 'family_month' | 'family_year' | 'family_holiday';
   scope_start_date: string;
   scope_label: string | null;
   video_key: string;

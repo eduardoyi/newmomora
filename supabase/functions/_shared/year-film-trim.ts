@@ -29,6 +29,11 @@ export const BURST_CLIP_SECONDS = 2.5;
 export const VERIFIED_CLIP_SECONDS = 3;
 export const VOICE_MAX_SECONDS = 6;
 export const VOICE_LEAD_SECONDS = 0.15;
+/** A sound scene needs real voice: an excerpt with less than this much
+ * voiced audio (a 1 s laugh in a quiet clip) can't carry the scene's on-screen
+ * time — the holiday dogfood (Oct 2026) showed a 0.75 s excerpt as a 5 s
+ * scene of a frozen ticket. Applies to every film. */
+export const MIN_VOICED_SECONDS = 2;
 const AVOID_START_SECONDS = 0.5;
 const AVOID_END_SECONDS = 0.2;
 /** A window is voiced when it is this far above the clip's noise floor. */
@@ -91,7 +96,8 @@ function overlap(a: Window, b: Window): number {
 }
 
 /** Voice windows best first, one per voiced onset — the caller tries the
- * next when the audio check rejects one (e.g. it opens on a cough). */
+ * next when the audio check rejects one (e.g. it opens on a cough). Windows
+ * with under MIN_VOICED_SECONDS of voice are not offered at all. */
 export function rankVoiceWindows(
   voiced: Window[],
   duration: number,
@@ -108,7 +114,7 @@ export function rankVoiceWindows(
     if (!out.some((w) => Math.abs(w.start - window.start) < 0.5)) out.push(window);
     remaining = remaining.filter((v) => v.start > best.start + VOICE_LEAD_SECONDS + 0.01);
   }
-  return out;
+  return out.filter((w) => w.voicedSeconds >= MIN_VOICED_SECONDS - 1e-6);
 }
 
 /** The ≤maxSeconds window with the most voiced audio, starting just before

@@ -5,6 +5,7 @@ import type { ChatFn } from '../src/openai';
 import { pollFailureCode, pollMachine, publish, runFrameChecks, runVoiceChecks, type StageDeps, startThumbs } from '../src/stages';
 import type { Storage } from '../src/storage';
 import { assetId, type PrepareManifest } from '../../../supabase/functions/_shared/year-film-assets.ts';
+import { checkCacheKey } from '../../../supabase/functions/_shared/year-film-checks.ts';
 
 const FILM = '11111111-1111-4111-8111-111111111111';
 const ATTEMPT = '22222222-2222-4222-8222-222222222222';
@@ -178,6 +179,91 @@ describe('frame checks', () => {
   });
 });
 
+// The holiday card film is public: the strict prompt, its own cache keys, and
+// a sound clip's frame checked before its voice (owner, 2026-10-05).
+describe('public film (holiday card)', () => {
+  const holidayScript = {
+    ...script,
+    kind: 'family_holiday',
+    scenes: [
+      { type: 'sound', source: 'video', frame: frame('s1.mp4', 'video'), caption: null, needsVoiceCheck: true, alternates: [frame('s2.mp4', 'video')] },
+      { type: 'burst', role: 'finale', titles: [], frames: [frame('v.mp4', 'video')], secondsPerFrame: 0.5 },
+    ],
+  };
+  const voiceAsset = (key: string, windows: ReturnType<typeof w>[]) => ({
+    id: assetId('voice', key), key, mode: 'voice' as const, file: null, checkImage: null, source: { width: 1, height: 1, duration: 9, hasVideo: true }, windows, warnings: [],
+  });
+  const holidayPrep: PrepareManifest = {
+    version: 1,
+    assets: {
+      ...prep.assets,
+      [assetId('voice', 's1.mp4')]: voiceAsset('s1.mp4', [w(10)]),
+      [assetId('voice', 's2.mp4')]: voiceAsset('s2.mp4', [w(20)]),
+    },
+  };
+  const holidayStorage = () => memoryStorage({
+    [`${PREFIX}script.json`]: { bed: 'winter-bells', editsVersion: 0, script: holidayScript },
+    [`${PREFIX}prep/prep.json`]: holidayPrep,
+    [`${PREFIX}prep/w1.jpg`]: 1, [`${PREFIX}prep/ref.jpg`]: 1, [`${PREFIX}prep/w10.jpg`]: 1, [`${PREFIX}prep/w20.jpg`]: 1,
+    [`${PREFIX}prep/w10.wav`]: 1, [`${PREFIX}prep/w20.wav`]: 1,
+  });
+  const strictAnswer = (underdressed: boolean) => JSON.stringify({ frames: [{ index: 0, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed, screen_capture: false }] });
+  const clearVoice = JSON.stringify({ child_voice: 'clear', adult_dominant: false, starts_cleanly: true, heard: '' });
+
+  it('asks the strict prompt and caches under the public key, never reusing a normal verdict', async () => {
+    let saved: Record<string, unknown> = {};
+    const { bridge } = fakeBridge({
+      load_film_context: () => context({ kind: 'family_holiday', aiChecks: saved }),
+      save_checks: (body) => { saved = { ...saved, ...(body.checks as object) }; return { state: 'ok' }; },
+    });
+    // A NORMAL verdict for the same clip window already sits in the cache.
+    const normalKey = await checkCacheKey({ kind: 'frame', model: 'gpt-6-luna', assetKey: 'v.mp4', window: { start: 1, end: 3.5 }, referenceKeys: ['ref.jpg'] });
+    const verdict = { kind: 'frame', value: { mainSubject: 'kid', childrenVisible: ['kid'], faceVisible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed: false, screenCapture: false } };
+    // …and a verdict from the retired v1 public prompt (no beach exception) too.
+    const v1Key = await checkCacheKey({ kind: 'frame', model: 'gpt-6-luna', assetKey: 'v.mp4', window: { start: 1, end: 3.5 }, referenceKeys: ['ref.jpg'], variant: 'public' as never });
+    saved = { [normalKey]: verdict, [v1Key]: verdict };
+    const prompts: string[] = [];
+    const chat: ChatFn = async (body) => {
+      prompts.push(JSON.stringify(body));
+      return { content: strictAnswer(false), usage: null, ok: true };
+    };
+    const burstOnly = memoryStorage({
+      [`${PREFIX}script.json`]: { bed: 'winter-bells', editsVersion: 0, script: { ...holidayScript, scenes: [holidayScript.scenes[1]] } },
+      [`${PREFIX}prep/prep.json`]: holidayPrep,
+      [`${PREFIX}prep/w1.jpg`]: 1, [`${PREFIX}prep/ref.jpg`]: 1,
+    });
+    expect(await runFrameChecks(deps({ bridge, chat, storage: burstOnly }), PREFIX)).toEqual({ done: true });
+    expect(prompts.length).toBe(1); // neither the cached normal verdict nor the v1 public one stood in
+    expect(prompts[0]).toContain('underdressed');
+    const publicKey = await checkCacheKey({ kind: 'frame', model: 'gpt-6-luna', assetKey: 'v.mp4', window: { start: 1, end: 3.5 }, referenceKeys: ['ref.jpg'], variant: 'public-v2' });
+    expect(Object.keys(saved)).toContain(publicKey);
+    expect(publicKey).not.toBe(normalKey);
+  });
+
+  it('checks a video sound clip\'s frame before its voice; a flagged window falls through to the alternate', async () => {
+    let saved: Record<string, unknown> = {};
+    const { bridge } = fakeBridge({
+      load_film_context: () => context({ kind: 'family_holiday', aiChecks: saved }),
+      save_checks: (body) => { saved = { ...saved, ...(body.checks as object) }; return { state: 'ok' }; },
+    });
+    const calls: string[] = [];
+    // The window check images are w10 (s1) then w20 (s2): frames are asked in need order, one batch.
+    const chat: ChatFn = async (body) => {
+      const text = JSON.stringify(body);
+      if (text.includes('input_audio')) {
+        calls.push('voice');
+        return { content: clearVoice, usage: null, ok: true };
+      }
+      const candidates = (text.match(/CANDIDATE index/g) ?? []).length;
+      calls.push(`frames:${candidates}`);
+      // s1's window is underdressed, s2's is fine.
+      return { content: JSON.stringify({ frames: [0, 1].slice(0, candidates).map((index) => ({ index, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed: index === 0, screen_capture: false })) }), usage: null, ok: true };
+    };
+    expect(await runVoiceChecks(deps({ bridge, chat, storage: holidayStorage() }), PREFIX)).toEqual({ done: true });
+    expect(calls).toEqual(['frames:2', 'voice']); // one batched frame check, then a single voice check (s2 only)
+  });
+});
+
 describe('publish', () => {
   const ready = () => memoryStorage({
     [`${PREFIX}status.json`]: { state: 'done', durationMs: 61000 },
@@ -200,5 +286,15 @@ describe('publish', () => {
     const { bridge } = fakeBridge({ publish: () => ({ ok: false, reason: 'content_changed', delete_keys: [] }) });
     expect(await publish(deps({ bridge, storage }), PREFIX)).toEqual({ ok: false, reason: 'content_changed' });
     expect([...storage.objects.keys()].some((k) => k.startsWith(PREFIX))).toBe(false);
+  });
+});
+
+// The holiday card film's claim checks and quote pick run on GPT-6.1 Sol; live films keep GPT-6 Sol.
+describe('holiday models', () => {
+  it('names gpt-6.1-sol for the holiday film only', async () => {
+    const { HOLIDAY_CLAIM_CHECK_MODEL, CLAIM_CHECK_MODEL } = await import('../../../supabase/functions/_shared/year-film-vision.ts');
+    const { HOLIDAY_QUOTE_MODEL, QUOTE_MODEL } = await import('../../../supabase/functions/_shared/year-film-quotes.ts');
+    expect([HOLIDAY_CLAIM_CHECK_MODEL, HOLIDAY_QUOTE_MODEL]).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol']);
+    expect([CLAIM_CHECK_MODEL, QUOTE_MODEL]).toEqual(['gpt-6-sol', 'gpt-6-sol']);
   });
 });

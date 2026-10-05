@@ -77,7 +77,7 @@ for (let i = 1; i <= 3; i += 1) {
 // phrase at 3 s. ffmpeg 5.1's loudnorm (the image's) left exactly this kind
 // of excerpt quiet under the bed (Sep 2026 canary); a steady tone doesn't
 // reproduce it.
-await sh('say', ['-o', f('speech.aiff'), 'Hola papá, mira, un perro']);
+await sh('say', ['-o', f('speech.aiff'), 'Hola papá, mira, un perro grande, mira cómo corre']);
 await sh('ffmpeg', ['-v', 'error', '-y', '-i', f('speech.aiff'), '-f', 'lavfi', '-i', 'aevalsrc=0.0005*(2*random(0)):d=8:s=22050',
   '-filter_complex', '[0:a]adelay=3000,volume=-30dB,apad[v];[v][1:a]amix=inputs=2:duration=shortest:normalize=0', '-c:a', 'aac', f('voice.m4a')]);
 await sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=900x900', '-frames:v', '1', f('ref.jpg')]);

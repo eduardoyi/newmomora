@@ -11,7 +11,7 @@
 // arrives as a precomputed id set. The judge prompt never names anyone and
 // asks the model not to identify people.
 import { type FilmMemberInput, isFilmChild } from './year-film-eligibility.ts';
-import { CLAIM_CHECK_MODEL, type VisionImage } from './year-film-vision.ts';
+import type { VisionImage } from './year-film-vision.ts';
 
 // ── Card geometry (Gelato 5R, plan §3 / C0) ──────────────────────────────
 
@@ -334,7 +334,11 @@ export function selectFrontCandidates(photos: FrontPhotoInput[], options: Select
 
 /** Judged by the same model as the year film's claim checks: it decides
  * which photo goes on a printed card, a claim-level call (plan C1). */
-export const FRONT_JUDGE_MODEL = CLAIM_CHECK_MODEL;
+/** The holiday card's reasoning model (letter writer + front-photo judge):
+ * gpt-6.1-sol (owner, 2026-10-05). Live films keep CLAIM_CHECK_MODEL. */
+export const HOLIDAY_SOL_MODEL = 'gpt-6.1-sol';
+
+export const FRONT_JUDGE_MODEL = HOLIDAY_SOL_MODEL;
 export const FRONT_JUDGE_BATCH = 8;
 
 export type LookingAtCamera = 'most' | 'some' | 'none';

@@ -17,11 +17,13 @@ import {
   type FrameChecks,
   isCertainFirst,
   rankMemories,
+  SHARE_SENSITIVE_MILESTONES,
   shareSensitiveIds,
   unconfirmedFirsts,
 } from './year-film-script.ts';
 import type { FrameCheck } from './year-film-vision.ts';
 import { birthdayFilmScope, familyYearScope } from './year-film-eligibility.ts';
+import { HOLIDAY_FIRST_PHRASES, holidayFirstLabel, MILESTONE_NAMES_ES } from './year-film-i18n.ts';
 
 const ENZO = 'enzo';
 const MARA = 'mara';
@@ -643,7 +645,10 @@ Deno.test('holiday film: Jan 1 → the day it is made, ≤ 60 s, slower bursts, 
   assertEquals(script.kind, 'family_holiday');
   assertEquals(script.theme, 'holiday');
   assertEquals(script.title, 'Nuestro 2026');
-  assertEquals(script.span, { from: '2026-01-01', to: '2026-10-04' });
+  assertEquals(scenes(script, 'title')[0].subtitle, 'Un año en familia');
+  // The strip spans the whole card year (it is watched in December); the content stops on the creation day.
+  assertEquals(script.span, { from: '2026-01-01', to: '2026-12-31' });
+  assertEquals(script.scope, { start: '2026-01-01', endExclusive: '2026-10-05' });
   const all = script.scenes.flatMap((sc) => ('frames' in sc ? sc.frames : []) as { date: string | null }[]);
   assert(all.every((f) => (f.date ?? '') < '2026-10-05'), 'nothing after the day the card is made');
   assertEquals(scenes(script, 'chapter').map((c) => c.name), ['Enzo', 'Mara']);
@@ -666,6 +671,16 @@ Deno.test('holiday film: Jan 1 → the day it is made, ≤ 60 s, slower bursts, 
   assertEquals(scenes(en, 'end_card')[0].from, 'from the Rivera Soto family');
 });
 
+Deno.test('holiday film: the greeting choice feeds the end card, es + en, default holidays', () => {
+  const greetings = (language: 'es' | 'en') =>
+    (['christmas', 'holidays', 'new-year'] as const).map((greeting) => scenes(holiday(familyYear(), { language, greeting }), 'end_card')[0].greeting);
+  assertEquals(greetings('es'), ['Feliz Navidad', 'Felices fiestas', 'Feliz Año Nuevo']);
+  assertEquals(greetings('en'), ['Merry Christmas', 'Happy holidays', 'Happy New Year']);
+  assertEquals(scenes(holiday(familyYear()), 'end_card')[0].greeting, 'Felices fiestas');
+  // The sign-off does not depend on the greeting.
+  assertEquals(scenes(holiday(familyYear(), { greeting: 'new-year' }), 'end_card')[0].from, 'de parte de la familia Rivera Soto');
+});
+
 Deno.test('holiday film: sensitive and worried/sad/weary memories never appear, holiday topics score up', () => {
   const memories = familyYear();
   memories.push(memory({ id: 'sad', date: '2026-03-04', emotion: 'sad', taggedMemberIds: CORE }));
@@ -680,6 +695,25 @@ Deno.test('holiday film: sensitive and worried/sad/weary memories never appear, 
     { scope: { start: '2026-01-01', endExclusive: '2026-10-05' }, milestones: [], ownChildIds: [ENZO, MARA], n: 1, holiday: true },
   );
   assertEquals(ranked[0].memory.id, 'xmas');
+});
+
+Deno.test('sound scene: every alternate keeps its OWN memory\'s caption, parallel to its frame (a fallback never shows the primary\'s)', () => {
+  const audio = (id: string, date: string, text: string) => memory({
+    id, type: 'audio', date, text, taggedMemberIds: [ENZO],
+    media: [{ kind: 'audio', durationMs: 20000, hasPreview: false }],
+    assets: [{ kind: 'audio', key: `${id}.m4a`, previewKey: null, durationMs: 20000, aspectRatio: null }],
+  });
+  const script = holiday([...familyYear(), audio('a1', '2026-05-05', 'Enzo leyéndole un libro a Mara'), audio('a2', '2026-06-06', 'Enzo cantando en el carro'), audio('a3', '2026-07-07', 'Cantando en el carro')]);
+  const sound = scenes(script, 'sound')[0];
+  assertEquals(sound.alternates.length, 2);
+  const texts: Record<string, string> = { a1: 'Enzo leyéndole un libro a Mara', a2: 'Enzo cantando en el carro', a3: 'Cantando en el carro' };
+  assertEquals(sound.caption, texts[sound.frame.memoryId!]);
+  assertEquals(sound.alternateCaptions, sound.alternates.map((f) => texts[f.memoryId!]));
+  // The video-fallback variant (no audio memories) keeps them aligned too.
+  const clips = ['c1', 'c2'].map((id, i) => video({ id, date: `2026-0${i + 4}-20`, text: `Clip ${id}`, taggedMemberIds: [ENZO], media: [{ kind: 'video', durationMs: 9000, hasPreview: true }] }));
+  const withClips = holiday([...familyYear(), ...clips], { checks: new Map(clips.map((c) => [c.assets[0].previewKey!, check({ underdressed: false })])) });
+  const vs = scenes(withClips, 'sound')[0];
+  if (vs) assertEquals(vs.alternateCaptions, vs.alternates.map((f) => `Clip ${f.memoryId}`));
 });
 
 Deno.test('holiday film: the sound is dropped before a chapter would be, to stay under 60 s', () => {
@@ -738,9 +772,126 @@ Deno.test('holiday film close: the card front\'s top picks go first, then vision
   // Vision: a frame showing both children beats a newer one that doesn't; a blurry one drops out.
   const check = (children: string[], quality: 'good' | 'blurry' = 'good') => ({
     mainSubject: 'group', childrenVisible: children, faceVisible: true, expression: 'smiling' as const, quality, unsafe: false, screenCapture: false,
+    underdressed: false, // the holiday film's checks come from the strict public prompt
   });
   const checks: FrameChecks = new Map([['a-p.jpg', check([ENZO])], ['b-p.jpg', check([ENZO, MARA])], ['c-p.jpg', check([ENZO, MARA], 'blurry')]]);
   assertEquals(closeIds(holiday(memories, { checks })), ['b', 'a']);
+});
+
+Deno.test('holiday film close: a frame the strict check flagged never closes the film — everyone\'s portraits do', () => {
+  const memories = withClose([together('a', '2026-09-01', CORE), together('b', '2026-06-01', CORE)]);
+  const check = (underdressed: boolean) => ({
+    mainSubject: 'group', childrenVisible: [ENZO, MARA], faceVisible: true, expression: 'smiling' as const, quality: 'good' as const,
+    unsafe: false, screenCapture: false, underdressed,
+  });
+  // One flagged (newest): the other carries the close, alone.
+  const one: FrameChecks = new Map([['a-p.jpg', check(true)], ['b-p.jpg', check(false)]]);
+  assertEquals(closeIds(holiday(memories, { checks: one })), ['b']);
+  // Both flagged — or checked only by the NORMAL prompt (no `underdressed` answer): portraits, not a flagged photo.
+  const both: FrameChecks = new Map([['a-p.jpg', check(true)], ['b-p.jpg', check(true)]]);
+  assertEquals(scenes(holiday(memories, { checks: both }), 'close')[0].source, 'portraits');
+  const normal = new Map([...one].map(([k, v]) => [k, { ...v, underdressed: undefined }])) as FrameChecks;
+  assertEquals(scenes(holiday(memories, { checks: normal }), 'close')[0].source, 'portraits');
+});
+
+Deno.test('holiday film close: always a still — a front pick that is a clip falls back to the memory\'s photo', () => {
+  const clipPick = memory({
+    id: 'clip', date: '2026-09-10', taggedMemberIds: CORE,
+    media: [{ kind: 'video', durationMs: 5000, hasPreview: true }, { kind: 'image', durationMs: null, hasPreview: true }],
+    assets: [
+      { id: 'media-clip', kind: 'video', key: 'clip.mp4', previewKey: 'clip-poster.jpg', durationMs: 5000, aspectRatio: 0.56 },
+      { id: 'media-clip-photo', kind: 'image', key: 'clip.jpg', previewKey: 'clip-p.jpg', durationMs: null, aspectRatio: 1.5 },
+    ],
+  });
+  const clipOnly = memory({
+    id: 'clip-only', date: '2026-09-11', taggedMemberIds: CORE,
+    media: [{ kind: 'video', durationMs: 5000, hasPreview: true }],
+    assets: [{ id: 'media-clip-only', kind: 'video', key: 'clip-only.mp4', previewKey: 'clip-only-poster.jpg', durationMs: 5000, aspectRatio: 0.56 }],
+  });
+  const script = holiday(withClose([clipPick, clipOnly, together('plain', '2026-03-01', CORE)]), { preferredCloseMedia: ['media-clip'] });
+  const close = scenes(script, 'close')[0];
+  assert(close.frames.every((f) => f.kind !== 'video'), 'no clip in the close');
+  assertEquals(close.frames.map((f) => f.memoryId), ['clip', 'plain']);
+  assertEquals(close.frames[0].key, 'clip.jpg');
+});
+
+Deno.test('holiday film: public-audience text/topic screen (bath, undressed, diapers, nursing) is stricter than the year film\'s', () => {
+  const tubs = [
+    memory({ id: 'tub', text: 'Se bañó en la bañera con los patitos' }),
+    memory({ id: 'en-bath', text: 'Bath time with the ducks' }),
+    memory({ id: 'shower', text: 'Su primera ducha sola' }),
+    memory({ id: 'undies', text: 'Running around in his underwear' }),
+    memory({ id: 'nursing', text: 'Nursing Mara before bed' }),
+    memory({ id: 'care', topics: ['baby-care'] }),
+  ];
+  const fine = [
+    memory({ id: 'beach', text: 'Se bañó en el mar, qué felicidad', topics: ['beach'] }), // swimming is the vision check's call
+    memory({ id: 'swimsuit', text: 'Nadando con su bañador nuevo' }),
+    memory({ id: 'shirtless', text: 'Enzo sin camiseta en la playa, shirtless all day' }), // beach shirtless is fine (the vision check decides)
+    memory({ id: 'pool', text: 'Bathing suit shopping' }),
+    memory({ id: 'park', text: 'Un día en el parque', topics: ['park-playground'] }),
+  ];
+  const all = [...tubs, ...fine];
+  const normal = shareSensitiveIds(all, []);
+  const strict = shareSensitiveIds(all, [], { publicAudience: true });
+  for (const m of tubs) assert(strict.has(m.id), `public: ${m.id}`);
+  for (const m of fine) assert(!strict.has(m.id), `public keeps ${m.id}`);
+  // The year film's screen is unchanged (none of those were sensitive to it).
+  for (const id of ['tub', 'en-bath', 'shower', 'undies', 'nursing', 'care']) assert(!normal.has(id), `normal: ${id}`);
+  // And the holiday film's pool uses it.
+  const script = holiday([...familyYear(), memory({ id: 'tub2', date: '2026-05-04', text: 'En la bañera', taggedMemberIds: CORE }), memory({ id: 'shirt2', date: '2026-05-05', text: 'Sin ropa', taggedMemberIds: CORE })]);
+  const ids = JSON.stringify(script.scenes);
+  assert(!ids.includes('"tub2"') && !ids.includes('"shirt2"'));
+  assertEquals(script.stats.pool, familyYear().filter((m) => m.date < '2026-10-05').length);
+  const yearFilm = family([...familyYear(), memory({ id: 'tub3', date: '2026-05-04', text: 'En la bañera', taggedMemberIds: CORE })]);
+  assertEquals(yearFilm.stats.pool, family(familyYear()).stats.pool + 1); // the year film still includes it
+});
+
+Deno.test('holiday film: a chapter moment never rests on a frame the strict check flagged or the normal prompt checked', () => {
+  const memories = familyYear();
+  const strict = (underdressed: boolean | undefined) => check({ underdressed });
+  const checksWith = (flag: (key: string) => boolean | undefined) => {
+    const map: FrameChecks = new Map();
+    for (const m of memories) for (const a of m.assets) map.set(a.previewKey ?? a.key, strict(flag(a.previewKey ?? a.key)));
+    return map;
+  };
+  const moments = (c: FrameChecks) => scenes(holiday(memories, { checks: c }), 'chapter').flatMap((ch) => ch.frames.map((f) => f.memoryId!));
+  const baseline = moments(checksWith(() => false));
+  assert(baseline.length >= 2, `chapters have verified moments (${baseline.length})`);
+  const target = memories.find((m) => m.id === baseline[0])!;
+  const targetKey = target.assets[0].previewKey ?? target.assets[0].key;
+  assert(!moments(checksWith((k) => k === targetKey)).includes(target.id), 'the flagged frame is not a chapter moment');
+  // A verdict from the normal prompt (no answer to the strict question) backs no claim in a public film.
+  assertEquals(moments(checksWith(() => undefined)), []);
+});
+
+Deno.test('holiday film: the firsts card says it the way a parent does; the year film keeps the catalog label', () => {
+  const memories = withClose([
+    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [MARA] }),
+    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [ENZO] }),
+  ]);
+  const milestones = [
+    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'walking', status: 'confirmed' as const },
+    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+  ];
+  assertEquals(scenes(holiday(memories, { milestones }), 'firsts')[0].items.map((f) => f.label), ['Dio sus primeros pasos', 'Aprendió a ir en bici sin rueditas']);
+  assertEquals(scenes(holiday(memories, { milestones, language: 'en' }), 'firsts')[0].items.map((f) => f.label), ['Took their first steps', 'Learned to ride without training wheels']);
+  // Year film: the catalog label, as before.
+  assertEquals(scenes(family(memories, { milestones }), 'firsts')[0].items.map((f) => f.label), ['Camina con confianza', 'Bici sin rueditas']);
+});
+
+Deno.test('holiday film: every catalog milestone has plain phrasing in both languages (no tag-speak)', () => {
+  for (const language of ['es', 'en'] as const) {
+    const gaps = Object.keys(MILESTONE_NAMES_ES).filter((id) => !SHARE_SENSITIVE_MILESTONES.has(id) && id !== 'birthday' && !HOLIDAY_FIRST_PHRASES[language][id]);
+    assertEquals(gaps, [], `${language} phrases missing`);
+    for (const phrase of Object.values(HOLIDAY_FIRST_PHRASES[language])) assert(phrase.trim().length > 0 && !/confianza|unassisted/i.test(phrase), phrase);
+  }
+});
+
+Deno.test('holidayFirstLabel: the plain phrase, else the catalog label, else null', () => {
+  assertEquals(holidayFirstLabel('first-steps', 'es'), 'Dio sus primeros pasos');
+  assertEquals(holidayFirstLabel('no-such-milestone', 'es'), null);
+  assertEquals(holidayFirstLabel('potty-trained', 'es'), 'Adiós al pañal'); // not in the plain map: catalog label (never shown, sensitive)
 });
 
 Deno.test('holiday film close: falls back to the core plus others (recorded), then to everyone\'s portraits', () => {

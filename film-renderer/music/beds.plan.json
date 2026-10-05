@@ -1,5 +1,5 @@
 {
-  "note": "Year Film music beds (docs/plans/year-film.md §6). ElevenLabs music_v1, instrumental, commercially cleared on the paid plan (as the launch bed). Section lengths are in beats at each bed's tempo; generate.mjs converts them to ms. Every bed opens with a 16-beat intro so its drop lands inside the first burst. Owner, 2026-09-28: liked bright-pop and playful-marimba; sunny-folk and warm-acoustic dropped (folk/acoustic out) and replaced in the liked style. Owner, 2026-09-28: the drop came 15–30s in (half a 60s film) → an 8-beat pickup and the full band from the first beat of Main; generate.mjs reports when each bed reaches full energy (target ≲ 6s). Owner, 2026-09-28: all fast-start beds approved; monthlies get more variety (six beds, rotated by calendar month) since they come out every month.",
+  "note": "Year Film music beds (docs/plans/year-film.md §6). ElevenLabs music_v1, instrumental, commercially cleared on the paid plan (as the launch bed). Section lengths are in beats at each bed's tempo; generate.mjs converts them to ms. Every bed opens with a 16-beat intro so its drop lands inside the first burst. Owner, 2026-09-28: liked bright-pop and playful-marimba; sunny-folk and warm-acoustic dropped (folk/acoustic out) and replaced in the liked style. Owner, 2026-09-28: the drop came 15–30s in (half a 60s film) → an 8-beat pickup and the full band from the first beat of Main; generate.mjs reports when each bed reaches full energy (target ≲ 6s). Owner, 2026-09-28: all fast-start beds approved; monthlies get more variety (six beds, rotated by calendar month) since they come out every month. Owner, 2026-10-05 (holiday cards C4): two understated holiday beds (winter-bells, fireside-piano) with their own gentler section plan: no jingle-bell kitsch, light bells at most, same 8-beat pickup + full arrangement from the first beat of Main.",
   "sections": [
     {
       "name": "Pickup",
@@ -227,6 +227,216 @@
         "hand claps",
         "tight drums",
         "sunny and fun",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "winter-bells",
+      "bpm": 104,
+      "use": [
+        "family_holiday"
+      ],
+      "sections": [
+        {
+          "name": "Pickup",
+          "beats": 8,
+          "styles": [
+            "very short gentle pickup",
+            "soft felt piano and celesta motif starts right away",
+            "warm and cozy"
+          ],
+          "avoid": [
+            "long intro",
+            "slow build-up",
+            "ambient",
+            "silence"
+          ]
+        },
+        {
+          "name": "Main",
+          "beats": 56,
+          "styles": [
+            "warm full arrangement from the very first beat",
+            "felt piano, soft strings and light celesta bells all playing",
+            "gentle brushed drums and warm upright bass",
+            "steady soft pulse",
+            "heartfelt and cozy",
+            "clear memorable melody"
+          ],
+          "avoid": [
+            "build-up",
+            "sparse",
+            "intro",
+            "loud",
+            "big drums"
+          ]
+        },
+        {
+          "name": "Breather",
+          "beats": 12,
+          "styles": [
+            "drums drop out briefly",
+            "piano and strings carry the melody",
+            "keep the gentle pulse"
+          ],
+          "avoid": [
+            "silence",
+            "long pause"
+          ]
+        },
+        {
+          "name": "Lift",
+          "beats": 48,
+          "styles": [
+            "strings swell warmly",
+            "fuller but still gentle",
+            "glowing and hopeful",
+            "main melody returns"
+          ],
+          "avoid": [
+            "bombastic",
+            "loud",
+            "big drums"
+          ]
+        },
+        {
+          "name": "Ending",
+          "beats": 8,
+          "styles": [
+            "final soft chord then ring out",
+            "clean gentle ending"
+          ],
+          "avoid": [
+            "fade out",
+            "new melody"
+          ]
+        }
+      ],
+      "avoid": [
+        "jingle bells",
+        "sleigh bells",
+        "Christmas carol melody",
+        "choir",
+        "novelty",
+        "cheesy",
+        "EDM",
+        "big drums",
+        "loud",
+        "sad"
+      ],
+      "styles": [
+        "warm gentle winter acoustic pop",
+        "felt piano",
+        "light celesta and glockenspiel bells",
+        "soft strings",
+        "brushed drums",
+        "warm upright bass",
+        "cozy and understated",
+        "instrumental"
+      ]
+    },
+    {
+      "id": "fireside-piano",
+      "bpm": 92,
+      "use": [
+        "family_holiday"
+      ],
+      "sections": [
+        {
+          "name": "Pickup",
+          "beats": 8,
+          "styles": [
+            "very short gentle pickup",
+            "soft felt piano and celesta motif starts right away",
+            "warm and cozy"
+          ],
+          "avoid": [
+            "long intro",
+            "slow build-up",
+            "ambient",
+            "silence"
+          ]
+        },
+        {
+          "name": "Main",
+          "beats": 56,
+          "styles": [
+            "warm full arrangement from the very first beat",
+            "felt piano, soft strings and light celesta bells all playing",
+            "gentle brushed drums and warm upright bass",
+            "steady soft pulse",
+            "heartfelt and cozy",
+            "clear memorable melody"
+          ],
+          "avoid": [
+            "build-up",
+            "sparse",
+            "intro",
+            "loud",
+            "big drums"
+          ]
+        },
+        {
+          "name": "Breather",
+          "beats": 12,
+          "styles": [
+            "drums drop out briefly",
+            "piano and strings carry the melody",
+            "keep the gentle pulse"
+          ],
+          "avoid": [
+            "silence",
+            "long pause"
+          ]
+        },
+        {
+          "name": "Lift",
+          "beats": 48,
+          "styles": [
+            "strings swell warmly",
+            "fuller but still gentle",
+            "glowing and hopeful",
+            "main melody returns"
+          ],
+          "avoid": [
+            "bombastic",
+            "loud",
+            "big drums"
+          ]
+        },
+        {
+          "name": "Ending",
+          "beats": 8,
+          "styles": [
+            "final soft chord then ring out",
+            "clean gentle ending"
+          ],
+          "avoid": [
+            "fade out",
+            "new melody"
+          ]
+        }
+      ],
+      "avoid": [
+        "jingle bells",
+        "sleigh bells",
+        "Christmas carol melody",
+        "choir",
+        "novelty",
+        "cheesy",
+        "EDM",
+        "big drums",
+        "loud",
+        "sad"
+      ],
+      "styles": [
+        "warm cinematic piano",
+        "tender and hopeful",
+        "soft strings pad",
+        "a few light bell accents",
+        "gentle pulse",
+        "cozy winter evening",
+        "understated and heartfelt",
         "instrumental"
       ]
     }

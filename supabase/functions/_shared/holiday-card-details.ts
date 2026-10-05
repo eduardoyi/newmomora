@@ -40,6 +40,9 @@ export interface DetailExcerpt {
   date: string;
   /** ≤ DETAIL_EXCERPT_CHARS, one line, no links. */
   text: string;
+  /** Other own children tagged on the same memory: a detail from it only
+   * counts for this child when the sentence names them (or "los dos"). */
+  sharedWith?: string[];
 }
 
 /** Up to DETAIL_EXCERPTS_MAX share-safe excerpts that tag `childId`, best
@@ -47,7 +50,7 @@ export interface DetailExcerpt {
 export function selectDetailExcerpts(
   memories: FilmMemorySource[],
   milestones: FilmMilestoneInput[],
-  options: { childId: string; scope: FilmScope; ownChildIds: string[]; max?: number },
+  options: { childId: string; scope: FilmScope; ownChildIds: string[]; max?: number; childNames?: Record<string, string> },
 ): DetailExcerpt[] {
   const pool = holidayPool(memories, options.scope, shareSensitiveIds(memories, milestones));
   const mine = pool.filter((m) =>
@@ -61,7 +64,11 @@ export function selectDetailExcerpts(
     n: options.max ?? DETAIL_EXCERPTS_MAX,
     holiday: true,
   })
-    .map(({ memory }) => ({ memoryId: memory.id, date: memory.date, text: excerptOf(memory.text, DETAIL_EXCERPT_CHARS) }))
+    .map(({ memory }) => {
+      const others = memory.taggedMemberIds.filter((id) => id !== options.childId && options.ownChildIds.includes(id));
+      const sharedWith = others.map((id) => options.childNames?.[id] ?? id);
+      return { memoryId: memory.id, date: memory.date, text: excerptOf(memory.text, DETAIL_EXCERPT_CHARS), ...(sharedWith.length ? { sharedWith } : {}) };
+    })
     .sort((a, b) => a.date.localeCompare(b.date) || a.memoryId.localeCompare(b.memoryId));
 }
 
@@ -117,6 +124,7 @@ export type DetailDropReason =
   | 'bad_shape'
   | 'unknown_id'
   | 'not_in_cited_excerpts'
+  | 'unclear_owner'
   | 'too_long'
   | 'names_someone'
   | 'sensitive'
@@ -142,7 +150,32 @@ function escapeRegExp(text: string): string {
 /** Parses and verifies the model's details against the excerpts it read.
  * `names`: everyone's names (children, nicknames, relatives, surnames) a
  * detail must not carry. Never throws on model output. */
-export function parseDetails(raw: string, excerpts: DetailExcerpt[], names: string[]): DetailsResult {
+/** Words that put both (all) children in the sentence. */
+const BOTH_TEXT = /(?<!\p{L})(los dos|las dos|ambos|ambas|los tres|both|the two of them|the kids|los niños)(?!\p{L})/iu;
+
+/** In a memory that tags several own children, does the sentence holding
+ * `phrase` belong to `owner`? Owner review v8: one run gave Mara's imaginary
+ * plane to Enzo, because both were tagged. */
+export function ownsDetail(excerpt: DetailExcerpt, phrase: string, owner: { name: string; nicknames?: string[] } | undefined): boolean {
+  if (!owner || !excerpt.sharedWith?.length) return true;
+  const sentences = excerpt.text.split(/(?<=[.!?;])\s+/u);
+  const holding = sentences.filter((sentence) => ` ${normalize(sentence)} `.includes(` ${phrase} `));
+  const names = [owner.name, ...(owner.nicknames ?? [])].filter((n) => n.trim().length >= 2);
+  const named = (sentence: string, who: string[]) =>
+    who.filter((n) => n.trim().length >= 2).some((n) => new RegExp(`(?<!\\p{L})${escapeRegExp(n.trim())}(?!\\p{L})`, 'iu').test(sentence));
+  // A sentence naming this child AND another tagged child is ambiguous
+  // ("Enzo y Mara jugaban con su avión imaginario"): skip it (owner, v9).
+  return holding.some((sentence) =>
+    BOTH_TEXT.test(sentence) || (named(sentence, names) && !named(sentence, excerpt.sharedWith ?? []))
+  );
+}
+
+export function parseDetails(
+  raw: string,
+  excerpts: DetailExcerpt[],
+  names: string[],
+  owner?: { name: string; nicknames?: string[] },
+): DetailsResult {
   const reasons: Partial<Record<DetailDropReason, number>> = {};
   const drop = (reason: DetailDropReason) => {
     reasons[reason] = (reasons[reason] ?? 0) + 1;
@@ -188,12 +221,16 @@ export function parseDetails(raw: string, excerpts: DetailExcerpt[], names: stri
       drop('not_in_cited_excerpts');
       continue;
     }
+    if (!cited.some((i) => normalized[i].includes(` ${phrase} `) && ownsDetail(excerpts[i], phrase, owner))) {
+      drop('unclear_owner');
+      continue;
+    }
     if (seen.has(phrase)) {
       drop('duplicate');
       continue;
     }
     seen.add(phrase);
-    const memoryIds = excerpts.filter((_, i) => normalized[i].includes(` ${phrase} `)).map((e) => e.memoryId);
+    const memoryIds = excerpts.filter((e, i) => normalized[i].includes(` ${phrase} `) && ownsDetail(e, phrase, owner)).map((e) => e.memoryId);
     out.push({ detail, memoryIds, recurring: memoryIds.length >= 2 });
   }
   out.sort((a, b) => Number(b.recurring) - Number(a.recurring) || b.memoryIds.length - a.memoryIds.length || a.detail.localeCompare(b.detail));

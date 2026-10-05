@@ -397,6 +397,279 @@ foreign-name checks). Verified: `npm run test:edge` 1923 passed; worker
 - Verified: test:edge 1957 passed; worker tsc + vitest 17/17; app tsc clean.
   Total C1+C2 spend ≈ $4.80.
 
+### C3 results (2026-10-05, card design + print PDF)
+
+`book-renderer/src/card/` (types, geometry, text fit, fitted document,
+CardFront / CardBack / CardQr, preview app, print app), `card.html` +
+`card-print.html` + `vite.card.config.ts`, `card:preview` / `card:pdf`
+scripts (`scripts/lib/renderCardPdf.ts`), data via
+`npm run eval:holiday-card-assets` → `book-renderer/card-data/<slug>/`
+(gitignored). The letter's closing wish now takes the card's `greeting`
+(`holiday-card-letter.ts`, `occasion_mismatch` flag). Verified:
+book-renderer 794 tests (22 new), build clean.
+
+- Fronts: full-bleed photo (greeting position per card; top-center on the
+  owner's sky), bordered (photo + greeting band), illustrated (band, never over
+  faces); both orientations. Back: greeting, letter (Newsreader, auto-fit
+  9–12 pt; every v5 variant fits at 12 pt), Caveat signature, 26 mm QR (ECC H,
+  play badge, decodes from the 300-dpi raster), caption, "hecho con Momora";
+  no-QR back.
+- PDF: 2 pages, 185.8 × 135 mm with 4 mm bleed (TrimBox/BleedBox set), fonts
+  embedded, no Type 3, originals passed through (photo #1 at 551 dpi full-bleed,
+  768 dpi bordered; illustrations ~280–289 dpi). Not PDF/X-4 (check Gelato's
+  preflight at C5).
+- The owner's card QR is reserved: `m.usemomora.com/f/<token>` in
+  `card.json` (C5 registers it).
+- Reviewer notes (Claude): clean, legible, premium-quiet. To improve: the
+  bordered landscape photo is only ~49% of the card (band too tall); the back
+  is all type (could use one signature element); a letter variant prints
+  `mágico!”.` (drop the period after a closing `!”`); the signature is large
+  next to the body.
+
+### C3 owner review round 1 (2026-10-05) → round 2
+
+- Editing should feel like the book: **click directly on any text to edit**;
+  every text is editable (front greeting, back heading, letter, sign-off, QR
+  caption).
+- Remove "hecho con Momora": just the **Momora wordmark**, small and subtle,
+  bottom-right of the back.
+- **Replace and reposition the image** like the book editor (picker + focal
+  point).
+- The left controls are too much for users: a clean user mode (layout,
+  letter version, greeting, QR on/off, change photo) and a `?dev=1` mode for
+  guides/zoom/readouts.
+- Keep the **bordered vs full-bleed** choice.
+- Signature element: the family's **illustrated portraits** near the
+  sign-off.
+
+### C4 results (2026-10-05, holiday film motion + local render)
+
+- `film-renderer/assemble.mjs` holiday theme (only when `theme === 'holiday'`;
+  `family-2026`, `month-2026-09`, `birthday-enzo-y4` assemble byte-identical):
+  warm winter palette, a 34-flake seeded GSAP snowfall on light scenes, faint
+  warm light over bursts, gentler close glints, a 2×2 portrait close fallback
+  when no whole-family photo exists, a greeting end card (wall of stills →
+  mark → greeting in Newsreader, gold rule, "de parte de la familia …" in
+  Caveat). `holdFactor` implemented in `burst()` (first-half burst 0.52 →
+  0.79 s per frame; finale 0.33 → 0.45 s).
+- Greeting input on `buildHolidayScript` (christmas / holidays / new-year,
+  default holidays; `--greeting`); holiday title subtitle.
+- Fail-closed in production `resolveFrames` for `family_holiday` (no verdict
+  or no check image → drop; upset faces dropped); `burstFrameVerdict`
+  fail-closed also drops faceless blurry frames and photos of screens
+  (caught a blurry diaper clip in the first render).
+- Music: `winter-bells` (104 BPM, full energy 6.5 s) and `fireside-piano`
+  (92 BPM, measures 15.5 s to full energy, so it's the weaker one) via
+  ElevenLabs; `PENDING_P1_BEDS` keeps the SQL/app parity tests green until
+  P1 adds the allow-list migration + app manifest + previews (P1 must do this
+  before any holiday film is queued).
+- Renders: `holiday-2026.mp4` (57.1 s, 10 scenes, firsts = Mara walking) and
+  `holiday-2026-sub30-seed1.mp4` (44.3 s). Loudness −14.6 LUFS.
+- Verified: test:edge 1962 passed; worker tsc + vitest 17/17;
+  render/year-film-renderer 10/10; app tsc clean + year-film-beds jest 6/6;
+  `hyperframes check` clean.
+- Reviewer notes (Claude): reads as a quiet family winter film, not
+  Christmas kitsch. Issues: the firsts card shows the catalog label
+  ("Camina con confianza") instead of plain words ("Dio sus primeros
+  pasos"), which the letter already does; the end card still says "hecho
+  con Momora." (owner removed that wording from the card); the public-audience
+  photo rule still allows shirtless/diaper/bath shots (the thin-year end-card
+  mosaic shows a bath photo); chapter and close layouts leave empty space;
+  snow barely visible.
+
+### C3 round 2 results (2026-10-05, editor + design)
+
+- Click-to-edit for every text (front greeting + year, back heading, letter,
+  sign-off, QR caption) reusing the book's popover (`TextPopoverView`
+  extracted; the book's `TextEditPopover` is a thin wrapper, no behaviour
+  change); per-field reset; the letter never shrinks below 9 pt (Save blocked
+  with a warning instead). Replace (`CardPhotoPicker` against a
+  `FrontPhotoProvider` interface, so P2 plugs in the family pool) and
+  reposition (book's focal-point modal, `FocalPointModalView` extracted, the
+  book's 3% gate). Edits model `CardEdits {text, letters, focalPoints,
+  frontImage, choices}` saved to `card-data/<slug>/edits.json` by the dev
+  server (P1 persists the same shape).
+- User mode (layout bordered/full-bleed, letter chips, greeting, film QR,
+  change photo; one sheet + front/back toggle at phone width) vs `?dev=1`
+  (guides, zoom, readouts, orientation/greeting-position overrides, portraits
+  toggle).
+- "Momora." wordmark (Newsreader Medium 8 pt, pink dot) bottom-right; "hecho
+  con" removed. The core family's illustrated portraits (12–13 mm circles)
+  beside the sign-off. Bordered photo 49% → 67% of the card (greeting + year on
+  one line), smaller sign-off, balanced portrait back, no period after `!”`.
+- Verified: book-renderer 806 tests, `build` + `build:web` (bundle check)
+  clean; letter deno test 23.
+- Open: PDF/X-4 still not produced; greeting position is per card (no face
+  detection); portraits embedded at 1024 px (could downscale); the control strip
+  is functional, not designed.
+
+### Letters v6 (2026-10-05, owner reopened the classic letter)
+
+Owner: the classic letter "drops random and too-specific facts here and
+there" (it closed on "También salimos a comer en familia más de una vez."
+right before "Feliz Navidad") and "the opening is too abrupt — it jumps from
+hi straight into facts; it could say why we send this, that you're important
+to us, that we share a bit of our year."
+
+Fix (`holiday-card-letter.ts`, by Claude directly): the genre is now a real
+letter frame: greeting → a FRAMING sentence (why we're writing to them) → the
+kids (one concrete thing each) → the family only if it matters (never an
+add-on "also we…" fact) → a LANDING sentence turned toward the reader →
+the wish (following the card's greeting). New soft flag `trailing_filler`
+(a "También/Además/Also…" sentence right before the wish); `--greeting` on
+`eval:holiday-card-letters`. Two runs: the frame holds in every variant; 0
+`trailing_filler`. Letter tests 24 pass.
+
+### C4 round 2 results (2026-10-05)
+
+- **Strict public rule (owner: yes):** `publicAudience` frame-check variant
+  (`underdressed`: bare torso at any age, diaper/underwear only,
+  bath/shower, nudity, toilet, medical, crying; swimsuits only if they cover
+  the torso; unsure → excluded), required by the strict parser; separate
+  cache key (`variant: 'public'`; normal keys unchanged, pinned by a test);
+  every frame a holiday film shows is now checked (chapters, firsts, close,
+  pair photos behind portraits, video sound windows), fail closed, removals
+  pruned by `pruneUnpreparedScenes`; the holiday close is always a still; the
+  end-card mosaic uses only checked stills; stricter text screen for holiday.
+  Full film: 42 frames checked, 3 removed; thin: 28 checked, 3 removed; the
+  bath / shirtless / bathroom-mirror / crying frames are gone. Worker
+  `stages.ts` and Fly `job.mjs` carry the same rule (not deployed).
+- **End card (holiday only):** the mark fades in place, greeting + "de
+  parte de la familia …" centred, small "Momora." wordmark bottom-right, no
+  "hecho con". Birthday/month/year films assemble byte-identical.
+- **Sound bug:** root cause = a 0.75 s voiced excerpt accepted (no minimum)
+  inside an 8-beat (~4.6 s) scene. Fix: `MIN_VOICED_SECONDS = 2` in the
+  shared `rankVoiceWindows` (**affects live films once the worker/Fly image is
+  next deployed**: very short voice clips are no longer chosen); holiday
+  scenes are sized to the excerpt (0.4 s lead + excerpt + 0.9 s tail, 5-beat
+  floor). Live films keep the 8-beat floor (dead tail ≤ ~1.5 s); owner to
+  decide whether to apply the holiday sizing to all films.
+- **Firsts:** plain phrasing `HOLIDAY_FIRST_PHRASES` / `holidayFirstLabel`
+  in `year-film-i18n.ts` ("Dio sus primeros pasos"), holiday only.
+- Renders: `holiday-2026.mp4` 59.4 s (winter-bells), thin 45.0 s
+  (fireside-piano). Verified: test:edge 1980; worker tsc + vitest 19/19;
+  render tests 10/10; app tsc clean; `hyperframes check` clean (one
+  transient contrast warning on the fading mark).
+
+### Letters v7–v8 (2026-10-05)
+
+Owner + Adriana on v6: mixed casual and Spain-style Spanish ("hemos
+pasado"); the close invited them to catch up (should be "we're sharing,
+we love you, merry Christmas"); facts felt bolted on ("sharing about our
+year" then two specifics and "the park"). Claude hand-wrote three letters
+from the family's data (owner: "awesome, I love that style and structure"),
+then reverse-engineered them into the prompt:
+
+- **Shape (v7):** greeting → "les queremos contar un poquito de cómo nos fue"
+  → the year in broad strokes (the one sentence where a 2–4 item list is
+  right) → a warm bridge to the kids → the kids, one or two concrete things each,
+  told in context (the line of the year set in its MOMENT, i.e. the parents'
+  words just before the quote, `withQuoteContext`) → "Los queremos mucho y
+  les deseamos una feliz Navidad." No invitation. A fictional family's
+  example letter in the prompt (repo is public).
+- **Register:** es-CO = simple past ("fuimos", "cumplió"), never the
+  Spain-style perfect (`spain_perfect` flag); `invitation` flag; a second
+  list flags `enumeration`; the greeting on its own line.
+- **Data (v8):** named trips from place labels on consecutive days or
+  travel memories (`namedTrips`: the family's two 3-day trips were found; the
+  place labels were being dropped as if they were names); birthdays inside
+  the year told as done when before ~Dec 20 (`turningNote`: "Enzo cumplió
+  cuatro", even with no birthday memories yet, since cards are made before
+  Enzo's Oct 23 and Mara's Nov 8); distinctive recurring photo labels
+  (glasses) promoted from "fallback". Owner: content not in the memories stays
+  out; drafts aim at 80–90% and parents edit.
+- **Model:** the letter writer and front judge use `gpt-6.1-sol`
+  (`HOLIDAY_SOL_MODEL`); the holiday film's claim checks and quote pick too
+  (`HOLIDAY_CLAIM_CHECK_MODEL`, `HOLIDAY_QUOTE_MODEL`); live films keep
+  `gpt-6-sol`. Pricing $2 / $0.10 cached / $10 per M.
+- Result: the best classic is close to the hand-written draft (trips by name,
+  "cumplió cuatro / dos", the quote in its moment, love + wish). Still weak:
+  Mara's glasses not used yet; short/playful variants weaker; one reflective
+  run attributed an imaginary plane to the wrong child (check the details
+  extraction's child attribution). Holiday-card tests 75 pass.
+
+### C4 round 3 (2026-10-05)
+
+Beach/pool shirtless allowed in the public rule (`public-v2` cache variant;
+nudity, bath, diaper/underwear outside water play, crying still out); the sound
+scene's caption now always comes from the memory whose audio plays
+(`alternateCaptions`; shared bug, live films too); the end-card wordmark in
+the bottom-right corner; holiday sound scenes end with the voice (≤ ~0.3 s
+tail). test:edge 1988; worker 20/20; render 10/10; app tsc clean;
+non-holiday assembly byte-identical.
+
+### C5 build: public film page + dogfood publish (2026-10-05)
+
+Built and tested locally, **not deployed** (the orchestrator reviews and runs
+the deploy steps):
+
+- Migration `20261005120000_family_holiday_film_share.sql`: `year_films.kind`
+  accepts `family_holiday`; `year_film_bed_ids()` adds `winter-bells` and
+  `fireside-piano` (the `PENDING_P1_BEDS` parity exceptions are gone: the SQL
+  list now equals the Deno manifest, and the app manifest deliberately omits the
+  holiday beds, see `src/utils/year-film-beds.test.ts`); new table
+  `film_share_tokens` (select-only RLS through `year_films`, no client writes).
+  No other SQL enumerates kinds: `year_film_due` / `year_film_candidate_rows`
+  hard-code the three scheduled kinds, `placement_date` already falls through to
+  Dec 31, and the member policy already hides `forced` rows. pgTAP:
+  `supabase/tests/film_share_tokens.sql`.
+- `workers/memory-viewer`: `GET /f/:token` (9:16 player, tap-to-play with
+  sound), `/f/:token/video` (Range), `/f/:token/poster`; see its README "Public
+  film page". `/m` behaviour unchanged (the Range streaming moved into a shared
+  `src/stream.ts`).
+- `npm run holiday:publish-sample` (`supabase/scripts/publish-holiday-film-sample.ts`):
+  dry run by default; creates/reuses the forced `family_holiday` row, uploads
+  `film.mp4` + `poster.jpg` + `poster_thumb.jpg` to
+  `{ownerId}/year-films/{filmId}/{attemptId}/`, registers the token.
+- **Known gap (dogfood row):** it sits outside the render pipeline with empty
+  `referenced_*` arrays, so deleting/editing/reporting a memory does not
+  invalidate it until P1 re-renders the card film under the same film id. Until
+  then block it by hand (`year_films.blocked = true` shows the "being updated"
+  page) or revoke the token.
+- P1 follow-ups: a small column or `film_script->'endCard'` for the greeting
+  (the Worker currently fetches the whole `film_script` to read two strings);
+  members/owners reading the token of a forced film (service role only today);
+  `save_year_film_edits` does not refuse `family_holiday` rows (they are
+  invisible to clients, so their ids are not discoverable).
+
+### C5 deploy (2026-10-05, owner-approved)
+
+- Migration `20261005120000_family_holiday_film_share.sql` applied by the
+  owner (`supabase db push`; only pending migration): `family_holiday` kind,
+  holiday beds in `year_film_bed_ids()`, `film_share_tokens`.
+- Sample film published with `npm run holiday:publish-sample --apply`: forced
+  `family_holiday` row for the owner's family (ready, outside the render
+  pipeline until P1; empty references, so it is blocked by hand if needed),
+  film + poster + thumb in R2, the card's reserved token linked.
+- `workers/memory-viewer` deployed with `/f/:token`, `/video`, `/poster`
+  (version d901bee6). Smoke test: page 200 + `no-store` + `noindex`, video
+  206 Range, poster 200, unknown token 404, `/m` unchanged; mobile render
+  checked (cover, "Toca para ver con sonido", wordmark).
+- Letters: a sentence naming both children no longer gives a detail to
+  either (owner: vague → skip; the "avión imaginario" memory). Final set
+  loaded into the owner's card (`card-data/yi-2026`, token reused).
+
+### C5 sample order (2026-10-05)
+
+- Owner's own letter (edited from Claude's hand-written draft B) on the
+  full-bleed card; final PDF via `card:pdf --saved` (letter 10.75 pt, photo
+  551 dpi, QR decodes to the live `/f/` link; the owner scanned it on his phone
+  and the film played).
+- **Gelato file lessons:** (1) the API takes the back as a SEPARATE file
+  (`files: [{type: 'default'}, {type: 'back'}]`), not page 2 of one PDF;
+  `splitCardPdf` writes `-front.pdf` / `-back.pdf`; (2) no TrimBox/BleedBox:
+  with a TrimBox 4 mm inside the page, Gelato's preview shifted the art and
+  left 4 mm white strips on the right and bottom; the page is the bleed
+  (185.8 × 135 mm). (3) Orders need the company info filled in the Gelato
+  portal once. (4) Requests need a browser-like User-Agent.
+- Draft → owner checked previews in the dashboard, set quantity 3 (first-order
+  30% off) → confirmed via `PATCH /v4/orders/{id} {orderType: 'order'}`:
+  order `e4e54644-560e-4b2f-8c74-24608d48cbee`, 3 packs (30 cards + envelopes),
+  **€19.80, shipping €0** (EU/PT), made in PT, to Lisbon.
+- Open: the generated letters are still blander than the owner's edit (his
+  benchmark: "un pedacito de nuestra vida", "no se pierde nada de lo que hace
+  su hermano"); pgTAP for the migration not run yet (local Docker hangs).
+
 ### Product build (after C4 passes)
 
 | Phase | Build | Gate |

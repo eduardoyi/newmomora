@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Momora — Card Print</title>
+    <!--
+      Holiday card print entry (docs/plans/holiday-cards.md C3): same rules as
+      print.html — NO CDN fonts (the vendored static woff2 faces in
+      src/print/fonts are loaded and hard-checked by src/card/measure.ts), exact
+      @page size injected at runtime by CardPrintApp.tsx, images block-level.
+    -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #fff;
+        font-optical-sizing: none;
+      }
+      #root img {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/card/print/main.tsx"></script>
+  </body>
+</html>

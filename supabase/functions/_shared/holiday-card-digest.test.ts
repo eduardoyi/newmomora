@@ -1,6 +1,6 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import type { PortraitVersionCandidate } from './portrait-versions.ts';
-import { buildDigestFromPool, buildDigestFromScript, DIGEST_EXCERPT_MAX, excerptOf } from './holiday-card-digest.ts';
+import { buildDigestFromPool, buildDigestFromScript, DIGEST_EXCERPT_MAX, excerptOf, namedTrips, withQuoteContext } from './holiday-card-digest.ts';
 import { holidayFilmScope } from './year-film-eligibility.ts';
 import { buildHolidayScript, type FilmMemorySource, type FilmPerson } from './year-film-script.ts';
 
@@ -214,4 +214,26 @@ Deno.test('digest v3: concrete details per child and per theme, cleaned; certain
   assertEquals(candidate.children[1].firsts, []);
   const said = buildDigestFromPool(withFirst, [{ ...milestones[0], status: 'candidate' }], [edu, adri, ...kids, abu], SCOPE, 'es', context);
   assertEquals(said.children[1].firsts.map((f) => f.confirmed), [false]);
+});
+
+Deno.test('v7: the line of the year carries its moment (the words just before the quote)', () => {
+  const line = { quote: 'papá, la luna nos sigue', memoryId: 'm1' };
+  const pool = [{ id: 'm1', text: 'Mirando por la ventana de noche, Tomás se volteó y me dijo: "papá, la luna nos sigue". Nos reímos mucho.' }];
+  assertEquals(withQuoteContext(line, pool).context, 'Mirando por la ventana de noche, Tomás se volteó y me dijo:');
+  assertEquals(withQuoteContext(line, [{ id: 'm1', text: 'papá, la luna nos sigue' }]).context, undefined);
+  assertEquals(withQuoteContext(line, []).context, undefined);
+});
+
+Deno.test('v8: named trips come from place labels on consecutive days or travel memories', () => {
+  const mem = (id: string, date: string, labels: string[], topics: string[] = []) =>
+    ({ id, date, labels, topics, text: null, emotion: null, taggedMemberIds: [], illustrationReady: false, media: [], reported: false }) as unknown as Parameters<typeof namedTrips>[0][number];
+  const pool = [
+    mem('a', '2026-07-10', ['Cartagena', 'beach'], ['beach']),
+    mem('b', '2026-07-11', ['Cartagena', 'sand'], ['beach']),
+    mem('c', '2026-07-12', ['Cartagena'], ['beach']),
+    mem('d', '2026-05-02', ['Pelusa', 'Spiderman'], ['pretend-play']),
+    mem('e', '2026-06-20', ['Pelusa'], ['days-out']),
+    mem('f', '2026-04-02', ['Tomás', 'Lisboa'], []),
+  ];
+  assertEquals(namedTrips(pool, ['Tomás']), [{ place: 'Cartagena', month: 7, days: 3, memories: 3 }]);
 });

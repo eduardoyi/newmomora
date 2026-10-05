@@ -7,6 +7,7 @@
 
 const PRICES: Record<string, { input: number; cachedInput: number; output: number }> = {
   'gpt-6-sol': { input: 2.0, cachedInput: 0.2, output: 10.0 },
+  'gpt-6.1-sol': { input: 2.0, cachedInput: 0.1, output: 10.0 },
   'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
   'gpt-6-astra': { input: 10.0, cachedInput: 1.0, output: 50.0 },
 };

@@ -303,7 +303,7 @@ async function prepare(prefix, job, work) {
       if (await stillFile(src, item.key, out)) result.file = await put(`${id}.jpg`, out, 'image/jpeg');
       else result.warnings.push('could not decode image');
     }
-    if ((item.mode === 'still' && item.checkImage) || item.mode === 'reference') {
+    if (((item.mode === 'still' || item.mode === 'pair') && item.checkImage) || item.mode === 'reference') {
       const out = path.join(work, `${id}-check.jpg`);
       if (await checkImage(src, item.key, out)) result.checkImage = await put(`${id}-check.jpg`, out, 'image/jpeg');
     }
@@ -338,6 +338,12 @@ async function prepare(prefix, job, work) {
         const cut = path.join(work, `${id}-v${k}.${isVideo ? 'mp4' : 'm4a'}`);
         if (isVideo ? await cutVideo(src, cut, windows[k], true) : await cutAudio(src, cut, windows[k])) {
           w.file = await put(path.basename(cut), cut, isVideo ? 'video/mp4' : 'audio/mp4');
+          // Public films (holiday card) strict-check the frame a video sound
+          // window shows: a check image from the middle of the cut.
+          if (isVideo && item.checkImage) {
+            const frame = path.join(work, `${id}-v${k}.jpg`);
+            w.checkImage = (await checkImage(cut, `${id}.mp4`, frame, (windows[k].end - windows[k].start) / 2)) ? await put(`${id}-v${k}.jpg`, frame, 'image/jpeg') : null;
+          }
         }
         const wv = path.join(work, `${id}-v${k}.wav`);
         if (await wav(src, wv, windows[k])) w.wav = await put(`${id}-v${k}.wav`, wv, 'audio/wav');

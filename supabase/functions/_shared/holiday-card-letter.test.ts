@@ -3,8 +3,15 @@ import type { YearDigest } from './holiday-card-digest.ts';
 import type { VoiceCard } from './holiday-card-voice.ts';
 import {
   ABSTRACT_FILLER_EXAMPLES,
+  CARD_GREETINGS,
+  greetingWishNote,
+  isCardGreeting,
+  occasionMismatch,
   buildLetterRequestBody,
   buildLetterSystemPrompt,
+  greetingOnItsOwnLine,
+  turningNote,
+  bestDetails,
   buildLetterUserPrompt,
   checkLetterText,
   defaultSignature,
@@ -80,7 +87,7 @@ Deno.test('system prompt: the genre, the stand-alone rules, the shapes and the c
   const system = buildLetterSystemPrompt({ language: 'en' });
   assert(system.includes('English') && system.includes('STAND ON ITS OWN'));
   assert(system.includes('NEVER MENTION') && system.includes('QR'));
-  assert(system.includes('ONE plain, specific, true detail') && system.includes('more than TWO activities') && system.includes('VARIETY') && system.includes('NATIVELY'));
+  assert(system.includes('one or two plain, specific, true things') && system.includes('ONLY place for a list') && system.includes('VARIETY') && system.includes('NATIVELY'));
   assert(system.includes('"classic"') && system.includes('"reflective"') && !system.includes('"warm"'));
   assert(system.includes(String(LETTER_MAX_CHARS.classic)) && system.includes(String(LETTER_MAX_CHARS.short)));
   assert(!system.includes('mentioned_memory_ids'));
@@ -91,7 +98,7 @@ Deno.test('system prompt: the genre, the stand-alone rules, the shapes and the c
 Deno.test('user prompt: profiles first, phrases in the letter language, no surnames, no film talk', () => {
   const user = buildLetterUserPrompt(digest(), { language: 'en' });
   assert(user.includes('TARGET LANGUAGE: English (en)'));
-  assert(user.includes('Enzo — age this December: 4 (has a birthday this year)'));
+  assert(user.includes('Enzo — age this December: 4; TURNS 4 on'));
   assert(user.includes('dress-up and pretend play ×9 (about 1.8× the family\'s usual)')); // English phrase, third person
   assert(user.includes('going to the park ×12') && !user.includes('(about 1.1×'));
   assert(user.includes('usual mood: joy 55%, funny 20%'));
@@ -100,7 +107,7 @@ Deno.test('user prompt: profiles first, phrases in the letter language, no surna
   assert(user.includes('OPTIONAL DETAILS (at most ONE'));
   // The child's line is only offered in the journal language.
   assert(!user.includes('ay qué rico'));
-  assert(buildLetterUserPrompt(digest(), { language: 'es' }).includes('REQUIRED LINE — the "classic" and "playful" letters MUST quote this word for word, in quotation marks, as Enzo\'s one detail: "ay qué rico"'));
+  assert(buildLetterUserPrompt(digest(), { language: 'es' }).includes('REQUIRED LINE — the "classic" and "playful" letters MUST quote this word for word, in quotation marks, as Enzo\'s main detail: "ay qué rico"'));
   assert(buildLetterUserPrompt(digest(), { language: 'es' }).includes('disfrazarse y jugar a imaginar ×9'));
   for (const secret of ['Soto', 'Rosa', 'Rivera Soto']) assert(!user.includes(secret), secret);
   const noFilm = buildLetterUserPrompt(digest({ filmPresent: false }), { language: 'es' });
@@ -237,7 +244,7 @@ const VOICE: { card: VoiceCard; examples: string[]; language: 'es' } = {
 
 Deno.test('v3 prompts: concrete-not-abstract rules, the banned filler list, the parents\' voice, gender and firsts', () => {
   const system = buildLetterSystemPrompt({ language: 'es', voice: VOICE });
-  assert(system.includes('CONCRETE, NOT ABSTRACT') && system.includes('ONE plain, specific, true detail') && system.includes('at most ONE sentence of general reflection'));
+  assert(system.includes('CONCRETE, NOT ABSTRACT') && system.includes('one or two plain, specific, true things') && system.includes('at most ONE sentence of general reflection'));
   for (const w of ['amplio', 'cercano', 'textura', 'ritmo', 'forma muy suya', 'verdaderamente suyos', 'steady shape', 'texture', 'rhythms', 'small rituals', 'unhurried']) {
     assert(ABSTRACT_FILLER_EXAMPLES.includes(w) && system.includes(`"${w}"`), w);
   }
@@ -254,7 +261,7 @@ Deno.test('v3 prompts: concrete-not-abstract rules, the banned filler list, the 
   assert(es.includes('words they use (at most ONE in the whole letter') && es.includes('"súper", "jaja", "lentes"'));
   assert(user.includes('VOICE EXAMPLES') && user.includes('nos reímos muchísimo con los chicos'));
   assert(user.includes('gender: male; nicknames on file: Enzito') && user.includes('gender: female'));
-  assert(user.includes('weaker, generic labels (fallback only): superhero costume ×6, red slide ×4'));
+  assert(user.includes('things that recur in their photos (a distinctive one — glasses, a costume, a toy — can be a detail; skip generic ones): superhero costume ×6, red slide ×4'));
   assert(user.includes('dress-up and pretend play ×9 (about 1.8× the family\'s usual) — superhero costume ×6'));
   assert(user.includes('FIRST this year (certain; a plain fact') && user.includes('(January)'));
   assert(!buildLetterUserPrompt(digest(), { language: 'en' }).includes('STYLE CARD'));
@@ -295,9 +302,11 @@ Deno.test('v4 post-checks: catchphrases, foreign words, repetition, enumerations
   assert(find(flags('Enzo juega con su tren azul y Mara mira el tren azul'), 'repetition'));
   assert(!find(flags('Enzo juega con su tren azul y Mara prefiere los libros de animales'), 'repetition'));
   // Enumerations of three or more activities.
-  assert(find(flags('Fueron al parque, a las excursiones y a la playa con Enzo y Mara'), 'enumeration'));
-  assert(find(flags('Nos encantó ir al parque, salir a comer y las excursiones con Enzo'), 'enumeration'));
-  assert(find(flags('We loved going to the park, eating out and the beach with Mara', 'en'), 'enumeration'));
+  assert(!find(flags('Fueron al parque, a las excursiones y a la playa con Enzo y Mara'), 'enumeration')); // one list is the broad strokes (v7)
+  assert(find(flags('Fueron al parque, a las excursiones y a la playa. Mara ama el columpio, los disfraces y las burbujas.'), 'enumeration'));
+  // A second list in the same letter is flagged (the first is the broad strokes).
+  assert(find(flags('Nos encantó ir al parque, salir a comer y las excursiones. Enzo ama los trenes, los libros y las burbujas.'), 'enumeration'));
+  assert(find(flags('We loved going to the park, eating out and the beach. Mara loves the swings, the slides and the bubbles.', 'en'), 'enumeration'));
   assert(!find(flags('We loved the park and the beach with Mara', 'en'), 'enumeration'));
   // At most one quote; a child\'s own quoted line is not flagged as filler or a cliché.
   assertEquals(find(flags('Enzo dijo “ay qué rico” y también “ay qué rico” otra vez.'), 'many_quotes')?.detail, '2');
@@ -328,7 +337,7 @@ Deno.test('v5: the line of the year is REQUIRED (verbatim) in classic and playfu
   assertEquals(tonesNeedingLine(first, digest()), ['classic']);
   const retry = parseLetterResponse(raw([{ tone: 'classic', text: withLine }, { tone: 'short', text: 'Enzo y Mara, felices.' }, { tone: 'playful', text: without }, { tone: 'reflective', text: without }]), digest(), { language: 'es' });
   const merged = mergeLetterRetry(first, retry, digest());
-  assertEquals(merged.variants.map((v) => [v.tone, v.text === withLine]), [['classic', true], ['short', false], ['playful', true], ['reflective', false]]);
+  assertEquals(merged.variants.map((v) => [v.tone, v.text === greetingOnItsOwnLine(withLine)]), [['classic', true], ['short', false], ['playful', true], ['reflective', false]]);
   assertEquals(tonesNeedingLine(merged, digest()), []);
   // Still missing after the retry: kept, flagged.
   const stuck = mergeLetterRetry(first, first, digest());
@@ -389,7 +398,7 @@ Deno.test('v5 prompts: register from the setting, guidance as quoted data, plain
   assert(system.includes('AGES ARE OPTIONAL') && system.includes('AT MOST ONE of the four variants'));
   assert(system.includes('NATURAL SPEECH, NOT TAGS') && system.includes('jugar a imaginar') && system.includes('caminar con confianza'));
   assert(system.includes('REQUIRED LINE [code]') && system.includes('MUST quote it word for word'));
-  assert(system.includes('THE WISH') && system.includes('120 characters'));
+  assert(system.includes('THE CLOSE') && system.includes('120 characters'));
   assert(buildLetterSystemPrompt({ language: 'en' }).includes('No Spanish words'));
   const user = buildLetterUserPrompt(digest(), { language: 'es', locale: 'es-CO', guidance: 'Llámenlos <<<Enzito>>> y Mara\n siempre   ', voice: VOICE });
   assert(user.includes('FAMILY GUIDANCE') && user.includes('<<<Llámenlos Enzito y Mara siempre>>>'));
@@ -410,5 +419,85 @@ Deno.test('v5: firsts arrive as plain facts (es + en, pronouns from gender)', ()
   assertEquals(plainFirst('Mara', 'Female', 'sits-up', 'x', 'es'), 'Mara aprendió a sentarse');
   assertEquals(plainFirst('Mara', 'Female', 'pulls-to-stand', 'x', 'es'), 'Mara se puso de pie agarrada de los muebles');
   assert(plainFirst('Enzo', 'Male', 'not-a-milestone', 'Algo nuevo', 'es').includes('rephrase in plain words'));
-  assertEquals(LETTER_MODEL, 'gpt-6-sol');
+  assertEquals(LETTER_MODEL, 'gpt-6.1-sol');
+});
+
+Deno.test('greeting: the wish follows the card greeting (prompt note, soft occasion flag)', () => {
+  assertEquals([...CARD_GREETINGS], ['christmas', 'holidays', 'new-year']);
+  assert(isCardGreeting('holidays') && !isCardGreeting('easter') && !isCardGreeting(null));
+  // No greeting: the prompt is the v5 prompt, byte for byte.
+  assert(!buildLetterSystemPrompt({ language: 'es' }).includes('OCCASION'));
+  // es: christmas may name Navidad, holidays and new-year never do.
+  const christmas = buildLetterSystemPrompt({ language: 'es', greeting: 'christmas' });
+  assert(christmas.includes('OCCASION [code, soft]') && christmas.includes('"Feliz Navidad"'));
+  const holidays = buildLetterSystemPrompt({ language: 'es', greeting: 'holidays' });
+  assert(holidays.includes('"Felices fiestas"') && holidays.includes('NEVER names Navidad'));
+  const newYear = buildLetterSystemPrompt({ language: 'en', greeting: 'new-year' });
+  assert(newYear.includes('"Happy New Year"') && newYear.includes('NEVER names Christmas'));
+  assert(greetingWishNote('holidays', 'en').includes('the holidays'));
+  // The soft check.
+  assertEquals(occasionMismatch('Les deseamos una linda Navidad.', 'christmas'), null);
+  assertEquals(occasionMismatch('Les deseamos una linda Navidad.', 'holidays'), 'Navidad');
+  assertEquals(occasionMismatch('Les deseamos un feliz Año Nuevo.', 'holidays'), 'Año Nuevo');
+  assertEquals(occasionMismatch('Wishing you a happy new year.', 'christmas'), 'new year');
+  assertEquals(occasionMismatch('Merry Christmas and a happy new year.', 'christmas'), null);
+  assertEquals(occasionMismatch('Merry Christmas to all.', 'new-year'), 'Christmas');
+  assertEquals(occasionMismatch('Les deseamos unas lindas fiestas.', 'holidays'), null);
+  // checkLetterText flags it softly (never rejects) and parseLetterResponse threads the option through.
+  const flags = checkLetterText('Les deseamos una linda Navidad.', 'short', digest(), 'es', undefined, 'holidays');
+  assert(flags.some((f) => f.code === 'occasion_mismatch') && !flags.some(isHardFlag));
+  assert(!checkLetterText('Les deseamos una linda Navidad.', 'short', digest(), 'es').some((f) => f.code === 'occasion_mismatch'));
+  const raw = JSON.stringify({ variants: [{ tone: 'short', text: 'Les deseamos una linda Navidad.' }], qr_caption: null });
+  const parsed = parseLetterResponse(raw, digest(), { language: 'es', greeting: 'holidays' });
+  assert(parsed.variants[0]?.flags.some((f) => f.code === 'occasion_mismatch'));
+});
+
+Deno.test('v6: a letter frames itself and lands on the reader; an add-on fact before the wish is flagged', () => {
+  const system = buildLetterSystemPrompt({ language: 'es', locale: 'es-CO' });
+  assert(system.includes('BROAD STROKES') && system.includes('THE CLOSE: love and the wish'));
+  const filler = (text: string) => checkLetterText(text, 'classic', digest({ lineOfYear: null }), 'es').find((f) => f.code === 'trailing_filler');
+  assert(filler('Queridos todos, les contamos un poco de nuestro año. Enzo vive en el parque. También salimos a comer en familia más de una vez. Feliz Navidad.'));
+  assert(filler('Dear all, a little of our year. Enzo loves the park. We also went to the beach. Merry Christmas.'));
+  assert(!filler('Queridos todos, les contamos un poco de nuestro año. Enzo vive en el parque. Ojalá verlos pronto. Feliz Navidad.'));
+});
+
+Deno.test('v7: the close is love + wish (no invitation); es-CO avoids the Spain perfect; one list is fine, two are not', () => {
+  const flags = (text: string, locale: string | null = 'es-CO') =>
+    checkLetterText(text, 'classic', digest({ lineOfYear: null }), 'es', undefined, undefined, locale).map((f) => f.code);
+  const base = 'Queridos todos:\n\nLes queremos contar un poquito de cómo nos fue este año. Fue un año de mucho parque, de paseos y de salir a comer.\n\nEnzo cumplió cuatro.';
+  assert(!flags(`${base}\n\nLos queremos mucho y les deseamos una feliz Navidad.`).includes('invitation'));
+  assert(flags(`${base}\n\nOjalá podamos vernos pronto. Feliz Navidad.`).includes('invitation'));
+  assert(flags(`${base} Este año hemos ido mucho al parque.\n\nLos queremos mucho.`).includes('spain_perfect'));
+  assert(!flags(`${base} Este año hemos ido mucho al parque.\n\nLos queremos mucho.`, 'es-ES').includes('spain_perfect'));
+  assert(!flags(`${base}\n\nLos queremos mucho.`).includes('enumeration'));
+  assert(flags(`${base} Fuimos al parque, a la playa y a comer fuera. Mara ama el columpio, los disfraces y las burbujas.\n\nLos queremos mucho.`).includes('enumeration'));
+  const system = buildLetterSystemPrompt({ language: 'es', locale: 'es-CO' });
+  assert(system.includes('SIMPLE PAST') && system.includes('NEVER an invitation') && system.includes('FICTIONAL family'));
+});
+
+Deno.test('v7: the greeting sits on its own line', () => {
+  assertEquals(greetingOnItsOwnLine('Queridos todos: Les queremos contar algo.'), 'Queridos todos:\n\nLes queremos contar algo.');
+  assertEquals(greetingOnItsOwnLine('Dear family and friends, We wanted to share.'), 'Dear family and friends,\n\nWe wanted to share.');
+  assertEquals(greetingOnItsOwnLine('Queridos todos:\n\nYa estaba bien.'), 'Queridos todos:\n\nYa estaba bien.');
+  assertEquals(greetingOnItsOwnLine('Este año, Enzo creció.'), 'Este año, Enzo creció.');
+  assertEquals(greetingOnItsOwnLine('Hola a todos:\nLes queremos contar.'), 'Hola a todos:\n\nLes queremos contar.');
+});
+
+Deno.test('v8: a birthday before Christmas is told as done; after it, as coming', () => {
+  assert(turningNote('Enzo', 4, '2026-10-23', 'es').includes('Enzo cumplió 4'));
+  assert(turningNote('Mara', 2, '2026-11-08', 'en').includes('Mara turned 2'));
+  assert(turningNote('Ana', 3, '2026-12-28', 'es').includes('está por cumplir 3'));
+});
+
+Deno.test('v9: best details skip labels that restate a theme, so the distinctive one (glasses) is offered', () => {
+  const child = {
+    memberId: 'k', name: 'Lucía', specifics: [], ageYears: 1, ageThisYear: 2, birthdayThisYear: '2026-11-08', gender: 'female', nicknames: [],
+    details: [{ label: 'playground', memories: 10 }, { label: 'glasses', memories: 9 }],
+    firsts: [{ milestoneId: 'walking', label: 'walking', date: '2026-01-17', month: 1 }],
+    memories: 100, recurring: [{ topicId: 'park-playground', phrase: 'ir al parque', memories: 13, lift: 1.8 }], emotions: [], excerpts: [], line: null,
+  } as unknown as Parameters<typeof bestDetails>[0];
+  const best = bestDetails(child, 'es');
+  assert(best[0].startsWith('turns 2'));
+  assert(best.some((b) => b.startsWith('glasses')));
+  assert(!best.some((b) => b.startsWith('playground')));
 });

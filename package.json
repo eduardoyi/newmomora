@@ -48,6 +48,8 @@
     "eval:holiday-card-audit": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-holiday-card-audit.ts",
     "eval:holiday-card-front": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-holiday-card-front.ts",
     "eval:holiday-card-letters": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-holiday-card-letters.ts",
+    "eval:holiday-card-assets": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-holiday-card-assets.ts",
+    "holiday:publish-sample": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/publish-holiday-film-sample.ts",
     "eval:year-film-audit": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-audit.ts",
     "eval:year-film-script": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-script.ts",
     "eval:year-film-assets": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-year-film-assets.ts",

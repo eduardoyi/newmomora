@@ -23,7 +23,7 @@ export interface PricedAiUsage {
 
 const LEGACY_PRICING_VERSION = 'openai-2026-07-27';
 
-type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-6-sol' | 'gpt-6-luna';
+type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-6-sol' | 'gpt-6.1-sol' | 'gpt-6-luna';
 
 const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   inputText: number;
@@ -41,6 +41,8 @@ const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   // Year Film quote pick / claim + frame checks (pricing version openai-2026-09-28).
   'gpt-6-sol': { inputText: 2, inputImage: 2, cachedInput: 0.2, outputText: 10, outputImage: 10 },
   'gpt-6-luna': { inputText: 0.1, inputImage: 0.1, cachedInput: 0.01, outputText: 0.5, outputImage: 0.5 },
+  // Holiday card film claim checks / quote pick (pricing version openai-2026-09-29; standard tier, short context).
+  'gpt-6.1-sol': { inputText: 2, inputImage: 2, cachedInput: 0.1, outputText: 10, outputImage: 10 },
 };
 
 const TRANSCRIBE_USD_PER_AUDIO_SECOND = 0.003 / 60;
@@ -120,6 +122,8 @@ export function priceOpenAiUsage(
 
   const pricingVersion = model === 'gpt-image-2.5-flare'
     ? 'openai-2026-09-08'
+    : model === 'gpt-6.1-sol'
+    ? 'openai-2026-09-29'
     : model === 'gpt-6-sol' || model === 'gpt-6-luna'
     ? 'openai-2026-09-28'
     : LEGACY_PRICING_VERSION;

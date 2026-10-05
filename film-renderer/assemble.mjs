@@ -70,10 +70,26 @@ const H = 1920;
 const MAX_SECONDS = 60; // plan §5: approved burst pace first, films up to the ~60s bed
 
 // ── Palette & type (frame.md) ────────────────────────────────────────────
-const C = {
-  lav: '#ECE8F5', cream: '#F7F1EA', plum: '#2A2230', ink: '#2C2418', ink2: '#6B5E4F',
-  rose: '#D63E78', card: '#FFFFFF', paper: '#FFFDF9',
-};
+// Holiday card film (docs/plans/holiday-cards.md §6 C4): film.theme === 'holiday'
+// swaps in a warmer winter palette (dusky rose-lilac and candlelit cream instead
+// of lavender and cream, a wine night instead of plum, berry instead of rose),
+// a quiet snowfall behind the text of the light scenes, a warm light over the
+// bursts and the greeting end card. Every other film is untouched: nothing below
+// changes its output when HOLIDAY is false.
+const HOLIDAY = film.theme === 'holiday';
+const C = HOLIDAY
+  ? {
+    lav: '#E9DEE4', cream: '#F6EBDD', plum: '#2F1F2B', ink: '#2C2418', ink2: '#6B5E4F',
+    rose: '#BE4568', card: '#FFFFFF', paper: '#FFFDF9', gold: '#C79A4E',
+  }
+  : {
+    lav: '#ECE8F5', cream: '#F7F1EA', plum: '#2A2230', ink: '#2C2418', ink2: '#6B5E4F',
+    rose: '#D63E78', card: '#FFFFFF', paper: '#FFFDF9',
+  };
+// The same colors as rgb triples (for rgba()) and the few one-off tints.
+const T = HOLIDAY
+  ? { plum: '47,31,43', cream: '249,241,228', rose: '190,69,104', band: '#EBDCD8', perf: '#D9CBC6' }
+  : { plum: '42,34,48', cream: '247,241,234', rose: '214,62,120', band: '#E6D7EE', perf: '#CFC8E0' };
 const FONTS = `
 @font-face{font-family:"Newsreader";src:url("assets/fonts/Newsreader_500Medium.ttf");font-weight:500}
 @font-face{font-family:"Newsreader";src:url("assets/fonts/Newsreader_400Regular_Italic.ttf");font-weight:400;font-style:italic}
@@ -214,12 +230,66 @@ const BASE_CSS = `${FONTS}
 .sc .card{position:absolute;background:${C.card};border-radius:40px;padding:16px;box-shadow:0 22px 48px rgba(44,36,24,.22)}
 .sc .card img{display:block;width:100%;height:100%;object-fit:cover;border-radius:28px}
 .sc .kicker{position:absolute;left:96px;font:500 40px/1 "Plus Jakarta Sans";letter-spacing:.12em;text-transform:uppercase;color:${C.ink2}}
-.sc .kicker.light{color:rgba(247,241,234,.72)}
+.sc .kicker.light{color:rgba(${T.cream},.72)}
 .sc .title{position:absolute;left:96px;right:120px;font:500 132px/0.98 "Newsreader";letter-spacing:-.03em;color:${C.ink}}
 .sc .word{display:inline-block}`;
 
+// ── Holiday theme: gradients and a quiet snowfall ─────────────────────────
+// Light scenes get a soft winter-dawn gradient (dusky rose at the top, candlelit
+// cream below) instead of a flat color. The snow is a low-density, seeded layer
+// BEHIND each scene's content, one continuous fall across scenes: every flake's
+// position is a function of film time (a fixed table below), and each scene
+// builds its own slice of that path from its start time, so a cut never resets
+// the snow. Plain GSAP tweens on divs (no blur, no clip-path: the fast capture
+// path). Bursts (full-bleed photos) get no snow, only a faint warm light.
+const SNOW = (() => {
+  const r = rng(2026);
+  return Array.from({ length: 34 }, () => {
+    const size = 7 + r() * 9;
+    // [x0, y0, size, opacity, fall speed px/s, drift amp px, drift rad/s, phase]
+    return [Math.round(r() * W), Math.round(r() * (H + 160)), +size.toFixed(1), +(0.62 + r() * 0.33).toFixed(2), Math.round(34 + size * 4.5), Math.round(18 + r() * 34), +(0.4 + r() * 0.5).toFixed(2), +(r() * 6.28).toFixed(2)];
+  });
+})();
+const SNOW_LOOP = H + 160;
+function themeBg(bg) {
+  if (!HOLIDAY) return bg;
+  if (bg === C.lav) return 'linear-gradient(180deg,#D9D0E2 0%,#E8DCE2 48%,#F4E8DF 100%)';
+  if (bg === C.cream) return 'linear-gradient(180deg,#F0E1D4 0%,#F6EBDD 50%,#FAF1E6 100%)';
+  return bg;
+}
+function snowLayer(dark) {
+  return {
+    css: `
+.sc .snow{position:absolute;inset:0}
+.sc .snow i{position:absolute;left:0;top:0;border-radius:50%;background:#fff;box-shadow:${dark ? '0 0 6px rgba(255,255,255,.55)' : '0 0 0 1px rgba(110,85,120,.14),0 2px 7px rgba(80,55,90,.18)'}}`,
+    html: `<div class="snow" data-layout-allow-overflow>${SNOW.map((f) => `<i style="width:${f[2]}px;height:${f[2]}px;opacity:${f[3]}"></i>`).join('')}</div>`,
+    js: `
+(function(){
+  var SN=${JSON.stringify(SNOW)}, T0=__SNOW_T0__, D=__SNOW_D__, L=${SNOW_LOOP};
+  q('.snow i').forEach(function(el,i){
+    var f=SN[i], v=f[4], y0=(f[1]+v*T0)%L, end=Math.min(L,y0+v*D);
+    var X=function(t){return Math.round(f[0]+f[5]*Math.sin(f[7]+f[6]*(T0+t)));};
+    tl.fromTo(el,{y:y0-80},{y:end-80,duration:(end-y0)/v,ease:'none'},0);
+    if (y0+v*D>L) tl.fromTo(el,{y:-80},{y:y0+v*D-L-80,duration:(y0+v*D-L)/v,ease:'none',immediateRender:false},(L-y0)/v);
+    tl.set(el,{x:X(0)},0);
+    for (var t=0.6;t<D+0.6;t+=0.6) tl.to(el,{x:X(t),duration:0.6,ease:'none'},t-0.6);
+  });
+})();`,
+  };
+}
+// A warm light over the bursts' full-bleed media: an amber glow from the top
+// corner and a faint overall warmth. Gradients only.
+const WARM_LIGHT_CSS = `.sc .warm{position:absolute;inset:0;background:radial-gradient(ellipse 90% 55% at 12% 0%,rgba(255,206,140,.22),transparent 70%),rgba(255,190,120,.05);pointer-events:none}`;
+
 const files = [];
-function subcomp(id, { bg, css = '', html, js }) {
+function subcomp(id, { bg, css = '', html, js, snow }) {
+  if (HOLIDAY && snow !== false) {
+    const layer = snowLayer(bg === C.plum);
+    css = `${layer.css}${css}`;
+    html = `${layer.html}${html}`;
+    js = `${layer.js}${js}`;
+  }
+  bg = themeBg(bg);
   const text = `<!doctype html>
 <html><head><meta charset="UTF-8"></head><body>
 <template>
@@ -260,7 +330,7 @@ function coldOpen(s, id) {
 .${id} .morph{position:absolute;border-radius:48px;overflow:hidden;background:#fff;box-shadow:0 30px 70px rgba(44,36,24,.28)}
 .${id} .morph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .${id} .morph .sweep{position:absolute;left:0;top:-10%;bottom:-10%;width:18%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.85),transparent)}
-.${id} .glow{position:absolute;left:190px;top:560px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(214,62,120,.20),transparent 68%)}`,
+.${id} .glow{position:absolute;left:190px;top:560px;width:760px;height:760px;border-radius:50%;background:radial-gradient(circle,rgba(${T.rose},.20),transparent 68%)}`,
     html: `
 <div class="glow"></div>
 ${from ? `<div class="morph back" style="left:120px;top:420px;width:400px;height:400px"><img src="${asset(from.pairFile)}"><span class="wipe"><img class="drawn" src="${asset(from.file)}"></span><i class="sweep"></i></div>` : ''}
@@ -304,6 +374,9 @@ function mosaicTiles() {
   const pool = [];
   const add = (f) => {
     if (!f?.file || f.kind === 'portrait' || f.kind === 'audio' || seen.has(f.file)) return;
+    // Holiday card film (public): a tile is a clip's first frame, which no check
+    // saw (clips are checked at their middle) — only checked stills tile the wall.
+    if (HOLIDAY && isClip(f)) return;
     seen.add(f.file);
     pool.push(still(f));
   };
@@ -345,7 +418,7 @@ function counters(s, id) {
     bg: C.cream,
     css: `${mosaicCss(id)}
 .${id} .mosaic{filter:saturate(.45)}
-.${id} .veil{position:absolute;inset:0;background:rgba(247,241,234,.8)}
+.${id} .veil{position:absolute;inset:0;background:rgba(${T.cream},.8)}
 .${id} .counts{position:absolute;left:96px;right:150px;top:420px}
 .${id} .row{display:flex;align-items:baseline;gap:22px;margin-bottom:14px}
 .${id} .row .num{font:500 120px/1 "Newsreader";letter-spacing:-.03em;color:${C.ink};font-variant-numeric:tabular-nums}
@@ -385,9 +458,13 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
   const titleBeats = s.titles?.length ? headingBeats + s.titles.length * perTitle : 0;
   const titleOffset = titleBeats * BEAT;
   const tail = (i) => accelerate && i >= Math.ceil(frames.length * 0.5);
+  // `holdFactor` (the holiday card film's slower pacing, FilmScript contract):
+  // the spare-quarter-beat target and both caps scale by it, so the extra time
+  // isn't clipped away. Absent → 1, and every other film is unchanged.
+  const hold = s.holdFactor ?? 1;
   const units = frames.map(() => 2);
-  let spare = Math.max(0, Math.round(frames.length * (accelerate ? 0.6 : 1) * 4 * TEMPO) - units.reduce((x, y) => x + y, 0));
-  for (const [cap, test] of [[6, isClip], [4, (f) => !isClip(f)]]) {
+  let spare = Math.max(0, Math.round(frames.length * (accelerate ? 0.6 : 1) * hold * 4 * TEMPO) - units.reduce((x, y) => x + y, 0));
+  for (const [cap, test] of [[Math.round(6 * hold), isClip], [Math.round(4 * hold), (f) => !isClip(f)]]) {
     for (let moved = true; spare > 0 && moved; ) {
       moved = false;
       frames.forEach((f, i) => {
@@ -413,16 +490,17 @@ function burst(s, id, { accelerate = false, bg = C.plum }) {
   const titleGrid = s.titles?.length ? frames.slice(0, 12).map((f) => `<i style="background-image:url(${still(f)})"></i>`).join('') : '';
   subcomp(id, {
     bg,
-    css: `
+    snow: false,
+    css: `${HOLIDAY ? WARM_LIGHT_CSS : ''}
 .${id} .diag{position:absolute;left:-22%;top:-12%;width:144%;height:124%;display:grid;grid-template-columns:repeat(4,1fr);gap:22px}
 .${id} .diag i{display:block;width:100%;aspect-ratio:3/4;background:center/cover;border-radius:24px}
 .${id} .dwrap{position:absolute;inset:0;overflow:hidden}
-.${id} .scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(42,34,48,.55),rgba(42,34,48,.86) 30%,rgba(42,34,48,.86) 62%,rgba(42,34,48,.6))}
-.${id} .tk{position:absolute;left:96px;right:150px;top:560px;font:500 40px/1.2 "Plus Jakarta Sans";letter-spacing:.12em;text-transform:uppercase;color:rgba(247,241,234,.78)}
+.${id} .scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(${T.plum},.55),rgba(${T.plum},.86) 30%,rgba(${T.plum},.86) 62%,rgba(${T.plum},.6))}
+.${id} .tk{position:absolute;left:96px;right:150px;top:560px;font:500 40px/1.2 "Plus Jakarta Sans";letter-spacing:.12em;text-transform:uppercase;color:rgba(${T.cream},.78)}
 .${id} .themes{position:absolute;left:96px;right:150px;top:${s.titlesKicker ? 660 : 620}px}
 .${id} .themes span{display:block;margin-bottom:18px;font:500 ${s.titlesKicker ? 100 : 118}px/1.02 "Newsreader";letter-spacing:-.03em;color:${C.cream};opacity:0;transform-origin:left center;text-shadow:0 2px 18px rgba(20,14,24,.55)}`,
     html: `${titleGrid ? `<div class="dwrap"><div class="diag">${titleGrid}</div><div class="scrim"></div>${s.titlesKicker ? `<p class="tk">${esc(s.titlesKicker)}</p>` : ''}<div class="themes">${s.titles.map((x) => `<span>${esc(x)}</span>`).join('')}</div></div>` : ''}
-${layers}`,
+${layers}${HOLIDAY ? '<i class="warm"></i>' : ''}`,
     js: `
 var B=${BEAT}, cuts=${JSON.stringify(cuts.map((c) => [c.t, c.d]))};
 ${titleGrid ? `
@@ -450,7 +528,7 @@ function line(s, id) {
 .${id} .qwrap{position:absolute;left:96px;right:150px;top:${s.frame ? 860 : 700}px}
 .${id} .quote{font:700 118px/1.04 "Caveat";color:${C.ink}}
 .${id} .mark{position:relative}
-.${id} .under{position:absolute;left:0;right:0;bottom:6px;height:22px;background:rgba(214,62,120,.55);border-radius:8px;transform-origin:left center}
+.${id} .under{position:absolute;left:0;right:0;bottom:6px;height:22px;background:rgba(${T.rose},.55);border-radius:8px;transform-origin:left center}
 .${id} .by{margin-top:44px;font:500 44px "Plus Jakarta Sans";color:${C.ink2}}`,
     html: `<p class="kicker" style="top:330px">${esc(s.kicker ?? '')}</p>
 ${s.frame ? `<div class="card src" style="${fitCard(s.frame, { cx: 276, cy: 600, maxW: 360, maxH: 360, pad: 16 }).style}"><img src="${still(s.frame)}"></div>` : ''}
@@ -586,7 +664,22 @@ function sound(s, id) {
   const clip = s.frame;
   const dur = probeDuration(clip.file);
   const voiceSrc = normalizedVoice(clip.file);
-  const n = Math.min(14, Math.max(8, Math.ceil((dur + 0.7) / BEAT)));
+  // Holiday card film (watched on its own page, owner round 3): the scene ends
+  // right as the voice does — a tail of at most ~0.3 s, never a frozen frame or
+  // a static waveform card (the family films' 8-beat floor held a 1 s excerpt
+  // for ~4 s). Scenes stay on the beat grid, so the slack is absorbed by when
+  // the voice starts: the scene is the fewest whole beats that fit the excerpt
+  // plus a 0.35 s minimum margin, the voice enters 0.25-0.7 s in (the ticket is
+  // still sliding in) and the rest is the tail. The bed returns 0.6 s after the
+  // voice, partly over the next scene's cut.
+  let voiceStart = 0.4;
+  let n;
+  if (HOLIDAY) {
+    n = Math.min(14, Math.max(nb(4), Math.ceil((dur + 0.35) / BEAT)));
+    voiceStart = +Math.min(0.7, Math.max(0.25, n * BEAT - dur - 0.2)).toFixed(3);
+  } else {
+    n = Math.min(14, Math.max(8, Math.ceil((dur + 0.7) / BEAT)));
+  }
   const env = envelope(clip.file);
   const pts = env.map((v, i) => {
     const x = (i / (env.length - 1)) * 800;
@@ -594,7 +687,6 @@ function sound(s, id) {
     return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
   }).join(' ');
   const isVideo = isClip(clip);
-  const voiceStart = 0.4;
   // A vertical clip is the scene (owner, F3: a small box with big gutters
   // wasted it): it plays full-screen, the ticket goes compact over its foot.
   const dims = isVideo ? probeDims(clip.file) : null;
@@ -609,7 +701,7 @@ function sound(s, id) {
    of the bottom keep-out. */
 .${id} .col{position:absolute;left:96px;right:96px;top:${isVideo ? 400 : 560}px;${isVideo ? 'height:1080px;' : ''}display:flex;flex-direction:column;gap:28px}
 .${id} .stub{position:relative;background:${C.cream};border-radius:40px;overflow:hidden}
-.${id} .band{position:relative;height:380px;background:#E6D7EE}
+.${id} .band{position:relative;height:380px;background:${T.band}}
 .${id} .wax{position:absolute;left:44px;top:44px;width:116px;height:116px;border-radius:50%;background:${C.rose};color:#fff;display:flex;align-items:center;justify-content:center;font:500 58px "Newsreader"}
 .${id} svg{position:absolute;left:44px;top:190px;width:800px;height:120px;overflow:visible}
 .${id} path{fill:none;stroke:${C.ink};stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
@@ -619,7 +711,7 @@ function sound(s, id) {
    dashed perforation between two notches punched in the ground behind the
    card — the stub's overflow clips them to semicircular bites. */
 .${id} .tear{position:relative;height:0}
-.${id} .tear .perf{position:absolute;left:40px;right:40px;top:-1px;border-top:3px dashed #CFC8E0}
+.${id} .tear .perf{position:absolute;left:40px;right:40px;top:-1px;border-top:3px dashed ${T.perf}}
 .${id} .tear .notch{position:absolute;top:-24px;width:48px;height:48px;border-radius:50%;background:${C.plum}}
 .${id} .tear .nl{left:-24px}
 .${id} .tear .nr{right:-24px}
@@ -630,7 +722,7 @@ function sound(s, id) {
 .${id} .stub,.${id} .son{flex-shrink:0}
 .${id} .clipbox .bf{position:absolute;inset:-10%;background:center/cover no-repeat}
 .${id} .clipbox video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
-.${id} .son{align-self:center;display:flex;align-items:center;gap:18px;padding:22px 36px 22px 30px;border-radius:999px;background:rgba(247,241,234,.12);border:2px solid rgba(247,241,234,.35);color:${C.cream};font:700 40px "Plus Jakarta Sans";white-space:nowrap}
+.${id} .son{align-self:center;display:flex;align-items:center;gap:18px;padding:22px 36px 22px 30px;border-radius:999px;background:rgba(${T.cream},.12);border:2px solid rgba(${T.cream},.35);color:${C.cream};font:700 40px "Plus Jakarta Sans";white-space:nowrap}
 .${id} .son svg{position:static;width:56px;height:56px;overflow:visible}
 .${id} .son path{stroke:${C.cream};stroke-width:5}
 .${id} .son .cone{fill:${C.cream};stroke:none}
@@ -645,10 +737,10 @@ ${hero ? `
 .${id} .hero{position:absolute;inset:0;overflow:hidden}
 .${id} .hero .bf{position:absolute;inset:-10%;background:center/cover no-repeat}
 .${id} .hero video{position:absolute;inset:0;width:100%;height:100%;object-fit:${dims.h / dims.w >= 1.6 ? 'cover' : 'contain'}}
-.${id} .hero .hs{position:absolute;inset:0;background:linear-gradient(180deg,rgba(42,34,48,.82) 0%,rgba(42,34,48,.7) 20%,rgba(42,34,48,0) 34%,rgba(42,34,48,0) 48%,rgba(42,34,48,.85) 100%)}
+.${id} .hero .hs{position:absolute;inset:0;background:linear-gradient(180deg,rgba(${T.plum},.82) 0%,rgba(${T.plum},.7) 20%,rgba(${T.plum},0) 34%,rgba(${T.plum},0) 48%,rgba(${T.plum},.85) 100%)}
 .${id} .kicker.light{color:${C.cream}}
 .${id} .col{top:auto;bottom:430px;height:auto}
-.${id} .son{position:absolute;right:150px;top:272px;padding:16px 28px 16px 22px;font-size:34px;background:rgba(42,34,48,.55)}
+.${id} .son{position:absolute;right:150px;top:272px;padding:16px 28px 16px 22px;font-size:34px;background:rgba(${T.plum},.55)}
 .${id} .son svg{width:46px;height:46px}` : ''}`,
     html: `${hero ? `<div class="hero"><i class="bf" data-layout-allow-overflow style="background-image:url(${blurred(clip, { dim: 0.55, sat: 1 })})"></i>${clipTag}<i class="hs"></i></div>` : ''}<p class="kicker light" style="top:${isVideo ? 300 : 440}px">${esc(s.kicker ?? '')}</p>
 <div class="col"><div class="stub"><div class="band"><i class="wax">m.</i><svg viewBox="0 0 800 120" preserveAspectRatio="none"><path d="${pts}"/></svg><i class="play"></i><b class="time">0:00</b></div>${s.caption ? `<div class="tear"><i class="perf"></i><i class="notch nl"></i><i class="notch nr"></i></div><p class="cap">${esc(ticketCaption(s.caption))}</p>` : ''}</div>
@@ -681,8 +773,9 @@ function firsts(s, id) {
   let t = 0;
   for (const item of items) {
     const card = item.frame?.file ? item.frame : null;
-    const beatsHeld = card ? nb(4) : nb(3);
-    const box = card ? fitCard(card, { cx: 513, top: 500, maxW: 560, maxH: 600 }) : null;
+    // Holiday card film: a first is the heart of the year, hold it a little longer.
+    const beatsHeld = HOLIDAY ? (card ? nb(6) : nb(4)) : (card ? nb(4) : nb(3));
+    const box = card ? fitCard(card, { cx: 513, top: 500 + (HOLIDAY && items.length === 1 ? 110 : 0), maxW: 560, maxH: 600 }) : null;
     slots.push({ item, card, box, t: +t.toFixed(4), d: +(beatsHeld * BEAT).toFixed(4) });
     t += beatsHeld * BEAT;
   }
@@ -706,7 +799,7 @@ function firsts(s, id) {
 .${id} .first.under{top:1010px;box-shadow:0 14px 30px rgba(44,36,24,.14)}
 .${id} .first b{display:block;font:500 90px/1.05 "Newsreader";letter-spacing:-.02em;color:${C.ink}}
 .${id} .first span{display:block;margin-top:18px;font:500 36px/1.2 "Plus Jakarta Sans";color:${C.rose}}`,
-    html: `<p class="kicker" style="top:${slots.some((x) => x.card) ? 400 : 560}px">${esc(s.kicker ?? '')}</p>${slotHtml}`,
+    html: `<p class="kicker" style="top:${slots.some((x) => x.card) ? 400 + (HOLIDAY && items.length === 1 ? 110 : 0) : 560}px">${esc(s.kicker ?? '')}</p>${slotHtml}`,
     js: `
 var B=${BEAT}, slots=${JSON.stringify(slots.map((x) => [x.t, x.d, !!x.card]))};
 tl.fromTo(q('.kicker'),{opacity:0},{opacity:1,duration:.3},0);
@@ -739,26 +832,32 @@ q('.st').forEach(function(el,i){ tl.fromTo(el,{scale:0,rotation:0},{scale:1,rota
 
 function close(s, id) {
   const n = nb(8);
-  const frames = s.frames.slice(0, 2);
+  // Holiday: when the close is everyone's portraits (no photo of the whole core
+  // family exists), show all of them, up to four, never just the children.
+  const group = HOLIDAY && s.frames.length > 2;
+  const frames = s.frames.slice(0, group ? 4 : 2);
+  const spotsGroup = frames.length === 3 ? [[320, 880], [760, 880], [540, 1290]] : [[320, 880], [760, 880], [320, 1290], [760, 1290]];
   const r = rng(11);
-  const colors = [C.rose, '#F2B544', '#5B8DEF', '#EE8A4B'];
+  // Holiday: a gentler shower of gold and cream glints (round, fewer, softer) instead of party confetti.
+  const colors = HOLIDAY ? [C.gold, '#F4E3B8', C.rose, '#FFFFFF'] : [C.rose, '#F2B544', '#5B8DEF', '#EE8A4B'];
+  const spread = HOLIDAY ? 0.7 : 1;
   // Confetti bursts from behind the party photos as they land.
-  const conf = Array.from({ length: 32 }, (_, i) => ({ x: 540 + (r() - 0.5) * 520, y: 960 + (r() - 0.5) * 260, dx: (r() - 0.5) * 1100, dy: -380 - r() * 520, rot: r() * 540, c: colors[i % 4] }));
+  const conf = Array.from({ length: HOLIDAY ? 22 : 32 }, (_, i) => ({ x: 540 + (r() - 0.5) * 520, y: 960 + (r() - 0.5) * 260, dx: (r() - 0.5) * 1100 * spread, dy: (-380 - r() * 520) * spread, rot: r() * 540, c: colors[i % 4] }));
   const land = 2 * BEAT + 0.22;
   subcomp(id, {
     bg: C.lav,
     css: `
-.${id} .conf{position:absolute;width:22px;height:40px;border-radius:6px;opacity:0;z-index:1}
+.${id} .conf{position:absolute;${HOLIDAY ? 'width:16px;height:16px;border-radius:50%' : 'width:22px;height:40px;border-radius:6px'};opacity:0;z-index:1}
 .${id} .party{z-index:2}
 .${id} .sub{position:absolute;left:96px;top:1300px;font:500 34px "Plus Jakarta Sans";color:${C.ink2}}`,
     html: `<h1 class="title" style="top:310px;font-size:128px">${words(s.line)}</h1>
 ${conf.map((c) => `<i class="conf" style="left:${c.x.toFixed(0)}px;top:${c.y.toFixed(0)}px;background:${c.c}"></i>`).join('')}
-${frames.map((f, i) => `<div class="card party" style="${fitCard(f, { cx: i ? 730 : 340, cy: 970, maxW: 420, maxH: 540, pad: 16 }).style}"><img src="${still(f)}"></div>`).join('')}
+${frames.map((f, i) => `<div class="card party" style="${fitCard(f, group ? { cx: spotsGroup[i][0], cy: spotsGroup[i][1], maxW: 400, maxH: 380, pad: 14 } : HOLIDAY ? { cx: i ? 740 : 330, cy: 1090, maxW: 470, maxH: 660, pad: 16 } : { cx: i ? 730 : 340, cy: 970, maxW: 420, maxH: 540, pad: 16 }).style}"><img src="${still(f)}"></div>`).join('')}
 ${s.celebrationDate ? `<p class="sub">${esc(fdate(s.celebrationDate))}</p>` : ''}`,
     js: `
 var B=${BEAT}, land=${land.toFixed(3)}, conf=${JSON.stringify(conf.map((c) => [Math.round(c.dx), Math.round(c.dy), Math.round(c.rot), Math.round(H + 80 - c.y)]))};
 tl.fromTo(q('.title .word'),{y:70,opacity:0},{y:0,opacity:1,duration:.5,ease:'power3.out',stagger:.08},0);
-tl.fromTo(q('.party'),{scale:0,rotation:0},{scale:1,rotation:function(i){return i?6:-5;},duration:.55,ease:'back.out(1.8)',stagger:.12},B*2);
+tl.fromTo(q('.party'),{scale:0,rotation:0},{scale:1,rotation:function(i){return ${group ? '[-5,6,5,-6][i]' : 'i?6:-5'};},duration:.55,ease:'back.out(1.8)',stagger:.12},B*2);
 q('.conf').forEach(function(el,i){ var c=conf[i];
   tl.fromTo(el,{x:0,y:0,rotation:0,opacity:0},{x:c[0],y:c[1],rotation:c[2],opacity:1,duration:.55,ease:'power3.out',immediateRender:false},land);
   tl.set(el,{zIndex:3},land+.55);
@@ -790,6 +889,68 @@ tl.fromTo(q('.mwrap'),{scale:1.08},{scale:1,duration:.9,ease:'power2.out'},0);
 moves.forEach(function(m,i){ tl.fromTo(tiles[i],{x:0,y:0,scale:1,opacity:1},{x:m[0],y:m[1],scale:.1,opacity:0,duration:.55,ease:'power3.in'},m[2]); });
 tl.fromTo(q('.mark'),{scale:0},{scale:1,duration:.6,ease:'back.out(1.8)'},1.05);
 tl.fromTo(q('.sig'),{opacity:0,y:20},{opacity:1,y:0,duration:.5},1.4);`,
+  });
+  return { beats: n, events: [], hideStrip: true };
+}
+
+/** Holiday card film end card (film.theme 'holiday', end_card.greeting): the
+ * wall of the year's stills collapses into the Momora mark, the mark fades
+ * out where it is (it does not travel — owner, 2026-10-05), and the greeting
+ * (Newsreader, large) and the family's sign-off (Caveat, handwritten) land as
+ * the card's content, centered in the safe area. The Momora wordmark sits
+ * small and quiet at the bottom right (no "made with"). Greeting and sign-off
+ * come from film.json. */
+function holidayEndCard(s, id) {
+  const n = nb(9);
+  const cells = mosaicTiles();
+  const maxD = Math.max(...cells.map((c) => c.d));
+  const moves = cells.map((c) => [Math.round(-c.cx), Math.round(-c.cy), +(0.35 + (c.d / maxD) * 0.75).toFixed(3)]);
+  // Break the greeting into at most two balanced lines, then size it to the safe width.
+  const gw = String(s.greeting).split(/\s+/);
+  let lines = [gw.join(' ')];
+  if (gw.length > 1 && lines[0].length > 9) {
+    let best = null;
+    for (let k = 1; k < gw.length; k++) {
+      const pair = [gw.slice(0, k).join(' '), gw.slice(k).join(' ')];
+      const widest = Math.max(pair[0].length, pair[1].length);
+      if (!best || widest < best.widest) best = { pair, widest };
+    }
+    lines = best.pair;
+  }
+  const longest = Math.max(...lines.map((l) => l.length));
+  const size = Math.min(196, Math.floor(834 / (0.5 * longest)));
+  const greet = lines.map((l) => `<span class="gl">${words(l)}</span>`).join('');
+  // Greeting, rule and sign-off are one block, centered on the middle of the
+  // safe area (180 px top, 420 px bottom keep-out → y ≈ 840).
+  const greetH = size * lines.length;
+  const fromH = 170; // the sign-off wraps to at most two Caveat lines
+  const blockH = greetH + 50 + 5 + 45 + fromH;
+  const top = Math.max(300, Math.round(840 - blockH / 2));
+  subcomp(id, {
+    bg: C.lav,
+    css: `${mosaicCss(id)}
+.${id} .mark{position:absolute;left:410px;top:830px;width:260px;height:260px;border-radius:50%;background:${C.rose};color:#fff;display:flex;align-items:center;justify-content:center;font:500 148px "Newsreader"}
+.${id} .greet{position:absolute;left:96px;right:120px;top:${top}px;font:500 ${size}px/1 "Newsreader";letter-spacing:-.03em;color:${C.ink}}
+.${id} .gl{display:block}
+.${id} .rule{position:absolute;left:100px;top:${top + greetH + 50}px;width:150px;height:5px;border-radius:3px;background:${C.gold};transform-origin:left center}
+.${id} .from{position:absolute;left:96px;right:150px;top:${top + greetH + 50 + 5 + 45}px;font:700 74px/1.12 "Caveat";color:${C.rose}}
+/* The app's Wordmark (src/components/wordmark.tsx), small: Newsreader medium,
+   tight tracking, the period in the primary color. In the bottom-right
+   corner (60 px in): the card is watched on our own page via QR, so the
+   social apps' bottom safe zone does not apply (owner round 3). */
+.${id} .wm{position:absolute;right:60px;bottom:60px;font:500 46px/1 "Newsreader";letter-spacing:-.025em;color:${C.ink2};white-space:nowrap}
+.${id} .wm i{font-style:normal;color:${C.rose}}`,
+    html: `${mosaicHtml()}<div class="mark">m.</div><h1 class="greet">${greet}</h1><i class="rule"></i><p class="from">${esc(s.from ?? '')}</p><p class="wm">Momora<i>.</i></p>`,
+    js: `
+var B=${BEAT}, moves=${JSON.stringify(moves)}, tiles=q('.mosaic i');
+tl.fromTo(q('.mwrap'),{scale:1.08},{scale:1,duration:.9,ease:'power2.out'},0);
+moves.forEach(function(m,i){ tl.fromTo(tiles[i],{x:0,y:0,scale:1,opacity:1},{x:m[0],y:m[1],scale:.1,opacity:0,duration:.55,ease:'power3.in'},m[2]); });
+tl.fromTo(q('.mark'),{scale:0},{scale:1,duration:.6,ease:'back.out(1.8)'},1.05);
+tl.to(q('.mark'),{opacity:0,duration:.4,ease:'power2.in'},1.75);
+tl.fromTo(q('.gl .word'),{y:60,opacity:0},{y:0,opacity:1,duration:.7,ease:'power3.out',stagger:.14},2.0);
+tl.fromTo(q('.rule'),{scaleX:0},{scaleX:1,duration:.5,ease:'power2.inOut'},2.7);
+tl.fromTo(q('.from'),{y:24,opacity:0},{y:0,opacity:1,duration:.7,ease:'power2.out'},2.9);
+tl.fromTo(q('.wm'),{opacity:0},{opacity:.85,duration:.8,ease:'power1.out'},3.5);`,
   });
   return { beats: n, events: [], hideStrip: true };
 }
@@ -917,7 +1078,7 @@ for (const s of film.scenes) {
     case 'sound': r = sound(s, id); break;
     case 'firsts': r = firsts(s, id); break;
     case 'close': r = close(s, id); break;
-    case 'end_card': r = endCard(s, id); break;
+    case 'end_card': r = HOLIDAY && s.greeting ? holidayEndCard(s, id) : endCard(s, id); break;
     case 'title': r = title(s, id); break;
     case 'award': r = award(s, id); break;
     case 'chapter': r = chapter(s, id); break;
@@ -1027,7 +1188,12 @@ ${scenes.map((sc, k) => `  <div id="${sc.id}" class="clip" data-composition-id="
 
 fs.rmSync(path.join(PROJECT, 'compositions'), { recursive: true, force: true });
 fs.mkdirSync(path.join(PROJECT, 'compositions'), { recursive: true });
-for (const f of files) fs.writeFileSync(path.join(PROJECT, 'compositions', `${f.id}.html`), f.text);
+for (const f of files) {
+  // The holiday snow slices its fall from the scene's place on the film clock.
+  const sc = scenes.find((x) => x.id === f.id);
+  const text = sc ? f.text.replace('__SNOW_T0__', String(sc.start)).replace('__SNOW_D__', String(sc.dur)) : f.text;
+  fs.writeFileSync(path.join(PROJECT, 'compositions', `${f.id}.html`), text);
+}
 fs.writeFileSync(path.join(PROJECT, 'index.html'), indexHtml);
 // The render job (render/year-film-renderer/src/job.mjs) turns this into the
 // viewer's scenes.json and picks the poster frame from the close scene.

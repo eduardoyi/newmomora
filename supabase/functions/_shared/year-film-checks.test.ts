@@ -14,6 +14,20 @@ Deno.test('cache keys change with anything that could change the verdict', async
   assertEquals(k.startsWith('frame:'), true);
 });
 
+Deno.test('the strict public variant has its own cache key; normal keys are unchanged', async () => {
+  const base = { kind: 'frame' as const, model: 'gpt-6-luna', assetKey: 'u/memories/a.mp4', window: { start: 1, end: 3.5 }, referenceKeys: ['r1'] };
+  const normal = await checkCacheKey(base);
+  const strict = await checkCacheKey({ ...base, variant: 'public-v2' });
+  assertNotEquals(normal, strict); // a cached normal verdict is never reused as a strict one
+  // …nor one from the retired v1 public prompt (no beach exception): its keys are never produced again.
+  assertNotEquals(strict, await checkCacheKey({ ...base, variant: 'public' as never }));
+  assertEquals(strict, await checkCacheKey({ ...base, variant: 'public-v2' }));
+  assertNotEquals(await checkCacheKey({ ...base, kind: 'claim' }), await checkCacheKey({ ...base, kind: 'claim', variant: 'public-v2' }));
+  // Keys of every other film are byte-for-byte what they were before the variant existed.
+  assertEquals(normal, 'frame:c1b31cbae87fd2ea8522f318e46d69a9'); // computed with the pre-variant formula
+  assertEquals(normal, await checkCacheKey({ ...base, variant: undefined }));
+});
+
 Deno.test('splitBatch keeps positional results per item and records misses as null', () => {
   const check = { mainSubject: 'c1' } as FrameCheck;
   const cache = splitBatch('frame', ['a', 'b', 'c'], new Map([[0, check], [2, check]]));

@@ -82,6 +82,8 @@ supabase/scripts/eval-output/
 # The fabricated sample/ book (placeholder SVGs, no real memories) IS tracked --
 # it's the zero-real-data fixture the book-renderer preview + vitest tests need.
 book-renderer/book-data/*
+# Holiday card dogfood data (real family photos + letters), see docs/plans/holiday-cards.md
+book-renderer/card-data/
 !book-renderer/book-data/sample/
 !book-renderer/book-data/sample/**
 

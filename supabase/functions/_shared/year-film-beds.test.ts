@@ -5,8 +5,14 @@ const bedsJson = JSON.parse(
   await Deno.readTextFile(new URL('../../../film-renderer/composition/assets/audio/beds/beds.json', import.meta.url)),
 ) as { beds: { id: string; use: string[] }[] };
 const migration = await Deno.readTextFile(
-  new URL('../../migrations/20260929120000_year_films.sql', import.meta.url),
+  new URL('../../migrations/20261005120000_family_holiday_film_share.sql', import.meta.url),
 );
+
+// The holiday-card beds (winter-bells, fireside-piano) are in beds.json,
+// YEAR_FILM_BEDS and the SQL allow-list (20261005120000_family_holiday_film_share.sql).
+// The app manifest (src/utils/year-film-beds.ts) deliberately leaves them out:
+// holiday films are never edited in the app (see src/utils/year-film-beds.test.ts).
+const HOLIDAY_BEDS = ['winter-bells', 'fireside-piano'];
 
 Deno.test('beds mirror beds.json (ids and uses)', () => {
   const fromJson = bedsJson.beds.map((b) => ({ id: b.id, use: b.use })).sort((a, b) => a.id.localeCompare(b.id));
@@ -18,6 +24,14 @@ Deno.test('the SQL allow-list matches', () => {
   const block = migration.slice(start, migration.indexOf('$$;', start));
   const ids = [...block.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]);
   assertEquals(ids, YEAR_FILM_BEDS.map((b) => b.id));
+});
+
+Deno.test('the holiday beds are used only by the holiday film and are in the SQL allow-list', () => {
+  const block = migration.slice(migration.indexOf('create or replace function public.year_film_bed_ids()'));
+  for (const id of HOLIDAY_BEDS) {
+    assertEquals(bedsJson.beds.find((b) => b.id === id)?.use, ['family_holiday'], id);
+    assertEquals(block.includes(`'${id}'`), true, id);
+  }
 });
 
 // assemble.mjs's pickBed, copied as-is: the default must not drift from it.
@@ -33,7 +47,7 @@ function assemblePick(kind: string, slug: string, spanFrom: string): string {
 }
 
 Deno.test('defaultBed matches assemble.mjs for the same slugs', () => {
-  const cases: [('birthday' | 'family_month' | 'family_year'), string, string][] = [
+  const cases: [('birthday' | 'family_month' | 'family_year' | 'family_holiday'), string, string][] = [
     ['birthday', 'birthday-enzo-y4', '2025-10-23'],
     ['birthday', 'birthday-mara-y2', '2025-11-08'],
     ['birthday', '7f0c2b3e-1f11-4a2c-9a3e-3f0b1c2d4e5f', '2025-10-23'],
@@ -46,6 +60,10 @@ Deno.test('defaultBed matches assemble.mjs for the same slugs', () => {
   assertEquals(isYearFilmBed('polka'), false);
 });
 
-Deno.test('defaultBed: the holiday card film borrows a year-end family bed', () => {
-  assertEquals(defaultBed('family_holiday', 'holiday-2026', '2026-01-01'), assemblePick('family_year', 'holiday-2026', '2026-01-01'));
+Deno.test('defaultBed: the holiday card film uses its own holiday beds, same pick as assemble.mjs', () => {
+  for (const slug of ['holiday-2026', 'holiday-2026-sub30-seed1', '7f0c2b3e-1f11-4a2c-9a3e-3f0b1c2d4e5f']) {
+    const bed = defaultBed('family_holiday', slug, '2026-01-01');
+    assertEquals(bed, assemblePick('family_holiday', slug, '2026-01-01'));
+    assertEquals(HOLIDAY_BEDS.includes(bed), true);
+  }
 });

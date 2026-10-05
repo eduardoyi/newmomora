@@ -53,6 +53,20 @@
         "film-renderer"
       ],
       "port": 5189
+    },
+    {
+      "name": "card-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "vite",
+        "dev",
+        "--config",
+        "vite.card.config.ts",
+        "--port",
+        "5174"
+      ],
+      "cwd": "book-renderer",
+      "port": 5174
     }
   ]
 }

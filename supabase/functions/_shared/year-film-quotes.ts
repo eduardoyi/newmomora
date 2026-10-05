@@ -74,6 +74,9 @@ export function buildQuotePrompt(
 /** Picks the verbatim line of the year (owner, 2026-09-28: GPT-6 Sol). */
 export const QUOTE_MODEL = 'gpt-6-sol';
 
+/** The holiday card film's quote pick (owner, 2026-10-05): GPT-6.1 Sol. */
+export const HOLIDAY_QUOTE_MODEL = 'gpt-6.1-sol';
+
 export function buildQuoteRequestBody(system: string, user: string, model: string): Record<string, unknown> {
   return {
     model,

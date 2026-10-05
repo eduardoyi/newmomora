@@ -5,6 +5,7 @@ import {
   DETAIL_EXCERPT_CHARS,
   DETAILS_MODEL,
   type DetailExcerpt,
+  ownsDetail,
   parseDetails,
   selectDetailExcerpts,
 } from './holiday-card-details.ts';
@@ -114,4 +115,23 @@ Deno.test('digest: specifics ride on the child profile (memberId, counts, recurr
   assertEquals(digest.children.map((c) => c.memberId), [ENZO, MARA]);
   assertEquals(digest.children[0].specifics, [{ detail: 'Spider-Man', memories: 2, recurring: true }, { detail: 'el tren azul', memories: 1, recurring: false }]);
   assertEquals(digest.children[1].specifics, []);
+});
+
+Deno.test('v8: in a memory that tags both kids, a detail belongs to the child its sentence names (or "los dos")', () => {
+  const shared = { memoryId: 'm1', date: '2026-05-01', text: 'Lucía jugó con su avión imaginario. Tomás leía un cuento.', sharedWith: ['Tomás'] };
+  assert(ownsDetail(shared, 'avion imaginario', { name: 'Lucía' }));
+  assert(!ownsDetail({ ...shared, sharedWith: ['Lucía'] }, 'avion imaginario', { name: 'Tomás' }));
+  const both = { memoryId: 'm2', date: '2026-06-28', text: 'Fuimos al parque y los dos se disfrazaron de Spiderman', sharedWith: ['Lucía'] };
+  assert(ownsDetail(both, 'spiderman', { name: 'Tomás' }));
+  const solo = { memoryId: 'm3', date: '2026-07-01', text: 'Montó bicicleta sin rueditas' };
+  assert(ownsDetail(solo, 'bicicleta sin rueditas', { name: 'Tomás' }));
+  // parseDetails drops a detail no cited sentence gives this child.
+  const raw = JSON.stringify({ details: [{ detail: 'avión imaginario', memory_ids: [1], recurring: false }] });
+  assertEquals(parseDetails(raw, [{ ...shared, sharedWith: ['Lucía'] }], ['Tomás', 'Lucía'], { name: 'Tomás' }).reasons.unclear_owner, 1);
+});
+
+Deno.test('v9: a sentence naming both children (without "los dos") gives the detail to neither', () => {
+  const shared = { memoryId: 'm1', date: '2026-09-26', text: 'Tomás y Lucía jugaban con un avión imaginario en la sala.', sharedWith: ['Lucía'] };
+  assert(!ownsDetail(shared, 'avion imaginario', { name: 'Tomás' }));
+  assert(!ownsDetail({ ...shared, sharedWith: ['Tomás'] }, 'avion imaginario', { name: 'Lucía' }));
 });

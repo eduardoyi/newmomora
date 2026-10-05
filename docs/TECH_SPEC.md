@@ -977,7 +977,10 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 `film_ready`, backfill; see the P2 paragraph below) and
 `20260930150000_year_film_edit_options.sql` (edit sheet RPC + a
 `save_year_film_edits` fix) and `20260930180000_year_films_remaking_visibility.sql`
-(client SELECT policy: visible once ever ready).
+(client SELECT policy: visible once ever ready) and
+`20261005120000_family_holiday_film_share.sql` (kind `family_holiday`, the two
+holiday music beds, and `film_share_tokens` for the public film page; see
+"Table `film_share_tokens`" next to `media_share_tokens` below).
 
 **`year_films`** — one row per scheduled film key forever (unique
 `(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
@@ -985,7 +988,7 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 
 | Column | Notes |
 |---|---|
-| `kind` | `birthday` (needs `family_member_id` + `age_year` 1–12) · `family_month` · `family_year` |
+| `kind` | `birthday` (needs `family_member_id` + `age_year` 1–12) · `family_month` · `family_year` · `family_holiday` (the holiday-card film, docs/plans/holiday-cards.md; operator/on-demand rows only: always `forced`, never created or listed by `year_film_due` / `year_film_candidate_rows`, hidden from members by the `not forced` policy, never announced) |
 | `scope_start_date`, `scope_end_exclusive` | frozen at insert; same convention as the TS scopes |
 | `status` | `queued → curating → preparing → rendering → ready`; terminal `skipped`, `failed` |
 | `blocked` / `stale` | never serve the current video / a re-render is wanted (current video OK) |
@@ -994,7 +997,7 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 | `content_epoch`, `curated_epoch` | invalidation clock; publish requires them equal |
 | `attempt_id`, `attempt_count`, `next_attempt_at`, `heartbeat_at`, `render_slot_at`, `machine_ids`, `requeue_after`, `cleanup_needed`, `last_failure_code` | attempt state (service role only) |
 | `video_key`, `poster_key`, `scenes_key`, `duration_ms`, `surface_at`, `notified_at`, `ready_at` | output under `{ownerId}/year-films/{filmId}/{attemptId}/` (`film.mp4`, `poster.jpg`, `poster_thumb.jpg` — the list thumbnail, key derived from `poster_key` —, `scenes.json`) |
-| `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `scope_end_exclusive - 2` (the birthday), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday offset is coupled to `BIRTHDAY_FILM_DAYS_AFTER = 1` (pgTAP asserts every birthday film sits on the real birthday). |
+| `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `scope_end_exclusive - 2` (the birthday), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` and `family_holiday` (the `else` branch) → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday offset is coupled to `BIRTHDAY_FILM_DAYS_AFTER = 1` (pgTAP asserts every birthday film sits on the real birthday). |
 
 Client access: column-level `select` on safe columns only (never scripts,
 checks, quotes, keys or attempt fields); RLS ("Year films: select") = family
@@ -1026,7 +1029,7 @@ time too (`year_film_parent_blocked_users`); viewer blocks stay personal.
 
 **RPCs.** Client: `save_year_film_edits(film, edits)` (owner/manager +
 billing + anonymous guard; `removedMemoryIds` ⊆ referenced, quote ∈
-candidates, `musicBedId` ∈ `year_film_bed_ids()`; 5 edits/film/day, 20/family;
+candidates, `musicBedId` ∈ `year_film_bed_ids()` (12 beds: the ten family/birthday/monthly ones plus the holiday `winter-bells` and `fireside-piano`, added by `20261005120000`; the app picker omits the holiday beds); 5 edits/film/day, 20/family;
 removal blocks until re-render). Service role (scheduler): `year_film_due`,
 `year_film_due_families`, `year_film_promote_requeues`,
 `year_film_recheck_skipped`, `claim_year_film_dispatch`, `year_film_recover`,
@@ -2081,6 +2084,17 @@ The public `workers/memory-viewer` Worker uses the configured production custom 
 The selected asset is the first video, otherwise the first audio, otherwise the first photo by `memory_media.position`. `/m` and all byte routes must re-check the token; revoked tokens return 410 before an R2 read. HTML uses `Cache-Control: no-store`; media and poster bytes use `Cache-Control: private, no-store`. This stops fresh origin access after revocation, but does not retract Open Graph title, caption, or poster data that WhatsApp or another provider previously cached.
 
 The current model is **one active token per memory**, not per book. Exports reuse that active token, so revoking it disables every printed copy using it. A later export can mint a fresh token after revocation, but independently revocable book copies require a future schema/export change.
+
+
+**Table `film_share_tokens`** (migration `20261005120000_family_holiday_film_share.sql`, holiday cards C5): `token` (text PK, `check (token ~ '^[A-Za-z0-9]{22}$')`, application-generated like `media_share_tokens`), `film_id` (FK → `year_films`, cascade), `created_at`, `revoked_at` (null = active; partial unique index `film_share_tokens_active_film_key` = one active token per film). RLS: select-only for `authenticated` through `year_films` (the policy's join runs under the caller's own `year_films` RLS, so a member sees a token only for a film they can see; forced films, including every holiday film, keep their tokens service-role only), plus a restrictive anonymous-deny policy; grants mirror `media_share_tokens` (`revoke all` from `anon`/`authenticated`, `grant select` to `authenticated`); no client writes. Minted by service-role scripts / the future holiday-cards pipeline (`supabase/scripts/publish-holiday-film-sample.ts` for the owner's sample card). Family and account deletion cascade through `year_films` (no extra sweep, same as `media_share_tokens`).
+
+The same `workers/memory-viewer` Worker serves the **public film page**, resolving `film_share_tokens` → `year_films` with the service role on every request (details: `workers/memory-viewer/README.md` "Public film page"):
+
+- `GET /f/:token` — mobile-first 9:16 player page (tap-to-play with sound, poster, "Momora." wordmark), Spanish/English by `year_films.language`; `noindex`, `no-store`; Open Graph title from the film's end card (greeting + signature, which are printed on the card), image `/f/:token/poster`. 404 for an unknown/malformed token or a family pending deletion, 410 for a revoked token, 503 "being updated" page when the film is `blocked` or has no video.
+- `GET /f/:token/video` — the film's `video_key` from R2 with Range support (206), `private, no-store`.
+- `GET /f/:token/poster` — the film's `poster_key` JPEG (neutral Momora JPEG if the object is missing), `private, no-store`.
+
+The Worker reads `film_script` only for the last `end_card` scene's `greeting` and `from` strings; no memory text, object key, token or id reaches a response or log. A dogfood row (`publish-holiday-film-sample.ts`) lives outside the render pipeline (empty `referenced_*` arrays), so memory deletions/edits/reports do not invalidate it until P1 re-renders the card film under the same film id; block it by hand (`blocked = true`) or revoke the token.
 
 ---
 

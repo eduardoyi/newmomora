@@ -47,7 +47,7 @@ import { getTopicById } from './memory-topics.ts';
 import { type FilmLanguage, milestoneLabel, TOPIC_TITLES_ES, topicActivity, topicTitle } from './year-film-i18n.ts';
 import { familyDisplayName, SHARE_SENSITIVE_TEXT } from './year-film-script.ts';
 import type { DigestTheme, YearDigest } from './holiday-card-digest.ts';
-import { CLAIM_CHECK_MODEL } from './year-film-vision.ts';
+import { HOLIDAY_SOL_MODEL } from './holiday-card-photos.ts';
 import { characteristicWords, describeVoiceCard, sharedWordRun, type VoiceCard } from './holiday-card-voice.ts';
 
 /** The writer: GPT-6 Sol (owner, round 5), the same model as the film's
@@ -55,7 +55,7 @@ import { characteristicWords, describeVoiceCard, sharedWordRun, type VoiceCard }
  * new literal. Its request body is the quote pick's shape (`model`,
  * `response_format: json_object`, `messages`; no temperature or other
  * sampling parameters), so buildLetterRequestBody is valid as is. */
-export const LETTER_MODEL = CLAIM_CHECK_MODEL;
+export const LETTER_MODEL = HOLIDAY_SOL_MODEL;
 
 export const LETTER_TONES = ['classic', 'short', 'playful', 'reflective'] as const;
 export type LetterTone = (typeof LETTER_TONES)[number];
@@ -68,6 +68,48 @@ export const LETTER_MAX_CHARS: Readonly<Record<LetterTone, number>> = {
   reflective: 650,
 };
 export const QR_CAPTION_MAX_CHARS = 80;
+
+/** The card's greeting (front and back heading): the letter's closing wish
+ * must match it. Mirrors `book-renderer/src/card/greetings.ts`. */
+export const CARD_GREETINGS = ['christmas', 'holidays', 'new-year'] as const;
+export type CardGreeting = (typeof CARD_GREETINGS)[number];
+
+export function isCardGreeting(value: unknown): value is CardGreeting {
+  return typeof value === 'string' && (CARD_GREETINGS as readonly string[]).includes(value);
+}
+
+/** What the closing wish may and may not name, for the prompt (one line). */
+export function greetingWishNote(greeting: CardGreeting, language: FilmLanguage): string {
+  if (language === 'es') {
+    switch (greeting) {
+      case 'christmas':
+        return 'the card says "Feliz Navidad": the wish may speak of Navidad (or leave the occasion unnamed), never of Año Nuevo alone';
+      case 'holidays':
+        return 'the card says "Felices fiestas": the wish speaks of "las fiestas" or "estas fechas" and NEVER names Navidad, Nochebuena, Christmas or Año Nuevo';
+      case 'new-year':
+        return 'the card says "Feliz Año Nuevo": the wish looks ahead to the new year ("el año que empieza") and NEVER names Navidad, Nochebuena or Christmas';
+    }
+  }
+  switch (greeting) {
+    case 'christmas':
+      return 'the card says "Merry Christmas": the wish may speak of Christmas (or leave the occasion unnamed), never of the New Year alone';
+    case 'holidays':
+      return 'the card says "Happy Holidays": the wish speaks of "the holidays" or "this season" and NEVER names Christmas, Hanukkah or the New Year';
+    case 'new-year':
+      return 'the card says "Happy New Year": the wish looks ahead to the new year and NEVER names Christmas or the holidays';
+  }
+}
+
+/** Soft check: the wish names an occasion the card's greeting does not. */
+const CHRISTMAS_TEXT = /(?<!\p{L})(navidad(e[ñn]\p{L}*)?|nochebuena|christmas|xmas)(?!\p{L})/iu;
+const NEW_YEAR_TEXT = /(?<!\p{L})(a[ñn]o nuevo|new year)(?!\p{L})/iu;
+export function occasionMismatch(text: string, greeting: CardGreeting): string | null {
+  if (greeting === 'christmas') return NEW_YEAR_TEXT.test(text) && !CHRISTMAS_TEXT.test(text) ? 'new year' : null;
+  const christmas = CHRISTMAS_TEXT.exec(text);
+  if (christmas) return christmas[0];
+  if (greeting === 'holidays') return NEW_YEAR_TEXT.exec(text)?.[0] ?? null;
+  return null;
+}
 
 // ── Prompts ──────────────────────────────────────────────────────────────
 
@@ -89,6 +131,9 @@ export interface LetterOptions {
    * content: shown to the writer as quoted DATA, never as instructions. */
   guidance?: string | null;
   voice?: LetterVoice;
+  /** The card's greeting: the closing wish must match it. Omitted: the wish
+   * is free (the v5 behavior). */
+  greeting?: CardGreeting;
 }
 
 // ── Language from the family's setting ───────────────────────────────────
@@ -125,7 +170,7 @@ export function registerNote(language: FilmLanguage, locale: string | null | und
   const region = (locale ?? '').split('-')[1]?.toUpperCase() ?? '';
   if (language === 'es') {
     const notes: Record<string, string> = {
-      CO: 'Colombian Spanish: "ustedes" (never "vosotros"), the warm everyday register of Colombia, Colombian words where they come naturally; nothing Spain-only',
+      CO: 'Colombian Spanish: "ustedes" (never "vosotros"), the warm everyday register of Colombia ("un poquito", "montar en bici", "no hay quien la pare" are the kind of words), Colombian words where they come naturally; finished things of this year in the SIMPLE PAST ("fuimos", "cumplió", "estrenó"), never the Spain-style perfect ("hemos ido", "ha cumplido", "hemos pasado"); nothing Spain-only',
       MX: 'Mexican Spanish: "ustedes", Mexican everyday words where natural; nothing Spain-only',
       AR: 'Rioplatense Spanish (Argentina/Uruguay), "ustedes" for several people, everyday words of the region where natural',
       ES: 'Spanish from Spain, "vosotros" is fine for several people',
@@ -164,29 +209,35 @@ export function buildLetterSystemPrompt(options: LetterOptions): string {
     '',
     'WRITE LIKE THEM, in register and rhythm: you are these parents. Take from the STYLE CARD how they address people and how casual they are, the sentence rhythm and length, how they end a thought (a light remark), their punctuation habits and how they name the kids; take from the VOICE EXAMPLES the same, for style ONLY — never reuse their content, events or phrases. The voice is NOT vocabulary: do not sprinkle their catchphrases or in-jokes — at most ONE of the listed "words they use" in the whole letter, and only if it fits naturally in a letter to relatives; never a phrase that needs context; never a word from another language than the letter\'s. A caption opener ("Hoy…", "Today…") is not a letter opener: open with a greeting or a plain statement. The letter keeps its holiday shape and audience, so it is warmer and more complete than a caption. If they never use something (emojis, long sentences, sentimental talk), neither do you. The letter is plain text: no emoji ever.',
     '',
-    'THE GENRE: a plain opening line on the year; then, for each child, one or two sentences — name and one concrete thing about them (the age is optional); then the parents/family ONLY if the digest evidences it; then a warm wish that is not a cliché. Say it the way a parent talks.',
+    'THE GENRE — reverse-engineered from letters the owners approved (2026-10-05). Three short paragraphs:\n' +
+      '(1) GREETING + THE YEAR IN BROAD STROKES: a short greeting ("Queridos todos:" / "Dear family and friends,"), one plain sentence saying you want to tell them a little about your year ("Les queremos contar un poquito de cómo nos fue este año."), then ONE sentence that sums up the family\'s year with its recurring things (from FAMILY THEMES, PLACES and any named TRIP — a trip is named: "unos días de playa en Cartagena" — this is the one place where a list of 2–4 things is right: "Fue un año de mucho parque, de paseos y de salir a comer."), then a short BRIDGE to the kids that is warm but claims nothing specific ("Y en medio de todo eso, Tomás y Lucía siguen creciendo felices."). \n' +
+      '(2) THE KIDS: one or two sentences per child, each built on one or two concrete things from their profile, told with their small context so they never feel bolted on: the age they TURN this year when the profile says so ("Tomás cumplió cinco y…" — the card is read at Christmas, so a birthday before it is told as done, even if the journal has no birthday yet), a first with its month ("Lucía dio sus primeros pasos en enero"), a specific thing they do, the line of the year set in the moment it was said (use its MOMENT text: "Una noche, mirando la luna desde la ventana, se volteó y nos dijo: …"). Connect a child\'s two things naturally ("…y desde entonces no hay quien la pare" only if the profile supports it). \n' +
+      '(3) THE CLOSE: love and the wish, nothing else ("Los queremos mucho y les deseamos una feliz Navidad."). NEVER an invitation or a call to action: no "nos encantaría verlos", "ojalá podamos vernos", "cuéntennos", "let\'s catch up", "hope to see you" [code, soft]. \n' +
+      'EXAMPLE of the shape and register (a FICTIONAL family — never reuse its sentences, names or facts): "Queridos todos:\\n\\nLes queremos contar un poquito de cómo nos fue este año. Fue un año de mucho parque, de paseos y de unos días de playa. Y en medio de todo eso, Tomás y Lucía siguen creciendo felices.\\n\\nTomás cumplió cinco y ya se sabe todas las canciones del colegio. Una noche, mirando la luna desde la ventana, nos dijo: \\"mami, la luna nos está siguiendo\\". Lucía dio sus primeros pasos en marzo y desde entonces anda detrás de su hermano por toda la casa.\\n\\nLos queremos mucho y les deseamos una feliz Navidad." Say it the way these parents talk.',
     '',
     'RULES (checked by code where marked [code]; a letter that breaks a [code] rule is thrown away):',
     '1. FACTS ONLY FROM THE DIGEST. Every claim about a person, place or activity must come from the PROFILES, THEMES, PLACES, the optional DETAILS or the LINE OF THE YEAR. Never invent or embellish: no weather, no places, dates, gifts, trips or achievements the digest does not give, no "first time ever" unless a FIRST is listed, no feelings of a specific person beyond the MOODS shown. If the digest is thin, write less, not more. Write no dates.',
     '2. PEOPLE [code]: you may use ONLY the first names under PEOPLE (and the nicknames listed for a child, if the STYLE CARD says the parents use nicknames). Write no other personal name and NO surname or family name anywhere (the signature is added separately; never write it). Refer to anyone else only with a relationship word that appears in a DETAIL\'s "with" field, or say "family and friends". Never infer a relationship.',
     '3. AGES ARE OPTIONAL, and never a formula. If you give a child\'s age use "age this December" (the card is read in December) and no other number; but weave it in naturally ("Enzo, que llegó a los 4…", "now that Mara is two…") or leave it out. AT MOST ONE of the four variants may open a child\'s sentence with the age pattern ("X tiene N años y…", "X, con N años, …", "X, N, …"); the others must not. Vary the sentence shape per child and per variant (a short remark, a question, a scene, a plain statement). Use each child\'s gender for pronouns and agreement.',
     '3b. NATURAL SPEECH, NOT TAGS [code, soft]: the themes, labels and catalog names in the digest are internal tags — rephrase them the way a person talks. Never copy them ("jugar a imaginar", "caminar con confianza", "juego imaginario", "salidas en familia", "actividades al aire libre", "imaginative play", "family outings", "outdoor activities" are tag-speak); say what the child actually does ("disfrazarse e inventar historias", "dio sus primeros pasos").',
-    '4. CONCRETE, NOT ABSTRACT. Each child gets ONE plain, specific, true detail. Prefer, in this order: the REQUIRED LINE (below) if there is one, then a SPECIFIC thing from the parents\' own words ("specific things about them" — which costume, which game or book or place; pick the most vivid or the one that recurs), then a FIRST (given as a plain fact — say it in your own natural words, never "milestone"), then a recurring theme. REQUIRED LINE [code]: when the user message lists a REQUIRED LINE for a child, the "classic" AND the "playful" letters MUST quote it word for word, in quotation marks, as that child\'s one detail (the "short" and "reflective" letters may use it or not); at most ONE quote per letter. Said simply, the way a parent talks; plain words over pretty ones. Do not write about "how the year felt" in the abstract: at most ONE sentence of general reflection in the whole letter. If a child has nothing specific in the digest, name the plain theme ("he loves the park") rather than inventing one.',
+    '4. CONCRETE, NOT ABSTRACT. Each child gets one or two plain, specific, true things. Prefer, in this order: the REQUIRED LINE (below) if there is one, then a SPECIFIC thing from the parents\' own words ("specific things about them" — which costume, which game or book or place; pick the most vivid or the one that recurs), then a FIRST (given as a plain fact — say it in your own natural words, never "milestone"), then a recurring theme. REQUIRED LINE [code]: when the user message lists a REQUIRED LINE for a child, the "classic" AND the "playful" letters MUST quote it word for word, in quotation marks, as that child\'s main detail, set in its MOMENT when one is given (retell the moment in a few of your own words, never copy the parents\' sentence) (the "short" and "reflective" letters may use it or not); at most ONE quote per letter. Said simply, the way a parent talks; plain words over pretty ones. Do not write about "how the year felt" in the abstract: at most ONE sentence of general reflection in the whole letter (the FRAMING and LANDING sentences are about the relationship with the reader, not reflection, and do not count). If a child has nothing specific in the digest, name the plain theme ("he loves the park") rather than inventing one.',
     `5. NO ABSTRACT FILLER [code, soft]: never use words like ${ABSTRACT_FILLER_EXAMPLES.map((w) => `"${w}"`).join(', ')}, and no "the year felt wide/close/slow", "days that feel truly theirs", "the shape/texture/rhythm of our days". If a sentence could be about any family, rewrite it with the specific thing.`,
     '6. NO CLICHÉS [code, soft]: avoid "full of love/joy" ("lleno de"), "unforgettable moments" ("momentos inolvidables"), "so many memories", "hearts are full", "blessed", "magical", "the best year ever", "cherish", "treasure". Say the plain thing instead.',
-    '7. SPECIFICITY BUDGET: at most ONE concrete detail per child; prefer RECURRING patterns over one-off events; no trivia (food quirks, a single afternoon) unless it is a recurring trait; never enumerate more than TWO activities in one sentence (no "park, outings, meals out and the beach"); the family-level sentence is at most ONE and built around ONE specific thing; the optional DETAILS may feed AT MOST ONE detail in the whole letter, or none, and never as a "remember when" story. Excerpts under a child are for TONE ONLY: do not retell them.',
+    '7. SPECIFICITY BUDGET: one or two concrete things per child, told with their context; prefer RECURRING patterns and firsts over one-off events; no trivia (food quirks, a single afternoon) unless it is a recurring trait; the broad-strokes sentence of paragraph 1 is the ONLY place for a list of things (2–4) — nowhere else enumerate more than two [code, soft]; never a trailing "also we…" fact before the wish [code, soft]; the optional DETAILS may feed AT MOST ONE detail in the whole letter, or none, and never as a "remember when" story. Excerpts under a child are for TONE ONLY: do not retell them.',
     '7b. VARIETY [code, soft]: never repeat a word or phrase across sentences; never write "una y otra vez", "again and again", "over and over"; avoid "volvimos"/"otra vez"/"once again" and any "we kept going back to…" pattern. Vary how sentences start.',
     '8. NO COMPARISON [code]: never compare a child to other children or to norms; no "ahead", "behind", "advanced", "for his/her age", no milestone-chart language.',
     '9. NO HARD OR PRIVATE MATERIAL [code]: no health, illness, doctors, medicine, hospital, bath time, potty/diapers, tantrums, crying, worry, sadness, loss or conflict.',
     '10. NEVER MENTION [code] a film, a video, a movie, a QR code, scanning, or watching anything — not even lightly. Do not mention Momora, an app, AI, a journal or notes either, and never quote counts ("163 memories"); the YEAR IN NUMBERS are background only.',
     '11. FORMAT: plain text, short paragraphs separated by a blank line, no headline, no signature, no markdown, no emoji. At most two exclamation marks. You may open with a short greeting to everyone ("Dear family and friends," / "Queridos todos,").',
-    '11b. THE WISH [code, soft]: close with ONE short sentence of at most ~120 characters, plain and specific in tone — no stacked clauses ("con tiempo para conversar, reírse y…"), no list of things you wish them.',
+    `11b. THE CLOSE [code, soft]: love and the wish in ONE short sentence of at most ~120 characters ("Los queremos mucho y les deseamos una feliz Navidad." / "We love you all and wish you a merry Christmas.") — no stacked clauses, no list of things you wish them, no invitation to meet, call or catch up.${
+      options.greeting ? ` OCCASION [code, soft]: ${greetingWishNote(options.greeting, options.language)}.` : ''
+    }`,
     '',
     'FOUR VARIANTS that differ in SHAPE, not just tone (each a different letter — do not trim one to make another):',
-    `- "classic": the genre above in full — an opening line, then one or two sentences per child (every child, one concrete detail each), the family only if evidenced, then the wish. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.classic} (spaces included).`,
-    `- "short": two or three sentences — the wish, and one concrete sentence about the kids together. Target 200–260 characters; NEVER more than ${LETTER_MAX_CHARS.short}.`,
-    `- "playful": light humor drawn from RECURRING traits (what they are always into), affectionate teasing never at a child's expense, no invented anecdotes. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.playful}.`,
-    `- "reflective": what this year was about for the family, said with the specific things that filled it (named plainly from the themes and places), not in abstractions; the kids as supporting players. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.reflective}.`,
+    `- "classic": the three paragraphs above in full (every child named, each with one or two concrete things in context). Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.classic} (spaces included).`,
+    `- "short": a greeting, one broad-strokes sentence about the year, one sentence with one concrete thing per child, and the close. Target 200–260 characters; NEVER more than ${LETTER_MAX_CHARS.short}.`,
+    `- "playful": the same three paragraphs with light humor drawn from RECURRING traits (what they are always into) — affectionate, never at a child's expense, no invented anecdotes; the close stays love + wish. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.playful}.`,
+    `- "reflective": the same three paragraphs, with a little more room in paragraph 1 for what this year was about for the family (said with its specific things, not abstractions); the close stays love + wish. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.reflective}.`,
     'The limits are hard: the text must fit a printed card. Count carefully and leave a margin.',
     '',
     `QR CAPTION: when FILM is yes, also write "qr_caption" — the ONLY place that points to the film: one short, natural line of at most ${QR_CAPTION_MAX_CHARS} characters that invites the reader to scan and see the year, naming at most two real things from THEMES or PLACES, e.g. ${
@@ -218,6 +269,39 @@ function themeText(theme: DigestTheme, language: FilmLanguage, voice: 'third' | 
   const often = theme.lift >= 1.3 ? ` (about ${theme.lift.toFixed(1)}× the family's usual)` : '';
   const details = theme.details?.length ? ` — ${theme.details.map((d) => `${d.label} ×${d.memories}`).join(', ')}` : '';
   return `${phrase} ×${theme.memories}${often}${details}`;
+}
+
+/** Birthdays inside the card's year: the card is read around Christmas, so a
+ * birthday before ~Dec 20 is told as done ("cumplió cuatro"), even when the
+ * journal has no birthday memories yet (owner review v8: Enzo turns 4 on Oct
+ * 23, Mara 2 on Nov 8; the cards are made before that). */
+export function turningNote(name: string, age: number | null, birthday: string, lang: FilmLanguage): string {
+  const month = MONTH_NAMES[lang][Number(birthday.slice(5, 7)) - 1];
+  const day = Number(birthday.slice(8, 10));
+  const done = birthday.slice(5) <= '12-20';
+  return done
+    ? `TURNS ${age} on ${month} ${day}, before the card is read — say it as done ("${lang === 'es' ? `${name} cumplió ${age}` : `${name} turned ${age}`}"); turning ${age} is a natural detail for the classic letter`
+    : `turns ${age} on ${month} ${day}, after the card is read ("${lang === 'es' ? `está por cumplir ${age}` : `about to turn ${age}`}")`;
+}
+
+/** The child's strongest letter details, in order: the age they turn, a
+ * first, their line of the year, a recurring specific from the parents' own
+ * words, a distinctive recurring thing in their photos (glasses, a costume).
+ * Code picks the order so every run starts from the same strong material
+ * (owner review v8: Mara's new glasses never made it in). */
+export function bestDetails(c: YearDigest['children'][number], lang: FilmLanguage): string[] {
+  const out: string[] = [];
+  if (c.birthdayThisYear && c.ageThisYear !== null) out.push(`turns ${c.ageThisYear} this year (see the age line)`);
+  for (const f of c.firsts.slice(0, 1)) out.push(`first: ${plainFirst(c.name, c.gender, f.milestoneId, f.label, lang)} (${MONTH_NAMES[lang][f.month - 1]})`);
+  if (c.line) out.push(`their line of the year, in its MOMENT`);
+  const specific = c.specifics.find((d) => d.recurring) ?? c.specifics[0];
+  if (specific) out.push(`${specific.detail}${specific.recurring ? ` (comes up in ${specific.memories} moments)` : ''}`);
+  // Skip labels that only restate a recurring theme ("playground" for
+  // park-playground): the distinctive one (glasses) is the point.
+  const themeWords = new Set(c.recurring.flatMap((t) => t.topicId.split('-')));
+  const label = c.details.find((d) => d.memories >= 4 && !d.label.split(/\s+/).some((w) => themeWords.has(w)));
+  if (label) out.push(`${label.label} (in ${label.memories} of their photos — say it naturally, e.g. "con sus lentes nuevos")`);
+  return out.slice(0, 4);
 }
 
 export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions): string {
@@ -262,18 +346,23 @@ export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions
   lines.push('');
   lines.push('CHILDREN (who each one is right now):');
   for (const c of digest.children) {
-    lines.push(`- ${c.name} — age this December: ${c.ageThisYear ?? 'unknown'}${c.birthdayThisYear ? ' (has a birthday this year)' : ''}${c.gender ? `; gender: ${c.gender}` : ''}${c.nicknames.length ? `; nicknames on file: ${c.nicknames.join(', ')}` : ''}; appears in ${c.memories} of the year's moments`);
+    lines.push(`- ${c.name} — age this December: ${c.ageThisYear ?? 'unknown'}${c.birthdayThisYear ? `; ${turningNote(c.name, c.ageThisYear, c.birthdayThisYear, lang)}` : ''}${c.gender ? `; gender: ${c.gender}` : ''}${c.nicknames.length ? `; nicknames on file: ${c.nicknames.join(', ')}` : ''}; appears in ${c.memories} of the year's moments`);
     if (c.firsts.length) {
       lines.push(`    FIRST this year (certain; a plain fact — say it in your own natural words): ${c.firsts.map((f) => `${plainFirst(c.name, c.gender, f.milestoneId, f.label, lang)} (${MONTH_NAMES[lang][f.month - 1]})`).join('; ')}`);
+    }
+    const best = bestDetails(c, lang);
+    if (best.length) {
+      lines.push(`    BEST DETAILS for ${c.name} (strongest first — the "classic" letter uses TWO of them, joined naturally in one or two sentences, e.g. "${lang === 'es' ? 'Tomás cumplió cinco y ya se sabe todas las canciones del colegio' : 'Tomás turned five and knows every song from school'}"; never a lone "${c.name} cumplió N." sentence): ${best.map((b, i) => `${i + 1}) ${b}`).join(' ')}`);
     }
     lines.push(`    specific things about ${c.name}, from the parents' own words (pick the ONE most vivid or recurring; a detail may come from here): ${
       c.specifics.length ? c.specifics.map((d) => `${d.detail}${d.recurring ? ` (comes up in ${d.memories} moments)` : ''}`).join('; ') : '(none extracted)'
     }`);
     lines.push(`    keeps coming back to (internal tags — rephrase in natural speech): ${c.recurring.length ? c.recurring.map((t) => themeText(t, lang, 'third')).join('; ') : '(no clear pattern)'}`);
-    lines.push(`    weaker, generic labels (fallback only): ${c.details.length ? c.details.map((d) => `${d.label} ×${d.memories}`).join(', ') : '(none)'}`);
+    lines.push(`    things that recur in their photos (a distinctive one — glasses, a costume, a toy — can be a detail; skip generic ones): ${c.details.length ? c.details.map((d) => `${d.label} ×${d.memories}`).join(', ') : '(none)'}`);
     lines.push(`    usual mood: ${c.emotions.length ? c.emotions.map((e) => `${e.emotion} ${Math.round(e.share * 100)}%`).join(', ') : '(unclear)'}`);
     if (c.line && lang === digest.language) {
-      lines.push(`    REQUIRED LINE — the "classic" and "playful" letters MUST quote this word for word, in quotation marks, as ${c.name}'s one detail: "${c.line.quote}"`);
+      lines.push(`    REQUIRED LINE — the "classic" and "playful" letters MUST quote this word for word, in quotation marks, as ${c.name}'s main detail: "${c.line.quote}"`);
+      if (c.line.context) lines.push(`    its MOMENT (the parents' words just before it — set the quote in this scene, in your own words): "${c.line.context}"`);
     }
     if (c.excerpts.length) {
       lines.push('    tone only — the parents\' words, NOT events to retell:');
@@ -288,6 +377,9 @@ export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions
   lines.push('');
   lines.push(`FAMILY THEMES (what sets this year apart): ${digest.familyThemes.length ? digest.familyThemes.map((t) => themeText(t, lang, 'family')).join('; ') : '(none stands out)'}`);
   lines.push(`PLACES THAT RECUR: ${digest.places.length ? digest.places.map((t) => themeText(t, lang, 'family')).join('; ') : '(none)'}`);
+  lines.push(`TRIPS (named places from the parents' own labels — a trip belongs in the broad-strokes sentence, by name): ${
+    digest.trips?.length ? digest.trips.map((t) => `${t.place} (${MONTH_NAMES[lang][t.month - 1]}, ${t.days} day${t.days === 1 ? '' : 's'}, ${t.memories} moments)`).join('; ') : '(none)'
+  }`);
   const c = digest.counts;
   lines.push(`YEAR IN NUMBERS (background only, never quote): ${c.moments} moments over ${c.months} months, ${c.outings} outings.`);
   if (digest.highlights.length) {
@@ -406,6 +498,10 @@ export type LetterFlagCode =
   | 'label_calque'
   | 'formulaic_age'
   | 'long_closer'
+  | 'trailing_filler'
+  | 'invitation'
+  | 'spain_perfect'
+  | 'occasion_mismatch'
   | 'copied_voice_example'
   | 'age_mismatch'
   | 'child_missing'
@@ -558,6 +654,13 @@ function isActivityList(match: string): boolean {
   return items.length >= 3 && items.filter((i) => ACTIVITY_ITEM.test(i)).length >= 2;
 }
 
+/** Invitations / calls to action the close must not carry (es + en). */
+const INVITATION_TEXT =
+  /(nos (encantar[ií]a|gustar[ií]a) (verl[oe]s|saber)|ojal[aá] (podamos )?(vernos|verl[oe]s|nos veamos)|vernos pronto|cu[eé]ntennos|ponernos al d[ií]a|hope to see you|let'?s catch up|catch up soon|see you soon|would love to hear)/iu;
+
+/** Spain-style present perfect for finished things ("hemos ido", "ha cumplido"). */
+const SPAIN_PERFECT_TEXT = /(?<!\p{L})(hemos|han|ha|he|has)\s+\p{L}*(ado|ido|to|cho|sto)(?!\p{L})/iu;
+
 const FILLER_REPEATS = /(una y otra vez|again and again|over and over)/iu;
 const STOP_WORDS = new Set([
   'el', 'la', 'los', 'las', 'de', 'del', 'que', 'y', 'en', 'un', 'una', 'con', 'por', 'para', 'nos', 'es', 'al', 'se', 'su', 'sus', 'lo',
@@ -597,6 +700,8 @@ export function checkLetterText(
   digest: YearDigest,
   language: FilmLanguage,
   voice?: LetterVoice,
+  greeting?: CardGreeting,
+  locale?: string | null,
 ): LetterFlag[] {
   const flags: LetterFlag[] = [];
   const trimmed = text.trim();
@@ -657,7 +762,8 @@ export function checkLetterText(
   const rep = repeatedPhrases(unquoted);
   if (rep.length) flags.push({ code: 'repetition', detail: rep.join(', ') });
   const enumerations = [...unquoted.matchAll(ENUMERATION_TEXT)].map((m) => m[0].trim()).filter(isActivityList);
-  if (enumerations.length) flags.push({ code: 'enumeration', detail: enumerations[0] });
+  // One list is right (the year in broad strokes, paragraph 1); a second is not.
+  if (enumerations.length > 1) flags.push({ code: 'enumeration', detail: enumerations[1] });
   const quotes = [...trimmed.matchAll(/[“"«][^”"»]{3,120}[”"»]/gu)];
   if (quotes.length > 1) flags.push({ code: 'many_quotes', detail: `${quotes.length}` });
   // REQUIRED: a child's verified line of the year must be quoted verbatim in
@@ -675,6 +781,26 @@ export function checkLetterText(
   const closer = sentences.at(-1) ?? '';
   if (Array.from(closer).length > CLOSER_MAX_CHARS || (closer.split(',').length > 3 && Array.from(closer).length > 80)) {
     flags.push({ code: 'long_closer', detail: `${Array.from(closer).length} chars` });
+  }
+  // No add-on fact right before the wish ("También salimos a comer…"):
+  // the letter lands on the reader, not on a leftover activity (owner, v6).
+  const beforeWish = sentences.at(-2) ?? '';
+  if (/^(tambi[eé]n|adem[aá]s|also|we also|plus)\b/iu.test(beforeWish.trim())) {
+    flags.push({ code: 'trailing_filler', detail: beforeWish.trim().split(/\s+/u).slice(0, 3).join(' ') });
+  }
+  // The close is love + the wish, never an invitation (owner + Adriana, v7).
+  const invite = INVITATION_TEXT.exec(unquoted);
+  if (invite) flags.push({ code: 'invitation', detail: invite[0] });
+  // Latin-American Spanish tells this year's finished things in the simple
+  // past; "hemos ido / ha cumplido" reads as Spain (Adriana, v7).
+  if (language === 'es' && locale && !/-ES$/iu.test(locale)) {
+    const perfect = SPAIN_PERFECT_TEXT.exec(unquoted);
+    if (perfect) flags.push({ code: 'spain_perfect', detail: perfect[0] });
+  }
+  // The wish follows the card's greeting.
+  if (greeting) {
+    const mismatch = occasionMismatch(trimmed, greeting);
+    if (mismatch) flags.push({ code: 'occasion_mismatch', detail: mismatch });
   }
   // Ages: only the ones the digest gives.
   const allowed = new Set(digest.children.flatMap((c) => [c.ageYears, c.ageThisYear]).filter((n): n is number => n !== null));
@@ -740,6 +866,11 @@ function isTone(value: unknown): value is LetterTone {
 }
 
 /** Parses and validates the model's JSON. Never throws on model output. */
+/** A letter's greeting sits on its own line ("Queridos todos:\n\nLes…"). */
+export function greetingOnItsOwnLine(text: string): string {
+  return text.replace(/^((?:queridos?|queridas?|dear|hola|hi)\b[^\n.!?]{0,40}?[:,])(?:[ \t]+|[ \t]*\n(?!\n))(?=\p{Lu})/iu, '$1\n\n');
+}
+
 export function parseLetterResponse(raw: string, digest: YearDigest, options: LetterOptions): LetterResult {
   const result: LetterResult = {
     language: options.language,
@@ -766,7 +897,7 @@ export function parseLetterResponse(raw: string, digest: YearDigest, options: Le
   const seen = new Set<LetterTone>();
   for (const item of list) {
     const tone = isTone(item?.tone) ? item.tone : null;
-    const text = typeof item?.text === 'string' ? item.text.trim() : '';
+    const text = typeof item?.text === 'string' ? greetingOnItsOwnLine(item.text.trim()) : '';
     if (!tone || typeof item?.text !== 'string') {
       result.rejected.push({ tone: typeof item?.tone === 'string' ? item.tone : null, text, flags: [{ code: 'bad_shape' }] });
       continue;
@@ -776,7 +907,7 @@ export function parseLetterResponse(raw: string, digest: YearDigest, options: Le
       continue;
     }
     seen.add(tone);
-    const flags = checkLetterText(text, tone, digest, options.language, options.voice);
+    const flags = checkLetterText(text, tone, digest, options.language, options.voice, options.greeting, options.locale);
     if (flags.some(isHardFlag)) result.rejected.push({ tone, text, flags });
     else result.variants.push({ tone, text, chars: Array.from(text).length, flags });
   }

@@ -35,6 +35,7 @@
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import type { FilmScene, FilmScript, FrameRef } from '../functions/_shared/year-film-script.ts';
+import { isPublicFilm, pruneUnpreparedScenes, stillKey, type Usage, uses as sharedUses } from '../functions/_shared/year-film-assets.ts';
 import {
   BURST_CLIP_SECONDS,
   parseRmsLevels,
@@ -242,60 +243,10 @@ async function voiceCheck(src: string, w: Window): Promise<VoiceCheck | null> {
 
 // ── Scene walk ───────────────────────────────────────────────────────────
 
-type Usage = 'still' | 'burst' | 'verified' | 'voice';
-
-interface Use {
-  frame: FrameRef;
-  usage: Usage;
-  /** Shown in the film's dense/visual parts → frame-checked. */
-  checked: boolean;
-}
-
-/** Every frame with what it's used for. End cards and title cards are
- * small tiles → stills (video posters). */
-function uses(scene: FilmScene): Use[] {
-  const as = (frames: FrameRef[], usage: Usage, checked: boolean) => frames.map((frame) => ({ frame, usage, checked }));
-  const motion = (f: FrameRef, verified: boolean, checked: boolean): Use => ({
-    frame: f,
-    usage: f.kind === 'video' ? (verified ? 'verified' : 'burst') : 'still',
-    checked,
-  });
-  switch (scene.type) {
-    case 'cold_open':
-      return as([...(scene.from ? [scene.from] : []), scene.to], 'still', false);
-    case 'title':
-      return as(scene.cards, 'still', true);
-    case 'end_card':
-      return as(scene.grid, 'still', true);
-    case 'burst':
-      return scene.frames.map((f) => motion(f, false, true));
-    case 'sound':
-      return [{ frame: scene.frame, usage: 'voice', checked: false }];
-    case 'line':
-      return scene.frame ? [motion(scene.frame, false, false)] : [];
-    case 'starring':
-      return [
-        ...as(scene.people.map((p) => p.portrait), 'still', false),
-        ...as(scene.people.flatMap((p) => p.moments ?? []), 'still', false), // reveal cards
-        ...as((scene.together ?? []).map((t) => t.portrait), 'still', false), // the group shot
-      ];
-    case 'award':
-      return [motion(scene.frame, true, false)]; // verified in F1
-    case 'close':
-      return scene.frames.map((f) => motion(f, scene.source === 'then_now', scene.source === 'celebration'));
-    case 'counters':
-      return as(scene.backdrop ?? [], 'still', false); // muted mosaic tiles
-    case 'firsts':
-      return scene.items.flatMap((item) => (item.frame ? [motion(item.frame, false, false)] : [])); // the milestone's card
-    case 'chapter': // verified in F1; shown as cards
-      return [...as(scene.portrait ? [scene.portrait] : [], 'still', false), ...as(scene.frames, 'still', false)];
-  }
-}
-
-function stillKey(frame: FrameRef, usage: Usage): string {
-  // Tiles of videos show the poster; everything else the original.
-  return usage === 'still' && frame.kind === 'video' && frame.previewKey ? frame.previewKey : frame.key;
-}
+/** The shared mapping (year-film-assets.ts); a public film (holiday card)
+ * checks every frame, not just the dense parts. */
+const uses = sharedUses;
+const isDrawing = (frame: FrameRef) => frame.kind === 'illustration' || frame.kind === 'portrait';
 
 // ── Per-film preparation ─────────────────────────────────────────────────
 
@@ -308,7 +259,7 @@ interface Prepared {
   trim?: Window & { score?: number; voicedSeconds?: number; coverage?: number };
   alternatives?: Window[];
   voice?: VoiceCheck | null;
-  voiceTries?: { window: Window; voice: VoiceCheck | null }[];
+  voiceTries?: { window: Window; voice: VoiceCheck | null; frame?: string }[];
   warnings: string[];
 }
 
@@ -341,7 +292,10 @@ for (const slug of slugs) {
   const at = (file: string) => new URL(file, filmDir).pathname;
 
   const soundScene = film.scenes.find((s): s is Extract<FilmScene, { type: 'sound' }> => s.type === 'sound');
-  const allUses = film.scenes.flatMap(uses);
+  // The holiday card film is watched by anyone who scans the card: every frame
+  // goes through the strict public-audience check (owner, 2026-10-05).
+  const strict = isPublicFilm(film);
+  const allUses = film.scenes.flatMap((scene) => uses(scene, strict));
   const local = await ensureDownloaded([
     ...allUses.map((u) => stillKey(u.frame, u.usage)),
     ...allUses.flatMap((u) => (u.frame.pairKey ? [u.frame.pairKey] : [])),
@@ -390,8 +344,18 @@ for (const slug of slugs) {
       }
       result.voiceTries = [];
       for (const window of windows) {
-        const voice = await voiceCheck(src, window);
-        result.voiceTries.push({ window, voice });
+        let voice = await voiceCheck(src, window);
+        let frameNote: string | undefined;
+        // A public film shows a video sound clip on screen: its frame must pass
+        // the strict check too (no verdict = fail closed), else the next window.
+        if (strict && frame.kind === 'video' && info?.hasVideo && (voice === null || isVoiceVerified(voice))) {
+          const [check] = visionOn ? await checkImages([await visionImage(src, (window.start + window.end) / 2)]) : [undefined];
+          frameNote = describeCheck(check, nameById);
+          if (burstFrameVerdict(check, null, new Set(), undefined, { publicAudience: true }) === 'remove') {
+            voice = { childVoice: 'none', adultDominant: false, startsCleanly: false, heard: `frame check removed this window (${frameNote})` };
+          }
+        }
+        result.voiceTries.push({ window, voice, ...(frameNote ? { frame: frameNote } : {}) });
         result.trim = window;
         result.voice = voice;
         if (voice === null || isVoiceVerified(voice)) break;
@@ -425,6 +389,50 @@ for (const slug of slugs) {
   const passesVoice = (p: Prepared | undefined, source: 'audio' | 'video') =>
     !!p?.file && (source === 'audio' ? p.voice == null || isVoiceVerified(p.voice) : isVoiceVerified(p.voice ?? null));
 
+  // Frame-check setup (hoisted: a public film also checks the frames of its
+  // video sound windows while the sound is chosen).
+  const removals: Removal[] = [];
+  let checkedCount = 0;
+  const subjects = film.subjects ?? [];
+  // All own children, so a sibling-led frame is recognizable (F2 round 2).
+  const people = film.references?.length ? film.references : subjects;
+  const ownChildIds = new Set(people.map((p) => p.id));
+  const requiredChild = film.kind === 'birthday' ? subjects[0]?.id ?? null : null;
+  const visionOn = frameChecks && people.length > 0;
+  const references: (VisionImage & { name: string })[] = visionOn
+    ? (await Promise.all(people.map(async (s) => {
+      const src = s.referenceKey ? local.get(s.referenceKey) : undefined;
+      const image = src ? await visionImage(src, null) : null;
+      return image ? { ...image, name: s.name } : null;
+    }))).filter((r): r is VisionImage & { name: string } => !!r)
+    : [];
+  const refNames = references.map((r) => r.name);
+  const idByName = new Map(people.map((s) => [s.name.toLowerCase(), s.id]));
+  const nameById = new Map(people.map((s) => [s.id, s.name]));
+  const visionOptions = { publicAudience: strict };
+
+  const checkImages = async (images: (VisionImage | null)[]): Promise<(FrameCheck | undefined)[]> => {
+    const out: (FrameCheck | undefined)[] = [];
+    for (let i = 0; i < images.length; i += FRAME_CHECK_BATCH) {
+      const batch = images.slice(i, i + FRAME_CHECK_BATCH);
+      const sendable = batch.filter((x): x is VisionImage => !!x);
+      const raw = references.length > 0 && sendable.length > 0
+        ? await chat(buildFrameCheckRequestBody(refNames, references, sendable, VISION_MODEL, visionOptions))
+        : null;
+      const parsed = raw ? parseFrameCheckResponse(raw, sendable.length, idByName, visionOptions) : new Map();
+      let k = 0;
+      for (const image of batch) out.push(image ? parsed.get(k++) : undefined);
+    }
+    return out;
+  };
+  const checkFiles = async (items: { file: string; clip: Prepared | null }[]): Promise<(FrameCheck | undefined)[]> =>
+    checkImages(await Promise.all(items.map(({ file, clip }) => visionImage(at(file), clip?.trim ? (clip.trim.end - clip.trim.start) / 2 : null))));
+  const verdictOf = (check: FrameCheck | undefined, tags?: string[]) =>
+    // The holiday card film is public: no verdict means the frame goes, and so
+    // does anything the strict prompt flags (bare torso, diaper, bath…).
+    burstFrameVerdict(check, requiredChild, ownChildIds, tags, { failClosed: strict, publicAudience: strict });
+  let strictOnlyFiles = new Set<string>();
+
   // 1. Voice: the first candidate clip (and window) that passes wins.
   let soundNote = '';
   if (soundScene) {
@@ -437,6 +445,9 @@ for (const slug of slugs) {
     }
     if (chosen && chosen !== soundScene.frame) {
       soundNote = `primary sound failed the voice check → alternate ${chosen.memoryId}`;
+      // The alternate's own caption goes with its audio (never the primary's).
+      const at = soundScene.alternates.indexOf(chosen);
+      soundScene.caption = soundScene.alternateCaptions?.[at] ?? null;
       soundScene.frame = chosen;
     } else if (!chosen) soundNote = 'no candidate passed the voice check → scene would drop';
     const p = prepared.get(`voice:${soundScene.frame.key}`);
@@ -447,7 +458,7 @@ for (const slug of slugs) {
   // 2. Everything else, annotated in place.
   for (const scene of film.scenes) {
     if (scene.type === 'sound') continue;
-    for (const use of uses(scene)) {
+    for (const use of uses(scene, strict)) {
       const p = await prepare(use.frame, use.usage);
       Object.assign(use.frame, { file: p.file, usage: use.usage, trim: p.trim ?? null, source: p.source });
       if (use.frame.pairKey) Object.assign(use.frame, { pairFile: (await prepare(use.frame, 'still', 'pair_photo')).file });
@@ -455,50 +466,25 @@ for (const slug of slugs) {
   }
 
   // 3. Frame check on what the film will actually show.
-  const removals: Removal[] = [];
-  let checkedCount = 0;
-  const subjects = film.subjects ?? [];
-  // All own children, so a sibling-led frame is recognizable (F2 round 2).
-  const people = film.references?.length ? film.references : subjects;
-  const ownChildIds = new Set(people.map((p) => p.id));
-  const requiredChild = film.kind === 'birthday' ? subjects[0]?.id ?? null : null;
-  if (frameChecks && people.length > 0) {
-    const references = (await Promise.all(people.map(async (s) => {
-      const src = s.referenceKey ? local.get(s.referenceKey) : undefined;
-      const image = src ? await visionImage(src, null) : null;
-      return image ? { ...image, name: s.name } : null;
-    }))).filter((r): r is VisionImage & { name: string } => !!r);
-    const names = references.map((r) => r.name);
-    const idByName = new Map(people.map((s) => [s.name.toLowerCase(), s.id]));
-    const nameById = new Map(people.map((s) => [s.id, s.name]));
-
-    const checkFiles = async (items: { file: string; clip: Prepared | null }[]): Promise<(FrameCheck | undefined)[]> => {
-      const out: (FrameCheck | undefined)[] = [];
-      for (let i = 0; i < items.length; i += FRAME_CHECK_BATCH) {
-        const batch = items.slice(i, i + FRAME_CHECK_BATCH);
-        const images = await Promise.all(batch.map(({ file, clip }) =>
-          visionImage(at(file), clip?.trim ? (clip.trim.end - clip.trim.start) / 2 : null)
-        ));
-        const sendable = batch.map((_, j) => images[j]).filter((x): x is VisionImage => !!x);
-        const raw = references.length > 0 && sendable.length > 0
-          ? await chat(buildFrameCheckRequestBody(names, references, sendable, VISION_MODEL))
-          : null;
-        const parsed = raw ? parseFrameCheckResponse(raw, sendable.length, idByName) : new Map();
-        let k = 0;
-        for (let j = 0; j < batch.length; j += 1) out.push(images[j] ? parsed.get(k++) : undefined);
-      }
-      return out;
-    };
-
+  if (visionOn) {
     // Each distinct prepared asset is checked once, then retried for clips.
-    const targets = new Map<string, { p: Prepared; frames: { scene: FilmScene; frame: AnnotatedFrame }[] }>();
+    const targets = new Map<string, { p: Prepared; frames: { scene: FilmScene; frame: AnnotatedFrame; pair?: boolean }[] }>();
     for (const scene of film.scenes) {
-      for (const use of uses(scene)) {
+      for (const use of uses(scene, strict)) {
+        // A public film also checks the real photo behind a portrait's reveal.
+        if (strict && use.frame.pairKey) {
+          const pp = prepared.get(`still:${use.frame.pairKey}`);
+          if (pp?.file) {
+            const entry = targets.get(pp.file) ?? { p: pp, frames: [] };
+            entry.frames.push({ scene, frame: use.frame as AnnotatedFrame, pair: true });
+            targets.set(pp.file, entry);
+          }
+        }
         if (!use.checked) continue;
         // Drawings are made from the memory's tagged people, so they carry
         // the tags' assurance; vision can't match a drawn face to a photo
         // (F2 round 2: 20 of 30 removals were drawings).
-        if (use.frame.kind === 'illustration') {
+        if (isDrawing(use.frame)) {
           (use.frame as AnnotatedFrame).frameCheck = 'drawing — not checked';
           continue;
         }
@@ -512,14 +498,18 @@ for (const slug of slugs) {
     const list = [...targets.values()];
     const verdicts = await checkFiles(list.map(({ p }) => ({ file: p.file!, clip: p.usage === 'still' ? null : p })));
     checkedCount = list.length;
-    const verdictOf = (check: FrameCheck | undefined, tags?: string[]) =>
-      // The holiday card film is public: no verdict means the frame goes.
-      burstFrameVerdict(check, requiredChild, ownChildIds, tags, { failClosed: film.kind === 'family_holiday' });
     const tagsOf = (t: (typeof list)[number]) => t.frames[0]?.frame.tags;
+    const strictOnly = new Set<string>();
+    strictOnlyFiles = strictOnly;
     const flagged: { t: (typeof list)[number]; verdict: ReturnType<typeof verdictOf> }[] = [];
     list.forEach((t, i) => {
       const verdict = verdictOf(verdicts[i], tagsOf(t));
-      for (const f of t.frames) f.frame.frameCheck = describeCheck(verdicts[i], nameById);
+      for (const f of t.frames) if (!f.pair) f.frame.frameCheck = describeCheck(verdicts[i], nameById);
+      if (strict) {
+        // What the strict public rule removed that round 1's rules would have kept.
+        const before = burstFrameVerdict(verdicts[i], requiredChild, ownChildIds, tagsOf(t), { failClosed: true });
+        if (verdict === 'remove' && before !== 'remove') strictOnly.add(t.p.file!);
+      }
       if (verdict !== 'keep') flagged.push({ t, verdict });
     });
 
@@ -547,7 +537,13 @@ for (const slug of slugs) {
         continue;
       }
       for (const f of t.frames) {
-        removals.push({ scene: f.scene.type === 'burst' ? `burst/${f.scene.role}` : f.scene.type, file: t.p.file, reason: f.frame.frameCheck ?? 'no verdict' });
+        removals.push({ scene: f.pair ? `${f.scene.type}/portrait photo` : f.scene.type === 'burst' ? `burst/${f.scene.role}` : f.scene.type, file: t.p.file, reason: f.pair ? 'portrait photo removed by the strict check' : f.frame.frameCheck ?? 'no verdict' });
+        if (strict) {
+          // Public film: the frame loses its file wherever it is used; the
+          // prune below drops the frame or the scene that needs it.
+          Object.assign(f.frame, f.pair ? { pairFile: null } : { file: null });
+          continue;
+        }
         const drop = (frames: FrameRef[]) => frames.filter((x) => x !== f.frame);
         if (f.scene.type === 'burst') f.scene.frames = drop(f.scene.frames);
         if (f.scene.type === 'title') f.scene.cards = drop(f.scene.cards);
@@ -557,17 +553,27 @@ for (const slug of slugs) {
     }
   }
 
+  if (strict) {
+    // The same pass the production applyPrepared runs: frames without a file
+    // go, and scenes left without what they need (no sound candidate passed
+    // the voice and frame checks, an empty close…) drop.
+    const pruned = pruneUnpreparedScenes(film);
+    film.scenes = pruned.scenes;
+    film.dropped = pruned.dropped;
+  }
   await Deno.writeTextFile(new URL('film.json', filmDir), JSON.stringify(film, null, 2));
 
   // Report.
+  const strictRemoved = new Set(removals.map((r) => r.file).filter((f): f is string => !!f && strictOnlyFiles.has(f)));
   const items = [...prepared.entries()].map(([id, p]) => ({ id, ...p }));
   const warnings = items.flatMap((p) => p.warnings.map((w) => `${p.usage} ${p.kind}: ${w}`));
-  await Deno.writeTextFile(new URL('asset-report.json', filmDir), JSON.stringify({ slug, soundNote, removals, items, warnings }, null, 2));
+  await Deno.writeTextFile(new URL('asset-report.json', filmDir), JSON.stringify({ slug, soundNote, removals, strictOnly: strictRemoved.size, checked: checkedCount, items, warnings }, null, 2));
   await Deno.writeTextFile(new URL('asset-report.html', filmDir), renderReport(slug, script.title, soundNote, items, removals, checkedCount));
   const count = (u: Usage) => items.filter((p) => p.usage === u && p.file).length;
   console.log(
     `${slug}: ${count('still')} stills, ${count('burst')} burst clips, ${count('verified')} verified clips, ` +
-      `${count('voice')} voice excerpts · frame check ${checkedCount} checked, ${new Set(removals.map((r) => r.file)).size} removed · ` +
+      `${count('voice')} voice excerpts · frame check ${checkedCount} checked, ${new Set(removals.map((r) => r.file)).size} removed` +
+      `${strict ? ` (${strictRemoved.size} only by the strict public rule)` : ''} · ` +
       `${warnings.length} warnings${soundNote ? ` · ${soundNote}` : ''}`,
   );
   await Deno.writeTextFile(new URL('usage.json', filmDir), JSON.stringify(usageSummary(), null, 2));

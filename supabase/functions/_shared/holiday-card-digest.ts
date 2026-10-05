@@ -147,8 +147,10 @@ export interface DigestChildProfile {
   emotions: { emotion: string; share: number }[];
   /** 2–3 short excerpts that show tone. NOT events to retell. */
   excerpts: { memoryId: string; excerpt: string }[];
-  /** Their verified line of the year, when there is one. */
-  line: { quote: string; memoryId: string } | null;
+  /** Their verified line of the year, when there is one. `context` is the
+   * parents' own words just before the quote (the moment it was said), so the
+   * letter can set it in its scene instead of dropping it in cold. */
+  line: { quote: string; memoryId: string; context?: string } | null;
 }
 
 /** A light profile, only with real evidence (enough memories tagging them
@@ -157,6 +159,14 @@ export interface DigestParentProfile {
   name: string;
   memories: number;
   recurring: DigestTheme[];
+}
+
+export interface DigestTrip {
+  place: string;
+  /** 1–12, the month the trip started. */
+  month: number;
+  days: number;
+  memories: number;
 }
 
 export interface YearDigest {
@@ -173,6 +183,10 @@ export interface YearDigest {
   familyThemes: DigestTheme[];
   /** Places and outings that recur (beach, park days…), most first (≤4). */
   places: DigestTheme[];
+  /** Named trips: a place the parents labelled (e.g. "Cartagena") on memories
+   * of consecutive days, or on travel memories (owner review v8: a real trip
+   * lived only in labels). */
+  trips?: DigestTrip[];
   /** Optional secondary details (≤6): the writer MAY draw one. */
   highlights: DigestHighlight[];
   /** The first verified line of the year (a child's own words) + who said it. */
@@ -251,6 +265,23 @@ function firstNameOf(name: string): string {
 }
 
 /** The memory's own words, one line, no links, cut on a word boundary. */
+/** The parents' words leading up to a quoted line ("mirando la luna por la
+ * ventana, Tomás se volteó y me dijo:"), trimmed to the sentence or two before
+ * it. Only from the quote's own (share-safe, in-pool) memory. */
+export function withQuoteContext(
+  line: { quote: string; memoryId: string },
+  pool: readonly { id: string; text: string | null }[],
+): { quote: string; memoryId: string; context?: string } {
+  const text = pool.find((m) => m.id === line.memoryId)?.text ?? '';
+  const at = text.toLowerCase().indexOf(line.quote.slice(0, 12).toLowerCase());
+  if (at <= 0) return { quote: line.quote, memoryId: line.memoryId };
+  const before = text.slice(0, at).replace(/["“«']\s*$/u, '').trim();
+  const context = before.length > QUOTE_CONTEXT_MAX ? `…${before.slice(before.length - QUOTE_CONTEXT_MAX).replace(/^\S*\s/u, '')}` : before;
+  return context ? { quote: line.quote, memoryId: line.memoryId, context } : { quote: line.quote, memoryId: line.memoryId };
+}
+
+const QUOTE_CONTEXT_MAX = 200;
+
 export function excerptOf(text: string | null, max = DIGEST_EXCERPT_MAX): string {
   const clean = (text ?? '').replace(/https?:\/\/\S+/gi, ' ').replace(/\s+/g, ' ').trim();
   const chars = Array.from(clean);
@@ -405,12 +436,52 @@ function recurringThemes(
     .slice(0, limit);
 }
 
+const TRIP_TOPICS: ReadonlySet<string> = new Set(['travel', 'beach', 'camping', 'road-trip', 'vacation', 'snow-play']);
+
+/** Place names among the parents' labels (capitalized, not a person, not a
+ * generic word) that mark a trip: memories on 2+ consecutive days, or any
+ * memory with a travel topic. "Cartagena" on Jul 10–12 → one 3-day trip. */
+export function namedTrips(pool: readonly FilmMemorySource[], bannedNames: readonly string[]): DigestTrip[] {
+  const byPlace = new Map<string, { display: string; dates: Set<string>; travel: boolean; memories: number }>();
+  for (const m of pool) {
+    for (const raw of m.labels ?? []) {
+      const label = raw.replace(/\s+/g, ' ').trim();
+      if (!/^\p{Lu}/u.test(label) || label.length < 3 || label.length > 30 || /\d/.test(label)) continue;
+      const key = label.toLowerCase();
+      if (GENERIC_LABELS.has(key)) continue;
+      if (bannedNames.some((name) => name && key.includes(name.toLowerCase()))) continue;
+      const entry = byPlace.get(key) ?? { display: label, dates: new Set<string>(), travel: false, memories: 0 };
+      entry.dates.add(m.date);
+      entry.memories += 1;
+      if (m.topics.some((t) => TRIP_TOPICS.has(t))) entry.travel = true;
+      byPlace.set(key, entry);
+    }
+  }
+  const trips: DigestTrip[] = [];
+  for (const entry of byPlace.values()) {
+    const dates = [...entry.dates].sort();
+    let longest = 1;
+    let run = 1;
+    for (let i = 1; i < dates.length; i += 1) {
+      const gap = (Date.parse(`${dates[i]}T00:00:00Z`) - Date.parse(`${dates[i - 1]}T00:00:00Z`)) / 86_400_000;
+      run = gap === 1 ? run + 1 : 1;
+      longest = Math.max(longest, run);
+    }
+    if (longest < 2 && !(entry.travel && entry.memories >= 2)) continue;
+    trips.push({ place: entry.display, month: Number(dates[0].slice(5, 7)), days: Math.max(longest, 1), memories: entry.memories });
+  }
+  return trips.sort((a, b) => b.memories - a.memories || a.place.localeCompare(b.place)).slice(0, 3);
+}
+
 /** Words that say nothing: generic labels the analysis writes for any photo. */
 const GENERIC_LABELS: ReadonlySet<string> = new Set([
   'family', 'familia', 'kids', 'kid', 'child', 'children', 'baby', 'toddler', 'boy', 'girl', 'niño', 'niña', 'niños', 'niñas',
   'bebé', 'bebe', 'outdoors', 'outdoor', 'indoor', 'indoors', 'exterior', 'interior', 'photo', 'foto', 'video', 'vídeo',
   'home', 'casa', 'smile', 'smiling', 'sonrisa', 'happy', 'feliz', 'fun', 'diversión', 'together', 'juntos', 'day', 'día',
   'people', 'personas', 'play', 'playing', 'jugando', 'juego', 'portrait', 'retrato', 'selfie', 'daytime', 'sunny', 'cute',
+  // Owner review v8: these crowded out distinctive things (glasses).
+  'siblings', 'sibling', 'hermanos', 'hermano', 'hermana', 'playtime', 'smiles', 'sonrisas', 'toys', 'toy', 'juguetes',
+  'playful', 'juguetón', 'juguetona', 'laughing', 'riendo', 'love', 'amor', 'cuddle', 'hug', 'abrazo',
 ]);
 
 /** Recurring labels in `subset`, cleaned: not generic, not a topic name, no
@@ -541,7 +612,7 @@ function build({ scope, language, sources, members, context, script }: Source): 
       recurring,
       emotions: dominantEmotions(mine),
       excerpts,
-      line: quote && poolIds.has(quote.memoryId) ? quote : null,
+      line: quote && poolIds.has(quote.memoryId) ? withQuoteContext(quote, pool) : null,
     };
   });
   const firstLine = children.find((n) => n.line);
@@ -565,6 +636,8 @@ function build({ scope, language, sources, members, context, script }: Source): 
   const places = recurringThemes(pool, everything, language, 'family', PLACES, PLACE_MIN_MEMORIES, 0, PLACE_TOPICS)
     .sort((a, b) => b.memories - a.memories || a.topicId.localeCompare(b.topicId));
 
+  const trips = namedTrips(pool, bannedInLabels);
+
   return {
     familyName: context.familyName,
     language,
@@ -574,6 +647,7 @@ function build({ scope, language, sources, members, context, script }: Source): 
     parents,
     familyThemes,
     places,
+    trips,
     highlights,
     lineOfYear,
     counts: {

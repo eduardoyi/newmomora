@@ -1,5 +1,5 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
-import { chooseClipWindow, chooseVoiceWindow, parseRmsLevels, parseSceneScores, rankClipWindows, rankVoiceWindows, voicedSegments } from './year-film-trim.ts';
+import { chooseClipWindow, chooseVoiceWindow, MIN_VOICED_SECONDS, parseRmsLevels, parseSceneScores, rankClipWindows, rankVoiceWindows, voicedSegments } from './year-film-trim.ts';
 
 Deno.test('parses ffmpeg scene scores and RMS levels', () => {
   const scene = 'frame:0    pts:0       pts_time:0\nlavfi.scene_score=0.000000\nframe:1    pts:1       pts_time:0.25\nlavfi.scene_score=0.041000\n';
@@ -54,4 +54,24 @@ Deno.test('ranked windows give distinct fallbacks', () => {
   const clips = rankClipWindows(motion, series(duration, () => -30), duration);
   assert(clips.length >= 2);
   assert(clips.every((a, i) => clips.every((b, j) => i === j || a.end <= b.start || b.end <= a.start)), 'windows overlap');
+});
+
+Deno.test('rankVoiceWindows: an excerpt with under 2 s of voice is never offered (a 0.75 s laugh held the holiday sound scene for 5 s)', () => {
+  assertEquals(MIN_VOICED_SECONDS, 2);
+  // The thin-year clip: 0.75 s of voice in a 10 s clip.
+  const brief = [{ start: 7.9, end: 8.65 }];
+  assertEquals(chooseVoiceWindow(brief, 10)!.voicedSeconds, 0.75); // the chooser still finds it…
+  assertEquals(rankVoiceWindows(brief, 10), []); // …but it cannot carry a sound scene
+  assertEquals(rankVoiceWindows([{ start: 3, end: 4.75 }], 10), []);
+  // Exactly 2 s of voice qualifies.
+  const two = rankVoiceWindows([{ start: 3, end: 5 }], 10);
+  assertEquals(two.length, 1);
+  assertEquals(two[0].voicedSeconds, 2);
+  // Brief voiced bursts don't add up unless they fall inside one excerpt: two separate
+  // 1 s laughs 12 s apart are two sub-2 s windows → none; the same two within 6 s qualify together.
+  assertEquals(rankVoiceWindows([{ start: 1, end: 2 }, { start: 14, end: 15 }], 20), []);
+  assertEquals(rankVoiceWindows([{ start: 1, end: 2 }, { start: 3, end: 4 }], 20).length, 1);
+  // Windows below the floor are dropped from a ranked list but the good ones stay.
+  const mixed = rankVoiceWindows([{ start: 1, end: 1.75 }, { start: 8, end: 13 }, { start: 16, end: 17 }], 30);
+  assertEquals(mixed.map((w) => w.start), [7.85]);
 });

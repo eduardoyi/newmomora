@@ -43,12 +43,17 @@ function apiKey() {
   throw new Error('No ElevenLabs key in the environment — run with node --env-file=.env.local');
 }
 
+// A bed may carry its own `sections` (and extra `avoid`) when the shared
+// high-energy structure doesn't fit its mood (the holiday beds, C4); the
+// default is the shared plan, so existing beds regenerate unchanged.
+const sectionsOf = (bed) => bed.sections ?? plan.sections;
+
 function compositionPlan(bed) {
   const beatMs = 60000 / bed.bpm;
   return {
     positive_global_styles: [...bed.styles, `${bed.bpm} bpm`],
-    negative_global_styles: plan.avoid,
-    sections: plan.sections.map((s) => ({
+    negative_global_styles: [...plan.avoid, ...(bed.avoid ?? [])],
+    sections: sectionsOf(bed).map((s) => ({
       section_name: s.name,
       positive_local_styles: s.styles,
       negative_local_styles: s.avoid,
@@ -78,7 +83,7 @@ function decode(file) {
   return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
 }
 
-function analyze(file, requestedBpm) {
+function analyze(file, requestedBpm, sections) {
   const x = decode(file);
   const frames = Math.floor(x.length / HOP);
   // Percussive onset envelope: energy of the first difference (a high-pass),
@@ -125,7 +130,7 @@ function analyze(file, requestedBpm) {
     return 10 * Math.log10(1e-12 + e / Math.max(1, b - a));
   };
   let drop = { t: 8, rise: -Infinity };
-  const planned = phaseSeconds + plan.sections[0].beats * (60 / best.bpm);
+  const planned = phaseSeconds + sections[0].beats * (60 / best.bpm);
   for (let t = Math.max(1.5, planned - 1.5); t <= planned + 1.5; t += 0.02) {
     const rise = rmsDb(t, t + 1) - rmsDb(t - 1, t);
     if (rise > drop.rise) drop = { t, rise };
@@ -138,7 +143,7 @@ function analyze(file, requestedBpm) {
   const body = [...windows].map((w) => w.db).sort((p, q) => p - q)[Math.floor(windows.length * 0.6)];
   const fullAt = (windows.find((w) => w.db >= body - 1.5) ?? windows[0]).t;
   const beat = 60 / best.bpm;
-  const dropBeat = plan.sections[0].beats;
+  const dropBeat = sections[0].beats;
   return { bpm: best.bpm, phaseSeconds, dropBeat, dropSeconds: dropBeat * beat, dropRiseDb: Math.round(drop.rise * 10) / 10, rawDrop: drop.t, fullAt };
 }
 
@@ -167,7 +172,7 @@ for (const bed of plan.beds) {
     process.stdout.write(`done (${duration(raw).toFixed(1)}s)\n`);
   }
   if (!fs.existsSync(raw)) continue;
-  const a = analyze(raw, bed.bpm);
+  const a = analyze(raw, bed.bpm, sectionsOf(bed));
   const out = path.join(OUT_DIR, `${bed.id}.mp3`);
   // Trim to the first beat so the assembler's grid starts on the music, and
   // bring every bed to one loudness (the voice carve assumes it; the raw

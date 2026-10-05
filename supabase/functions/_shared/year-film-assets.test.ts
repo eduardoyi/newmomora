@@ -2,12 +2,17 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   applyPrepared,
   assetId,
+  blockedSoundWindows,
   frameRef,
+  frameTargets,
   planPrepare,
   type PrepareManifest,
   type PreparedAsset,
+  pruneUnpreparedScenes,
   resolveFrames,
   resolveSound,
+  soundFrameNeeds,
+  uses,
   voiceRef,
 } from './year-film-assets.ts';
 import type { FilmScript, FrameRef } from './year-film-script.ts';
@@ -177,6 +182,56 @@ Deno.test('resolveFrames: an unsafe still is removed', () => {
   assertEquals('done' in r && r.done.removed, [assetId('still', 'photo/p1.jpg')]);
 });
 
+Deno.test('resolveFrames: the holiday card film fails closed (no verdict, no check image, upset face, anything the strict prompt flags)', () => {
+  const holiday = { ...film(), kind: 'family_holiday' } as FilmScript;
+  const m = manifest();
+  const v1 = assetId('burst', 'video/v1.mp4');
+  const v2 = assetId('burst', 'video/v2.mp4');
+  const p1 = assetId('still', 'photo/p1.jpg');
+  const strictOk = (extra: Partial<FrameCheck> = {}) => check('c1', { underdressed: false, ...extra });
+  // Answers every check the resolver asks for with `answer`, round by round.
+  const settle = (script: FilmScript, manifestIn: PrepareManifest, answer: (ref: string) => FrameCheck | null) => {
+    const verdicts: Record<string, FrameCheck | null> = {};
+    for (let round = 0; round < 6; round += 1) {
+      const r = resolveFrames(script, manifestIn, verdicts, ctx);
+      if ('done' in r) return r.done;
+      for (const n of r.needs) verdicts[n.ref] = answer(n.ref);
+    }
+    throw new Error('did not settle');
+  };
+  // Every check failed (null): the year film keeps them, the holiday film drops them all.
+  const failed = settle(holiday, m, () => null);
+  assertEquals([...failed.removed].sort(), [
+    assetId('still', 'photo/p2.jpg'), assetId('still', 'photo/t1.jpg'), assetId('still', 'video/v1.mp4.poster.jpg'), p1, v1, v2,
+  ].sort());
+  assertEquals(settle(film(), m, () => null).removed, []);
+  // An upset face goes (the year film keeps it).
+  const upset = (ref: string) => strictOk(ref === frameRef(p1, null) ? { expression: 'upset' } : {});
+  assertEquals(settle(holiday, m, upset).removed, [p1]);
+  assertEquals(settle(film(), m, upset).removed, []);
+
+  // The strict prompt's flag (bare torso, diaper, bath…) removes a frame — a still and a clip — that the normal rules keep.
+  const underdressed = (ref: string) => strictOk(ref === frameRef(p1, null) || ref === frameRef(v2, 0) ? { underdressed: true } : {});
+  const flagged = settle(holiday, m, underdressed);
+  assertEquals(flagged.removed, [p1]);
+  assertEquals(flagged.windows[v2], 1); // v2's first window was flagged; its next window is clean
+  assertEquals(settle(holiday, m, (ref) => strictOk(ref.startsWith(v2) ? { underdressed: true } : {})).removed, [v2]); // every window flagged
+  assertEquals(settle(film(), m, () => check('c1', { underdressed: true })).removed, []); // normal films ignore the field
+
+  // A verdict from the NORMAL prompt (no `underdressed` answer) never passes a public film.
+  assertEquals(settle(holiday, m, () => check('c1')).removed.length, 6);
+
+  // A frame with no check image cannot be verified: the holiday film drops it.
+  const noImage = manifest();
+  noImage.assets[p1].checkImage = null;
+  noImage.assets[v2].windows.forEach((w) => { w.checkImage = null; });
+  assertEquals([...settle(holiday, noImage, () => strictOk()).removed].sort(), [p1, v2].sort());
+  assertEquals(settle(film(), noImage, () => check('c1')).removed, []);
+
+  // No references: nothing can be checked at all (the film wouldn't be built).
+  assertEquals(resolveFrames(holiday, m, {}, { ...ctx, hasReferences: false }), { done: { windows: {}, removed: [] } });
+});
+
 Deno.test('applyPrepared annotates files and windows, applies the sound choice and drops removed frames', () => {
   const script = film('video');
   const m = manifest();
@@ -212,4 +267,183 @@ Deno.test('applyPrepared drops a sound scene with no passing candidate and frame
   const burst = out.scenes[1] as Extract<FilmScript['scenes'][number], { type: 'burst' }>;
   assertEquals(burst.frames.map((f) => f.key), ['video/v1.mp4', 'video/v2.mp4']);
   assertEquals(out.dropped.some((d) => d.scene === 'sound'), true);
+});
+
+// ── Public audience (the holiday card film) ──────────────────────────────
+
+/** Synthetic holiday film: every scene type that shows frames, so the strict
+ * check can be shown to reach all of them (the first holiday render's
+ * mosaic leaked a bath photo through chapters that weren't checked). */
+function holidayFilm(): FilmScript {
+  const portrait = frame('draw/portrait1.webp', 'portrait', { memoryId: null, pairKey: 'pair/c1.jpg' });
+  return {
+    version: 1,
+    kind: 'family_holiday',
+    theme: 'holiday',
+    language: 'es',
+    title: 'Un año en familia',
+    scope: { start: '2026-01-01', endExclusive: '2026-10-06' },
+    subjects: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }],
+    references: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }],
+    scenes: [
+      { type: 'title', title: '2026', subtitle: '', cards: [frame('photo/t1.jpg', 'photo')] },
+      { type: 'chapter', childId: 'c1', name: 'Enzo', portrait, frames: [frame('photo/ch1.jpg', 'photo'), frame('draw/ch2.webp', 'illustration')], line: null },
+      { type: 'sound', source: 'video', frame: frame('video/s1.mp4', 'video'), alternates: [frame('video/s2.mp4', 'video')], caption: null, needsVoiceCheck: true },
+      { type: 'firsts', items: [{ milestoneId: 'first-steps', label: 'Dio sus primeros pasos', date: '2026-04-01', memoryId: 'm1', frame: frame('photo/f1.jpg', 'photo') }] },
+      { type: 'close', line: '', source: 'family', celebrationDate: null, frames: [frame('photo/cl1.jpg', 'photo')] },
+      { type: 'end_card', grid: [frame('photo/e1.jpg', 'photo')], greeting: 'Felices fiestas', from: 'de parte de la familia' },
+    ],
+  } as unknown as FilmScript;
+}
+
+function holidayManifest(): PrepareManifest {
+  const still = (key: string) => asset(assetId('still', key), key, 'still', [], `prep/${key.replace(/\W/g, '_')}.jpg`);
+  const assets: PreparedAsset[] = [
+    still('photo/t1.jpg'), still('photo/ch1.jpg'), still('photo/f1.jpg'), still('photo/cl1.jpg'), still('photo/e1.jpg'),
+    asset(assetId('still', 'draw/portrait1.webp'), 'draw/portrait1.webp', 'still', [], 'prep/portrait1.jpg'),
+    asset(assetId('still', 'draw/ch2.webp'), 'draw/ch2.webp', 'still', [], 'prep/ch2.jpg'),
+    { ...asset(assetId('pair', 'pair/c1.jpg'), 'pair/c1.jpg', 'pair', [], 'prep/pair1.jpg'), checkImage: 'prep/pair1.check.jpg' },
+    asset(assetId('voice', 'video/s1.mp4'), 'video/s1.mp4', 'voice', [win(0), win(10)]),
+    asset(assetId('voice', 'video/s2.mp4'), 'video/s2.mp4', 'voice', [win(20)]),
+    asset(assetId('reference', 'ref/c1.jpg'), 'ref/c1.jpg', 'reference'),
+  ];
+  return { version: 1, assets: Object.fromEntries(assets.map((a) => [a.id, a])) };
+}
+
+const strictOk = (extra: Partial<FrameCheck> = {}) => check('c1', { underdressed: false, ...extra });
+const answerAll = (script: FilmScript, m: PrepareManifest, answer: (ref: string) => FrameCheck | null) => {
+  const verdicts: Record<string, FrameCheck | null> = {};
+  for (let round = 0; round < 6; round += 1) {
+    const r = resolveFrames(script, m, verdicts, ctx);
+    if ('done' in r) return { done: r.done, verdicts };
+    for (const n of r.needs) verdicts[n.ref] = answer(n.ref);
+  }
+  throw new Error('did not settle');
+};
+
+Deno.test('uses: a public film checks every frame (chapters, firsts, close), a normal film only the dense parts', () => {
+  const f = holidayFilm();
+  const checked = (script: FilmScript, publicAudience: boolean) =>
+    script.scenes.flatMap((scene) => uses(scene, publicAudience).filter((u) => u.checked).map((u) => u.frame.key)).sort();
+  assertEquals(checked(f, false), ['photo/e1.jpg', 'photo/t1.jpg']);
+  assertEquals(checked(f, true), [
+    'draw/ch2.webp', 'draw/portrait1.webp', 'photo/cl1.jpg', 'photo/ch1.jpg', 'photo/e1.jpg', 'photo/f1.jpg', 'photo/t1.jpg',
+  ].sort());
+  // Drawings (illustrations, portraits) are never sent to the vision check.
+  const targets = frameTargets(f, holidayManifest()).map((t) => t.assetId);
+  assertEquals(targets.some((id) => id.includes('draw/')), false);
+  assertEquals(targets.includes(assetId('still', 'photo/ch1.jpg')), true);
+  assertEquals(targets.includes(assetId('still', 'photo/f1.jpg')), true);
+  assertEquals(targets.includes(assetId('still', 'photo/cl1.jpg')), true);
+  // The real photo behind a portrait's reveal is checked too.
+  assertEquals(targets.includes(assetId('pair', 'pair/c1.jpg')), true);
+});
+
+Deno.test('planPrepare: a public film asks for check images of every photo, pair photo and video sound window', () => {
+  const byId = Object.fromEntries(planPrepare(holidayFilm()).map((i) => [i.id, i]));
+  assertEquals(byId[assetId('still', 'photo/ch1.jpg')].checkImage, true);
+  assertEquals(byId[assetId('still', 'photo/cl1.jpg')].checkImage, true);
+  assertEquals(byId[assetId('still', 'draw/ch2.webp')].checkImage, false);
+  assertEquals(byId[assetId('still', 'draw/portrait1.webp')].checkImage, false);
+  assertEquals(byId[assetId('pair', 'pair/c1.jpg')].checkImage, true);
+  assertEquals(byId[assetId('voice', 'video/s1.mp4')].checkImage, true);
+  assertEquals(byId[assetId('voice', 'video/s2.mp4')].checkImage, true);
+  // A normal film: none of that.
+  const normal = Object.fromEntries(planPrepare(film()).map((i) => [i.id, i]));
+  assertEquals(normal[assetId('voice', 'video/v9.mp4')].checkImage, false);
+});
+
+Deno.test('resolveFrames: the strict check removes a flagged photo wherever the holiday film uses it', () => {
+  const f = holidayFilm();
+  const m = holidayManifest();
+  const ch1 = assetId('still', 'photo/ch1.jpg');
+  const f1 = assetId('still', 'photo/f1.jpg');
+  const cl1 = assetId('still', 'photo/cl1.jpg');
+  const pair = assetId('pair', 'pair/c1.jpg');
+  const { done } = answerAll(f, m, (ref) => strictOk(ref === ch1 || ref === f1 || ref === cl1 || ref === pair ? { underdressed: true } : {}));
+  assertEquals([...done.removed].sort(), [ch1, cl1, f1, pair].sort());
+
+  const out = applyPrepared(f, m, null, done, 'winter-bells');
+  const type = <T extends FilmScript['scenes'][number]['type']>(t: T) => out.scenes.find((s) => s.type === t) as Extract<FilmScript['scenes'][number], { type: T }> | undefined;
+  // Chapter: the flagged photo is gone, the drawing stays; the portrait loses its real-photo pair.
+  assertEquals(type('chapter')!.frames.map((x) => x.key), ['draw/ch2.webp']);
+  assertEquals((type('chapter')!.portrait as { pairFile?: string | null }).pairFile, null);
+  // Firsts keeps the milestone, without its card; the close (nothing left) is dropped, the sound scene too (no candidate chosen).
+  assertEquals(type('firsts')!.items[0].frame, undefined);
+  assertEquals(type('close'), undefined);
+  assertEquals(type('sound'), undefined);
+  assertEquals(out.dropped.some((d) => d.scene === 'close'), true);
+
+  // The same removals leave a NORMAL film's other uses alone (live films unchanged).
+  const normal = film();
+  const normalRemoved = assetId('still', 'photo/p1.jpg');
+  const kept = applyPrepared(normal, manifest(), null, { windows: {}, removed: [normalRemoved] }, 'bright-pop');
+  assertEquals((kept.scenes.find((s) => s.type === 'burst') as { frames: FrameRef[] }).frames.map((x) => x.key), ['video/v1.mp4', 'video/v2.mp4']);
+});
+
+Deno.test('sound frames (public film): a video sound window must pass the strict check, else the next window or candidate carries the scene', () => {
+  const f = holidayFilm();
+  const m = holidayManifest();
+  const s1 = assetId('voice', 'video/s1.mp4');
+  const s2 = assetId('voice', 'video/s2.mp4');
+  // Nothing checked yet: every window needs its check; all are blocked until verdicts arrive (fail closed).
+  assertEquals(soundFrameNeeds(f, m, {}).map((n) => n.ref).sort(), [frameRef(s1, 0), frameRef(s1, 1), frameRef(s2, 0)].sort());
+  assertEquals([...blockedSoundWindows(f, m, {})].sort(), [voiceRef(s1, 0), voiceRef(s1, 1), voiceRef(s2, 0)].sort());
+  // s1's windows are both underdressed; s2's is fine.
+  const verdicts = { [frameRef(s1, 0)]: strictOk({ underdressed: true }), [frameRef(s1, 1)]: strictOk({ underdressed: true }), [frameRef(s2, 0)]: strictOk() };
+  assertEquals(soundFrameNeeds(f, m, verdicts), []);
+  const blocked = blockedSoundWindows(f, m, verdicts);
+  assertEquals([...blocked].sort(), [voiceRef(s1, 0), voiceRef(s1, 1)].sort());
+  // A normal verdict (no `underdressed`) is not enough; no verdict at all is a failure too.
+  assertEquals(blockedSoundWindows(f, m, { ...verdicts, [frameRef(s2, 0)]: check('c1') }).has(voiceRef(s2, 0)), true);
+  assertEquals(blockedSoundWindows(f, m, { ...verdicts, [frameRef(s2, 0)]: null }).has(voiceRef(s2, 0)), true);
+  // The blocked windows are skipped without a voice check; the alternate wins.
+  const r = resolveSound(f, m, { [voiceRef(s2, 0)]: clear }, blocked);
+  assertEquals('done' in r && r.done?.frame?.key, 'video/s2.mp4');
+  // Everything blocked: the scene drops.
+  const none = resolveSound(f, m, {}, new Set([...blocked, voiceRef(s2, 0)]));
+  assertEquals('done' in none && none.done?.frame, null);
+  // Non-public films never ask (their sound is checked as before).
+  assertEquals(soundFrameNeeds(film('video'), manifest(), {}), []);
+  assertEquals(blockedSoundWindows(film('video'), manifest(), {}).size, 0);
+});
+
+Deno.test('pruneUnpreparedScenes drops frames without a file and the scenes that need them', () => {
+  const script = film('video') as FilmScript;
+  const s = JSON.parse(JSON.stringify(script)) as FilmScript;
+  (s.scenes[0] as { cards: { file?: string }[] }).cards.forEach((c) => (c.file = 'a.jpg'));
+  (s.scenes[1] as { frame: { file?: string | null } }).frame.file = null; // sound: no candidate
+  const out = pruneUnpreparedScenes(s);
+  assertEquals(out.scenes.map((x) => x.type), ['title', 'end_card']); // an end card with an empty wall still greets
+  assertEquals(out.dropped.map((d) => d.scene).sort(), ['burst', 'sound']);
+});
+
+Deno.test('applyPrepared: a fallback sound candidate carries ITS OWN caption and date, never the primary\'s', () => {
+  const withCaptions = (): FilmScript => {
+    const script = film('video');
+    const sound = script.scenes[1] as Extract<FilmScript['scenes'][number], { type: 'sound' }>;
+    Object.assign(sound, { caption: 'Enzo leyéndole un libro a Mara', alternateCaptions: ['Enzo cantando en el carro'] });
+    sound.alternates[0].date = '2026-08-22';
+    return script;
+  };
+  const a1 = assetId('voice', 'audio/a1.m4a');
+  const v9 = assetId('voice', 'video/v9.mp4');
+  const m = manifest();
+  const pick = (script: FilmScript, verdicts: Parameters<typeof resolveSound>[2]) => {
+    const r = resolveSound(script, m, verdicts);
+    return applyPrepared(script, m, 'done' in r ? r.done : null, { windows: {}, removed: [] }, 'bright-pop').scenes[1] as Extract<FilmScript['scenes'][number], { type: 'sound' }>;
+  };
+  // The primary fails the voice check (both windows faint) → the alternate plays, with its caption and date.
+  const fallback = pick(withCaptions(), { [voiceRef(a1, 0)]: faint, [voiceRef(a1, 1)]: faint, [voiceRef(v9, 0)]: clear });
+  assertEquals(fallback.frame.key, 'video/v9.mp4');
+  assertEquals(fallback.caption, 'Enzo cantando en el carro');
+  assertEquals(fallback.frame.date, '2026-08-22');
+  // The primary passing keeps its own caption.
+  const primary = pick(withCaptions(), { [voiceRef(a1, 0)]: clear });
+  assertEquals(primary.frame.key, 'audio/a1.m4a');
+  assertEquals(primary.caption, 'Enzo leyéndole un libro a Mara');
+  // A script stored before `alternateCaptions` existed: no caption beats the primary's wrong one.
+  const old = withCaptions();
+  delete (old.scenes[1] as { alternateCaptions?: unknown }).alternateCaptions;
+  assertEquals(pick(old, { [voiceRef(a1, 0)]: faint, [voiceRef(a1, 1)]: faint, [voiceRef(v9, 0)]: clear }).caption, null);
 });

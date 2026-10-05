@@ -27,9 +27,29 @@ export interface Use {
   checked: boolean;
 }
 
+/** The holiday card film is watched by anyone who scans the card (owner,
+ * 2026-10-05): every frame it shows goes through the strict public vision
+ * check, and an unverified frame is dropped. */
+export function isPublicFilm(film: Pick<FilmScript, 'kind'>): boolean {
+  return film.kind === 'family_holiday';
+}
+
 /** Every frame of a scene with what it's used for. End cards and title
- * cards are small tiles → stills (video posters). */
-export function uses(scene: FilmScene): Use[] {
+ * cards are small tiles → stills (video posters). With `publicAudience`
+ * (holiday card film) every frame is checked, not just the dense parts; the
+ * sound scene's video is checked per voice window (soundFrameNeeds). */
+export function uses(scene: FilmScene, publicAudience = false): Use[] {
+  const list = baseUses(scene);
+  return publicAudience ? list.map((u) => ({ ...u, checked: u.usage !== 'voice' })) : list;
+}
+
+/** Drawings (illustrations, portraits) are made from the memory's tagged
+ * people and aren't vision-checked. */
+function isDrawing(frame: FrameRef): boolean {
+  return frame.kind === 'illustration' || frame.kind === 'portrait';
+}
+
+function baseUses(scene: FilmScene): Use[] {
   const as = (frames: FrameRef[], usage: Usage, checked: boolean) => frames.map((frame) => ({ frame, usage, checked }));
   const motion = (f: FrameRef, verified: boolean, checked: boolean): Use => ({
     frame: f,
@@ -100,6 +120,7 @@ function prepareMode(frame: FrameRef, usage: Usage): PrepareMode {
 
 /** Every distinct asset the film needs, once. */
 export function planPrepare(film: FilmScript): PrepareItem[] {
+  const strict = isPublicFilm(film);
   const out = new Map<string, PrepareItem>();
   const add = (item: PrepareItem) => {
     const existing = out.get(item.id);
@@ -108,14 +129,16 @@ export function planPrepare(film: FilmScript): PrepareItem[] {
   };
   for (const scene of film.scenes) {
     if (scene.type === 'sound') {
-      for (const f of [scene.frame, ...scene.alternates]) add({ id: assetId('voice', f.key), key: f.key, mode: 'voice', checkImage: false });
+      // A video sound candidate shows on screen: its windows get check images
+      // in a public film.
+      for (const f of [scene.frame, ...scene.alternates]) add({ id: assetId('voice', f.key), key: f.key, mode: 'voice', checkImage: strict && f.kind === 'video' });
       continue;
     }
-    for (const use of uses(scene)) {
+    for (const use of uses(scene, strict)) {
       const key = stillKey(use.frame, use.usage);
       const mode = prepareMode(use.frame, use.usage);
-      add({ id: assetId(use.usage, key), key, mode, checkImage: use.checked && mode === 'still' && use.frame.kind !== 'illustration' });
-      if (use.frame.pairKey) add({ id: assetId('pair', use.frame.pairKey), key: use.frame.pairKey, mode: 'pair', checkImage: false });
+      add({ id: assetId(use.usage, key), key, mode, checkImage: use.checked && mode === 'still' && !isDrawing(use.frame) });
+      if (use.frame.pairKey) add({ id: assetId('pair', use.frame.pairKey), key: use.frame.pairKey, mode: 'pair', checkImage: strict });
     }
   }
   const people = film.references?.length ? film.references : film.subjects ?? [];
@@ -191,11 +214,14 @@ function soundScene(film: FilmScript): Extract<FilmScene, { type: 'sound' }> | u
  * that candidate's windows. Audio memories are the parent's own clips: an
  * unchecked one passes; video fallbacks must be verified. Returns the next
  * check needed (one at a time — early exit keeps cost down) or the choice.
+ * `blocked` (public films: blockedSoundWindows) are voice refs that failed
+ * the strict frame check — those windows are skipped like a failed voice check.
  */
 export function resolveSound(
   film: FilmScript,
   prep: PrepareManifest,
   verdicts: VoiceVerdicts,
+  blocked: ReadonlySet<string> = new Set(),
 ): { need: VoiceNeed } | { done: SoundChoice | null } {
   const scene = soundScene(film);
   if (!scene) return { done: null };
@@ -211,6 +237,7 @@ export function resolveSound(
     for (let i = 0; i < windows.length; i += 1) {
       const index = p.windows.indexOf(windows[i]);
       const ref = voiceRef(id, index);
+      if (blocked.has(ref)) continue;
       if (!(ref in verdicts)) {
         if (!windows[i].wav) {
           last = { index, voice: null };
@@ -238,6 +265,46 @@ export function resolveSound(
   return {
     done: { frame: null, assetId: null, windowIndex: null, voice: null, verified: false, note: 'no candidate passed the voice check → scene would drop' },
   };
+}
+
+
+/** Public films only: the checks a video sound candidate's windows still need
+ * (the strict frame check of the window's check image). Batchable. */
+export function soundFrameNeeds(film: FilmScript, prep: PrepareManifest, verdicts: FrameVerdicts): FrameNeed[] {
+  const scene = isPublicFilm(film) ? soundScene(film) : undefined;
+  if (!scene) return [];
+  const needs: FrameNeed[] = [];
+  for (const candidate of [scene.frame, ...scene.alternates]) {
+    if (candidate.kind !== 'video') continue;
+    const id = assetId('voice', candidate.key);
+    const p = prep.assets[id];
+    (p?.windows ?? []).forEach((w, windowIndex) => {
+      const ref = frameRef(id, windowIndex);
+      if (w.file && w.checkImage && !(ref in verdicts)) needs.push({ ref, assetId: id, windowIndex, checkImage: w.checkImage });
+    });
+  }
+  return needs;
+}
+
+/** Public films only: the voice refs of video sound windows that may not
+ * carry the scene — the strict frame check removed the frame, found no
+ * verdict, or there was no check image (fail closed). */
+export function blockedSoundWindows(film: FilmScript, prep: PrepareManifest, verdicts: FrameVerdicts): Set<string> {
+  const blocked = new Set<string>();
+  const scene = isPublicFilm(film) ? soundScene(film) : undefined;
+  if (!scene) return blocked;
+  for (const candidate of [scene.frame, ...scene.alternates]) {
+    if (candidate.kind !== 'video') continue;
+    const id = assetId('voice', candidate.key);
+    (prep.assets[id]?.windows ?? []).forEach((w, windowIndex) => {
+      const ref = frameRef(id, windowIndex);
+      const verdict = w.checkImage && ref in verdicts
+        ? burstFrameVerdict(verdicts[ref] ?? undefined, null, new Set(), undefined, { publicAudience: true })
+        : 'remove';
+      if (verdict === 'remove') blocked.add(voiceRef(id, windowIndex));
+    });
+  }
+  return blocked;
 }
 
 // ── Frame check ────────────────────────────────────────────────────────────
@@ -274,9 +341,16 @@ export function frameRef(id: string, windowIndex: number | null): string {
  * memory's tagged people and aren't checked (F2 round 2). */
 export function frameTargets(film: FilmScript, prep: PrepareManifest): FrameTarget[] {
   const targets = new Map<string, FrameTarget>();
+  const strict = isPublicFilm(film);
   film.scenes.forEach((scene, sceneIndex) => {
-    for (const use of uses(scene)) {
-      if (!use.checked || use.frame.kind === 'illustration') continue;
+    for (const use of uses(scene, strict)) {
+      // A public film also checks the real photo behind a portrait's reveal.
+      if (strict && use.frame.pairKey) {
+        const pairId = assetId('pair', use.frame.pairKey);
+        const pp = prep.assets[pairId];
+        if (pp?.file && !targets.has(pairId)) targets.set(pairId, { assetId: pairId, mode: pp.mode, frames: [], tags: undefined });
+      }
+      if (!use.checked || isDrawing(use.frame)) continue;
       const id = assetId(use.usage, stillKey(use.frame, use.usage));
       const p = prep.assets[id];
       if (!p || (p.mode === 'still' ? !p.file : !p.windows.some((w) => w.file))) continue;
@@ -301,8 +375,12 @@ export interface FrameContext {
  * its other windows in order until one is kept. Without a rescue,
  * 'prefer_other_window' (nobody in the window) keeps the original window and
  * 'remove' removes the frames. A missing check image or a failed check keeps
- * the frame (fail-open, like the eval). Returns every check needed for the
- * current round (batchable) or the resolution.
+ * the frame (fail-open, like the eval) — except the holiday card film, which
+ * is public and fails closed (docs/plans/holiday-cards.md §5): no verdict, no
+ * check image, an upset face, or anything the strict public prompt flags
+ * (bare torso, diaper, bath, nudity…: `underdressed`) removes the frame, same
+ * as the F2 eval; and every frame of every scene is checked. Returns
+ * every check needed for the current round (batchable) or the resolution.
  */
 export function resolveFrames(
   film: FilmScript,
@@ -313,6 +391,7 @@ export function resolveFrames(
   const resolution: FrameResolution = { windows: {}, removed: [] };
   if (!ctx.hasReferences) return { done: resolution };
   const needs: FrameNeed[] = [];
+  const failClosed = isPublicFilm(film);
 
   for (const target of frameTargets(film, prep)) {
     const p = prep.assets[target.assetId];
@@ -324,19 +403,19 @@ export function resolveFrames(
         needs.push({ ref, assetId: target.assetId, windowIndex, checkImage: image });
         return 'need';
       }
-      return burstFrameVerdict(verdicts[ref] ?? undefined, ctx.requiredChildId, ctx.ownChildIds, target.tags);
+      return burstFrameVerdict(verdicts[ref] ?? undefined, ctx.requiredChildId, ctx.ownChildIds, target.tags, { failClosed, publicAudience: failClosed });
     };
 
     if (p.mode === 'still' || p.mode === 'pair' || p.mode === 'reference') {
       const v = verdictAt(null);
-      if (v === 'remove') resolution.removed.push(target.assetId);
+      if (v === 'remove' || (failClosed && v === 'no_image')) resolution.removed.push(target.assetId);
       continue;
     }
 
     const cut = p.windows.map((w, i) => (w.file ? i : -1)).filter((i) => i >= 0);
     const first = verdictAt(cut[0]);
     if (first === 'need') continue;
-    if (first === 'keep' || first === 'no_image') {
+    if (first === 'keep' || (first === 'no_image' && !failClosed)) {
       resolution.windows[target.assetId] = cut[0];
       continue;
     }
@@ -389,6 +468,7 @@ export function applyPrepared(
 ): FilmScript & { bed: string } {
   const film = JSON.parse(JSON.stringify(script)) as FilmScript;
   const removed = new Set(frames.removed);
+  const strict = isPublicFilm(film);
 
   film.scenes.forEach((scene, sceneIndex) => {
     if (scene.type === 'sound') {
@@ -398,6 +478,10 @@ export function applyPrepared(
         const chosen = chosenIndex <= 0 ? scene.frame : scene.alternates[chosenIndex - 1];
         const w = windowOf(prep.assets[sound.assetId], sound.windowIndex);
         scene.frame = chosen;
+        // The caption (and the frame's own date) belong to the memory whose audio
+        // plays: a fallback never shows the primary's caption (null when the
+        // script predates `alternateCaptions` — no caption beats a wrong one).
+        if (chosenIndex > 0) scene.caption = scene.alternateCaptions?.[chosenIndex - 1] ?? null;
         Object.assign(scene.frame as AnnotatedFrame, { file: w?.file ?? null, usage: 'voice', trim: w, voice: sound.voice });
         Object.assign(scene, { voiceVerified: sound.verified, note: sound.note });
       } else {
@@ -411,14 +495,19 @@ export function applyPrepared(
       const p = prep.assets[id];
       const isClip = p && (p.mode === 'clip' || p.mode === 'verified');
       const w = isClip ? windowOf(p, frames.windows[id] ?? 0) : null;
+      // A public film shows nothing the strict check removed, wherever the
+      // asset is used (chapter cards, firsts, the close…): its file goes, and
+      // the pass below drops the frame or the scene.
+      const file = strict && removed.has(id) ? null : isClip ? w?.file ?? null : p?.file ?? null;
       Object.assign(use.frame as AnnotatedFrame, {
-        file: isClip ? w?.file ?? null : p?.file ?? null,
+        file,
         usage: use.usage,
         trim: w,
         source: p?.source,
       });
       if (use.frame.pairKey) {
-        Object.assign(use.frame as AnnotatedFrame, { pairFile: prep.assets[assetId('pair', use.frame.pairKey)]?.file ?? null });
+        const pairId = assetId('pair', use.frame.pairKey);
+        Object.assign(use.frame as AnnotatedFrame, { pairFile: strict && removed.has(pairId) ? null : prep.assets[pairId]?.file ?? null });
       }
     }
     if (removed.size === 0) return;
@@ -432,9 +521,14 @@ export function applyPrepared(
     if (scene.type === 'close') scene.frames = scene.frames.filter(keep);
   });
 
-  // The assembler needs a file for every frame it shows: drop frames whose
-  // asset couldn't be prepared, and scenes left without what they need (a
-  // sound scene with no passing candidate "drops", as the F2 eval noted).
+  return { ...pruneUnpreparedScenes(film), bed };
+}
+
+/** The assembler needs a file for every frame it shows: drops frames whose
+ * asset couldn't be prepared (or was removed), and scenes left without what
+ * they need (a sound scene with no passing candidate "drops", as the F2 eval
+ * noted). Pure; shared by applyPrepared and the F2 eval's public films. */
+export function pruneUnpreparedScenes(film: FilmScript): FilmScript {
   const hasFile = (f: FrameRef | null | undefined) => !!(f as AnnotatedFrame | null | undefined)?.file;
   const kept: FilmScene[] = [];
   const dropped = [...(film.dropped ?? [])];
@@ -501,5 +595,5 @@ export function applyPrepared(
     kept.push(scene);
   }
 
-  return { ...film, scenes: kept, dropped, bed };
+  return { ...film, scenes: kept, dropped };
 }

@@ -18,7 +18,7 @@ import { mmCqw } from '../mm';
  * lock onto the mark, independent of whatever mm size it's ultimately
  * printed at.
  */
-const QUIET_ZONE_MODULES = 4;
+export const QUIET_ZONE_MODULES = 4;
 
 export type QrBadge = 'play' | 'audio';
 
@@ -89,7 +89,7 @@ export function QrCode({ value, mm, isSpread, className, badge }: QrCodeProps) {
  * error-correction level above is what keeps the code scannable despite
  * that real coverage.
  */
-function QrBadgeOverlay({ center, codeSize, kind }: { center: number; codeSize: number; kind: QrBadge }) {
+export function QrBadgeOverlay({ center, codeSize, kind }: { center: number; codeSize: number; kind: QrBadge }) {
   // 28% of the code's own module width (owner decision 2026-09-15, chosen
   // from a printed home-printer test sheet: 28% scanned reliably at the
   // real 13mm mark size on hardware WORSE than the production Indigo).

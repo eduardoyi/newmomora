@@ -12,12 +12,14 @@ export const YEAR_FILM_BEDS: readonly { id: string; use: readonly string[] }[] =
   { id: 'bright-pop', use: ['birthday'] },
   { id: 'bubbly-synth', use: ['family_month'] },
   { id: 'celebration-pop', use: ['family_year'] },
+  { id: 'fireside-piano', use: ['family_holiday'] },
   { id: 'groovy-keys', use: ['family_month'] },
   { id: 'pizzicato-bop', use: ['family_month'] },
   { id: 'playful-marimba', use: ['family_month'] },
   { id: 'playful-piano', use: ['family_month'] },
   { id: 'sparkle-pop', use: ['birthday'] },
   { id: 'tender-piano', use: ['tender'] },
+  { id: 'winter-bells', use: ['family_holiday'] },
 ];
 
 export function isYearFilmBed(id: unknown): id is string {
@@ -30,10 +32,7 @@ export function isYearFilmBed(id: unknown): id is string {
  * slug (production passes the film id) so siblings don't always share one.
  */
 export function defaultBed(kind: FilmKind, slug: string, spanFrom: string): string {
-  // The holiday card film borrows the year-end family bed until C4 adds
-  // holiday music (docs/plans/holiday-cards.md §6); beds.json stays untouched.
-  const bedKind = kind === 'family_holiday' ? 'family_year' : kind;
-  const options = YEAR_FILM_BEDS.filter((b) => b.use.includes(bedKind)).map((b) => b.id).sort((x, y) => x.localeCompare(y));
+  const options = YEAR_FILM_BEDS.filter((b) => b.use.includes(kind)).map((b) => b.id).sort((x, y) => x.localeCompare(y));
   if (options.length === 0) throw new Error(`no bed for film kind ${kind}`);
   if (kind === 'family_month') {
     const [y, m] = spanFrom.split('-').map(Number);

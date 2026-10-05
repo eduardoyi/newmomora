@@ -1545,6 +1545,35 @@ export type Database = {
           },
         ]
       }
+      film_share_tokens: {
+        Row: {
+          created_at: string
+          film_id: string
+          revoked_at: string | null
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          film_id: string
+          revoked_at?: string | null
+          token: string
+        }
+        Update: {
+          created_at?: string
+          film_id?: string
+          revoked_at?: string | null
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "film_share_tokens_film_id_fkey"
+            columns: ["film_id"]
+            isOneToOne: false
+            referencedRelation: "year_films"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       gallery_import_admission_settings: {
         Row: {
           daily_cluster_limit: number

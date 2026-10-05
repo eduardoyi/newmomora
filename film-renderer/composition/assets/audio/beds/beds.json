@@ -53,6 +53,19 @@
       "fullEnergyAt": 2
     },
     {
+      "id": "fireside-piano",
+      "file": "assets/audio/beds/fireside-piano.mp3",
+      "bpm": 92,
+      "drop": 5.217,
+      "dropBeat": 8,
+      "length": 86.07,
+      "use": [
+        "family_holiday"
+      ],
+      "requestedBpm": 92,
+      "fullEnergyAt": 15.5
+    },
+    {
       "id": "groovy-keys",
       "file": "assets/audio/beds/groovy-keys.mp3",
       "bpm": 110,
@@ -129,6 +142,19 @@
       ],
       "requestedBpm": 96,
       "fullEnergyAt": 14.5
+    },
+    {
+      "id": "winter-bells",
+      "file": "assets/audio/beds/winter-bells.mp3",
+      "bpm": 104,
+      "drop": 4.615,
+      "dropBeat": 8,
+      "length": 76.11,
+      "use": [
+        "family_holiday"
+      ],
+      "requestedBpm": 104,
+      "fullEnergyAt": 6.5
     }
   ]
 }

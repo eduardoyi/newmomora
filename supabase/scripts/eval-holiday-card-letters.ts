@@ -95,6 +95,8 @@ interface Options {
   detailsModel: string;
   llm: boolean;
   confirm: { memoryId: string; milestoneId: string }[];
+  /** The card's greeting; the closing wish follows it. */
+  greeting: 'christmas' | 'holidays' | 'new-year' | null;
 }
 
 function parseArgs(args: string[]): Options {
@@ -109,6 +111,7 @@ function parseArgs(args: string[]): Options {
     detailsModel: DETAILS_MODEL,
     llm: true,
     confirm: [],
+    greeting: null,
   };
   for (let i = 0; i < args.length; i += 1) {
     const next = args[i + 1];
@@ -128,6 +131,11 @@ function parseArgs(args: string[]): Options {
         break;
       case '--seed':
         options.seed = Number(next) || 1;
+        i += 1;
+        break;
+      case '--greeting':
+        if (next !== 'christmas' && next !== 'holidays' && next !== 'new-year') throw new Error('--greeting needs christmas, holidays or new-year');
+        options.greeting = next;
         i += 1;
         break;
       case '--also-lang':
@@ -223,6 +231,8 @@ const PRICES: Record<string, { input: number; output: number }> = {
   ...PRICE_USD_PER_MTOK,
   'gpt-6-luna': { input: 0.1, output: 0.5 },
   'gpt-6-sol': { input: 2.0, output: 10.0 },
+  // Mirrors gpt-6-sol until OpenAI's rate for 6.1 is confirmed.
+  'gpt-6.1-sol': { input: 2.0, output: 10.0 },
 };
 
 function costUsd(): number | null {
@@ -529,7 +539,8 @@ const childDetails: ChildDetails[] = [];
   const names = [...digest.people.map((p) => p.name), ...digest.forbiddenNames, ...digest.children.flatMap((c) => c.nicknames.flatMap((n) => [n, ...n.split(/\s+/)]))];
   const specifics: Record<string, { detail: string; memoryIds: string[]; recurring: boolean }[]> = {};
   for (const child of digest.children) {
-    const excerpts = selectDetailExcerpts(memories, milestones, { childId: child.memberId, scope, ownChildIds });
+    const childNames = Object.fromEntries(digest.children.map((c) => [c.memberId, c.name]));
+    const excerpts = selectDetailExcerpts(memories, milestones, { childId: child.memberId, scope, ownChildIds, childNames });
     const entry: ChildDetails = { name: child.name, excerpts: excerpts.length, result: null, skipped: null };
     childDetails.push(entry);
     if (!options.llm) entry.skipped = '--no-llm';
@@ -543,7 +554,7 @@ const childDetails: ChildDetails[] = [];
           if (entry.result === null) entry.skipped = 'OpenAI call failed or no API key';
           continue;
         }
-        const next = parseDetails(content, excerpts, names);
+        const next = parseDetails(content, excerpts, names, { name: child.name, nicknames: child.nicknames });
         if (entry.result === null || next.verified > entry.result.verified) entry.result = next;
         entry.skipped = null;
       }
@@ -608,6 +619,7 @@ for (const language of languages) {
     locale: own ? familyLang.locale : null,
     guidance: own ? guidance : null,
     voice: { card: voice.card, examples: voice.examples, language: journalLanguage },
+    ...(options.greeting ? { greeting: options.greeting } : {}),
   };
   const content = await chat(
     buildLetterRequestBody(options.model, buildLetterSystemPrompt(letterOptions), buildLetterUserPrompt(digest, letterOptions)),

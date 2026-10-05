@@ -16,6 +16,44 @@ people they trust," same trust model as before — but now with a
 "Privacy model" below for the full story, and the earlier "raw memoryId"
 design this replaced.
 
+## Public film page (`/f/:token`)
+
+The same Worker also serves the **holiday card film**: the QR printed on a
+Momora holiday card (`docs/plans/holiday-cards.md`, stage C5) opens
+`https://m.usemomora.com/f/<token>`, a public, no-login page that plays the
+family's film. The `/m`, `/media` and `/poster` routes above are untouched.
+
+| Route | Response |
+|---|---|
+| `GET /f/:token` | Mobile-first, full-height 9:16 player: poster, big tap-to-play button (the tap starts the film **with sound**, never autoplay), `playsinline`, native controls once playing, a "play again" state at the end, and the small "Momora." wordmark (inline SVG outlines of Newsreader Medium, no webfont). Spanish or English copy by the film's `language`. `<meta name="robots" content="noindex,nofollow">`, `X-Robots-Tag: noindex, nofollow`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, a strict CSP. Open Graph title `"<greeting> · <signature>"` from the film's end card (for example "Feliz Navidad · de la familia X"; the greeting and signature are printed on the card itself), else a neutral line; `og:image` is `/f/:token/poster`. |
+| `GET /f/:token/video` | The film's `video_key` from R2 as `video/mp4`, with HTTP Range support (206 / `Content-Range`), `Cache-Control: private, no-store`. Same streaming helper as `/media/:token` (`src/stream.ts`). |
+| `GET /f/:token/poster` | The film's `poster_key` (JPEG, 1080x1920). A missing poster object falls back to the neutral Momora JPEG. `private, no-store`. |
+
+**Resolution (every route, every request):**
+`film_share_tokens?token=eq.<token>&select=film_id,revoked_at` -> `year_films?id=eq.<film_id>&select=id,family_id,kind,status,blocked,video_key,poster_key,language,film_script,families(deleted_at)`
+(service role, `src/film.ts` + `src/supabase.ts`). Outcomes:
+
+- never minted, malformed token (anything but exactly 22 base62 characters), unknown sub-route, no film row, or the family is pending deletion: **404** (bilingual, says nothing about why);
+- token has `revoked_at`: **410**, before any film or R2 read;
+- film `blocked` (a removal or report took content out of the current video) or no servable video/poster yet: **503** "this film is being updated" page (`Retry-After: 3600`), never the video. A merely `stale` film keeps serving its current video;
+- otherwise 200/206.
+
+**Privacy.** `film_script` holds memory text. The Worker selects it only to read
+the last `end_card` scene's `greeting` and `from` strings (`readEndCard`,
+length-capped and control-character-stripped); everything else is dropped
+unread, and no response, header, log line or error carries memory text, an
+object key, a token or a film id. Tokens are bearer credentials, revocable by
+setting `film_share_tokens.revoked_at` (service role). Like `/m`, the page
+cannot retract a link preview a chat app already cached.
+
+Files: `src/film.ts` (route parsing, token classification, film resolution,
+title), `src/film-page.ts` (HTML), `src/film-routes.ts` (handlers),
+`src/stream.ts` (shared R2 Range streaming), `src/wordmark.ts` (generated
+wordmark outlines). Tests: `test/film.test.ts`, `test/film-routes.test.ts`.
+Schema: `supabase/migrations/20261005120000_family_holiday_film_share.sql`.
+No new binding or secret: the routes use the same `MEDIA` binding and
+`SUPABASE_SERVICE_ROLE_KEY` as `/m`.
+
 ## Status
 
 `m.usemomora.com` already has a deployed production Worker. This README
@@ -340,6 +378,22 @@ bucket are in the same Cloudflare account.
    ranged `/media` request, and 404 for the made-up token. Privately inspect
    the viewer title/card and the WhatsApp self-chat preview; the latter
    intentionally creates a third-party cached preview.
+
+6b. **Smoke-test the film page** (release that includes `/f/`; needs the
+   `film_share_tokens` migration applied and a film with a token):
+
+   ```bash
+   read -rs film_smoke_token
+   o='https://m.usemomora.com'
+   curl -sS -o /dev/null -D - "$o/f/$film_smoke_token" | rg -i '^(HTTP/|content-type:|cache-control:|x-robots-tag:)'
+   curl -sS -o /dev/null -D - -H 'Range: bytes=0-999' "$o/f/$film_smoke_token/video" | rg -i '^(HTTP/|content-type:|content-range:|cache-control:)'
+   curl -sS -o /dev/null -D - "$o/f/$film_smoke_token/poster" | rg -i '^(HTTP/|content-type:|cache-control:)'
+   curl -sS -o /dev/null -w 'unknown-token status=%{http_code}\n' "$o/f/AAAAAAAAAAAAAAAAAAAAAA"
+   ```
+
+   Expect 200 HTML with `no-store` and `x-robots-tag: noindex, nofollow`, 206
+   `video/mp4` with `content-range`, 200 `image/jpeg`, and 404 for the made-up
+   token. Never revoke a real printed-card token during smoke testing.
 
 7. **Test revocation only with a disposable synthetic memory/token.** After
    revoking that test token through an authorized admin path, `/m`, `/media`,

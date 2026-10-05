@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getMediaUrls } from '../media/coalescer';
 import { saveEdit, type UndoAction } from './editsApi';
 import type { MemoryBookEditsShape } from '../../model/edits';
-import './FocalPointModal.css';
+import { FocalPointModalView } from './FocalPointModalView';
 
 /**
  * Reposition-in-crop editing (Design Decision 9), implemented as a
@@ -40,12 +40,9 @@ export function FocalPointModal({
   onSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
   const [url, setUrl] = useState<string | null>(null);
-  const [point, setPoint] = useState(initial ?? { x: 0.5, y: 0.5 });
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const draggingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,35 +54,13 @@ export function FocalPointModal({
     };
   }, [assetFile]);
 
-  function pointFromEvent(e: { clientX: number; clientY: number }): { x: number; y: number } {
-    const box = boxRef.current;
-    if (!box) return point;
-    const rect = box.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-    return { x, y };
-  }
-
-  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    draggingRef.current = true;
-    (e.target as Element).setPointerCapture(e.pointerId);
-    setPoint(pointFromEvent(e));
-  }
-  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!draggingRef.current) return;
-    setPoint(pointFromEvent(e));
-  }
-  function handlePointerUp() {
-    draggingRef.current = false;
-  }
-
   // `initial` is `{x,y}|null` (this modal's own render-preview state
   // doesn't need the `slot` field), but `UndoAction.focalPoints.previous`
   // is a full `FocalPointEditRecord` (mirroring the server's stored shape,
   // `slot` included) — this re-wraps it, never re-deriving `x`/`y`.
   const previousFocalPoint = initial ? { slot: slotKey, x: initial.x, y: initial.y } : null;
 
-  async function handleSave() {
+  async function handleSave(point: { x: number; y: number }) {
     setSaving(true);
     setError(null);
     const result = await saveEdit(bookId, { kind: 'focalPoint', slot: slotKey, x: point.x, y: point.y });
@@ -116,60 +91,16 @@ export function FocalPointModal({
   }
 
   return (
-    <div className="focal-modal__backdrop" onClick={onClose}>
-      <div className="focal-modal" onClick={(e) => e.stopPropagation()}>
-        <header className="focal-modal__header">
-          <h2 className="focal-modal__title">Reposition photo</h2>
-          <button type="button" className="focal-modal__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </header>
-        <p className="focal-modal__hint">Drag to choose what stays in view when this photo is cropped.</p>
-
-        <div
-          ref={boxRef}
-          className="focal-modal__box"
-          style={{ aspectRatio: `${targetAspect}` }}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-        >
-          {url ? (
-            <img
-              src={url}
-              alt=""
-              className="focal-modal__img"
-              style={{ objectPosition: `${point.x * 100}% ${point.y * 100}%` }}
-              draggable={false}
-            />
-          ) : (
-            <div className="focal-modal__placeholder" />
-          )}
-          <div className="focal-modal__reticle" style={{ left: `${point.x * 100}%`, top: `${point.y * 100}%` }} />
-        </div>
-
-        {error && <p className="focal-modal__error">{error}</p>}
-
-        <div className="focal-modal__actions">
-          {initial && (
-            <button
-              type="button"
-              className="focal-modal__button focal-modal__button--ghost focal-modal__button--reset"
-              disabled={saving || resetting}
-              onClick={() => void handleReset()}
-            >
-              {resetting ? 'Resetting…' : 'Reset to original position'}
-            </button>
-          )}
-          <button type="button" className="focal-modal__button focal-modal__button--ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="button" className="focal-modal__button" disabled={saving || resetting} onClick={() => void handleSave()}>
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <FocalPointModalView
+      url={url}
+      targetAspect={targetAspect}
+      initial={initial}
+      saving={saving}
+      resetting={resetting}
+      error={error}
+      onSave={(p) => void handleSave(p)}
+      onReset={() => void handleReset()}
+      onClose={onClose}
+    />
   );
 }

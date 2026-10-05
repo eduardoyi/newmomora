@@ -1,5 +1,13 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1';
-import { buildFrameCheckRequestBody, burstFrameVerdict, isVerifiedSubject, parseFrameCheckResponse } from './year-film-vision.ts';
+import {
+  buildFrameCheckRequestBody,
+  buildFrameCheckSystemPrompt,
+  burstFrameVerdict,
+  describeCheck,
+  isPublicSafe,
+  isVerifiedSubject,
+  parseFrameCheckResponse,
+} from './year-film-vision.ts';
 
 const IDS = new Map([['enzo', 'id-enzo'], ['mara', 'id-mara']]);
 
@@ -85,4 +93,83 @@ Deno.test('burstFrameVerdict: failClosed (public audience) drops unchecked and c
   assertEquals(burstFrameVerdict({ ...base, expression: 'upset' }, null, kids, undefined, { failClosed: true }), 'remove');
   assertEquals(burstFrameVerdict({ ...base, expression: 'upset' }, null, kids), 'keep');
   assertEquals(burstFrameVerdict(base, null, kids, undefined, { failClosed: true }), 'keep');
+});
+
+Deno.test('burstFrameVerdict: failClosed drops blurry faceless frames and screens', () => {
+  const kids = new Set(['id-enzo']);
+  const stray = { mainSubject: 'id-enzo', childrenVisible: ['id-enzo'], faceVisible: false, expression: 'not_visible' as const, quality: 'blurry' as const, unsafe: false, screenCapture: false };
+  assertEquals(burstFrameVerdict(stray, null, kids, undefined, { failClosed: true }), 'remove');
+  // A year film keeps it; sharp, or with a face, stays in both.
+  assertEquals(burstFrameVerdict(stray, null, kids), 'keep');
+  assertEquals(burstFrameVerdict({ ...stray, quality: 'good' as const }, null, kids, undefined, { failClosed: true }), 'keep');
+  assertEquals(burstFrameVerdict({ ...stray, faceVisible: true }, null, kids, undefined, { failClosed: true }), 'keep');
+  // A photo of a screen.
+  const screen = { ...stray, faceVisible: true, quality: 'good' as const, screenCapture: true };
+  assertEquals(burstFrameVerdict(screen, null, kids, undefined, { failClosed: true }), 'remove');
+  assertEquals(burstFrameVerdict(screen, null, kids), 'keep');
+});
+
+// ── Public-audience variant (holiday card film, owner 2026-10-05) ─────────
+
+Deno.test('the normal prompt is unchanged; the public prompt adds the strict rule and the extra field', () => {
+  const normal = buildFrameCheckSystemPrompt(['Enzo', 'Mara']);
+  assertEquals(normal, buildFrameCheckSystemPrompt(['Enzo', 'Mara'], { publicAudience: false }));
+  assert(normal.includes('Diapers, swimsuits, a shirtless toddler, crying'));
+  assert(!normal.includes('underdressed'));
+
+  const strict = buildFrameCheckSystemPrompt(['Enzo', 'Mara'], { publicAudience: true });
+  assert(strict.includes('"underdressed":false'));
+  for (const word of ['bare torso', 'diaper', 'bath', 'shower', 'nudity', 'toilet', 'medical procedure', 'crying']) {
+    assert(strict.includes(word), `strict prompt names ${word}`);
+  }
+  for (const word of ['beach', 'pool', 'sprinkler', 'swim trunks', 'swim-diaper', 'shirtless on the sand']) assert(strict.includes(word), `beach exception names ${word}`);
+  assert(!strict.includes('covers the torso'));
+  assert(!strict.includes('a bare chest of a person older than a baby')); // v1's unsafe wording
+  assert(strict.includes('When you cannot tell whether someone is nude, answer true'));
+  // The normal prompt's "diapers are fine" clause is not in the strict one.
+  assert(!strict.includes('Diapers, swimsuits, a shirtless toddler, crying'));
+
+  const body = buildFrameCheckRequestBody(['Enzo'], [{ name: 'Enzo', base64: 'A', contentType: 'image/jpeg' }], [{ base64: 'B', contentType: 'image/jpeg' }], 'm', { publicAudience: true }) as {
+    messages: { role: string; content: string }[];
+  };
+  assertEquals(body.messages[0].content, buildFrameCheckSystemPrompt(['Enzo'], { publicAudience: true }));
+});
+
+Deno.test('parseFrameCheckResponse: the strict variant must answer `underdressed`; the normal one never carries it', () => {
+  const frame = { index: 0, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, screen_capture: false };
+  const normalRaw = JSON.stringify({ frames: [frame] });
+  const strictRaw = JSON.stringify({ frames: [{ ...frame, underdressed: true }, { ...frame, index: 1, underdressed: false }] });
+  // Strict parse of a normal answer: no verdict (fail closed upstream).
+  assertEquals(parseFrameCheckResponse(normalRaw, 2, IDS, { publicAudience: true }).size, 0);
+  const strict = parseFrameCheckResponse(strictRaw, 2, IDS, { publicAudience: true });
+  assertEquals(strict.get(0)!.underdressed, true);
+  assertEquals(strict.get(1)!.underdressed, false);
+  assertEquals(parseFrameCheckResponse(JSON.stringify({ frames: [{ ...frame, underdressed: 'yes' }] }), 1, IDS, { publicAudience: true }).size, 0);
+  // Normal parse ignores the field entirely: a normal check never looks strict.
+  assertEquals('underdressed' in parseFrameCheckResponse(strictRaw, 2, IDS).get(0)!, false);
+});
+
+Deno.test('public verdicts: only an explicit underdressed=false passes; a normal verdict never does', () => {
+  const kids = new Set(['id-enzo']);
+  const base = { mainSubject: 'id-enzo', childrenVisible: ['id-enzo'], faceVisible: true, expression: 'smiling' as const, quality: 'good' as const, unsafe: false, screenCapture: false };
+  const pub = { publicAudience: true };
+  assertEquals(burstFrameVerdict({ ...base, underdressed: false }, null, kids, undefined, pub), 'keep');
+  assertEquals(burstFrameVerdict({ ...base, underdressed: true }, null, kids, undefined, pub), 'remove');
+  assertEquals(burstFrameVerdict(base, null, kids, undefined, pub), 'remove'); // verdict from the normal prompt
+  assertEquals(burstFrameVerdict(undefined, null, kids, undefined, pub), 'remove'); // no verdict
+  assertEquals(burstFrameVerdict({ ...base, underdressed: false, expression: 'upset' }, null, kids, undefined, pub), 'remove');
+  assertEquals(burstFrameVerdict({ ...base, underdressed: false, unsafe: true }, null, kids, undefined, pub), 'remove');
+  // The normal rules ignore the field.
+  assertEquals(burstFrameVerdict({ ...base, underdressed: true }, null, kids), 'keep');
+  assertEquals(burstFrameVerdict({ ...base, underdressed: true }, null, kids, undefined, { failClosed: true }), 'keep');
+
+  assert(isPublicSafe({ ...base, underdressed: false }));
+  assert(!isPublicSafe({ ...base, underdressed: true }));
+  assert(!isPublicSafe(base));
+  assert(!isPublicSafe(undefined));
+  assert(isVerifiedSubject({ ...base, underdressed: false }, 'id-enzo', pub));
+  assert(!isVerifiedSubject({ ...base, underdressed: true }, 'id-enzo', pub));
+  assert(!isVerifiedSubject(base, 'id-enzo', pub));
+  assert(isVerifiedSubject(base, 'id-enzo')); // year films: unchanged
+  assert(describeCheck({ ...base, underdressed: true }, new Map()).includes('UNDERDRESSED'));
 });

@@ -18,7 +18,7 @@
  * Examples:
  *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:4 --film month:2026-08
  *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:3 --subsample 60 --seed 1
- *   npm run eval:year-film-script -- --children Enzo,Mara --film holiday:2026 [--today 2026-11-10] [--subsample 30 --seed 1]
+ *   npm run eval:year-film-script -- --children Enzo,Mara --film holiday:2026 [--today 2026-11-10] [--subsample 30 --seed 1] [--greeting christmas|holidays|new-year]
  *
  * `holiday:YYYY` is the Holiday Card film (docs/plans/holiday-cards.md §6 C2):
  * Jan 1 → `--today` inclusive, share-safe pool only, floors 20 moments / 12
@@ -30,6 +30,7 @@
  *     storyboard lists every unconfirmed candidate with ids to copy from)
  *   --preferred-close <mediaId,...>  the card front's top picks (media ids or
  *     object keys): the close uses them first when they qualify
+ *   --greeting christmas|holidays|new-year  the end card's greeting (default holidays)
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import { resolvePortraitVersionAtDate } from '../functions/_shared/portrait-versions.ts';
@@ -52,6 +53,7 @@ import {
   buildQuotePrompt,
   buildQuoteRequestBody,
   parseQuoteResponse,
+  HOLIDAY_QUOTE_MODEL,
   QUOTE_MODEL,
   type QuoteRejection,
   type QuoteSubject,
@@ -75,6 +77,9 @@ import {
   familyYearVisionCandidates,
   type HolidayInput,
   holidayVisionCandidates,
+  DEFAULT_HOLIDAY_GREETING,
+  HOLIDAY_GREETINGS,
+  type HolidayGreeting,
   type MonthlyInput,
   monthlyVisionCandidates,
   shareSensitiveIds,
@@ -85,6 +90,7 @@ import {
 import {
   buildFrameCheckRequestBody,
   CLAIM_CHECK_MODEL,
+  HOLIDAY_CLAIM_CHECK_MODEL,
   FRAME_CHECK_BATCH,
   parseFrameCheckResponse,
   type VisionImage,
@@ -109,10 +115,15 @@ interface Options {
   vision: boolean;
   model: string;
   visionModel: string;
+  /** --model / --vision-model passed: they win over the holiday film's own models. */
+  modelExplicit: boolean;
+  visionModelExplicit: boolean;
   today: string;
   /** Holiday film: candidate milestones to treat as confirmed. */
   confirm: { memoryId: string; milestoneId: string }[];
   preferredClose: string[];
+  /** Holiday film: the end card's greeting. */
+  greeting: HolidayGreeting;
 }
 
 function parseArgs(args: string[]): Options {
@@ -125,9 +136,12 @@ function parseArgs(args: string[]): Options {
     vision: true,
     model: QUOTE_MODEL,
     visionModel: CLAIM_CHECK_MODEL,
+    modelExplicit: false,
+    visionModelExplicit: false,
     today: new Date().toISOString().slice(0, 10),
     confirm: [],
     preferredClose: [],
+    greeting: DEFAULT_HOLIDAY_GREETING,
   };
   for (let i = 0; i < args.length; i += 1) {
     const next = args[i + 1];
@@ -168,10 +182,12 @@ function parseArgs(args: string[]): Options {
         options.vision = false;
         break;
       case '--model':
+        options.modelExplicit = true;
         options.model = next ?? options.model;
         i += 1;
         break;
       case '--vision-model':
+        options.visionModelExplicit = true;
         options.visionModel = next ?? options.visionModel;
         i += 1;
         break;
@@ -184,6 +200,13 @@ function parseArgs(args: string[]): Options {
           const [memoryId, milestoneId] = pair.trim().split(':');
           return memoryId && milestoneId ? [{ memoryId, milestoneId }] : [];
         });
+        i += 1;
+        break;
+      case '--greeting':
+        if (!(HOLIDAY_GREETINGS as readonly string[]).includes(next ?? '')) {
+          throw new Error(`Bad --greeting "${next}". Use ${HOLIDAY_GREETINGS.join(' | ')}`);
+        }
+        options.greeting = next as HolidayGreeting;
         i += 1;
         break;
       case '--preferred-close':
@@ -299,6 +322,8 @@ async function fetchVisionImages(keys: string[]): Promise<Map<string, VisionImag
 }
 
 interface VisionResult {
+  /** The model that made these verdicts. */
+  model: string;
   checks: FrameChecks | undefined;
   checked: number;
   sent: number;
@@ -310,9 +335,11 @@ async function checkFrames(
   kids: FilmPerson[],
   referenceDate: string,
   options: Options,
+  /** The holiday card film: the strict public-audience prompt. */
+  publicAudience = false,
 ): Promise<VisionResult> {
-  if (!options.vision) return { checks: undefined, checked: 0, sent: 0, skipped: '--no-vision' };
-  if (candidates.length === 0) return { checks: new Map(), checked: 0, sent: 0, skipped: null };
+  if (!options.vision) return { model: options.visionModel, checks: undefined, checked: 0, sent: 0, skipped: '--no-vision' };
+  if (candidates.length === 0) return { model: options.visionModel, checks: new Map(), checked: 0, sent: 0, skipped: null };
   const refKeys = kids.flatMap((k) => {
     const version = resolvePortraitVersionAtDate(k.portraits, referenceDate);
     return version ? [{ kid: k, key: version.profile_picture_key }] : [];
@@ -322,7 +349,7 @@ async function checkFrames(
     const image = images.get(r.key);
     return image ? [{ ...image, name: firstName(r.kid.name) }] : [];
   });
-  if (references.length === 0) return { checks: undefined, checked: 0, sent: 0, skipped: 'no reference photos' };
+  if (references.length === 0) return { model: options.visionModel, checks: undefined, checked: 0, sent: 0, skipped: 'no reference photos' };
   const names = references.map((r) => r.name);
   const idByName = new Map(kids.map((k) => [firstName(k.name).toLowerCase(), k.id]));
   const checks: FrameChecks = new Map();
@@ -330,14 +357,14 @@ async function checkFrames(
   for (let i = 0; i < sendable.length; i += FRAME_CHECK_BATCH) {
     const batch = sendable.slice(i, i + FRAME_CHECK_BATCH);
     const content = await chat(
-      buildFrameCheckRequestBody(names, references, batch.map((f) => images.get(checkKey(f))!), options.visionModel),
+      buildFrameCheckRequestBody(names, references, batch.map((f) => images.get(checkKey(f))!), options.visionModel, { publicAudience }),
     );
     if (content === null) continue;
-    for (const [index, check] of parseFrameCheckResponse(content, batch.length, idByName)) {
+    for (const [index, check] of parseFrameCheckResponse(content, batch.length, idByName, { publicAudience })) {
       checks.set(checkKey(batch[index]), check);
     }
   }
-  return { checks, checked: checks.size, sent: sendable.length, skipped: null };
+  return { model: options.visionModel, checks, checked: checks.size, sent: sendable.length, skipped: null };
 }
 
 // ── Asset download for the storyboard ────────────────────────────────────
@@ -643,6 +670,8 @@ const children: FilmPerson[] = pickChildren(
 const textById = new Map(data.memories.map((m) => [m.id, m.text]));
 // Share-sensitive memories never reach the quote picker (plan §3).
 const sensitive = shareSensitiveIds(data.memories, data.milestones);
+// The holiday card film is public: a stricter text/topic screen (the vision check is the real guard).
+const publicSensitive = shareSensitiveIds(data.memories, data.milestones, { publicAudience: true });
 const quotable = (pool: FilmMemorySource[]) => pool.filter((m) => !sensitive.has(m.id));
 const runId = new Date().toISOString().replace(/[:.]/g, '-');
 const runDir = new URL(`./eval-output/year-film-script/${runId}/`, import.meta.url);
@@ -664,7 +693,7 @@ async function emit(slug: string, label: string, script: FilmScript, quotes: Quo
   await Deno.writeTextFile(new URL('film-script.json', dir), JSON.stringify(script, null, 2));
   await Deno.writeTextFile(new URL('quotes.json', dir), JSON.stringify(quotes, null, 2));
   // Vision verdicts per frame (model A/B comparisons) and this film's model cost.
-  await Deno.writeTextFile(new URL('vision-checks.json', dir), JSON.stringify({ model: options.visionModel, checks: Object.fromEntries(vision.checks ?? []) }, null, 2));
+  await Deno.writeTextFile(new URL('vision-checks.json', dir), JSON.stringify({ model: vision.model, checks: Object.fromEntries(vision.checks ?? []) }, null, 2));
   await Deno.writeTextFile(new URL('usage.json', dir), JSON.stringify(usageSummary(), null, 2));
   console.log(formatUsage(`${slug} F1 models`));
   resetUsage();
@@ -714,11 +743,11 @@ for (const film of options.films) {
     // Jan 1 → the day the card is made, inclusive (default: today).
     const madeOn = options.today.startsWith(String(film.year)) ? options.today : `${film.year}-12-31`;
     const scope = holidayFilmScope(film.year, madeOn);
-    const fullPool = holidayPool(data.memories, scope, sensitive);
+    const fullPool = holidayPool(data.memories, scope, publicSensitive);
     const variants = [null, ...options.subsample.filter((n) => n < fullPool.length)];
     for (const n of variants) {
       const memories = n === null ? data.memories : subsamplePool(data.memories, new Set(fullPool.map((m) => m.id)), n, options.seed);
-      const evaluation = evaluateHolidayFilm({ memories, children, scope, excludeIds: sensitive });
+      const evaluation = evaluateHolidayFilm({ memories, children, scope, excludeIds: publicSensitive });
       const slug = `holiday-${film.year}${n === null ? '' : `-sub${n}-seed${options.seed}`}`;
       if (!evaluation.eligible) {
         console.log(
@@ -727,14 +756,20 @@ for (const film of options.films) {
         );
         continue;
       }
-      const pool = holidayPool(memories, scope, sensitive);
+      const pool = holidayPool(memories, scope, publicSensitive);
       const kids = chapterChildren(children.map((c) => ({ id: c.id, dateOfBirth: c.dateOfBirth })), scope)
         .map((k) => children.find((c) => c.id === k.id)!);
       // --confirm-milestones: preview the firsts scene with these treated as confirmed.
       const milestones = data.milestones.map((m) =>
         options.confirm.some((c) => c.memoryId === m.memoryId && c.milestoneId === m.milestoneId) ? { ...m, status: 'confirmed' } : m
       );
-      const quotes = await pickQuotes(pool, kids.map((k) => ({ id: k.id, name: firstName(k.name) })), options);
+      // The holiday card film picks its quote and runs its claim checks on gpt-6.1-sol (owner, 2026-10-05).
+      const holidayOptions: Options = {
+        ...options,
+        model: options.modelExplicit ? options.model : HOLIDAY_QUOTE_MODEL,
+        visionModel: options.visionModelExplicit ? options.visionModel : HOLIDAY_CLAIM_CHECK_MODEL,
+      };
+      const quotes = await pickQuotes(pool, kids.map((k) => ({ id: k.id, name: firstName(k.name) })), holidayOptions);
       const input: HolidayInput = {
         year: film.year,
         scope,
@@ -746,8 +781,9 @@ for (const film of options.films) {
         quotes: quotes.accepted,
         language: languageFor(pool, quotes),
         ...(options.preferredClose.length ? { preferredCloseMedia: options.preferredClose } : {}),
+        greeting: options.greeting,
       };
-      const vision = await checkFrames(holidayVisionCandidates(input), kids, scope.endExclusive, options);
+      const vision = await checkFrames(holidayVisionCandidates(input), kids, scope.endExclusive, holidayOptions, true);
       const script = buildHolidayScript({ ...input, checks: vision.checks });
       const label = `Holiday card film (${scope.start} → ${madeOn})${n === null ? '' : ` · subsample ${n} of ${fullPool.length} (seed ${options.seed})`}${
         options.confirm.length ? ` · ${options.confirm.length} milestone(s) confirmed for this run` : ''

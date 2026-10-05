@@ -1,0 +1,28 @@
+/* Card sheets: every box is positioned in millimetres (see document.ts), so the
+ * preview (scaled with CSS transform) and the PDF render the same geometry. */
+.card-sheet {
+  position: relative;
+  overflow: hidden;
+  font-optical-sizing: none;
+  font-kerning: normal;
+  -webkit-font-smoothing: antialiased;
+  color: #55483c;
+}
+.card-sheet *,
+.card-sheet *::before,
+.card-sheet *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+.card-sheet img {
+  display: block;
+  max-width: none;
+}
+.card-abs {
+  position: absolute;
+}
+.card-line {
+  white-space: pre;
+  overflow: visible;
+}

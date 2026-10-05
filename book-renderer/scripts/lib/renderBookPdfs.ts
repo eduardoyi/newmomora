@@ -84,7 +84,7 @@ export interface RenderBookPdfsResult {
 }
 
 const PT_PER_MM = 72 / 25.4;
-function mmToPt(mm: number): number {
+export function mmToPt(mm: number): number {
   return mm * PT_PER_MM;
 }
 function sha256Hex(bytes: Uint8Array): string {
@@ -127,7 +127,7 @@ function sendJson(res: http.ServerResponse, data: unknown): void {
   res.end(body);
 }
 
-function serveStatic(rootDir: string, pathname: string, res: http.ServerResponse): void {
+export function serveStatic(rootDir: string, pathname: string, res: http.ServerResponse): void {
   const decoded = decodeURIComponent(pathname);
   const relative = decoded === '/' ? '/index.html' : decoded;
   const normalizedRoot = path.normalize(rootDir);
@@ -268,7 +268,7 @@ const TRIM_PAGE_MM = PHYSICAL.pageSizeMm;
 // order of magnitude.
 const TOLERANCE_PT = 1.5;
 
-function assertSizeMm(label: string, widthPt: number, heightPt: number, expectedWidthMm: number, expectedHeightMm: number): void {
+export function assertSizeMm(label: string, widthPt: number, heightPt: number, expectedWidthMm: number, expectedHeightMm: number): void {
   const expectedWidthPt = mmToPt(expectedWidthMm);
   const expectedHeightPt = mmToPt(expectedHeightMm);
   const widthOk = Math.abs(widthPt - expectedWidthPt) <= TOLERANCE_PT;

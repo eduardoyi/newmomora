@@ -1,3 +1,4 @@
+import type { FilmRow, FilmTokenRow } from './film';
 import type { MemoryHeaderRow, MemoryMediaAssetRow, ShareTokenRow } from './resolve';
 
 /**
@@ -96,4 +97,34 @@ export async function fetchPrimaryMediaAsset(env: Env, memoryId: string): Promis
     order: 'position.asc',
   });
   return pickViewerAsset(rows);
+}
+
+/**
+ * `film_share_tokens` lookup for the public film page: the film id and the
+ * revocation marker, regardless of revocation (the caller tells "never minted"
+ * from "turned off"). Service-role, like every read here.
+ */
+export async function fetchFilmShareToken(env: Env, token: string): Promise<FilmTokenRow | null> {
+  const rows = await supabaseRequest<FilmTokenRow[]>(env, 'film_share_tokens', {
+    select: 'film_id,revoked_at',
+    token: `eq.${token}`,
+    limit: '1',
+  });
+  return rows[0] ?? null;
+}
+
+/**
+ * The film behind an active token. `film_script` is selected only so the
+ * resolver can read the end card's greeting and signature line (film.ts drops
+ * everything else; it holds memory text, which must never reach a page, a
+ * header or a log). `families(deleted_at)` lets a family pending deletion turn
+ * its public films off during the 15-day grace period.
+ */
+export async function fetchFilm(env: Env, filmId: string): Promise<FilmRow | null> {
+  const rows = await supabaseRequest<FilmRow[]>(env, 'year_films', {
+    select: 'id,family_id,kind,status,blocked,video_key,poster_key,language,film_script,families(deleted_at)',
+    id: `eq.${filmId}`,
+    limit: '1',
+  });
+  return rows[0] ?? null;
 }

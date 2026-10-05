@@ -11,6 +11,10 @@ import type { VoiceCheck } from './year-film-voice.ts';
 /** Bump when a check prompt changes in a way that should re-check. */
 export const CHECK_PROMPT_VERSION = 1;
 
+/** Bump (v3…) whenever the public-audience prompt changes in a way that should re-check. */
+export const PUBLIC_CHECK_VARIANT = 'public-v2';
+export type PublicCheckVariant = typeof PUBLIC_CHECK_VARIANT;
+
 export type CheckKind = 'claim' | 'frame' | 'voice';
 
 export interface QuotePick {
@@ -39,13 +43,19 @@ export interface CheckKeyInput {
   window?: { start: number; end: number } | null;
   /** Reference portrait keys the model compared against (frame/claim). */
   referenceKeys?: readonly string[];
+  /** 'public-v2': the public-audience prompt (holiday card film; v2 = bare torsos
+   * are fine in a beach/pool/swim context, owner 2026-10-05 round 3). Part of
+   * the key, so a normal verdict — or one from the retired 'public' (v1, no beach
+   * exception) prompt — is never reused. Absent for every other film, which keeps
+   * its keys (and cached verdicts) as they were. */
+  variant?: PublicCheckVariant;
 }
 
 export async function checkCacheKey(input: CheckKeyInput): Promise<string> {
   const window = input.window ? `${input.window.start.toFixed(3)}-${input.window.end.toFixed(3)}` : '';
   const refs = [...(input.referenceKeys ?? [])].sort().join(',');
   return `${input.kind}:${await sha(
-    [CHECK_PROMPT_VERSION, input.model, input.assetKey, window, refs].join('\u001f'),
+    [CHECK_PROMPT_VERSION, input.model, input.assetKey, window, refs, ...(input.variant ? [input.variant] : [])].join('\u001f'),
   )}`;
 }
 

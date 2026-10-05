@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { saveEdit, type UndoAction } from '../edits/editsApi';
 import type { MemoryBookEditsShape, TextEditRecord } from '../../model/edits';
 import type { PositionedTextRegion } from './useOverlayGeometry';
-import './EditOverlay.css';
+import { TextPopoverView } from './TextPopoverView';
 
 /**
  * Floating popover editor for one text region, anchored just below its
@@ -32,16 +32,11 @@ export function TextEditPopover({
   onClose: () => void;
   onSaved: (edits: MemoryBookEditsShape, undo: UndoAction) => void;
 }) {
-  const [value, setValue] = useState(region.value);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setValue(region.value);
-  }, [region.target, region.value]);
-
-  async function handleSave() {
+  async function handleSave(value: string) {
     if (saving || resetting) return;
     setSaving(true);
     setError(null);
@@ -69,7 +64,6 @@ export function TextEditPopover({
     onClose();
   }
 
-  const Field = region.multiline ? 'textarea' : 'input';
   // Anchored just below the region's own rect (both are relative to the
   // same stage container — see `useOverlayGeometry`). `maxWidth` +
   // `.text-popover`'s own CSS keep it from overflowing the stage on a
@@ -80,46 +74,21 @@ export function TextEditPopover({
   };
 
   return (
-    <>
-      <div className="text-popover__backdrop" onClick={onClose} />
-      <div className="text-popover" style={style} onClick={(e) => e.stopPropagation()}>
-        <span className="text-popover__label">
-          {region.label}
-          {region.approximate && <span className="text-popover__approx-hint"> · tap to add</span>}
-        </span>
-        <Field
-          className="text-popover__input"
-          value={value}
-          placeholder={region.placeholder}
-          rows={region.multiline ? 3 : undefined}
-          autoFocus
-          onChange={(e) => setValue(e.target.value)}
-        />
-        {error && <p className="text-popover__error">{error}</p>}
-        <div className="text-popover__actions">
-          {currentEdit && (
-            <button
-              type="button"
-              className="text-popover__button text-popover__button--ghost text-popover__button--reset"
-              disabled={saving || resetting}
-              onClick={() => void handleReset()}
-            >
-              {resetting ? 'Resetting…' : 'Reset to original'}
-            </button>
-          )}
-          <button type="button" className="text-popover__button text-popover__button--ghost" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="text-popover__button"
-            disabled={saving || resetting || value === region.value}
-            onClick={() => void handleSave()}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-        </div>
-      </div>
-    </>
+    <TextPopoverView
+      label={region.label}
+      approximateHint={region.approximate}
+      value={region.value}
+      resetKey={region.target}
+      placeholder={region.placeholder}
+      multiline={region.multiline}
+      canReset={currentEdit !== null}
+      saving={saving}
+      resetting={resetting}
+      error={error}
+      style={style}
+      onSave={(v) => void handleSave(v)}
+      onReset={() => void handleReset()}
+      onClose={onClose}
+    />
   );
 }

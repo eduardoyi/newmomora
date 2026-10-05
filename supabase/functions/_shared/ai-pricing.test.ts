@@ -79,6 +79,17 @@ Deno.test('gpt-6 chat usage is priced under its own pricing version (Year Film)'
   assertEquals(priceOpenAiUsage('gpt-audio-1.5', { audio_seconds: 6 }).costBasis, 'unpriced'); // no token counts
 });
 
+Deno.test('gpt-6.1-sol (holiday card film) is priced: $2 in, $0.10 cached, $10 out, own pricing version', () => {
+  const sol = priceOpenAiUsage('gpt-6.1-sol', { input_text_tokens: 10_000, output_text_tokens: 1_000 });
+  assertEquals(sol.pricingVersion, 'openai-2026-09-29');
+  assertEquals(sol.costIsComplete, true);
+  assertEquals(Math.round((sol.estimatedCostUsd ?? 0) * 1e6), 30_000);
+  const cached = priceOpenAiUsage('gpt-6.1-sol', { input_text_tokens: 5_000, cached_input_tokens: 5_000, output_text_tokens: 0 });
+  assertEquals(Math.round((cached.estimatedCostUsd ?? 0) * 1e6), 10_500); // 5k*2 + 5k*0.10 per million
+  // gpt-6-sol keeps its rates and version.
+  assertEquals(priceOpenAiUsage('gpt-6-sol', { input_text_tokens: 10_000, output_text_tokens: 1_000 }).pricingVersion, 'openai-2026-09-28');
+});
+
 Deno.test('gpt-audio voice checks price audio and text tokens separately', async () => {
   const { openAiAudioTokens } = await import('./ai-pricing.ts');
   const usage = { prompt_tokens: 260, completion_tokens: 40, prompt_tokens_details: { audio_tokens: 60 } };

@@ -8,10 +8,12 @@ import {
   resolveViewerMedia,
   type ResolvedMedia,
 } from './resolve';
-import { parseRangeHeader, formatContentRange } from './range';
+import { streamR2Object } from './stream';
 import { fetchShareToken, fetchMemoryHeader, fetchPrimaryMediaAsset } from './supabase';
 import { renderViewerPage, renderNotFoundPage, renderRevokedPage } from './page';
 import { BRAND_POSTER_BYTES, BRAND_POSTER_CONTENT_TYPE } from './brand-poster';
+import { parseFilmRoute } from './film';
+import { filmNotFoundPage, handleFilmRoute } from './film-routes';
 
 // Open Graph crawlers use these URLs outside the current browser request. Do
 // not derive their origin from `request.url`: an alternate custom domain or a
@@ -138,40 +140,15 @@ async function handleMediaBytes(env: Env, request: Request, token: string): Prom
   if (resolution.kind !== 'media') return nonMediaResponse(resolution)!;
   const media = resolution.media;
 
-  const range = parseRangeHeader(request.headers.get('Range'));
-  const object = range
-    ? await env.MEDIA.get(media.objectKey, { range })
-    : await env.MEDIA.get(media.objectKey);
+  const response = await streamR2Object(env.MEDIA, request, media.objectKey, media.contentType);
 
   // The DB row pointed at an object that isn't in R2 (upload never
   // completed, or the two stores drifted). Same friendly 404 -- from the
   // scanning family member's point of view this is indistinguishable from
-  // "link doesn't work".
-  if (!object) return notFoundPage();
-
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  // Always set content-type from the DB row, not R2's stored
-  // httpMetadata: memory_media rows are the source of truth for what an
-  // asset IS (see resolve.ts's HEIC->preview substitution, which changes
-  // the served content-type without changing what's in R2's own metadata).
-  headers.set('content-type', media.contentType);
-  headers.set('etag', object.httpEtag);
-  headers.set('accept-ranges', 'bytes');
-  // `/media/:token` is also a revocation-sensitive bearer URL. A browser or
-  // intermediary cache must not keep serving bytes after the token is
-  // revoked, even if it fetched them shortly before that change.
-  headers.set('cache-control', 'private, no-store');
-
-  if (object.range) {
-    const { offset, length } = object.range;
-    headers.set('content-range', formatContentRange({ servedOffset: offset, servedLength: length, totalSize: object.size }));
-    headers.set('content-length', String(length));
-    return new Response(object.body, { status: 206, headers });
-  }
-
-  headers.set('content-length', String(object.size));
-  return new Response(object.body, { status: 200, headers });
+  // "link doesn't work". Content-type always comes from the DB row, not R2's
+  // stored httpMetadata: memory_media rows are the source of truth for what
+  // an asset IS (see resolve.ts's HEIC->preview substitution).
+  return response ?? notFoundPage();
 }
 
 /**
@@ -218,6 +195,13 @@ export default Sentry.withSentry(sentryOptions, {
       return new Response(JSON.stringify({ ok: true }), {
         headers: { 'content-type': 'application/json' },
       });
+    }
+
+    // Public film page (holiday card QR). Checked first so a malformed /f/
+    // path gets the film-flavored 404 rather than the memory one.
+    if (url.pathname.startsWith('/f/')) {
+      const filmRoute = parseFilmRoute(url.pathname);
+      return filmRoute ? handleFilmRoute(env, request, filmRoute) : filmNotFoundPage();
     }
 
     const viewerToken = parseShareToken(url.pathname, '/m/');

@@ -8,17 +8,21 @@ import { resolvePortraitVersionAtDate } from '../../../supabase/functions/_share
 import {
   applyPrepared,
   assetId,
+  blockedSoundWindows,
+  type FrameNeed,
   type FrameResolution,
+  isPublicFilm,
   planPrepare,
   type PrepareManifest,
   resolveFrames,
   resolveSound,
+  soundFrameNeeds,
   type SoundChoice,
   voiceRef,
   frameRef,
 } from '../../../supabase/functions/_shared/year-film-assets.ts';
 import { defaultBed, isYearFilmBed } from '../../../supabase/functions/_shared/year-film-beds.ts';
-import { cachedFrame, cachedQuote, cachedVoice, checkCacheKey, type CheckCache, splitBatch } from '../../../supabase/functions/_shared/year-film-checks.ts';
+import { cachedFrame, cachedQuote, cachedVoice, checkCacheKey, type CheckCache, PUBLIC_CHECK_VARIANT, splitBatch } from '../../../supabase/functions/_shared/year-film-checks.ts';
 import {
   type FamilyRows,
   firstName,
@@ -34,6 +38,7 @@ import { detectJournalLanguage, type FilmLanguage, resolveFilmLanguage } from '.
 import {
   buildQuotePrompt,
   buildQuoteRequestBody,
+  HOLIDAY_QUOTE_MODEL,
   parseQuoteResponse,
   QUOTE_MODEL,
   selectQuotePool,
@@ -57,6 +62,7 @@ import {
   buildFrameCheckRequestBody,
   CLAIM_CHECK_MODEL,
   FRAME_CHECK_BATCH,
+  HOLIDAY_CLAIM_CHECK_MODEL,
   FRAME_CHECK_MODEL,
   parseFrameCheckResponse,
   type VisionImage,
@@ -239,10 +245,14 @@ export async function pollMachine(deps: StageDeps, statusKey: string, machineId:
 
 // ── 2. Quote pick (sticky) ───────────────────────────────────────────────
 
+/** The holiday card film runs its quote pick and claim checks on GPT-6.1 Sol. */
+const quoteModelFor = (plan: FilmPlan) => (plan.kind === 'family_holiday' ? HOLIDAY_QUOTE_MODEL : QUOTE_MODEL);
+const claimModelFor = (plan: FilmPlan) => (plan.kind === 'family_holiday' ? HOLIDAY_CLAIM_CHECK_MODEL : CLAIM_CHECK_MODEL);
+
 async function quoteCacheKey(plan: FilmPlan): Promise<string> {
   const pool = selectQuotePool(plan.quotable, plan.quoteSubjects);
   return `quote:${(await checkCacheKey({
-    kind: 'claim', model: QUOTE_MODEL, assetKey: pool.map((m) => m.id).join(','), referenceKeys: plan.quoteSubjects.map((s) => s.id),
+    kind: 'claim', model: quoteModelFor(plan), assetKey: pool.map((m) => m.id).join(','), referenceKeys: plan.quoteSubjects.map((s) => s.id),
   })).slice(6)}`;
 }
 
@@ -258,8 +268,8 @@ export async function pickQuote(deps: StageDeps): Promise<{ quotes: number }> {
   let value: { accepted: VerifiedQuote[]; language: string | null } = { accepted: [], language: null };
   if (pool.length > 0) {
     const { system, user } = buildQuotePrompt(plan.quoteSubjects, pool);
-    const result = await deps.chat(buildQuoteRequestBody(system, user, QUOTE_MODEL));
-    await recordUsage(deps, key, 'year_film_quote', QUOTE_MODEL, result.ok, result.usage);
+    const result = await deps.chat(buildQuoteRequestBody(system, user, quoteModelFor(plan)));
+    await recordUsage(deps, key, 'year_film_quote', quoteModelFor(plan), result.ok, result.usage);
     if (result.content !== null) {
       const parsed = parseQuoteResponse(result.content, plan.quoteSubjects, new Map(pool.map((m) => [m.id, m.text])));
       value = { accepted: parsed.accepted, language: parsed.language };
@@ -271,14 +281,20 @@ export async function pickQuote(deps: StageDeps): Promise<{ quotes: number }> {
 
 // ── 3. Claim checks ──────────────────────────────────────────────────────
 
+/** The holiday card film runs the strict public-audience prompt (owner,
+ * 2026-10-05); its verdicts are cached under their own key variant. */
+const publicVariant = (isPublic: boolean) => (isPublic ? { variant: PUBLIC_CHECK_VARIANT as typeof PUBLIC_CHECK_VARIANT } : {});
+const visionOptions = (isPublic: boolean) => ({ publicAudience: isPublic });
+
 async function claimKeys(plan: FilmPlan): Promise<{ frame: FrameRef; key: string }[]> {
   const refs = claimReferences(plan).map((r) => r.key);
+  const isPublic = plan.kind === 'family_holiday';
   const seen = new Set<string>();
   const out: { frame: FrameRef; key: string }[] = [];
   for (const frame of candidates(plan)) {
     if (seen.has(checkKey(frame))) continue;
     seen.add(checkKey(frame));
-    out.push({ frame, key: await checkCacheKey({ kind: 'claim', model: CLAIM_CHECK_MODEL, assetKey: checkKey(frame), referenceKeys: refs }) });
+    out.push({ frame, key: await checkCacheKey({ kind: 'claim', model: claimModelFor(plan), assetKey: checkKey(frame), referenceKeys: refs, ...publicVariant(isPublic) }) });
   }
   return out;
 }
@@ -318,9 +334,10 @@ export async function runClaimChecks(deps: StageDeps): Promise<{ checked: number
     }
     let checks: CheckCache = Object.fromEntries(skipped.map((k) => [k, { kind: 'claim', value: null }]));
     if (images.length > 0) {
-      const result = await deps.chat(buildFrameCheckRequestBody(references.map((r) => r.name), references, images, CLAIM_CHECK_MODEL));
-      await recordUsage(deps, keys[0], 'year_film_vision', CLAIM_CHECK_MODEL, result.ok, result.usage);
-      const parsed = result.content !== null ? parseFrameCheckResponse(result.content, images.length, idByName) : new Map();
+      const isPublic = plan.kind === 'family_holiday';
+      const result = await deps.chat(buildFrameCheckRequestBody(references.map((r) => r.name), references, images, claimModelFor(plan), visionOptions(isPublic)));
+      await recordUsage(deps, keys[0], 'year_film_vision', claimModelFor(plan), result.ok, result.usage);
+      const parsed = result.content !== null ? parseFrameCheckResponse(result.content, images.length, idByName, visionOptions(isPublic)) : new Map();
       checks = { ...checks, ...splitBatch('claim', keys, parsed) };
       checked += images.length;
     }
@@ -436,12 +453,74 @@ async function soundVerdicts(prep: PrepareManifest, cache: CheckCache): Promise<
   return out;
 }
 
-/** Walks the sound candidates, one voice check at a time, persisting each. */
+/** The reference photos and name map the frame checks compare against. */
+async function frameReferences(deps: StageDeps, prefix: string, script: FilmScript, prep: PrepareManifest) {
+  const { people, ctx } = frameContext(script, prep);
+  const referenceKeys = people.map((p) => p.referenceKey!).sort();
+  const references: (VisionImage & { name: string })[] = [];
+  for (const p of people) {
+    const b64 = await deps.storage.getBase64(`${prefix}${prep.assets[assetId('reference', p.referenceKey!)].checkImage}`);
+    if (b64) references.push({ base64: b64, contentType: 'image/jpeg', name: p.name });
+  }
+  const idByName = new Map(people.map((p) => [p.name.toLowerCase(), p.id]));
+  return { ctx, referenceKeys, references, idByName };
+}
+
+/** Runs the frame checks `needs` asks for, in batches, persisting each batch;
+ * returns the cache with the new verdicts. */
+async function runFrameNeeds(
+  deps: StageDeps,
+  prefix: string,
+  prep: PrepareManifest,
+  needs: FrameNeed[],
+  refs: { referenceKeys: string[]; references: (VisionImage & { name: string })[]; idByName: Map<string, string> },
+  isPublic: boolean,
+  cache: CheckCache & Record<string, unknown>,
+): Promise<CheckCache & Record<string, unknown>> {
+  for (let i = 0; i < needs.length; i += FRAME_CHECK_BATCH) {
+    const batch = needs.slice(i, i + FRAME_CHECK_BATCH);
+    const keys = await Promise.all(batch.map((n) => frameKey(prep, n, refs.referenceKeys, isPublic)));
+    const images: VisionImage[] = [];
+    const sentKeys: string[] = [];
+    const missing: string[] = [];
+    for (let j = 0; j < batch.length; j += 1) {
+      const b64 = await deps.storage.getBase64(`${prefix}${batch[j].checkImage}`);
+      if (b64) {
+        images.push({ base64: b64, contentType: 'image/jpeg' });
+        sentKeys.push(keys[j]);
+      } else missing.push(keys[j]);
+    }
+    let checks: CheckCache = Object.fromEntries(missing.map((k) => [k, { kind: 'frame', value: null }]));
+    if (images.length > 0) {
+      const result = await deps.chat(buildFrameCheckRequestBody(refs.references.map((x) => x.name), refs.references, images, FRAME_CHECK_MODEL, visionOptions(isPublic)));
+      await recordUsage(deps, sentKeys[0], 'year_film_vision', FRAME_CHECK_MODEL, result.ok, result.usage);
+      const parsed = result.content !== null ? parseFrameCheckResponse(result.content, images.length, refs.idByName, visionOptions(isPublic)) : new Map();
+      checks = { ...checks, ...splitBatch('frame', sentKeys, parsed) };
+    }
+    await deps.bridge.call('save_checks', { checks });
+    cache = { ...cache, ...checks } as typeof cache;
+  }
+  return cache;
+}
+
+/** Walks the sound candidates, one voice check at a time, persisting each.
+ * A public film (holiday card) first strict-checks the frames of its video
+ * sound windows, so a window the check removes is skipped like a failed voice
+ * check. */
 export async function runVoiceChecks(deps: StageDeps, prefix: string, maxChecks = 12): Promise<{ done: boolean }> {
   const { envelope, prep } = await prepared(deps, prefix);
+  const isPublic = isPublicFilm(envelope.script);
   let cache = await aiChecks(deps);
+  let blocked = new Set<string>();
+  if (isPublic) {
+    const refs = await frameReferences(deps, prefix, envelope.script, prep);
+    const verdicts = () => frameVerdicts(prep, cache, refs.referenceKeys, true);
+    const needs = soundFrameNeeds(envelope.script, prep, await verdicts());
+    if (needs.length > 0) cache = await runFrameNeeds(deps, prefix, prep, needs, refs, true, cache);
+    blocked = blockedSoundWindows(envelope.script, prep, await verdicts());
+  }
   for (let i = 0; i < maxChecks; i += 1) {
-    const r = resolveSound(envelope.script, prep, await soundVerdicts(prep, cache));
+    const r = resolveSound(envelope.script, prep, await soundVerdicts(prep, cache), blocked);
     if ('done' in r) return { done: true };
     const key = await voiceKey(prep, r.need.assetId, r.need.windowIndex);
     const wav = await deps.storage.getBase64(`${prefix}${r.need.wav}`);
@@ -472,20 +551,22 @@ function frameContext(script: FilmScript, prep: PrepareManifest) {
   };
 }
 
-async function frameKey(prep: PrepareManifest, ref: { assetId: string; windowIndex: number | null }, referenceKeys: string[]): Promise<string> {
+async function frameKey(prep: PrepareManifest, ref: { assetId: string; windowIndex: number | null }, referenceKeys: string[], isPublic: boolean): Promise<string> {
   const p = prep.assets[ref.assetId];
   return await checkCacheKey({
     kind: 'frame', model: FRAME_CHECK_MODEL, assetKey: p.key,
-    window: ref.windowIndex === null ? null : p.windows[ref.windowIndex], referenceKeys,
+    window: ref.windowIndex === null ? null : p.windows[ref.windowIndex], referenceKeys, ...publicVariant(isPublic),
   });
 }
 
-async function frameVerdicts(prep: PrepareManifest, cache: CheckCache, referenceKeys: string[]) {
+async function frameVerdicts(prep: PrepareManifest, cache: CheckCache, referenceKeys: string[], isPublic: boolean) {
   const out: Record<string, NonNullable<ReturnType<typeof cachedFrame>> | null> = {};
   for (const [id, p] of Object.entries(prep.assets)) {
-    const refs: (number | null)[] = p.mode === 'clip' || p.mode === 'verified' ? p.windows.map((_, i) => i) : [null];
+    // A public film also checks each video sound window (the scene shows it).
+    const windowed = p.mode === 'clip' || p.mode === 'verified' || (isPublic && p.mode === 'voice');
+    const refs: (number | null)[] = windowed ? p.windows.map((_, i) => i) : [null];
     for (const w of refs) {
-      const v = cachedFrame(cache, await frameKey(prep, { assetId: id, windowIndex: w }, referenceKeys));
+      const v = cachedFrame(cache, await frameKey(prep, { assetId: id, windowIndex: w }, referenceKeys, isPublic));
       if (v !== undefined) out[frameRef(id, w)] = v;
     }
   }
@@ -495,41 +576,13 @@ async function frameVerdicts(prep: PrepareManifest, cache: CheckCache, reference
 /** Frame-check rounds (first windows batched, then re-cut windows). */
 export async function runFrameChecks(deps: StageDeps, prefix: string, maxRounds = 6): Promise<{ done: boolean }> {
   const { envelope, prep } = await prepared(deps, prefix);
-  const { people, ctx } = frameContext(envelope.script, prep);
-  const referenceKeys = people.map((p) => p.referenceKey!).sort();
-  const references: (VisionImage & { name: string })[] = [];
-  for (const p of people) {
-    const b64 = await deps.storage.getBase64(`${prefix}${prep.assets[assetId('reference', p.referenceKey!)].checkImage}`);
-    if (b64) references.push({ base64: b64, contentType: 'image/jpeg', name: p.name });
-  }
-  const idByName = new Map(people.map((p) => [p.name.toLowerCase(), p.id]));
+  const isPublic = isPublicFilm(envelope.script);
+  const refs = await frameReferences(deps, prefix, envelope.script, prep);
   let cache = await aiChecks(deps);
   for (let round = 0; round < maxRounds; round += 1) {
-    const r = resolveFrames(envelope.script, prep, await frameVerdicts(prep, cache, referenceKeys), { ...ctx, hasReferences: references.length > 0 });
+    const r = resolveFrames(envelope.script, prep, await frameVerdicts(prep, cache, refs.referenceKeys, isPublic), { ...refs.ctx, hasReferences: refs.references.length > 0 });
     if ('done' in r) return { done: true };
-    for (let i = 0; i < r.needs.length; i += FRAME_CHECK_BATCH) {
-      const batch = r.needs.slice(i, i + FRAME_CHECK_BATCH);
-      const keys = await Promise.all(batch.map((n) => frameKey(prep, n, referenceKeys)));
-      const images: VisionImage[] = [];
-      const sentKeys: string[] = [];
-      const missing: string[] = [];
-      for (let j = 0; j < batch.length; j += 1) {
-        const b64 = await deps.storage.getBase64(`${prefix}${batch[j].checkImage}`);
-        if (b64) {
-          images.push({ base64: b64, contentType: 'image/jpeg' });
-          sentKeys.push(keys[j]);
-        } else missing.push(keys[j]);
-      }
-      let checks: CheckCache = Object.fromEntries(missing.map((k) => [k, { kind: 'frame', value: null }]));
-      if (images.length > 0) {
-        const result = await deps.chat(buildFrameCheckRequestBody(references.map((x) => x.name), references, images, FRAME_CHECK_MODEL));
-        await recordUsage(deps, sentKeys[0], 'year_film_vision', FRAME_CHECK_MODEL, result.ok, result.usage);
-        const parsed = result.content !== null ? parseFrameCheckResponse(result.content, images.length, idByName) : new Map();
-        checks = { ...checks, ...splitBatch('frame', sentKeys, parsed) };
-      }
-      await deps.bridge.call('save_checks', { checks });
-      cache = { ...cache, ...checks } as typeof cache;
-    }
+    cache = await runFrameNeeds(deps, prefix, prep, r.needs, refs, isPublic, cache);
   }
   return { done: false };
 }
@@ -538,10 +591,12 @@ export async function runFrameChecks(deps: StageDeps, prefix: string, maxRounds 
 export async function writeFilmJson(deps: StageDeps, prefix: string): Promise<{ written: true }> {
   const { envelope, prep } = await prepared(deps, prefix);
   const cache = await aiChecks(deps);
-  const sound = resolveSound(envelope.script, prep, await soundVerdicts(prep, cache));
   const { people, ctx } = frameContext(envelope.script, prep);
   const referenceKeys = people.map((p) => p.referenceKey!).sort();
-  const frames = resolveFrames(envelope.script, prep, await frameVerdicts(prep, cache, referenceKeys), ctx);
+  const isPublic = isPublicFilm(envelope.script);
+  const verdicts = await frameVerdicts(prep, cache, referenceKeys, isPublic);
+  const sound = resolveSound(envelope.script, prep, await soundVerdicts(prep, cache), blockedSoundWindows(envelope.script, prep, verdicts));
+  const frames = resolveFrames(envelope.script, prep, verdicts, ctx);
   if (!('done' in sound) || !('done' in frames)) throw new Error('checks_incomplete');
   const film = applyPrepared(envelope.script, prep, sound.done as SoundChoice | null, frames.done as FrameResolution, envelope.bed);
   await deps.storage.putJson(`${prefix}film.json`, film);
