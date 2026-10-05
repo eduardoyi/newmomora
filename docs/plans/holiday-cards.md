@@ -698,6 +698,52 @@ the deploy steps):
 - New A5 draft `9703d949…` (`…pf_a5_upt_350-gsm-130lb-coated-silk…glossy-protection_prt_1-0…`),
   3 packs, same QR token.
 
+- **Held** (A5 order `9703d949…`): "Can't combine multiple files into
+  production one". **The EU line wants ONE 2-page PDF** (page 1 front, page 2
+  back) as `type: 'default'`; the US 5R product wanted separate
+  `default` + `back` files. P1's product map must carry the file layout per
+  product/region (the renderer writes both: `saved.pdf` 2-page and
+  `-front/-back` singles). New draft `6234f0a9…` with the single A5 2-page PDF
+  (no TrimBox); the held order cancelled (not charged).
+
+- Gelato support (a human, after their AI agent; 2026-10-05) confirmed for the
+  EU A5 pack: **one 2-page PDF as `type: 'default'`, page 1 front, page 2
+  back; the preview shows only the front for this product, which is
+  expected.** Our editor's own back preview is the one parents should rely on.
+  Order `6234f0a9…` placed (€34.98: €19.80 cards after first-order discount +
+  €8.64 shipping, VAT incl.), routed to ES.
+
+### Letters v10–v11 (2026-10-05): editor + writer
+
+- **v10** taught the single-call writer the owner's printed letter (framing
+  with meaning, the year ending on the kids growing, a quote trimmed to its
+  core, `sharedSpecifics` → a sibling line, a `together` count). Better, still
+  "not natural enough" (owner).
+- **Why the hand-written drafts were better** (Claude's analysis, agreed): they
+  were built on what CHANGED this year (the digest ranks by recurrence =
+  routines); they allowed warm framing of real facts (the prompt forbade
+  "embellishing"); one letter from ~5 facts vs four letters under ~30 rules;
+  fuller memory text vs fragments and tags; examples beat rules; choosing came
+  before writing.
+- **v11 = `_shared/holiday-card-letter-v2.ts`:** (1) `selectEditorCandidates`
+  reads every written share-safe entry (≤120, ≤360 chars, ★ on news words);
+  (2) the EDITOR call picks 5–7 facts by newsworthiness (skill > first > age >
+  new thing > line > trip > siblings; one-off events last), each with evidence
+  ids that `parseEditorFacts` verifies (or GIVEN: birthdays, firsts, trips, the
+  line), plus a ≤3-item broad-strokes sentence and the QR caption; (3) the
+  WRITER is called once per angle (classic, warm, playful) with only those
+  facts, the parents' voice examples, three example letters for a FICTIONAL
+  family and ~8 principles: leave facts out, one warm turn per child, never a
+  new fact; (4) `checkV2Letter` keeps the v1 hard checks (sensitive,
+  developmental, names, film mention, length) and shows a few soft ones.
+- **Owner choice (c):** classic and warm stay plain ("say it plainly when a
+  turn feels strained"); playful gets the charm. `eval:holiday-card-letters`
+  defaults to `--pipeline v2` and shows the editor's facts + evidence on the
+  review page, so a weak letter is traceable to picking or writing.
+- Known variance: the editor doesn't always pick a multi-entry skill (the
+  bike) even with the priority; parents finish in the editor (target 80–90%).
+  ≈ $0.04–0.05 per card (1 editor + 3 writer calls, gpt-6.1-sol). 84 tests.
+
 ### Product build (after C4 passes)
 
 | Phase | Build | Gate |

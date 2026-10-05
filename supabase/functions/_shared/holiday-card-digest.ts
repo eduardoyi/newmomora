@@ -191,7 +191,7 @@ export interface YearDigest {
   highlights: DigestHighlight[];
   /** The first verified line of the year (a child's own words) + who said it. */
   lineOfYear: { quote: string; speaker: string; memoryId: string } | null;
-  counts: { moments: number; photos: number; videos: number; drawings: number; sounds: number; outings: number; months: number };
+  counts: { moments: number; photos: number; videos: number; drawings: number; sounds: number; outings: number; months: number; together?: number };
   /** The card has a film behind its QR code (only the QR caption cares). */
   filmPresent: boolean;
   /** Names the letter must never use — other family members' first names and
@@ -658,6 +658,9 @@ function build({ scope, language, sources, members, context, script }: Source): 
       sounds: counts.sounds,
       outings: pool.filter((m) => m.topics.some((t) => OUTING_TOPICS.has(t))).length,
       months: monthsCovered(pool),
+      // Moments that tag every own child: evidence for a warm sibling line
+      // ("no se pierde nada de lo que hace su hermano"; owner's edit, v10).
+      together: roster.children.length >= 2 ? pool.filter((m) => roster.children.every((c) => m.taggedMemberIds.includes(c.id))).length : 0,
     },
     filmPresent: script !== null,
     forbiddenNames,

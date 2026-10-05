@@ -209,21 +209,21 @@ export function buildLetterSystemPrompt(options: LetterOptions): string {
     '',
     'WRITE LIKE THEM, in register and rhythm: you are these parents. Take from the STYLE CARD how they address people and how casual they are, the sentence rhythm and length, how they end a thought (a light remark), their punctuation habits and how they name the kids; take from the VOICE EXAMPLES the same, for style ONLY — never reuse their content, events or phrases. The voice is NOT vocabulary: do not sprinkle their catchphrases or in-jokes — at most ONE of the listed "words they use" in the whole letter, and only if it fits naturally in a letter to relatives; never a phrase that needs context; never a word from another language than the letter\'s. A caption opener ("Hoy…", "Today…") is not a letter opener: open with a greeting or a plain statement. The letter keeps its holiday shape and audience, so it is warmer and more complete than a caption. If they never use something (emojis, long sentences, sentimental talk), neither do you. The letter is plain text: no emoji ever.',
     '',
-    'THE GENRE — reverse-engineered from letters the owners approved (2026-10-05). Three short paragraphs:\n' +
-      '(1) GREETING + THE YEAR IN BROAD STROKES: a short greeting ("Queridos todos:" / "Dear family and friends,"), one plain sentence saying you want to tell them a little about your year ("Les queremos contar un poquito de cómo nos fue este año."), then ONE sentence that sums up the family\'s year with its recurring things (from FAMILY THEMES, PLACES and any named TRIP — a trip is named: "unos días de playa en Cartagena" — this is the one place where a list of 2–4 things is right: "Fue un año de mucho parque, de paseos y de salir a comer."), then a short BRIDGE to the kids that is warm but claims nothing specific ("Y en medio de todo eso, Tomás y Lucía siguen creciendo felices."). \n' +
-      '(2) THE KIDS: one or two sentences per child, each built on one or two concrete things from their profile, told with their small context so they never feel bolted on: the age they TURN this year when the profile says so ("Tomás cumplió cinco y…" — the card is read at Christmas, so a birthday before it is told as done, even if the journal has no birthday yet), a first with its month ("Lucía dio sus primeros pasos en enero"), a specific thing they do, the line of the year set in the moment it was said (use its MOMENT text: "Una noche, mirando la luna desde la ventana, se volteó y nos dijo: …"). Connect a child\'s two things naturally ("…y desde entonces no hay quien la pare" only if the profile supports it). \n' +
-      '(3) THE CLOSE: love and the wish, nothing else ("Los queremos mucho y les deseamos una feliz Navidad."). NEVER an invitation or a call to action: no "nos encantaría verlos", "ojalá podamos vernos", "cuéntennos", "let\'s catch up", "hope to see you" [code, soft]. \n' +
-      'EXAMPLE of the shape and register (a FICTIONAL family — never reuse its sentences, names or facts): "Queridos todos:\\n\\nLes queremos contar un poquito de cómo nos fue este año. Fue un año de mucho parque, de paseos y de unos días de playa. Y en medio de todo eso, Tomás y Lucía siguen creciendo felices.\\n\\nTomás cumplió cinco y ya se sabe todas las canciones del colegio. Una noche, mirando la luna desde la ventana, nos dijo: \\"mami, la luna nos está siguiendo\\". Lucía dio sus primeros pasos en marzo y desde entonces anda detrás de su hermano por toda la casa.\\n\\nLos queremos mucho y les deseamos una feliz Navidad." Say it the way these parents talk.',
+    'THE GENRE — learned from the letter the owners actually printed (2026-10-05). Three short paragraphs:\n' +
+      '(1) GREETING + THE YEAR, WITH MEANING: a short greeting ("Queridos todos:" / "Dear family and friends,"); then a FRAMING sentence that gives the letter its meaning — you are sending them a small piece of your life, not a report (e.g. the idea of "un pedacito de nuestra vida" / "a little piece of our year"; vary the words, never a cliché); then ONE sentence with the year in broad strokes (FAMILY THEMES, PLACES, a named TRIP — the one place where a 2–4 item list is right) that ENDS on the kids growing, folded in as a clause ("…y unos días de playa, viendo a Tomás y a Lucía crecer"), not as a separate sentence. \n' +
+      '(2) THE KIDS: ONE flowing sentence per child that strings two or three true things together, the way a parent tells it ("Tomás ya tiene cinco, aprendió a nadar sin flotadores y sigue convencido de que \"la luna nos persigue\""): the age they turn this year, a first, a specific thing they do, their line of the year. A child\'s line is best woven in as what they believe or say ("sigue convencido de que…", "dice que…") and may be TRIMMED to its core words in quotation marks (drop a leading "papi,"/"mami," and the final "!"), never invented or reworded inside the quotes. When the digest shows the children are together in many moments (TOGETHER), one child\'s sentence may end on a warm, light observation about the two of them ("…y desde que camina, no se pierde nada de lo que hace su hermano"), as long as it only restates what the moments show (they play and go out together). \n' +
+      '(3) THE CLOSE: affection and the wish in one sentence ("Les mandamos mucho cariño y les deseamos una feliz Navidad." / "Los queremos mucho y…"), nothing else. NEVER an invitation or a call to action: no "nos encantaría verlos", "ojalá podamos vernos", "cuéntennos", "let\'s catch up", "hope to see you" [code, soft]. \n' +
+      'EXAMPLE of the shape and register (a FICTIONAL family — never reuse its sentences, names or facts): "Queridos todos:\\n\\nEste año quisimos compartirles un pedacito de lo que vivimos. Lo pasamos entre el parque, la piscina y unos días en la finca de los abuelos, viendo a Tomás y a Lucía crecer.\\n\\nTomás ya tiene cinco, aprendió a nadar sin flotadores y sigue convencido de que \\"la luna nos persigue\\". Lucía dijo sus primeras palabras en marzo y, desde que descubrió los columpios, no hay parque que se le escape.\\n\\nLes mandamos mucho cariño y les deseamos una feliz Navidad." Say it the way these parents talk.',
     '',
     'RULES (checked by code where marked [code]; a letter that breaks a [code] rule is thrown away):',
     '1. FACTS ONLY FROM THE DIGEST. Every claim about a person, place or activity must come from the PROFILES, THEMES, PLACES, the optional DETAILS or the LINE OF THE YEAR. Never invent or embellish: no weather, no places, dates, gifts, trips or achievements the digest does not give, no "first time ever" unless a FIRST is listed, no feelings of a specific person beyond the MOODS shown. If the digest is thin, write less, not more. Write no dates.',
     '2. PEOPLE [code]: you may use ONLY the first names under PEOPLE (and the nicknames listed for a child, if the STYLE CARD says the parents use nicknames). Write no other personal name and NO surname or family name anywhere (the signature is added separately; never write it). Refer to anyone else only with a relationship word that appears in a DETAIL\'s "with" field, or say "family and friends". Never infer a relationship.',
     '3. AGES ARE OPTIONAL, and never a formula. If you give a child\'s age use "age this December" (the card is read in December) and no other number; but weave it in naturally ("Enzo, que llegó a los 4…", "now that Mara is two…") or leave it out. AT MOST ONE of the four variants may open a child\'s sentence with the age pattern ("X tiene N años y…", "X, con N años, …", "X, N, …"); the others must not. Vary the sentence shape per child and per variant (a short remark, a question, a scene, a plain statement). Use each child\'s gender for pronouns and agreement.',
     '3b. NATURAL SPEECH, NOT TAGS [code, soft]: the themes, labels and catalog names in the digest are internal tags — rephrase them the way a person talks. Never copy them ("jugar a imaginar", "caminar con confianza", "juego imaginario", "salidas en familia", "actividades al aire libre", "imaginative play", "family outings", "outdoor activities" are tag-speak); say what the child actually does ("disfrazarse e inventar historias", "dio sus primeros pasos").',
-    '4. CONCRETE, NOT ABSTRACT. Each child gets one or two plain, specific, true things. Prefer, in this order: the REQUIRED LINE (below) if there is one, then a SPECIFIC thing from the parents\' own words ("specific things about them" — which costume, which game or book or place; pick the most vivid or the one that recurs), then a FIRST (given as a plain fact — say it in your own natural words, never "milestone"), then a recurring theme. REQUIRED LINE [code]: when the user message lists a REQUIRED LINE for a child, the "classic" AND the "playful" letters MUST quote it word for word, in quotation marks, as that child\'s main detail, set in its MOMENT when one is given (retell the moment in a few of your own words, never copy the parents\' sentence) (the "short" and "reflective" letters may use it or not); at most ONE quote per letter. Said simply, the way a parent talks; plain words over pretty ones. Do not write about "how the year felt" in the abstract: at most ONE sentence of general reflection in the whole letter (the FRAMING and LANDING sentences are about the relationship with the reader, not reflection, and do not count). If a child has nothing specific in the digest, name the plain theme ("he loves the park") rather than inventing one.',
+    '4. CONCRETE, NOT ABSTRACT. Each child gets two or three plain, specific, true things. Prefer, in this order: the REQUIRED LINE (below) if there is one, then a SPECIFIC thing from the parents\' own words ("specific things about them" — which costume, which game or book or place; pick the most vivid or the one that recurs), then a FIRST (given as a plain fact — say it in your own natural words, never "milestone"), then a recurring theme. REQUIRED LINE [code]: when the user message lists a REQUIRED LINE for a child, the "classic" AND the "playful" letters MUST quote it — whole, or trimmed to its core words (at least four, contiguous, unchanged), in quotation marks — as that child\'s main detail, set in its MOMENT when one is given (retell the moment in a few of your own words, never copy the parents\' sentence) (the "short" and "reflective" letters may use it or not); at most ONE quote per letter. Said simply, the way a parent talks; plain words over pretty ones. Do not write about "how the year felt" in the abstract: at most ONE sentence of general reflection in the whole letter (the FRAMING and LANDING sentences are about the relationship with the reader, not reflection, and do not count). If a child has nothing specific in the digest, name the plain theme ("he loves the park") rather than inventing one.',
     `5. NO ABSTRACT FILLER [code, soft]: never use words like ${ABSTRACT_FILLER_EXAMPLES.map((w) => `"${w}"`).join(', ')}, and no "the year felt wide/close/slow", "days that feel truly theirs", "the shape/texture/rhythm of our days". If a sentence could be about any family, rewrite it with the specific thing.`,
     '6. NO CLICHÉS [code, soft]: avoid "full of love/joy" ("lleno de"), "unforgettable moments" ("momentos inolvidables"), "so many memories", "hearts are full", "blessed", "magical", "the best year ever", "cherish", "treasure". Say the plain thing instead.',
-    '7. SPECIFICITY BUDGET: one or two concrete things per child, told with their context; prefer RECURRING patterns and firsts over one-off events; no trivia (food quirks, a single afternoon) unless it is a recurring trait; the broad-strokes sentence of paragraph 1 is the ONLY place for a list of things (2–4) — nowhere else enumerate more than two [code, soft]; never a trailing "also we…" fact before the wish [code, soft]; the optional DETAILS may feed AT MOST ONE detail in the whole letter, or none, and never as a "remember when" story. Excerpts under a child are for TONE ONLY: do not retell them.',
+    '7. SPECIFICITY BUDGET: two or three true things per child, strung into one flowing sentence (never a lone "X cumplió N."); prefer RECURRING patterns and firsts over one-off events; no trivia (food quirks, a single afternoon) unless it is a recurring trait; the broad-strokes sentence of paragraph 1 is the ONLY place for a list of things (2–4) — nowhere else enumerate more than two [code, soft]; never a trailing "also we…" fact before the wish [code, soft]; the optional DETAILS may feed AT MOST ONE detail in the whole letter, or none, and never as a "remember when" story. Excerpts under a child are for TONE ONLY: do not retell them.',
     '7b. VARIETY [code, soft]: never repeat a word or phrase across sentences; never write "una y otra vez", "again and again", "over and over"; avoid "volvimos"/"otra vez"/"once again" and any "we kept going back to…" pattern. Vary how sentences start.',
     '8. NO COMPARISON [code]: never compare a child to other children or to norms; no "ahead", "behind", "advanced", "for his/her age", no milestone-chart language.',
     '9. NO HARD OR PRIVATE MATERIAL [code]: no health, illness, doctors, medicine, hospital, bath time, potty/diapers, tantrums, crying, worry, sadness, loss or conflict.',
@@ -234,7 +234,7 @@ export function buildLetterSystemPrompt(options: LetterOptions): string {
     }`,
     '',
     'FOUR VARIANTS that differ in SHAPE, not just tone (each a different letter — do not trim one to make another):',
-    `- "classic": the three paragraphs above in full (every child named, each with one or two concrete things in context). Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.classic} (spaces included).`,
+    `- "classic": the three paragraphs above in full (every child named, one flowing sentence each with two or three true things). Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.classic} (spaces included).`,
     `- "short": a greeting, one broad-strokes sentence about the year, one sentence with one concrete thing per child, and the close. Target 200–260 characters; NEVER more than ${LETTER_MAX_CHARS.short}.`,
     `- "playful": the same three paragraphs with light humor drawn from RECURRING traits (what they are always into) — affectionate, never at a child's expense, no invented anecdotes; the close stays love + wish. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.playful}.`,
     `- "reflective": the same three paragraphs, with a little more room in paragraph 1 for what this year was about for the family (said with its specific things, not abstractions); the close stays love + wish. Target 450–600 characters; NEVER more than ${LETTER_MAX_CHARS.reflective}.`,
@@ -289,12 +289,22 @@ export function turningNote(name: string, age: number | null, birthday: string, 
  * words, a distinctive recurring thing in their photos (glasses, a costume).
  * Code picks the order so every run starts from the same strong material
  * (owner review v8: Mara's new glasses never made it in). */
-export function bestDetails(c: YearDigest['children'][number], lang: FilmLanguage): string[] {
+/** Specific details that show up for more than one child: shared, not personal. */
+export function sharedSpecifics(digest: YearDigest): Set<string> {
+  const seen = new Map<string, number>();
+  for (const c of digest.children) for (const d of new Set(c.specifics.map((x) => x.detail.toLowerCase()))) seen.set(d, (seen.get(d) ?? 0) + 1);
+  return new Set([...seen].filter(([, n]) => n > 1).map(([d]) => d));
+}
+
+export function bestDetails(c: YearDigest['children'][number], lang: FilmLanguage, shared: ReadonlySet<string> = new Set()): string[] {
   const out: string[] = [];
   if (c.birthdayThisYear && c.ageThisYear !== null) out.push(`turns ${c.ageThisYear} this year (see the age line)`);
   for (const f of c.firsts.slice(0, 1)) out.push(`first: ${plainFirst(c.name, c.gender, f.milestoneId, f.label, lang)} (${MONTH_NAMES[lang][f.month - 1]})`);
   if (c.line) out.push(`their line of the year, in its MOMENT`);
-  const specific = c.specifics.find((d) => d.recurring) ?? c.specifics[0];
+  // A specific BOTH kids share (they dressed up as Spider-Man together) says
+  // nothing about this child: it goes to the sibling line instead (v10).
+  const own = c.specifics.filter((d) => !shared.has(d.detail.toLowerCase()));
+  const specific = own.find((d) => d.recurring) ?? own[0];
   if (specific) out.push(`${specific.detail}${specific.recurring ? ` (comes up in ${specific.memories} moments)` : ''}`);
   // Skip labels that only restate a recurring theme ("playground" for
   // park-playground): the distinctive one (glasses) is the point.
@@ -350,9 +360,9 @@ export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions
     if (c.firsts.length) {
       lines.push(`    FIRST this year (certain; a plain fact — say it in your own natural words): ${c.firsts.map((f) => `${plainFirst(c.name, c.gender, f.milestoneId, f.label, lang)} (${MONTH_NAMES[lang][f.month - 1]})`).join('; ')}`);
     }
-    const best = bestDetails(c, lang);
+    const best = bestDetails(c, lang, sharedSpecifics(digest));
     if (best.length) {
-      lines.push(`    BEST DETAILS for ${c.name} (strongest first — the "classic" letter uses TWO of them, joined naturally in one or two sentences, e.g. "${lang === 'es' ? 'Tomás cumplió cinco y ya se sabe todas las canciones del colegio' : 'Tomás turned five and knows every song from school'}"; never a lone "${c.name} cumplió N." sentence): ${best.map((b, i) => `${i + 1}) ${b}`).join(' ')}`);
+      lines.push(`    BEST DETAILS for ${c.name} (strongest first — the "classic" letter strings TWO or THREE of them into ONE flowing sentence, e.g. "${lang === 'es' ? 'Tomás cumplió cinco y ya se sabe todas las canciones del colegio' : 'Tomás turned five and knows every song from school'}"; never a lone "${c.name} cumplió N." sentence): ${best.map((b, i) => `${i + 1}) ${b}`).join(' ')}`);
     }
     lines.push(`    specific things about ${c.name}, from the parents' own words (pick the ONE most vivid or recurring; a detail may come from here): ${
       c.specifics.length ? c.specifics.map((d) => `${d.detail}${d.recurring ? ` (comes up in ${d.memories} moments)` : ''}`).join('; ') : '(none extracted)'
@@ -376,6 +386,10 @@ export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions
   }
   lines.push('');
   lines.push(`FAMILY THEMES (what sets this year apart): ${digest.familyThemes.length ? digest.familyThemes.map((t) => themeText(t, lang, 'family')).join('; ') : '(none stands out)'}`);
+  if ((digest.counts.together ?? 0) >= 8) {
+    const shared = [...sharedSpecifics(digest)];
+    lines.push(`TOGETHER: the children appear together in ${digest.counts.together} moments this year${shared.length ? `; things they share: ${shared.join(', ')}` : ''} — the "classic" letter ends one child's sentence with a warm, light observation about the two of them (built on this, e.g. "…y no se pierde nada de lo que hace su hermano"); a shared thing belongs there, not to one child`);
+  }
   lines.push(`PLACES THAT RECUR: ${digest.places.length ? digest.places.map((t) => themeText(t, lang, 'family')).join('; ') : '(none)'}`);
   lines.push(`TRIPS (named places from the parents' own labels — a trip belongs in the broad-strokes sentence, by name): ${
     digest.trips?.length ? digest.trips.map((t) => `${t.place} (${MONTH_NAMES[lang][t.month - 1]}, ${t.days} day${t.days === 1 ? '' : 's'}, ${t.memories} moments)`).join('; ') : '(none)'
@@ -396,7 +410,7 @@ export function buildLetterUserPrompt(digest: YearDigest, options: LetterOptions
   return lines.join('\n');
 }
 
-const MONTH_NAMES: Record<FilmLanguage, string[]> = {
+export const MONTH_NAMES: Record<FilmLanguage, string[]> = {
   en: ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'],
   es: ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'],
 };
@@ -654,6 +668,21 @@ function isActivityList(match: string): boolean {
   return items.length >= 3 && items.filter((i) => ACTIVITY_ITEM.test(i)).length >= 2;
 }
 
+/** The line is quoted when the letter quotes it whole OR a core of it — a
+ * contiguous run of at least 4 of its words, in quotation marks ("el mundo es
+ * un lugar mágico" from "papi, el mundo es un lugar mágico!"; owner's edit,
+ * v10). */
+export function quotesLineCore(text: string, line: string): boolean {
+  const whole = normalize(line);
+  if (normalize(text).includes(whole)) return true;
+  const words = whole.split(' ').filter(Boolean).length;
+  for (const span of text.matchAll(/[“"«]([^”"»]{3,160})[”"»]/gu)) {
+    const core = normalize(span[1]);
+    if (core && whole.includes(core) && core.split(' ').filter(Boolean).length >= Math.min(4, words)) return true;
+  }
+  return false;
+}
+
 /** Invitations / calls to action the close must not carry (es + en). */
 const INVITATION_TEXT =
   /(nos (encantar[ií]a|gustar[ií]a) (verl[oe]s|saber)|ojal[aá] (podamos )?(vernos|verl[oe]s|nos veamos)|vernos pronto|cu[eé]ntennos|ponernos al d[ií]a|hope to see you|let'?s catch up|catch up soon|see you soon|would love to hear)/iu;
@@ -770,7 +799,7 @@ export function checkLetterText(
   // the classic and playful letters (only in the language of the captions,
   // where it can be word for word). The caller retries once when missing.
   if ((tone === 'classic' || tone === 'playful') && language === digest.language && digest.lineOfYear &&
-    !normalize(trimmed).includes(normalize(digest.lineOfYear.quote))) {
+    !quotesLineCore(trimmed, digest.lineOfYear.quote)) {
     flags.push({ code: 'line_missing' });
   }
   // Tags are internal: no catalog phrases copied into the letter.

@@ -10,6 +10,8 @@ import {
   buildLetterRequestBody,
   buildLetterSystemPrompt,
   greetingOnItsOwnLine,
+  quotesLineCore,
+  sharedSpecifics,
   turningNote,
   bestDetails,
   buildLetterUserPrompt,
@@ -87,7 +89,7 @@ Deno.test('system prompt: the genre, the stand-alone rules, the shapes and the c
   const system = buildLetterSystemPrompt({ language: 'en' });
   assert(system.includes('English') && system.includes('STAND ON ITS OWN'));
   assert(system.includes('NEVER MENTION') && system.includes('QR'));
-  assert(system.includes('one or two plain, specific, true things') && system.includes('ONLY place for a list') && system.includes('VARIETY') && system.includes('NATIVELY'));
+  assert(system.includes('two or three plain, specific, true things') && system.includes('ONLY place for a list') && system.includes('VARIETY') && system.includes('NATIVELY'));
   assert(system.includes('"classic"') && system.includes('"reflective"') && !system.includes('"warm"'));
   assert(system.includes(String(LETTER_MAX_CHARS.classic)) && system.includes(String(LETTER_MAX_CHARS.short)));
   assert(!system.includes('mentioned_memory_ids'));
@@ -244,7 +246,7 @@ const VOICE: { card: VoiceCard; examples: string[]; language: 'es' } = {
 
 Deno.test('v3 prompts: concrete-not-abstract rules, the banned filler list, the parents\' voice, gender and firsts', () => {
   const system = buildLetterSystemPrompt({ language: 'es', voice: VOICE });
-  assert(system.includes('CONCRETE, NOT ABSTRACT') && system.includes('one or two plain, specific, true things') && system.includes('at most ONE sentence of general reflection'));
+  assert(system.includes('CONCRETE, NOT ABSTRACT') && system.includes('two or three plain, specific, true things') && system.includes('at most ONE sentence of general reflection'));
   for (const w of ['amplio', 'cercano', 'textura', 'ritmo', 'forma muy suya', 'verdaderamente suyos', 'steady shape', 'texture', 'rhythms', 'small rituals', 'unhurried']) {
     assert(ABSTRACT_FILLER_EXAMPLES.includes(w) && system.includes(`"${w}"`), w);
   }
@@ -397,7 +399,7 @@ Deno.test('v5 prompts: register from the setting, guidance as quoted data, plain
   assert(!buildLetterSystemPrompt({ language: 'es' }).includes('FAMILY GUIDANCE'));
   assert(system.includes('AGES ARE OPTIONAL') && system.includes('AT MOST ONE of the four variants'));
   assert(system.includes('NATURAL SPEECH, NOT TAGS') && system.includes('jugar a imaginar') && system.includes('caminar con confianza'));
-  assert(system.includes('REQUIRED LINE [code]') && system.includes('MUST quote it word for word'));
+  assert(system.includes('REQUIRED LINE [code]') && system.includes('MUST quote it — whole, or trimmed'));
   assert(system.includes('THE CLOSE') && system.includes('120 characters'));
   assert(buildLetterSystemPrompt({ language: 'en' }).includes('No Spanish words'));
   const user = buildLetterUserPrompt(digest(), { language: 'es', locale: 'es-CO', guidance: 'Llámenlos <<<Enzito>>> y Mara\n siempre   ', voice: VOICE });
@@ -454,7 +456,7 @@ Deno.test('greeting: the wish follows the card greeting (prompt note, soft occas
 
 Deno.test('v6: a letter frames itself and lands on the reader; an add-on fact before the wish is flagged', () => {
   const system = buildLetterSystemPrompt({ language: 'es', locale: 'es-CO' });
-  assert(system.includes('BROAD STROKES') && system.includes('THE CLOSE: love and the wish'));
+  assert(system.includes('THE YEAR, WITH MEANING') && system.includes('THE CLOSE: affection and the wish'));
   const filler = (text: string) => checkLetterText(text, 'classic', digest({ lineOfYear: null }), 'es').find((f) => f.code === 'trailing_filler');
   assert(filler('Queridos todos, les contamos un poco de nuestro año. Enzo vive en el parque. También salimos a comer en familia más de una vez. Feliz Navidad.'));
   assert(filler('Dear all, a little of our year. Enzo loves the park. We also went to the beach. Merry Christmas.'));
@@ -500,4 +502,25 @@ Deno.test('v9: best details skip labels that restate a theme, so the distinctive
   assert(best[0].startsWith('turns 2'));
   assert(best.some((b) => b.startsWith('glasses')));
   assert(!best.some((b) => b.startsWith('playground')));
+});
+
+Deno.test('v10: the line of the year may be quoted whole or trimmed to a core of 4+ contiguous words', () => {
+  const line = 'papá, la luna nos está siguiendo!';
+  assert(quotesLineCore('Tomás sigue convencido de que "la luna nos está siguiendo".', line));
+  assert(quotesLineCore('Nos dijo: "papá, la luna nos está siguiendo!"', line));
+  assert(!quotesLineCore('Tomás dice que "la luna".', line)); // too short a core
+  assert(!quotesLineCore('Tomás dice que "la luna nos persigue".', line)); // reworded inside the quotes
+  assert(!quotesLineCore('Tomás mira la luna.', line));
+});
+
+Deno.test('v10: a specific both kids share goes to the sibling line, not to one child', () => {
+  const kid = (name: string, specifics: string[]) => ({
+    memberId: name, name, specifics: specifics.map((detail) => ({ detail, memories: 2, recurring: true })), ageYears: 3, ageThisYear: 4, birthdayThisYear: null,
+    gender: null, nicknames: [], details: [{ label: 'glasses', memories: 9 }], firsts: [], memories: 50, recurring: [], emotions: [], excerpts: [], line: null,
+  });
+  const digest = { children: [kid('Tomás', ['Spiderman', 'bicicleta sin rueditas']), kid('Lucía', ['Spiderman'])] } as unknown as Parameters<typeof sharedSpecifics>[0];
+  assertEquals([...sharedSpecifics(digest)], ['spiderman']);
+  const lucia = bestDetails(digest.children[1], 'es', sharedSpecifics(digest));
+  assert(!lucia.some((b) => b.startsWith('Spiderman')) && lucia.some((b) => b.startsWith('glasses')));
+  assert(bestDetails(digest.children[0], 'es', sharedSpecifics(digest)).some((b) => b.startsWith('bicicleta sin rueditas')));
 });

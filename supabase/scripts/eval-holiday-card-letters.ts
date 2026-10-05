@@ -77,6 +77,18 @@ import {
   QR_CAPTION_MAX_CHARS,
   SPANISH_REGISTER,
 } from '../functions/_shared/holiday-card-letter.ts';
+import {
+  buildEditorSystemPrompt,
+  buildEditorUserPrompt,
+  buildWriterSystemPrompt,
+  buildWriterUserPrompt,
+  checkV2Letter,
+  type EditorResult,
+  parseEditorFacts,
+  parseWriterText,
+  selectEditorCandidates,
+  WRITER_ANGLES,
+} from '../functions/_shared/holiday-card-letter-v2.ts';
 import { holidayFilmScope, holidayPool } from '../functions/_shared/year-film-eligibility.ts';
 import { detectJournalLanguage, type FilmLanguage, resolveFilmLanguage } from '../functions/_shared/year-film-i18n.ts';
 import { type FilmMemorySource, type FilmScript, shareSensitiveIds } from '../functions/_shared/year-film-script.ts';
@@ -97,6 +109,8 @@ interface Options {
   confirm: { memoryId: string; milestoneId: string }[];
   /** The card's greeting; the closing wish follows it. */
   greeting: 'christmas' | 'holidays' | 'new-year' | null;
+  /** v2 = editor + writer (default); v1 = the single-call letter. */
+  pipeline: 'v1' | 'v2';
 }
 
 function parseArgs(args: string[]): Options {
@@ -112,6 +126,7 @@ function parseArgs(args: string[]): Options {
     llm: true,
     confirm: [],
     greeting: null,
+    pipeline: 'v2',
   };
   for (let i = 0; i < args.length; i += 1) {
     const next = args[i + 1];
@@ -131,6 +146,11 @@ function parseArgs(args: string[]): Options {
         break;
       case '--seed':
         options.seed = Number(next) || 1;
+        i += 1;
+        break;
+      case '--pipeline':
+        if (next !== 'v1' && next !== 'v2') throw new Error('--pipeline needs v1 or v2');
+        options.pipeline = next;
         i += 1;
         break;
       case '--greeting':
@@ -358,6 +378,8 @@ interface LanguageRun {
   result: LetterResult | null;
   /** Tones that lacked the required line and were retried once. */
   retried: string[];
+  /** v2: what the editor chose (facts + evidence) and how many entries it read. */
+  editor?: (EditorResult & { candidates: number; candidateTexts: Map<string, string> }) | null;
 }
 
 function themeChips(themes: DigestTheme[]): string {
@@ -621,6 +643,46 @@ for (const language of languages) {
     voice: { card: voice.card, examples: voice.examples, language: journalLanguage },
     ...(options.greeting ? { greeting: options.greeting } : {}),
   };
+  if (options.pipeline === 'v2') {
+    const candidates = selectEditorCandidates(pool, {
+      scope,
+      milestones,
+      children: digest.children.map((c) => ({ id: c.memberId, name: c.name })),
+      people: data.members.map((m) => ({ id: m.id, name: m.name })),
+    });
+    const editorRaw = await chat(buildLetterRequestBody(options.model, buildEditorSystemPrompt(language), buildEditorUserPrompt(digest, candidates, language)));
+    if (editorRaw === null) {
+      runs.push({ language, skipped: 'editor call failed', result: null, retried: [] });
+      continue;
+    }
+    const editor = parseEditorFacts(editorRaw, candidates, digest);
+    const variants: LetterResult['variants'] = [];
+    const rejected: LetterResult['rejected'] = [];
+    for (const angle of WRITER_ANGLES) {
+      const raw = await chat(buildLetterRequestBody(
+        options.model,
+        buildWriterSystemPrompt({ language, locale: letterOptions.locale, greeting: options.greeting ?? undefined }),
+        buildWriterUserPrompt({ angle, facts: editor.facts, broadStrokes: editor.broadStrokes, children: digest.children.map((c) => ({ name: c.name, gender: c.gender })), voice: letterOptions.voice, language }),
+      ));
+      const text = raw === null ? null : parseWriterText(raw);
+      const tone = angle === 'warm' ? 'reflective' : angle;
+      if (!text) {
+        rejected.push({ tone, text: '', flags: [{ code: 'empty' }] });
+        continue;
+      }
+      const checks = checkV2Letter(text, angle, digest, language, { voice: letterOptions.voice, greeting: options.greeting ?? undefined, locale: letterOptions.locale });
+      if (checks.hard.length) rejected.push({ tone, text, flags: checks.hard });
+      else variants.push({ tone, text, chars: Array.from(text).length, flags: checks.soft });
+    }
+    runs.push({
+      language,
+      skipped: null,
+      retried: [],
+      result: { language, variants, rejected, qrCaption: editor.qrCaption, qrCaptionFlags: [], signature: defaultSignature(data.familyName, language), flags: [] },
+      editor: { ...editor, candidates: candidates.length, candidateTexts: new Map(candidates.map((c) => [c.id, `${c.date}: ${c.text}`])) },
+    });
+    continue;
+  }
   const content = await chat(
     buildLetterRequestBody(options.model, buildLetterSystemPrompt(letterOptions), buildLetterUserPrompt(digest, letterOptions)),
   );
@@ -648,7 +710,15 @@ const outDir = new URL('./eval-output/holiday-card/', import.meta.url);
 await Deno.mkdir(outDir, { recursive: true });
 const label = `${script ? `Film: ${options.scriptPath!.split('/').slice(-3).join('/')}` : 'No film (pool digest)'}${subsampleLabel}`;
 const cost = costUsd();
-await Deno.writeTextFile(new URL(`${runId}-letters.html`, outDir), renderHtml({ runId, label, digest, runs, thumbs, model: options.model, cost, voice, setting: { raw: data.language, language: journalLanguage, locale: familyLang.locale, source: familyLang.source, guidance }, stats: new Map(digest.children.map((c, i) => [c.memberId, childDetails[i]?.result ? `extracted ${childDetails[i].result!.extracted} · verified ${childDetails[i].result!.verified} · dropped ${childDetails[i].result!.dropped}` : `skipped: ${childDetails[i]?.skipped ?? '—'}`])) }));
+const editorHtml = runs.filter((r) => r.editor).map((r) => {
+  const e = r.editor!;
+  const items = e.facts.map((f) => `<li><b>${esc(f.about ?? 'family')}</b> <span class="chip">${esc(f.kind)}</span> ${esc(f.fact)}${
+    f.evidence.length ? `<details><summary>evidence (${f.evidence.length})</summary><ul>${f.evidence.map((id) => `<li>${esc(e.candidateTexts.get(id) ?? id)}</li>`).join('')}</ul></details>` : ' <i>(given)</i>'
+  }</li>`).join('');
+  const dropped = e.dropped.length ? `<p>Dropped by code: ${e.dropped.map((d) => `${esc(d.reason)}: ${esc(d.fact)}`).join(' · ')}</p>` : '';
+  return `<section style="max-width:900px;margin:24px auto;padding:16px;border:1px solid #ddd;border-radius:12px;font-family:system-ui"><h2>Editor (${esc(r.language)}): what's worth telling</h2><p>Read ${e.candidates} entries. Broad strokes: <i>${esc(e.broadStrokes ?? '—')}</i></p><ol>${items}</ol>${dropped}</section>`;
+}).join('');
+await Deno.writeTextFile(new URL(`${runId}-letters.html`, outDir), renderHtml({ runId, label, digest, runs, thumbs, model: options.model, cost, voice, setting: { raw: data.language, language: journalLanguage, locale: familyLang.locale, source: familyLang.source, guidance }, stats: new Map(digest.children.map((c, i) => [c.memberId, childDetails[i]?.result ? `extracted ${childDetails[i].result!.extracted} · verified ${childDetails[i].result!.verified} · dropped ${childDetails[i].result!.dropped}` : `skipped: ${childDetails[i]?.skipped ?? '—'}`])) }).replace('</body>', `${editorHtml}</body>`));
 await Deno.writeTextFile(
   new URL(`${runId}-letters.json`, outDir),
   JSON.stringify(
@@ -662,7 +732,8 @@ await Deno.writeTextFile(
       voice: { source: voice.source, model: voice.model, samples: voice.samples.length, card: voice.card, flags: voice.flags, examples: voice.examples, skipped: voice.skipped, raw: voice.raw },
       childDetails: childDetails.map((c) => ({ name: c.name, excerpts: c.excerpts, skipped: c.skipped, ...(c.result ? { extracted: c.result.extracted, verified: c.result.verified, dropped: c.result.dropped, reasons: c.result.reasons } : {}) })),
       digest,
-      runs: runs.map((r) => ({ language: r.language, skipped: r.skipped, retried: r.retried, signature: r.result?.signature ?? defaultSignature(data.familyName, r.language), ...r.result })),
+      pipeline: options.pipeline,
+      runs: runs.map((r) => ({ language: r.language, skipped: r.skipped, retried: r.retried, signature: r.result?.signature ?? defaultSignature(data.familyName, r.language), ...r.result, ...(r.editor ? { editor: { facts: r.editor.facts, broadStrokes: r.editor.broadStrokes, qrCaption: r.editor.qrCaption, dropped: r.editor.dropped, candidates: r.editor.candidates } } : {}) })),
     },
     null,
     2,
