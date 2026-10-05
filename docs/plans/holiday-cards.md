@@ -744,6 +744,23 @@ the deploy steps):
   bike) even with the priority; parents finish in the editor (target 80–90%).
   ≈ $0.04–0.05 per card (1 editor + 3 writer calls, gpt-6.1-sol). 84 tests.
 
+### Film fixes deployed (2026-10-05, owner-approved)
+
+- Render image `registry.fly.io/momora-year-film-renderer:b73621518323`
+  (built by `build.sh` from clean `b736215`, linux/amd64). The local sample
+  render stalled at frame 1215/1892 under Apple-Silicon emulation; the same
+  image on a one-off Fly performance-8x machine rendered the sample in 97 s
+  (63 s film, 4.4 GB peak, exit 0), in line with the F5 benchmark (93 s).
+- `momora-year-film-worker` version `8a4a007f` (100%) with
+  `FILM_RENDERER_IMAGE` = that image; every other var unchanged
+  (`CF_ACCOUNT_ID` placeholder kept: the per-machine R2 credential fallback).
+  No Supabase edge function imports the shared film code.
+- Live films now get: no sound scene from < 2 s of voice; a fallback sound
+  always carries its own caption. Holiday-only code (strict public check,
+  holiday theme, `family_holiday`) is inert for live films.
+- Rollback: `npx wrangler rollback 5c7e97be-7af3-49db-bd5c-033047e38b38` in
+  `cloudflare/year-film-worker` (previous version, image `188c127c14d5`).
+
 ### Product build (after C4 passes)
 
 | Phase | Build | Gate |
