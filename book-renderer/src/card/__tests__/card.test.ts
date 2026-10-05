@@ -425,3 +425,11 @@ describe('card data', () => {
     expect(typographic('Dijo "sí". Fin.')).toBe('Dijo \u201Csí\u201D. Fin.');
   });
 });
+
+describe('card formats (Gelato: 5R in US/CA, A5 in Europe)', () => {
+  it('A5 is 210 x 148 mm trim + 4 mm bleed in both orientations; 5R stays the default', () => {
+    expect(cardGeometry('landscape', 'A5')).toMatchObject({ format: 'A5', trimW: 210, trimH: 148, pageW: 218, pageH: 156 });
+    expect(cardGeometry('portrait', 'A5')).toMatchObject({ trimW: 148, trimH: 210, pageW: 156, pageH: 218 });
+    expect(cardGeometry('landscape')).toMatchObject({ format: '5R', trimW: 177.8, trimH: 127 });
+  });
+});

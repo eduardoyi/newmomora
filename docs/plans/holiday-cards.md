@@ -670,6 +670,34 @@ the deploy steps):
   benchmark: "un pedacito de nuestra vida", "no se pierde nada de lo que hace
   su hermano"); pgTAP for the migration not run yet (local Docker hangs).
 
+- **Refused 2026-10-05:** "Delivery for submitted combination of products
+  isn't possible to chosen destination" (not charged). The chosen variant
+  (5R, 350 gsm silk, no coating) lists PT in `notSupportedCountries`; other
+  5R variants deliver to PT/ES/US. Lessons: check each product's
+  `supportedCountries` / `notSupportedCountries` per destination before
+  ordering (EU quotes return `price: null` shipping even for deliverable
+  products, so the quote is not a deliverability signal); production needs a
+  per-region product map. New draft `d906d4ed…` with
+  `…coated-silk_cl_4-4_ct_glossy-protection_prt_1-0…` (gloss protection on the
+  front only, back writable), 3 packs, €28.29 before the first-order discount,
+  same files.
+
+- **Refused again** on the 5R gloss-front variant (`refusalReasonCode:
+  capability`, routed to a placeholder facility), although its product record
+  doesn't exclude PT. Conclusion: Gelato's 5R "Greeting Cards Legacy" packs
+  are only really produced in the US/CA network; EU quotes for them come back
+  with `null` shipping prices. **The EU catalog (`cards-eu`) has only A-sizes**;
+  its A5 card quotes with real shipping (PT: made in ES, €28.29 / 3 packs before
+  discount, DHL from €8.64, 7–10 days).
+- **Decision (needs the product map in P1): US/CA → 5R (5×7); Europe → A5
+  (148 × 210 mm).** The card renderer now takes `format: '5R' | 'A5'`
+  (`CARD_FORMATS`, `cardGeometry(orientation, format)`, `card.json.format`,
+  `eval:holiday-card-assets --format A5`); layouts adapt (owner's card at A5:
+  photo 470 dpi, letter 12 pt, QR decodes). A quote is only a deliverability
+  signal when it returns real shipping prices.
+- New A5 draft `9703d949…` (`…pf_a5_upt_350-gsm-130lb-coated-silk…glossy-protection_prt_1-0…`),
+  3 packs, same QR token.
+
 ### Product build (after C4 passes)
 
 | Phase | Build | Gate |

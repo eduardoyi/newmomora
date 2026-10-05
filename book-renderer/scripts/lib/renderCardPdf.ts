@@ -126,7 +126,7 @@ export async function renderCardPdf(options: RenderCardPdfOptions): Promise<Rend
     await page.close();
 
     // Validate the exact physical size of every page (MediaBox only).
-    const g = cardGeometry(orientation);
+    const g = cardGeometry(orientation, stats.format ?? '5R');
     const doc = await PDFDocument.load(raw);
     const pages = doc.getPages();
     if (pages.length !== 2) throw new Error(`renderCardPdf: FATAL — PDF has ${pages.length} pages, expected 2 (front + back)`);

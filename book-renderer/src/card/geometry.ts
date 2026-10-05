@@ -7,6 +7,16 @@ import type { CardOrientation, Focal } from './types';
  * the card code are millimetres from the top-left of the PAGE (bleed
  * included) unless a name says "trim".
  */
+/** Print formats: Gelato makes the 5x7 ("5R") cards only in the US/Canada
+ * network; Europe gets A5 (148 x 210 mm, nearly the same shape). Owner's
+ * sample to Lisbon was refused twice on 5R (2026-10-05). */
+export type CardFormat = '5R' | 'A5';
+
+export const CARD_FORMATS: Record<CardFormat, { trimLongMm: number; trimShortMm: number }> = {
+  '5R': { trimLongMm: 177.8, trimShortMm: 127 },
+  A5: { trimLongMm: 210, trimShortMm: 148 },
+};
+
 export const CARD = {
   trimLongMm: 177.8,
   trimShortMm: 127,
@@ -26,6 +36,7 @@ export interface Rect {
 
 export interface CardGeometry {
   orientation: CardOrientation;
+  format: CardFormat;
   trimW: number;
   trimH: number;
   bleed: number;
@@ -35,12 +46,14 @@ export interface CardGeometry {
   trim: Rect;
 }
 
-export function cardGeometry(orientation: CardOrientation): CardGeometry {
-  const trimW = orientation === 'landscape' ? CARD.trimLongMm : CARD.trimShortMm;
-  const trimH = orientation === 'landscape' ? CARD.trimShortMm : CARD.trimLongMm;
+export function cardGeometry(orientation: CardOrientation, format: CardFormat = '5R'): CardGeometry {
+  const size = CARD_FORMATS[format];
+  const trimW = orientation === 'landscape' ? size.trimLongMm : size.trimShortMm;
+  const trimH = orientation === 'landscape' ? size.trimShortMm : size.trimLongMm;
   const bleed = CARD.bleedMm;
   return {
     orientation,
+    format,
     trimW,
     trimH,
     bleed,

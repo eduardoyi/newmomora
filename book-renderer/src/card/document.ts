@@ -10,6 +10,7 @@ import {
   round,
   safeViolations,
   trimToPage,
+  type CardFormat,
   type CardGeometry,
   type Rect,
   type SafeViolation,
@@ -69,6 +70,8 @@ export interface CardPortraitInput {
 export interface CardInput {
   /** `null` = follow the front picture. */
   orientation: CardOrientation | null;
+  /** Print format (5R for US/CA, A5 for Europe). Default 5R. */
+  format?: CardFormat;
   frontLayout: CardLayout;
   frontImage: CardImage;
   /** The id of the chosen front picture (focal points and the picker are keyed by it). */
@@ -460,7 +463,7 @@ function buildBack(g: CardGeometry, input: CardInput, measure: MeasureFn, warnin
 
 export function buildCardDocument(input: CardInput, measure: MeasureFn): CardDocument {
   const orientation = input.orientation ?? orientationFromImage(input.frontImage.width, input.frontImage.height);
-  const geometry = cardGeometry(orientation);
+  const geometry = cardGeometry(orientation, input.format ?? '5R');
   const warnings: string[] = [];
   const front = buildFront(geometry, input, measure);
   const back = buildBack(geometry, input, measure, warnings);
@@ -511,6 +514,7 @@ export function cardStats(doc: CardDocument) {
     pageMm: [geometry.pageW, geometry.pageH],
     trimMm: [geometry.trimW, geometry.trimH],
     orientation: geometry.orientation,
+    format: geometry.format,
     frontLayout: front.layout,
     frontDpi: front.image.dpi,
     frontCrop: [front.image.cropX, front.image.cropY],

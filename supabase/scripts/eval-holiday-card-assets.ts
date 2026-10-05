@@ -70,6 +70,8 @@ interface Args {
   portraits: boolean;
   today: string;
   greetingPosition: string | null;
+  /** Print format: 5R (US/CA, default) or A5 (Europe). Kept from the previous card.json when omitted. */
+  format: '5R' | 'A5' | null;
   focal: { x: number; y: number } | null;
 }
 
@@ -88,6 +90,7 @@ function parseArgs(argv: string[]): Args {
     portraits: true,
     today: new Date().toISOString().slice(0, 10),
     greetingPosition: null,
+    format: null,
     focal: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -128,6 +131,11 @@ function parseArgs(argv: string[]): Args {
       case '--scenes':
         if (!next) throw new Error('--scenes needs a comma-separated list of scene ids');
         args.scenes = next.split(',').map((id) => id.trim()).filter(Boolean);
+        i += 1;
+        break;
+      case '--format':
+        if (next !== '5R' && next !== 'A5') throw new Error('--format must be 5R or A5');
+        args.format = next;
         i += 1;
         break;
       case '--greeting-position':
@@ -432,8 +440,10 @@ if (args.portraits) {
 let token: string | null = null;
 let previousFocal: { x: number; y: number } | null = null;
 let previousPosition: string | null = null;
+let previousFormat: '5R' | 'A5' | null = null;
 try {
   const previous = JSON.parse(await Deno.readTextFile(`${cardDir}/card.json`));
+  if (previous?.format === 'A5' || previous?.format === '5R') previousFormat = previous.format;
   if (typeof previous?.qr?.token === 'string' && /^[0-9A-Za-z]{22}$/.test(previous.qr.token)) token = previous.qr.token;
   if (typeof previous?.photo?.greetingPosition === 'string') previousPosition = previous.photo.greetingPosition;
   const f = previous?.photo?.focal;
@@ -460,6 +470,7 @@ const card = {
   signature: run.signature,
   qrCaption: run.qrCaption,
   qr: { enabled: args.qr, token, url: `${QR_BASE_URL}/${token}` },
+  format: args.format ?? previousFormat ?? '5R',
   letters: run.variants.map((v) => ({ tone: v.tone, text: v.text })),
   photo: {
     mediaId: front.id,

@@ -61,6 +61,7 @@ export function cardInputFromData(data: CardData, edits: CardEdits | undefined, 
   const showPortraits = choices.portraits ?? true;
   return {
     orientation: choices.orientation ?? null,
+    format: data.format ?? '5R',
     frontLayout: layout,
     frontImage: { url: assetUrl(option.file), width: option.width, height: option.height, focal: savedFocal },
     imageId: option.id,

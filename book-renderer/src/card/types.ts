@@ -71,6 +71,8 @@ export interface CardData {
   signature: string;
   qrCaption: string | null;
   qr: { enabled: boolean; token: string; url: string };
+  /** Print format; absent = 5R (older card.json files). */
+  format?: '5R' | 'A5';
   letters: { tone: string; text: string }[];
   photo: { mediaId?: string; memoryId?: string; file: string; width: number; height: number; focal?: Focal; greetingPosition?: GreetingPosition };
   illustrations: { id: string; file: string; width: number; height: number }[];
