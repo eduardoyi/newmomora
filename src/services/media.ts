@@ -354,11 +354,21 @@ export async function getMediaUrls(
   });
 }
 
+export interface UploadMediaObjectOptions {
+  /** 0..1 fraction of bytes sent (native only). */
+  onProgress?: (fraction: number) => void;
+  /** Cancel and fail with `upload_stalled` when no bytes move for this long.
+   * Opt-in like uploadToPresignedUrl's timeout: without it a hung connection
+   * leaves the caller waiting indefinitely with no error. */
+  stallTimeoutMs?: number;
+}
+
 export async function uploadMediaObject(
   objectKey: string,
   fileUri: string,
   contentType: string,
   familyId: string,
+  options?: UploadMediaObjectOptions,
 ): Promise<{ data: UploadMediaResponse | null; error: ServiceError | null }> {
   const { headers, error: authError } = await getUploadFunctionHeaders(
     objectKey,
@@ -388,11 +398,48 @@ export async function uploadMediaObject(
     return { data: await uploadResponse.json(), error: null };
   }
 
-  const uploadResult = await FileSystem.uploadAsync(uploadUrl, fileUri, {
-    httpMethod: 'POST',
+  const uploadOptions = {
+    httpMethod: 'POST' as const,
     headers,
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-  });
+  };
+  let uploadResult: FileSystem.FileSystemUploadResult | null | undefined;
+  if (options?.onProgress || options?.stallTimeoutMs) {
+    const { onProgress, stallTimeoutMs } = options;
+    let stalled = false;
+    let stallHandle: ReturnType<typeof setTimeout> | undefined;
+    let endStallWait: (() => void) | undefined;
+    const stallWait = new Promise<undefined>((resolve) => {
+      endStallWait = () => resolve(undefined);
+    });
+    const armStallTimer = () => {
+      if (!stallTimeoutMs) return;
+      if (stallHandle) clearTimeout(stallHandle);
+      stallHandle = setTimeout(() => {
+        stalled = true;
+        void Promise.resolve(uploadTask.cancelAsync()).catch(() => undefined);
+        endStallWait?.();
+      }, stallTimeoutMs);
+    };
+    const uploadTask = FileSystem.createUploadTask(uploadUrl, fileUri, uploadOptions, (data) => {
+      armStallTimer();
+      if (onProgress && data.totalBytesExpectedToSend > 0) {
+        onProgress(Math.min(data.totalBytesSent / data.totalBytesExpectedToSend, 1));
+      }
+    });
+    armStallTimer();
+    uploadResult = await Promise.race([uploadTask.uploadAsync(), stallWait]).finally(() => {
+      if (stallHandle) clearTimeout(stallHandle);
+    });
+    if (stalled || !uploadResult) {
+      return {
+        data: null,
+        error: { message: 'The upload stopped responding. Check your connection and try again.', code: 'upload_stalled' },
+      };
+    }
+  } else {
+    uploadResult = await FileSystem.uploadAsync(uploadUrl, fileUri, uploadOptions);
+  }
 
   if (uploadResult.status < 200 || uploadResult.status >= 300) {
     try {

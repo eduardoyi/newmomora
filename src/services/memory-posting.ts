@@ -165,9 +165,26 @@ function toError(error: unknown, fallbackMessage: string): Error {
   return new Error(fallbackMessage);
 }
 
+/**
+ * A per-asset upload failure, tagged with the asset's index in the input
+ * array so a caller can say WHICH photo/video failed. The message is the
+ * underlying error's, unchanged, so `toError`-style callers see no difference.
+ */
+export class MediaAssetUploadError extends Error {
+  readonly assetIndex: number;
+
+  constructor(message: string, assetIndex: number) {
+    super(message);
+    this.name = 'MediaAssetUploadError';
+    this.assetIndex = assetIndex;
+  }
+}
+
+export type MediaAssetUploadPhase = 'preparing' | 'uploading' | 'done';
+
 async function mapMediaUploads<T>(
   assets: MemoryMediaMutationAsset[],
-  uploadAsset: (asset: MemoryMediaMutationAsset) => Promise<T>,
+  uploadAsset: (asset: MemoryMediaMutationAsset, index: number) => Promise<T>,
 ): Promise<T[]> {
   const results = new Array<T>(assets.length);
   let nextIndex = 0;
@@ -179,9 +196,12 @@ async function mapMediaUploads<T>(
       nextIndex += 1;
 
       try {
-        results[currentIndex] = await uploadAsset(assets[currentIndex]);
+        results[currentIndex] = await uploadAsset(assets[currentIndex], currentIndex);
       } catch (error) {
-        firstError ??= error;
+        firstError ??= new MediaAssetUploadError(
+          toError(error, 'Media upload failed').message,
+          currentIndex,
+        );
       }
     }
   }
@@ -209,11 +229,27 @@ export async function uploadMemoryMediaAssets(params: {
   assets: MemoryMediaMutationAsset[];
   uploadedKeys: string[];
   onAssetUploaded?: () => void;
+  /** Fine-grained progress for NEW assets only (pass-through assets with an
+   * objectKey never report): `index` is the asset's position in `assets`,
+   * `fraction` is 0..1 within the phase. Edit-memory's save progress row. */
+  onAssetProgress?: (index: number, phase: MediaAssetUploadPhase, fraction: number) => void;
+  /** Forwarded to uploadMediaObject for the original file's upload. */
+  uploadStallTimeoutMs?: number;
 }): Promise<UploadedMemoryMediaAsset[]> {
-  const { userId, familyId, memoryId, assets, uploadedKeys, onAssetUploaded } = params;
+  const {
+    userId,
+    familyId,
+    memoryId,
+    assets,
+    uploadedKeys,
+    onAssetUploaded,
+    onAssetProgress,
+    uploadStallTimeoutMs,
+  } = params;
 
   const uploadAsset = async (
     asset: MemoryMediaMutationAsset,
+    index: number,
   ): Promise<UploadedMemoryMediaAsset> => {
     if (asset.objectKey) {
       onAssetUploaded?.();
@@ -234,10 +270,14 @@ export async function uploadMemoryMediaAssets(params: {
     // (falls back to the original file only when it already fits the
     // upload cap -- see video-compression.ts), so the content type and
     // extension may differ from the picked asset.
-    const compressed = await compressVideoForUpload({
-      fileUri: asset.fileUri,
-      contentType: asset.contentType,
-    });
+    onAssetProgress?.(index, 'preparing', 0);
+    const compressed = await compressVideoForUpload(
+      {
+        fileUri: asset.fileUri,
+        contentType: asset.contentType,
+      },
+      onAssetProgress ? (fraction) => onAssetProgress(index, 'preparing', fraction) : undefined,
+    );
 
     // Post-compression enforcement: the result (transcoded or fallback)
     // must fit MAX_VIDEO_BYTES before we spend a PUT on it. See
@@ -272,11 +312,20 @@ export async function uploadMemoryMediaAssets(params: {
 
     const mediaAssetId = getStorageMediaAssetId(asset.mediaAssetId);
     const mediaKey = buildMemoryMediaAssetKey(userId, memoryId, mediaAssetId, extension);
+    onAssetProgress?.(index, 'uploading', 0);
     const { error: uploadError } = await uploadMediaObject(
       mediaKey,
       upload.fileUri,
       upload.contentType,
       familyId,
+      onAssetProgress || uploadStallTimeoutMs
+        ? {
+            onProgress: onAssetProgress
+              ? (fraction) => onAssetProgress(index, 'uploading', fraction)
+              : undefined,
+            stallTimeoutMs: uploadStallTimeoutMs,
+          }
+        : undefined,
     );
 
     if (uploadError) {
@@ -326,6 +375,7 @@ export async function uploadMemoryMediaAssets(params: {
     }
 
     onAssetUploaded?.();
+    onAssetProgress?.(index, 'done', 1);
 
     return {
       objectKey: mediaKey,

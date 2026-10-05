@@ -55,9 +55,12 @@ async function fallBackToOriginalOrThrow(media: UploadableMedia): Promise<Upload
  * upload. Best-effort: images pass through untouched. Web uploads skip
  * compression (react-native-compressor is native-only). See
  * fallBackToOriginalOrThrow for what happens when compression itself fails.
+ * `onProgress` receives the transcode's 0..1 progress (edit-memory's save
+ * progress row).
  */
 export async function compressVideoForUpload(
   media: UploadableMedia,
+  onProgress?: (fraction: number) => void,
 ): Promise<UploadableMedia> {
   if (Platform.OS === 'web' || !isVideoContentType(media.contentType)) {
     return media;
@@ -68,7 +71,7 @@ export async function compressVideoForUpload(
     compressedUri = await Video.compress(media.fileUri, {
       compressionMethod: 'auto',
       maxSize: VIDEO_UPLOAD_MAX_DIMENSION,
-    });
+    }, onProgress);
   } catch {
     return fallBackToOriginalOrThrow(media);
   }

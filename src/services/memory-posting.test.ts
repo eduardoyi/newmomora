@@ -2,7 +2,12 @@ import * as ImageManipulator from 'expo-image-manipulator';
 
 import { createAudioMemory, createMediaMemory } from '@/services/memories';
 import { deleteStorageObject, uploadMediaObject } from '@/services/media';
-import { postAudioMemory, postMediaMemory, uploadMemoryMediaAssets } from '@/services/memory-posting';
+import {
+  MediaAssetUploadError,
+  postAudioMemory,
+  postMediaMemory,
+  uploadMemoryMediaAssets,
+} from '@/services/memory-posting';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
 import { MAX_AUDIO_BYTES, MAX_AUDIO_DURATION_MS, MAX_VIDEO_BYTES } from '@/utils/media-validation';
 import { getVideoFrame } from '@/utils/video-aspect-ratio';
@@ -110,6 +115,58 @@ describe('uploadMemoryMediaAssets', () => {
     expect(uploadedKeys).toHaveLength(0);
     expect(onAssetUploaded).toHaveBeenCalledTimes(1);
     expect(assets[0]?.objectKey).toBe('existing/key.jpg');
+  });
+
+  it('reports per-phase progress for new assets only, keyed by input index', async () => {
+    mockedUploadMediaObject.mockImplementation(async (_key, _uri, _type, _familyId, options) => {
+      options?.onProgress?.(0.5);
+      return { data: { objectKey: 'key', success: true }, error: null };
+    });
+    const onAssetProgress = jest.fn();
+
+    await uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [
+        { objectKey: 'existing/key.jpg', contentType: 'image/jpeg' },
+        { fileUri: 'file:///photo2.jpg', contentType: 'image/jpeg' },
+      ],
+      uploadedKeys: [],
+      onAssetProgress,
+      uploadStallTimeoutMs: 60_000,
+    });
+
+    expect(onAssetProgress.mock.calls).toEqual([
+      [1, 'preparing', 0],
+      [1, 'uploading', 0],
+      [1, 'uploading', 0.5],
+      [1, 'done', 1],
+    ]);
+    expect(mockedUploadMediaObject.mock.calls[0]?.[4]).toEqual(
+      expect.objectContaining({ stallTimeoutMs: 60_000 }),
+    );
+  });
+
+  it('tags a failed upload with the failing asset index, keeping its message', async () => {
+    mockedUploadMediaObject.mockResolvedValue({
+      data: null,
+      error: { message: 'Media upload failed', code: '500' },
+    });
+
+    const failure = uploadMemoryMediaAssets({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-1',
+      assets: [
+        { objectKey: 'existing/key.jpg', contentType: 'image/jpeg' },
+        { fileUri: 'file:///photo2.jpg', contentType: 'image/jpeg' },
+      ],
+      uploadedKeys: [],
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(MediaAssetUploadError);
+    await expect(failure).rejects.toMatchObject({ assetIndex: 1, message: 'Media upload failed' });
   });
 
   it('strips EXIF from new image uploads by re-encoding them before the PUT', async () => {

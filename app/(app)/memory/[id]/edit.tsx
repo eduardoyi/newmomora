@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -25,9 +25,16 @@ import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
+import { useMemory, useMemoryMutations, type MediaAssetUploadPhase } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { MediaAssetUploadError } from '@/services/memory-posting';
 import { mediaImageSource } from '@/utils/media-image-source';
+import {
+  describeEditSaveError,
+  summarizeMediaSaveProgress,
+  type MediaSaveProgressEntry,
+} from '@/utils/media-save-progress';
+import { isVideoContentType } from '@/utils/media-validation';
 import { isKnownMemoryType, MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -85,6 +92,10 @@ export default function EditMemoryScreen() {
   const [illustrationEnabled, setIllustrationEnabled] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  // Keyed by index into the attachedMedia array being saved; only newly added
+  // (not yet uploaded) assets get an entry. Null when no upload is running.
+  const [uploadProgress, setUploadProgress] = useState<Record<number, MediaSaveProgressEntry> | null>(null);
+  const lastReportedProgressRef = useRef<Record<number, string>>({});
 
   const tagMembers = useMemo(
     () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames })),
@@ -230,9 +241,40 @@ export default function EditMemoryScreen() {
     setSelectedMediaId((current) => (current === attachmentId ? null : current));
   };
 
+  const reportMediaProgress = useCallback(
+    (index: number, phase: MediaAssetUploadPhase, fraction: number) => {
+      // Native progress callbacks fire per chunk/frame -- only re-render when
+      // the phase changes or the visible percentage moves.
+      const key = `${phase}:${Math.floor(fraction * 100)}`;
+      if (lastReportedProgressRef.current[index] === key) {
+        return;
+      }
+      lastReportedProgressRef.current[index] = key;
+      setUploadProgress((current) =>
+        current?.[index] ? { ...current, [index]: { ...current[index], phase, fraction } } : current,
+      );
+    },
+    [],
+  );
+
   const handleSave = async () => {
     setErrorMessage('');
     if (!id) return;
+    const savingMedia = attachedMedia;
+    if (isMedia) {
+      const newEntries: Record<number, MediaSaveProgressEntry> = {};
+      savingMedia.forEach((attachment, index) => {
+        if (!attachment.objectKey) {
+          newEntries[index] = {
+            isVideo: isVideoContentType(attachment.contentType),
+            phase: 'waiting',
+            fraction: 0,
+          };
+        }
+      });
+      lastReportedProgressRef.current = {};
+      setUploadProgress(Object.keys(newEntries).length > 0 ? newEntries : null);
+    }
     try {
       // Always send content -- `undefined` means "unchanged" to updateMemory,
       // so mapping an emptied caption to undefined would silently keep the
@@ -253,7 +295,7 @@ export default function EditMemoryScreen() {
         // Never sent for audio -- the clip is immutable post-save (P3.2);
         // updateMemory rejects a mediaAssets write for any non-media type.
         mediaAssets: isMedia
-          ? attachedMedia.map((attachment) => ({
+          ? savingMedia.map((attachment) => ({
               objectKey: attachment.objectKey,
               fileUri: attachment.objectKey ? undefined : attachment.uri,
               mediaAssetId: attachment.id,
@@ -262,12 +304,28 @@ export default function EditMemoryScreen() {
               aspectRatio: attachment.aspectRatio,
             }))
           : undefined,
+        onMediaProgress: isMedia ? reportMediaProgress : undefined,
       });
       router.back();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Could not update memory');
+      const failedAttachment =
+        error instanceof MediaAssetUploadError ? savingMedia[error.assetIndex] : undefined;
+      setErrorMessage(
+        describeEditSaveError(
+          error,
+          failedAttachment && error instanceof MediaAssetUploadError
+            ? { position: error.assetIndex + 1, contentType: failedAttachment.contentType }
+            : undefined,
+        ),
+      );
+    } finally {
+      setUploadProgress(null);
     }
   };
+
+  const uploadSummary = uploadProgress
+    ? summarizeMediaSaveProgress(Object.values(uploadProgress))
+    : null;
 
   if (isLoading || isPlaceholderData || !isInitialized) {
     return (
@@ -363,9 +421,30 @@ export default function EditMemoryScreen() {
       dateTestID="edit-memory-date"
       dateValue={memoryDate}
       errorMessage={errorMessage || undefined}
+      errorTestID="edit-memory-error"
+      belowErrorSlot={uploadSummary ? (
+        <View
+          accessibilityLabel={uploadSummary.label}
+          accessibilityLiveRegion="polite"
+          style={styles.uploadProgress}
+          testID="edit-memory-upload-progress"
+        >
+          <Text style={styles.uploadProgressLabel}>{uploadSummary.label}</Text>
+          <View style={styles.uploadProgressTrack}>
+            <View
+              style={[
+                styles.uploadProgressFill,
+                // Never sit at 0 -- a sliver reads as "working".
+                { width: `${Math.max(uploadSummary.fraction, 0.03) * 100}%` },
+              ]}
+            />
+          </View>
+        </View>
+      ) : null}
       hasMediaRegion={hasAttachment}
       illustrationSlot={illustrationSlot}
       isSaving={isUpdating}
+      mediaDisabled={isUpdating}
       maxSelectedMembers={isIllustrationEnabled && hasIllustrationHistory ? MAX_ILLUSTRATION_MEMBERS : undefined}
       members={members}
       noticeSlot={noticeSlot}
@@ -575,6 +654,26 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 13,
     color: colors.error,
+  },
+  uploadProgress: {
+    gap: 6,
+    marginTop: spacing.sm,
+  },
+  uploadProgressLabel: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 12.5,
+    color: colors.ink2,
+  },
+  uploadProgressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+  },
+  uploadProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: colors.primary,
   },
   unavailableNotice: {
     backgroundColor: colors.surface,

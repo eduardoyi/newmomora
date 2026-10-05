@@ -396,6 +396,20 @@ describe('warmShareCardForMemoryFireAndForget', () => {
     );
   });
 
+  it('skips warming when the media cover is a video (server rejects video cards)', async () => {
+    warmShareCardForMemoryFireAndForget({
+      id: 'memory-5',
+      memory_type: 'media',
+      mediaAssets: [
+        { id: 'video-cover', content_type: 'video/mp4' },
+        { id: 'photo-page-2', content_type: 'image/jpeg' },
+      ],
+    });
+    await flushMicrotasks();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('skips warming entirely for a media memory with no media assets', async () => {
     warmShareCardForMemoryFireAndForget({ id: 'memory-4', memory_type: 'media', mediaAssets: [] });
     await flushMicrotasks();

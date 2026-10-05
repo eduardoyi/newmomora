@@ -188,6 +188,58 @@ describe('uploadMediaObject', () => {
       code: 'validation_error',
     });
   });
+
+  it('reports byte progress through an upload task when onProgress is given', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    const mockedCreateUploadTask = FileSystem.createUploadTask as jest.Mock;
+    mockedCreateUploadTask.mockImplementationOnce(
+      (_url: string, _fileUri: string, _options: unknown, callback: (data: unknown) => void) => ({
+        uploadAsync: async () => {
+          callback({ totalBytesSent: 25, totalBytesExpectedToSend: 100 });
+          callback({ totalBytesSent: 100, totalBytesExpectedToSend: 100 });
+          return { status: 200, body: '{}', headers: {} };
+        },
+        cancelAsync: mockCancelAsync,
+      }),
+    );
+    const onProgress = jest.fn();
+
+    const result = await uploadMediaObject(
+      'user-1/memories/memory-1/media/asset.mp4',
+      'file:///tmp/clip.mp4',
+      'video/mp4',
+      'family-1',
+      { onProgress },
+    );
+
+    expect(result.error).toBeNull();
+    expect(onProgress.mock.calls).toEqual([[0.25], [1]]);
+    expect(mockedUploadAsync).not.toHaveBeenCalled();
+  });
+
+  it('cancels and fails with upload_stalled when no bytes move within stallTimeoutMs', async () => {
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    const mockedCreateUploadTask = FileSystem.createUploadTask as jest.Mock;
+    mockedCreateUploadTask.mockImplementationOnce(() => ({
+      uploadAsync: () => new Promise(() => undefined),
+      cancelAsync: mockCancelAsync,
+    }));
+
+    const pending = uploadMediaObject(
+      'user-1/memories/memory-1/media/asset.mp4',
+      'file:///tmp/clip.mp4',
+      'video/mp4',
+      'family-1',
+      { stallTimeoutMs: 60_000 },
+    );
+    await jest.advanceTimersByTimeAsync(60_000);
+    const result = await pending;
+    jest.useRealTimers();
+
+    expect(mockCancelAsync).toHaveBeenCalled();
+    expect(result.error?.code).toBe('upload_stalled');
+  });
 });
 
 describe('getMediaUrls batching', () => {

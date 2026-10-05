@@ -22,6 +22,19 @@ Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — o
   waits for permission/source-chooser UI to dismiss before presenting the
   picker, and reports native launch failures inline instead of silently
   leaving the composer stuck. Concurrent picker launches are ignored.
+- **Edit-memory save progress:** unlike new-memory (which hands media to the
+  background queue and closes immediately), edit-memory blocks its screen while
+  newly added photos/videos are compressed and uploaded. A progress row under
+  the tags narrates it ("Compressing video… 20%", "Uploading 2 of 3… 70%",
+  "Saving…") with one bar weighted across the new items (video: 40% compress /
+  60% upload; photo: 10% / 90%). Remove buttons hide while saving so grid
+  numbering stays stable. Failures name the item by its grid badge
+  ("Couldn't upload video 2. …"; network failures become a connection hint),
+  and an upload with no bytes moving for 60 s is cancelled as `upload_stalled`
+  instead of spinning forever. Copy lives in `src/utils/media-save-progress.ts`;
+  progress comes from `uploadMemoryMediaAssets`' `onAssetProgress` (fed by
+  `compressVideoForUpload`'s and `uploadMediaObject`'s progress callbacks).
+  Extend by adding phases there, not by reading file sizes in the screen.
 - **Capture-date prefill (new-memory composer only):** supported library
   picks and incoming shares derive a `YYYY-MM-DD` suggestion from the
   earliest valid capture date across the currently attached media. Library
@@ -400,6 +413,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-10-05 | Edit-memory now shows compress/upload progress for newly added media, names the failing item on error, and fails stalled uploads after 60 s of no progress (device-measured: an added 16 s video spent ~3.5 s compressing + ~11 s uploading behind a bare spinner). Share-card warm now skips media memories whose cover is a video (server always 400s `video_not_supported`). |
 | 2026-08-15 | Fixed cross-creator media edits: an owner/manager retaining an existing original now retains its exact paired preview even though it sits under the original uploader's immutable prefix. New/replaced previews remain caller-prefix constrained; forged foreign previews and previews swapped from another asset are rejected. |
 | 2026-08-09 | Real Pixel 9a diagnostics reproduced an empty share surface as two simultaneous Momora tasks: a gallery `ACTION_SEND` started a second `MainActivity`, which never mounted React and detached the shared host from the original activity. Android now uses `singleTop` + `documentLaunchMode="never"`; incoming cache copies are verified before attachment; and consumed hook state is refreshed so repeated same-photo shares are processed. This native manifest repair requires a new Android build. |
 | 2026-08-09 | Incoming gallery shares now use the same visible, user-overridable earliest capture-date suggestion as library picks. `useIncomingMemoryShare` wires bounded JPEG/HEIC and video extractors through `prepareSharedMedia`; optional metadata is capped by one 750 ms batch deadline, duplicate selected URIs are rejected to avoid same-name share corruption, and only `capturedAtIso` reaches composer state. Visible and accessibility copy now consistently says "From media." |

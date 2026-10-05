@@ -64,6 +64,7 @@ import {
   hasImageMediaAsset,
   notifyFamilyActivityFireAndForget,
   uploadMemoryMediaAssets,
+  type MediaAssetUploadPhase,
   type MemoryMediaMutationAsset,
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
@@ -88,7 +89,12 @@ import {
   type AnchoredPageParam,
 } from '@/utils/timeline-anchor';
 
-export type { MemoryMediaMutationAsset } from '@/services/memory-posting';
+export type { MediaAssetUploadPhase, MemoryMediaMutationAsset } from '@/services/memory-posting';
+
+// Edit-memory blocks its screen on media uploads (unlike new-memory's
+// background queue), so a hung upload must surface as an error rather than
+// an endless spinner: fail when no bytes move for this long.
+const MEDIA_UPLOAD_STALL_TIMEOUT_MS = 60_000;
 
 // Family members are ordered by how often they're tagged in memories, so any
 // mutation that can change tags must refresh that ordering too.
@@ -278,6 +284,7 @@ export function useMemoryMutations() {
       taggedMemberIds?: string[];
       mediaAssets?: MemoryMediaMutationAsset[];
       memoryType?: MemoryType;
+      onMediaProgress?: (index: number, phase: MediaAssetUploadPhase, fraction: number) => void;
     }) => {
       if (!user) {
         throw new Error('You must be signed in to update a memory');
@@ -298,6 +305,8 @@ export function useMemoryMutations() {
               memoryId: input.memoryId,
               assets: input.mediaAssets,
               uploadedKeys,
+              onAssetProgress: input.onMediaProgress,
+              uploadStallTimeoutMs: MEDIA_UPLOAD_STALL_TIMEOUT_MS,
             })
           : undefined;
 

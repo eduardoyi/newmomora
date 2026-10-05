@@ -43,13 +43,25 @@ describe('compressVideoForUpload', () => {
     expect(mockedCompress).toHaveBeenCalledWith('file:///clip.mov', {
       compressionMethod: 'auto',
       maxSize: VIDEO_UPLOAD_MAX_DIMENSION,
-    });
+    }, undefined);
     expect(result).toEqual({
       fileUri: 'file:///compressed.mp4',
       contentType: 'video/mp4',
     });
     // Successful compression never needs to check the original's size.
     expect(mockedGetLocalFileSizeBytes).not.toHaveBeenCalled();
+  });
+
+  it('forwards transcode progress to onProgress', async () => {
+    mockedCompress.mockImplementation(async (_uri, _options, onProgress) => {
+      onProgress?.(0.5);
+      return 'file:///compressed.mp4';
+    });
+    const onProgress = jest.fn();
+
+    await compressVideoForUpload({ fileUri: 'file:///clip.mov', contentType: 'video/quicktime' }, onProgress);
+
+    expect(onProgress).toHaveBeenCalledWith(0.5);
   });
 
   describe('fallback when compression fails or returns nothing', () => {

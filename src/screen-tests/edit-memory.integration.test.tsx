@@ -7,6 +7,8 @@ import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 
+import { MediaAssetUploadError } from '@/services/memory-posting';
+
 import EditMemoryScreen from '../../app/(app)/memory/[id]/edit';
 
 jest.mock('expo-router', () => ({
@@ -22,8 +24,12 @@ jest.mock('@/components/date-picker-field', () => ({
   DatePickerField: () => null,
 }));
 
+let mockMediaPickerProps: { onSelect: (attachments: unknown[]) => void } | null = null;
 jest.mock('@/components/memory-media-picker', () => ({
-  MemoryMediaPicker: () => null,
+  MemoryMediaPicker: (props: { onSelect: (attachments: unknown[]) => void }) => {
+    mockMediaPickerProps = props;
+    return null;
+  },
 }));
 
 jest.mock('@/components/memory-media-preview', () => ({
@@ -240,6 +246,85 @@ describe('EditMemoryScreen', () => {
     expect(updateMemory).toHaveBeenCalledWith(
       expect.objectContaining({ content: '', memoryType: 'media' }),
     );
+  });
+
+  describe('adding a video to a media memory', () => {
+    beforeEach(() => {
+      mockedUseMemory.mockReturnValue({
+        data: {
+          id: 'memory-1',
+          content: 'Caption',
+          memory_date: '2026-07-14',
+          memory_type: 'media',
+          media_key: null,
+          media_content_type: 'image/jpeg',
+          mediaAssets: [
+            {
+              id: 'asset-1',
+              object_key: 'user-1/memories/memory-1/photo.jpg',
+              content_type: 'image/jpeg',
+              duration_ms: null,
+              aspect_ratio: null,
+            },
+          ],
+          taggedMembers: [],
+          illustration_key: null,
+          illustration_status: 'none',
+          updated_at: '2026-07-14T09:00:00.000Z',
+        },
+        isLoading: false,
+        isPlaceholderData: false,
+      });
+    });
+
+    function addVideo() {
+      act(() => {
+        mockMediaPickerProps?.onSelect([
+          { id: 'new-video', uri: 'file:///clip.mp4', contentType: 'video/mp4', sizeBytes: 1 },
+        ]);
+      });
+    }
+
+    it('shows compress/upload progress for the new item while saving', async () => {
+      let reportProgress: ((index: number, phase: string, fraction: number) => void) | undefined;
+      updateMemory.mockImplementationOnce(
+        (input: { onMediaProgress: typeof reportProgress }) =>
+          new Promise(() => {
+            reportProgress = input.onMediaProgress;
+          }),
+      );
+      const screen = renderScreen();
+      addVideo();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+      });
+      expect(screen.getByText('Uploading video… 0%')).toBeTruthy();
+
+      act(() => reportProgress?.(1, 'preparing', 0.5));
+      expect(screen.getByText('Compressing video… 20%')).toBeTruthy();
+
+      act(() => reportProgress?.(1, 'uploading', 0.5));
+      expect(screen.getByText('Uploading video… 70%')).toBeTruthy();
+
+      act(() => reportProgress?.(1, 'done', 1));
+      expect(screen.getByText('Saving…')).toBeTruthy();
+    });
+
+    it('names the item that failed and clears the progress row', async () => {
+      updateMemory.mockRejectedValueOnce(new MediaAssetUploadError('Media upload failed', 1));
+      const screen = renderScreen();
+      addVideo();
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+      });
+
+      expect(screen.getByTestId('edit-memory-error').props.children).toBe(
+        "Couldn't upload video 2. Media upload failed.",
+      );
+      expect(screen.queryByTestId('edit-memory-upload-progress')).toBeNull();
+    });
   });
 
   // P0.1 forward-compat fallback (docs/plans/audio-memories-v1.md) -- a

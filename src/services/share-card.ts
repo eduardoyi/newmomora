@@ -262,7 +262,7 @@ export function warmShareCardFireAndForget(memoryId: string, mediaAssetId?: stri
 export interface ShareCardWarmableMemory {
   id: string;
   memory_type: string;
-  mediaAssets: { id: string }[];
+  mediaAssets: { id: string; content_type?: string | null }[];
 }
 
 /**
@@ -283,11 +283,16 @@ export interface ShareCardWarmableMemory {
  */
 export function warmShareCardForMemoryFireAndForget(memory: ShareCardWarmableMemory): void {
   if (memory.memory_type === 'media') {
-    const coverAssetId = memory.mediaAssets[0]?.id;
-    if (!coverAssetId) {
+    const coverAsset = memory.mediaAssets[0];
+    if (!coverAsset) {
       return;
     }
-    warmShareCardFireAndForget(memory.id, coverAssetId);
+    // compose-share-card rejects video assets (`video_not_supported`) --
+    // a video cover's warm is a guaranteed 400 on every save.
+    if (coverAsset.content_type?.startsWith('video/')) {
+      return;
+    }
+    warmShareCardFireAndForget(memory.id, coverAsset.id);
     return;
   }
   // 'audio' is not in SHAREABLE_MEMORY_TYPES (compose-share-card/index.ts)
