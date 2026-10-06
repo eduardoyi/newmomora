@@ -645,7 +645,7 @@ describe('Holiday card entry (holiday-cards-p2 Step 6)', () => {
     );
   });
 
-  it('make: pick a greeting, create the card, then open the shop', async () => {
+  it('make: pick a greeting, create the card, then stay in the app until it is ready', async () => {
     mockHolidayCard(holidaySummary());
     mockBooks([]);
     createHolidayCard.mockResolvedValue({ ok: true, result: { cardId: 'card-9', created: true, regionWarning: false } });
@@ -655,12 +655,11 @@ describe('Holiday card entry (holiday-cards-p2 Step 6)', () => {
     fireEvent.press(getByTestId('holiday-greeting-holidays'));
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
 
-    // The ~20 minute confirmation comes first; Continue opens the shop.
+    // The ~20 minute confirmation; OK closes it and the app stays put (the
+    // "ready" push opens the shop later).
     fireEvent.press(await waitFor(() => getByTestId('holiday-greeting-continue')));
-    await waitFor(() =>
-      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-9#h=${HANDOFF_CODE}`),
-    );
     expect(createHolidayCard).toHaveBeenCalledWith('holidays');
+    expect(Linking.openURL).not.toHaveBeenCalled();
   });
 
   it('make: a server refusal shows inline and opens nothing', async () => {

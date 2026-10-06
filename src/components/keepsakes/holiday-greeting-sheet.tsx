@@ -4,8 +4,10 @@
 // fixed once the card is created. Confirm -> create -> an inline confirmation
 // ("Your card is being made", ~20 minutes, we'll send a notification; or the
 // "Cards ship to the US and Canada" note when the device timezone is outside
-// US/Canada; or the "already have this year's card" note) -> Continue opens the
-// shop, which shows the same preparing message. Errors stay inline.
+// US/Canada; or the "already have this year's card" note). A NEW card stays in
+// the app (OK closes the sheet): the card isn't editable until its film is
+// done, and the "ready" push opens the shop then (owner, 2026-10-06). Only an
+// existing card offers Continue -> the shop. Errors stay inline.
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -102,7 +104,7 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
 
   const handleContinue = () => {
     if (!notice) return;
-    onOpenCard(notice.cardId);
+    if (notice.existing) onOpenCard(notice.cardId);
     onClose();
   };
 
@@ -153,7 +155,7 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
               ) : (
                 <Text style={styles.body}>
                   {notice.region
-                    ? `Your card is being made. ${HOLIDAY_PREPARING_NOTE} You can still continue and choose a US or Canadian address when you order.`
+                    ? `Your card is being made. ${HOLIDAY_PREPARING_NOTE} You’ll choose a US or Canadian address when you order.`
                     : HOLIDAY_PREPARING_NOTE}
                 </Text>
               )}
@@ -163,7 +165,7 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
                 style={({ pressed }) => [styles.confirmButton, pressed && styles.pressed]}
                 testID="holiday-greeting-continue"
               >
-                <Text style={styles.confirmText}>Continue</Text>
+                <Text style={styles.confirmText}>{notice.existing ? 'Continue' : 'OK'}</Text>
               </Pressable>
             </View>
           ) : (

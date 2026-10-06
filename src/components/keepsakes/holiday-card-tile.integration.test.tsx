@@ -63,7 +63,7 @@ describe('HolidayCardTile with the real hook', () => {
     expect(mockedOpenShopUrl).not.toHaveBeenCalled();
   });
 
-  it('creates, opens the shop for the new card and flips the tile to generating', async () => {
+  it('creates, stays in the app (no shop) and flips the tile to generating', async () => {
     mockedFetch.mockResolvedValueOnce({ data: summary(), error: null });
     mockedFetch.mockResolvedValue({
       data: summary({ cardId: 'card-5', year: 2026, status: 'generating' }),
@@ -77,7 +77,7 @@ describe('HolidayCardTile with the real hook', () => {
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
     fireEvent.press(await findByTestId('holiday-greeting-continue'));
 
-    await waitFor(() => expect(mockedOpenShopUrl).toHaveBeenCalledWith('https://shop.usemomora.com/c/card-5'));
     expect(await findByTestId('holiday-card-tile-generating')).toBeTruthy();
+    expect(mockedOpenShopUrl).not.toHaveBeenCalled();
   });
 });
