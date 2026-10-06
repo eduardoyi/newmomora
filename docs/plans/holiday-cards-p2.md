@@ -481,3 +481,25 @@ no-store; generateLink side effects noted. Held canary: fail-closed CAS hold
 before any external call, refund-flag coverage, "ordered" defined over paid
 statuses only (a refunded canary unlocks the card), runbook (full refund,
 before family deletion, empty the list before launch).
+
+## 12. Printed canary (2026-10-06)
+
+Owner's family, through the real flow (app tile → greeting → "being made"
+→ ready push → shop signed in via the handoff → edit → checkout → Stripe):
+order `c77ae4f1…`, 10 cards, $29.90. Pay-first pipeline after payment:
+one 2-page 5R PDF rendered (fonts embedded, 185.9 × 135.1 mm), Gelato draft
+`7511ad5b…` (1 pack, single `default` file, product + reference + address
+correct), **held** (`HELD_FOR_CANARY`) before confirm; inspected; released by
+SQL at 16:31 UTC → sweep confirmed at 16:40 → Gelato `passed` at 16:41
+(the US one-PDF layout clears Gelato's production check). Delivery to the
+Houston PO box pending (≈ 7–9 days) = the physical 5R proof.
+
+Fixes found during the canary walk: OTA overwritten by another thread
+publishing from an older base (republished from main — publish OTAs only from
+an up-to-date main); Wrangler needs Node 22 (`.nvmrc` added); autofilled
+spaced ZIP+4 accepted + disabled-button hint; stray QR copy removed from the
+summary; card waits for its film + ready push; stay in the app after create;
+tiered pricing with a 10-card option; pay first, render after (like the book).
+
+Remaining before P3 (~Nov 10): cards delivered + inspected; empty the hold
+list; set `ship_by_note`; `mode = 'all'`, `closes_on`.
