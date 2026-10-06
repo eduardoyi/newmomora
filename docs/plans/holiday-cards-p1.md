@@ -465,3 +465,38 @@ video keys; memory-viewer cache, operator script deferred, export already
 covered; illustrated front is an explicit owner decision (Q5). Rejected:
 none. The Gelato "look up by reference before create" from round 2 is
 dropped as unneeded (drafts are free; the id is persisted at checkout).
+
+## 12. Deploy + canary (2026-10-06)
+
+- Prod `claim_family_deletion_fence` matched the migration's copy (md5 of
+  `prosrc` 57a110ee…, 5588 chars) → owner ran `supabase db push`
+  (20261006120000).
+- `GELATO_API_KEY` secret set; Edge Functions deployed (owner, `--use-api`):
+  holiday-cards, holiday-card-orders, sweep-holiday-card-orders,
+  stripe-webhook, get-year-film-url, hard-delete-expired-accounts,
+  schedule-year-films, workflow-year-film-bridge.
+- `momora-year-film-worker` version `dae3f266` (both Workflows), deployed with
+  `--env="" --var FILM_RENDERER_IMAGE:…:b73621518323` (the config only holds a
+  placeholder — a plain deploy would break live films). Rollback target
+  `8a4a007f`.
+- Render service image `registry.fly.io/momora-memory-book-renderer:9d1d05e`
+  (PII image test 6/6); previous image `:v1` is the rollback.
+- **Canary, owner's family (free dry run, owner's call — no paid order):**
+  - `create` (Europe/Lisbon → `regionWarning`, not blocked) → card ready on
+    attempt 1 in ~2 min: 12 front candidates (#1 the whole family, 4032×3024),
+    three es-CO letters with no flags, signature from the family name, QR
+    caption; film `0fa942b8` published 15 min later; `/f/<token>` page 200 +
+    video 206.
+  - `create_draft` → `quote` (Houston, 2 packs: deliverable, Gelato cost
+    $18.71 vs $49.80) → `create_checkout` in 33 s incl. Fly cold start: print
+    files under `print-orders/<order>/<hash16>/`, Gelato draft with the right
+    product, qty 2, `default` + `back`, address and reference; live Stripe
+    session. PDFs 185.9 × 135.1 mm, fonts embedded, QR = the card's live link.
+  - `cancel_checkout` → order `cancelled`, Gelato draft gone (404), print files
+    deleted.
+  - Not exercised in prod: the paid path (webhook → confirm → tracking). It
+    runs first on the first real order; the sweep alerts at 30 min if a paid
+    order isn't submitted. The US 5R print itself is proven by sample
+    05f43f74.
+- Follow-ups: HEIC → JPEG print path (gallery-import originals are excluded
+  from the front today); watch the first paid order.
