@@ -1,0 +1,39 @@
+/* Card-only additions to the shared checkout look (order/CheckoutScreen.css:
+ * .checkout-screen, .checkout-quote, .address-form ...). CLASS-SCOPED (.cc-*):
+ * nothing here touches html, body, :root or an element selector, so loading
+ * this lazy chunk never restyles the book pages. Tokens are the book flow's. */
+
+/* Quantity step */
+.cc-options { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cc-options__legend { font-family: var(--font-sans); font-size: 12px; font-weight: 600; color: var(--color-ink2); padding: 0; margin-bottom: 8px; }
+.cc-option {
+  display: flex; align-items: center; gap: 12px; padding: 14px 16px; min-height: 56px; cursor: pointer;
+  font-family: var(--font-sans); border-radius: var(--radius-md);
+  border: 1px solid var(--color-border); background: var(--color-white); color: var(--color-ink);
+}
+.cc-option input { width: 20px; height: 20px; accent-color: var(--color-primary); flex: none; margin: 0; }
+.cc-option.is-selected { border-color: var(--lavender-deep); background: var(--lavender-pale); }
+.cc-option__cards { font-size: 15px; font-weight: 600; flex: 1; }
+.cc-option__price { font-size: 15px; font-weight: 600; color: var(--color-ink); }
+
+/* Buttons under an error, and plain links in the summary */
+.cc-action {
+  font-family: var(--font-sans); font-size: 14px; font-weight: 600; padding: 10px 16px; min-height: 44px;
+  border-radius: var(--radius-md); border: 1px solid var(--color-border); background: var(--color-white);
+  color: var(--color-ink); cursor: pointer; align-self: flex-start;
+}
+.cc-link:first-child { padding-left: 0; }
+.cc-link { font-family: var(--font-sans); font-size: 12px; background: none; border: 0; padding: 0 0 0 10px; color: var(--lavender-deep); cursor: pointer; text-decoration: underline; min-height: 24px; }
+
+/* Summary extras: address, QR line, delivery note */
+.cc-block { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; background: var(--color-white); border: 1px solid var(--color-border); border-radius: var(--radius-lg); font-family: var(--font-sans); font-size: 14px; color: var(--color-ink); }
+.cc-block__label { font-size: 12px; font-weight: 600; color: var(--color-ink2); }
+.cc-block__line { display: block; }
+
+/* Front and back thumbnails */
+.cc-thumbs { width: 100%; }
+.cc-thumbs__grid { display: flex; gap: 12px; justify-content: center; align-items: flex-start; }
+.cc-thumb { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.cc-thumb__frame { overflow: hidden; background: #fff; border-radius: 2px; box-shadow: 0 6px 18px rgba(60, 40, 100, 0.2), 0 1px 3px rgba(60, 40, 100, 0.22); }
+.cc-thumb__caption { font-family: var(--font-sans); font-size: 12px; font-weight: 600; color: var(--color-ink2); }
+.cc-thumbs__note { margin: 0; font-family: var(--font-sans); font-size: 13px; color: var(--color-ink2); text-align: center; padding: 24px 0; }

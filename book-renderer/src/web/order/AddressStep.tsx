@@ -4,6 +4,7 @@ import { AddressForm } from './AddressForm';
 import { StripeAddressForm } from './StripeAddressForm';
 import { resolveStripe } from './stripeClient';
 import { getFixtureSlug } from '../dev/fixture';
+import { addressErrorMessages, validateCardAddress } from './cardAddress';
 import type { ShippingAddressInput } from './types';
 
 type Mode = { kind: 'checking' } | { kind: 'manual' } | { kind: 'stripe'; stripe: Stripe };
@@ -39,11 +40,37 @@ function fixtureModeActive(): boolean {
 export function AddressStep({
   submitting,
   onSubmit,
+  allowedCountries,
+  requireRegion,
+  defaultAddress,
 }: {
   submitting: boolean;
   onSubmit: (address: ShippingAddressInput) => void;
+  /** Narrows the country list (ISO codes). Omitted = the Memory Book list. Holiday cards pass `['US', 'CA']`. */
+  allowedCountries?: readonly string[];
+  /** Holiday cards: city and a 2-letter state/province are required and the postal code is checked (see `cardAddress.ts`). Omitted = the book rules. */
+  requireRegion?: boolean;
+  /** Pre-fills the form (coming back to change the address). */
+  defaultAddress?: ShippingAddressInput;
 }) {
   const [mode, setMode] = useState<Mode>(() => (fixtureModeActive() ? { kind: 'manual' } : { kind: 'checking' }));
+  const [formError, setFormError] = useState<string | null>(null);
+
+  // Card orders re-check what the Stripe element returns against the server's
+  // rules (the manual form does the same field by field); books pass through.
+  function handleSubmit(address: ShippingAddressInput) {
+    if (requireRegion) {
+      const result = validateCardAddress(address);
+      if (!result.ok) {
+        setFormError(addressErrorMessages(result.errors).join(' '));
+        return;
+      }
+      setFormError(null);
+      onSubmit(result.address);
+      return;
+    }
+    onSubmit(address);
+  }
 
   useEffect(() => {
     if (mode.kind !== 'checking') return;
@@ -60,8 +87,34 @@ export function AddressStep({
   if (mode.kind === 'checking') {
     return <p className="checkout-screen__hint">Loading address form…</p>;
   }
-  if (mode.kind === 'stripe') {
-    return <StripeAddressForm stripe={mode.stripe} submitting={submitting} onSubmit={onSubmit} />;
-  }
-  return <AddressForm submitting={submitting} onSubmit={onSubmit} />;
+  const form =
+    mode.kind === 'stripe' ? (
+      <StripeAddressForm
+        stripe={mode.stripe}
+        submitting={submitting}
+        onSubmit={handleSubmit}
+        allowedCountries={allowedCountries}
+        defaultAddress={defaultAddress}
+      />
+    ) : (
+      <AddressForm
+        submitting={submitting}
+        onSubmit={handleSubmit}
+        allowedCountries={allowedCountries}
+        requireRegion={requireRegion}
+        defaultAddress={defaultAddress}
+      />
+    );
+  // Always a fragment with the notice in slot 0 (so the form keeps its place, and its
+  // typed values, when the notice appears).
+  return (
+    <>
+      {formError && (
+        <p className="checkout-screen__error" role="alert">
+          {formError}
+        </p>
+      )}
+      {form}
+    </>
+  );
 }

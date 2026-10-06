@@ -36,7 +36,10 @@ import {
   type CardLanguage,
   CardSnapshotError,
   type CardSnapshot,
+  type FrozenCardSnapshot,
   normalizeCardEdits,
+  parseFrozenSnapshot,
+  resolveFrontId,
   type SnapshotMedia,
   snapshotHash,
 } from './holiday-card-snapshot.ts';
@@ -245,24 +248,33 @@ export async function loadCardSnapshot(
   const pickId = edits.frontImage;
   const candidateIds = candidateIdsFrom(card.front_candidates);
   if (pickId !== null && !UUID.test(pickId)) throw new CardLoadError('FRONT_PHOTO_UNREADABLE');
-  // The editor shows the pick, or else candidate #1: that photo, and no other, is what prints.
-  const wantedIds = pickId ? [pickId] : candidateIds.slice(0, 1);
-  if (wantedIds.length === 0) throw new CardLoadError('NO_FRONT_PHOTO');
+  // The editor shows the pick, or else the best USABLE candidate (`resolveFrontId`,
+  // the same rule as the editor view): that photo, and no other, is what prints.
+  if (pickId === null && candidateIds.length === 0) throw new CardLoadError('NO_FRONT_PHOTO');
 
   const mediaRows = must(await supabase
     .from('memory_media')
     .select('id, memory_id, object_key, preview_object_key, content_type')
-    .in('id', wantedIds)) as { id: string; memory_id: string; object_key: string; preview_object_key: string | null; content_type: string }[];
+    .in('id', pickId ? [pickId] : candidateIds)) as { id: string; memory_id: string; object_key: string; preview_object_key: string | null; content_type: string }[];
   const memoryIds = [...new Set(mediaRows.map((m) => m.memory_id))];
   const memories = memoryIds.length === 0
     ? []
     : must(await supabase.from('memories').select('id, family_id, memory_date').in('id', memoryIds)) as { id: string; family_id: string; memory_date: string | null }[];
   const memoryById = new Map(memories.map((m) => [m.id, m]));
-
-  const media: SnapshotMedia[] = [];
-  await Promise.all(mediaRows.map(async (row) => {
+  const usableRows = mediaRows.filter((row) => {
     const memory = memoryById.get(row.memory_id);
-    if (!memory || memory.family_id !== card.family_id || !PRINTABLE_TYPES.has(row.content_type)) return;
+    return !!memory && memory.family_id === card.family_id && PRINTABLE_TYPES.has(row.content_type);
+  });
+  const usableIds = new Set(usableRows.map((r) => r.id));
+  const frontId = resolveFrontId(pickId, candidateIds, (id) => usableIds.has(id));
+  // Candidates exist but none can print: the same answer as an unusable pick.
+  if (!frontId) throw new CardLoadError('FRONT_PHOTO_UNREADABLE');
+  const wantedIds = [frontId];
+
+  // Only the chosen photo is measured (a ranged read of the original).
+  const media: SnapshotMedia[] = [];
+  await Promise.all(usableRows.filter((row) => row.id === frontId).map(async (row) => {
+    const memory = memoryById.get(row.memory_id);
     const size = await probePhotoDimensions(row.object_key, reader, imageSize);
     media.push({
       id: row.id,
@@ -271,7 +283,7 @@ export async function loadCardSnapshot(
       width: size?.width ?? null,
       height: size?.height ?? null,
       memoryId: row.memory_id,
-      date: memory.memory_date,
+      date: memory?.memory_date ?? null,
     });
   }));
 
@@ -288,7 +300,7 @@ export async function loadCardSnapshot(
     format: options.format,
     letters: lettersFrom(card.letters),
     edits: editsForRenderer(card.edits),
-    frontCandidateIds: pickId ? candidateIds : candidateIds.slice(0, 1),
+    frontCandidateIds: pickId ? candidateIds : [frontId],
     media,
     people: people.map((p) => ({
       id: p.id,
@@ -320,6 +332,58 @@ export async function loadCardSnapshot(
   return { card, snapshot, hash: await snapshotHash(snapshot) };
 }
 
+// ── Ordered cards: the frozen snapshot ───────────────────────────────────
+
+/** Order statuses that count as "ordered": the card's content locks and reorders print the frozen snapshot. */
+export const ORDERED_ORDER_STATUSES = ['paid', 'submitted', 'in_production', 'shipped'] as const;
+
+export interface OrderedSnapshotOrder {
+  id: string;
+  status: string;
+  snapshotHash: string | null;
+  /** Print format the first order froze (`5R` | `A5`). */
+  format: string | null;
+  region: string | null;
+  createdAt: string;
+}
+
+export interface OrderedSnapshot {
+  order: OrderedSnapshotOrder;
+  snapshot: FrozenCardSnapshot;
+}
+
+/**
+ * The FIRST order of the card (oldest `created_at`) in paid | submitted |
+ * in_production | shipped, with its frozen `card_snapshot`. Null when the card
+ * has no such order (cancelled, failed, draft, quoted and checkout orders never
+ * count). Throws `CardLoadError('LOAD_FAILED')` on a database error and
+ * `CardLoadError('INVALID_CARD')` when that order's snapshot is not usable --
+ * callers must refuse, never fall back to live data (a reorder prints exactly
+ * what was printed the first time).
+ */
+export async function loadOrderedSnapshot(supabase: SupabaseClient, cardId: string): Promise<OrderedSnapshot | null> {
+  const { data, error } = await supabase
+    .from('holiday_card_orders')
+    .select('id, status, snapshot_hash, format, region, created_at, card_snapshot')
+    .eq('card_id', cardId)
+    .in('status', [...ORDERED_ORDER_STATUSES])
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    .limit(1);
+  if (error) throw new CardLoadError('LOAD_FAILED');
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { id: string; status: string; snapshot_hash: string | null; format: string | null; region: string | null; created_at: string; card_snapshot: unknown }
+    | null
+    | undefined;
+  if (!row) return null;
+  const snapshot = parseFrozenSnapshot(row.card_snapshot);
+  if (!snapshot) throw new CardLoadError('INVALID_CARD');
+  return {
+    order: { id: row.id, status: row.status, snapshotHash: row.snapshot_hash, format: row.format, region: row.region, createdAt: row.created_at },
+    snapshot,
+  };
+}
+
 // ── Film / QR gate ───────────────────────────────────────────────────────
 
 export type FilmGate =
@@ -332,13 +396,24 @@ export type FilmGate =
  * or revoked (the owner's `disable_link` revokes it WITHOUT touching
  * `edits.choices.qr`), or the buyer switched it off (`edits.choices.qr ===
  * false`). Only when the QR is ON must the film be PUBLISHED: it has a
- * `video_key`, was `ready_at` some time, and is not `blocked` -- whatever its
+ * `video_key`, was `ready_at` some time, and is not `ended` -- whatever its
  * current status (a re-render, or a failed re-render with the video still in
- * place, still serves the old video at the printed link). A film that never
- * published, or lost its video (`ended`), is not ready. A card with no film at
+ * place, still serves the old video at the printed link). A film that is
+ * still rendering is `FILM_NOT_READY` (wait, or switch the QR off).
+ *
+ * A film that can never be published -- blocked, or its render gave up
+ * (failed / skipped / ended with no published video) -- prints WITHOUT a QR
+ * (`shareTokenActive: false`), exactly the editor's `qrState: 'unavailable'`
+ * ("prints without a QR"). `strict: true` keeps those two as refusals
+ * (`FILM_BLOCKED` / `FILM_NOT_READY`): for reprinting a card whose first
+ * print HAD a QR, which must never print differently. A card with no film at
  * all (below the film floor) has no token, so it prints without a QR.
  */
-export async function checkFilmGate(supabase: SupabaseClient, card: HolidayCardRow): Promise<FilmGate> {
+export async function checkFilmGate(
+  supabase: SupabaseClient,
+  card: HolidayCardRow,
+  options: { strict?: boolean } = {},
+): Promise<FilmGate> {
   const qrOff = normalizeCardEdits(card.edits).choices.qr === false;
   if (qrOff || !card.share_token) return { ok: true, shareTokenActive: false };
 
@@ -358,9 +433,13 @@ export async function checkFilmGate(supabase: SupabaseClient, card: HolidayCardR
     .maybeSingle<{ id: string; status: string; blocked: boolean; video_key: string | null; ready_at: string | null }>();
   if (error) throw new CardLoadError('LOAD_FAILED');
   if (!film) return { ok: true, shareTokenActive: false };
-  if (film.blocked) return { ok: false, code: 'FILM_BLOCKED' };
-  if (!film.video_key || !film.ready_at || film.status === 'ended') return { ok: false, code: 'FILM_NOT_READY' };
-  return { ok: true, shareTokenActive: true };
+  if (film.blocked) return options.strict ? { ok: false, code: 'FILM_BLOCKED' } : { ok: true, shareTokenActive: false };
+  const published = Boolean(film.video_key) && Boolean(film.ready_at) && film.status !== 'ended';
+  if (published) return { ok: true, shareTokenActive: true };
+  // Never going to publish: no QR rather than a card nobody can order.
+  const gaveUp = film.status === 'failed' || film.status === 'skipped' || film.status === 'ended';
+  if (gaveUp && !options.strict) return { ok: true, shareTokenActive: false };
+  return { ok: false, code: 'FILM_NOT_READY' };
 }
 
 /**

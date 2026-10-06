@@ -772,6 +772,14 @@ the deploy steps):
   made in US, USPS Ground Advantage (7–9 days) to the owner's Houston PO box.
   $5.84 cards + $6.52 shipping = $13.38 incl. tax. Files under the R2 prefix
   `…/holiday-cards/sample-2026/v6-5r-us/`.
+- **REFUSED** (2026-10-06): "Can't combine multiple files into production one" —
+  the US 5R line, like the EU A5 one, needs **ONE 2-page PDF as `default`**
+  (page 1 front, page 2 back), not separate `default` + `back` files (the
+  earlier "US needs a back file" lesson was wrong). Not charged. Production
+  code switched to `one_pdf` for US/CA. A one-PDF re-sample draft
+  (`1289d87a…`) was created but NOT ordered: the owner chose to make the P2
+  printed canary (a real order through the app + shop, held, inspected, then
+  released to print) the physical sample instead.
 - P1 is planned in [holiday-cards-p1.md](holiday-cards-p1.md) (hardened
   2026-10-06; v1 = US/CA only, no illustrated front, one card per family per
   year, no letter rewrites or film refreshes).

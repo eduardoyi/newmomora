@@ -36,9 +36,21 @@ export const PROGRESS_STEPS: readonly ProgressStepInfo[] = [
   { key: 'delivered', label: 'Delivered' },
 ];
 
-const STEP_STATUSES: ReadonlySet<MemoryBookOrderStatus> = new Set(
-  PROGRESS_STEPS.map((step) => step.key as MemoryBookOrderStatus),
-);
+const STEP_STATUSES: ReadonlySet<string> = new Set(PROGRESS_STEPS.map((step) => step.key as string));
+
+/**
+ * A stepper's shape, so another product can draw the same bar with its own
+ * waypoints (holiday cards: paid -> sent to print -> printing -> shipped, see
+ * `card/checkout/cardProgress.ts`). `terminalKey` is the last status the bar
+ * knows: once an order is there every step reads `done` (nothing left to pulse).
+ */
+export interface StepperConfig {
+  steps: readonly { key: string; label: string; hint?: string }[];
+  terminalKey: string;
+}
+
+/** The Memory Book's six-step bar (the default everywhere). */
+export const BOOK_STEPPER: StepperConfig = { steps: PROGRESS_STEPS, terminalKey: 'delivered' };
 
 /**
  * `true` for exactly the statuses the stepper knows how to draw
@@ -60,8 +72,8 @@ export function showsProgressStepper(status: MemoryBookOrderStatus, refundedAt: 
 /** Index into `PROGRESS_STEPS` for the order's CURRENT step, or -1 if
  * `status` isn't a stepper status at all (callers should already have
  * checked `showsProgressStepper` first). */
-export function currentProgressStepIndex(status: MemoryBookOrderStatus): number {
-  return PROGRESS_STEPS.findIndex((step) => step.key === status);
+export function currentProgressStepIndex(status: string, steps: StepperConfig['steps'] = PROGRESS_STEPS): number {
+  return steps.findIndex((step) => step.key === status);
 }
 
 export type ProgressStepState = 'done' | 'current' | 'upcoming';
@@ -70,8 +82,8 @@ export type ProgressStepState = 'done' | 'current' | 'upcoming';
  * `delivered` is the one terminal stepper status, so every step (including
  * `delivered` itself) reads as `done` rather than `current`: there's
  * nothing left to pulse once the book has arrived. */
-export function progressStepState(stepIndex: number, currentIndex: number, status: MemoryBookOrderStatus): ProgressStepState {
-  if (status === 'delivered') return 'done';
+export function progressStepState(stepIndex: number, currentIndex: number, status: string, terminalKey: string = 'delivered'): ProgressStepState {
+  if (status === terminalKey) return 'done';
   if (stepIndex < currentIndex) return 'done';
   if (stepIndex === currentIndex) return 'current';
   return 'upcoming';

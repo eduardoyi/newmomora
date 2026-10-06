@@ -14,9 +14,34 @@ type Filter = (row: Row) => boolean;
 export interface FakeDbOptions {
   /** `updated_at` stamp for updates (default: the real clock). */
   clock?: () => string;
-  /** Return true to make this write fail with a database error. */
-  failWrite?: (table: string, op: 'update' | 'insert', patch: Row) => boolean;
+  /** The database's `now()` in ms, used by the built-in claim RPCs (default: the real clock). */
+  nowMs?: () => number;
+  /**
+   * Return true to make this write fail with a database error, or `{ code }` for a
+   * database error with that SQLSTATE (e.g. '23505').
+   */
+  failWrite?: (table: string, op: 'update' | 'insert', patch: Row) => boolean | { code: string };
+  /** Return true to make this SELECT (of these columns) fail with a database error. */
+  failRead?: (table: string, columns: string | null) => boolean;
 }
+
+/** What a failing RPC answers: supabase-js puts the Postgres SQLSTATE in `code` and the RAISE hint in `hint`. */
+export class FakeRpcError extends Error {
+  constructor(public readonly code: string, message: string, public readonly hint: string | null = message) {
+    super(message);
+  }
+}
+
+/** Column accessor: `col` or the PostgREST JSON path `col->>key`. */
+function valueAt(row: Row, col: string): unknown {
+  const at = col.indexOf('->>');
+  if (at < 0) return row[col] ?? null;
+  const outer = row[col.slice(0, at)];
+  const inner = typeof outer === 'object' && outer !== null ? (outer as Row)[col.slice(at + 3)] : null;
+  return inner ?? null;
+}
+
+const CLAIM_FRESH_MS = 10 * 60_000;
 
 export interface WriteLogEntry {
   table: string;
@@ -31,6 +56,53 @@ export class FakeDb {
   readonly rpcCalls: { name: string; args: Row }[] = [];
   readonly rpcHandlers = new Map<string, (args: Row) => unknown>();
   readonly users = new Map<string, { email: string | null }>();
+  /** Make an RPC fail with this database error (a settings read error, a claim RPC outage...). */
+  readonly rpcFailures = new Map<string, { message: string; code?: string; hint?: string | null }>();
+
+  /** The database clock (ms). */
+  now(): number {
+    return (this.options.nowMs ?? Date.now)();
+  }
+
+  /**
+   * Behaviour of the P2 RPCs (migration 20261007120000), mirrored from the SQL so the
+   * order flow is tested against the real rules; `rpcHandlers` / `rpcFailures` override.
+   */
+  private readonly builtinRpcs: Record<string, (args: Row) => unknown> = {
+    holiday_card_orders_enabled: () => {
+      const settings = this.rows('holiday_card_settings')[0];
+      return settings ? settings.orders_enabled !== false : false;
+    },
+    holiday_card_hold_confirm: (args) => {
+      const settings = this.rows('holiday_card_settings')[0];
+      const list = (settings?.hold_confirm_family_ids ?? []) as string[];
+      return list.includes(String(args.p_family_id));
+    },
+    claim_holiday_card_checkout: (args) => {
+      const orderId = String(args.p_order_id);
+      const order = this.rows('holiday_card_orders').find((o) => o.id === orderId);
+      const card = order?.card_id ? this.rows('holiday_cards').find((c) => c.id === order.card_id) : undefined;
+      if (!order || !card || card.deleted_at) throw new FakeRpcError('P0002', 'card_not_found');
+      if ((card.edits_version ?? 0) !== args.p_expected_version) throw new FakeRpcError('40001', 'CARD_CHANGED');
+      const claimAt = card.checkout_claimed_at ? Date.parse(String(card.checkout_claimed_at)) : NaN;
+      const otherCheckout = this.rows('holiday_card_orders').some((o) => o.card_id === card.id && o.status === 'checkout' && o.id !== orderId);
+      const freshOtherClaim = card.checkout_order_id && card.checkout_order_id !== orderId && Number.isFinite(claimAt) &&
+        claimAt > this.now() - CLAIM_FRESH_MS;
+      if (otherCheckout || freshOtherClaim) throw new FakeRpcError('55000', 'CHECKOUT_OPEN_ELSEWHERE');
+      card.checkout_order_id = orderId;
+      card.checkout_claimed_at = new Date(this.now()).toISOString();
+      return [{ edits_version: 0, ...card }];
+    },
+    release_holiday_card_checkout: (args) => {
+      for (const card of this.rows('holiday_cards')) {
+        if (card.checkout_order_id === args.p_order_id) {
+          card.checkout_order_id = null;
+          card.checkout_claimed_at = null;
+        }
+      }
+      return null;
+    },
+  };
 
   constructor(seed: Record<string, Row[]> = {}, private readonly options: FakeDbOptions = {}) {
     for (const [table, rows] of Object.entries(seed)) this.tables.set(table, rows.map((row) => ({ ...row })));
@@ -63,8 +135,15 @@ export class FakeDb {
       from: (table: string) => this.query(table),
       rpc: (name: string, args: Row) => {
         this.rpcCalls.push({ name, args });
-        const handler = this.rpcHandlers.get(name);
-        return Promise.resolve({ data: handler ? handler(args) : null, error: null });
+        const forced = this.rpcFailures.get(name);
+        if (forced) return Promise.resolve({ data: null, error: { message: forced.message, code: forced.code, hint: forced.hint ?? null } });
+        const handler = this.rpcHandlers.get(name) ?? this.builtinRpcs[name];
+        try {
+          return Promise.resolve({ data: handler ? handler(args) : null, error: null });
+        } catch (error) {
+          if (error instanceof FakeRpcError) return Promise.resolve({ data: null, error: { message: error.message, code: error.code, hint: error.hint } });
+          throw error;
+        }
       },
       auth: {
         admin: {
@@ -83,7 +162,7 @@ export class FakeDb {
     let mode: 'select' | 'update' | 'insert' | 'delete' = 'select';
     let patch: Row = {};
     let columns: string | null = null;
-    let orderBy: { col: string; ascending: boolean } | null = null;
+    const orderBy: { col: string; ascending: boolean }[] = [];
     let limitN: number | null = null;
     let wantsRows = false;
 
@@ -96,17 +175,32 @@ export class FakeDb {
 
     const exec = (): { data: Row[]; error: { message: string; code?: string } | null } => {
       const all = db.rows(table);
+      const failure = (op: 'update' | 'insert') => {
+        const failed = db.options.failWrite?.(table, op, patch);
+        if (!failed) return null;
+        return { data: [] as Row[], error: { message: `${op} failed`, ...(typeof failed === 'object' ? { code: failed.code } : {}) } };
+      };
       if (mode === 'insert') {
-        if (db.options.failWrite?.(table, 'insert', patch)) return { data: [], error: { message: 'insert failed' } };
+        const failed = failure('insert');
+        if (failed) return failed;
         const defaults: Row = table === 'holiday_card_orders' ? { status: 'draft' } : {};
         const row: Row = { id: crypto.randomUUID(), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...defaults, ...patch };
         all.push(row);
         db.log.push({ table, op: 'insert', patch, matched: 1 });
         return { data: [project(row)], error: null };
       }
+      if (mode === 'select' && db.options.failRead?.(table, columns)) return { data: [], error: { message: 'select failed' } };
       let matched = all.filter((row) => filters.every((f) => f(row)));
       if (mode === 'update') {
-        if (db.options.failWrite?.(table, 'update', patch)) return { data: [], error: { message: 'update failed' } };
+        const failed = failure('update');
+        if (failed) return failed;
+        // holiday_card_orders_one_checkout_per_card: at most one 'checkout' order per card.
+        if (table === 'holiday_card_orders' && patch.status === 'checkout') {
+          for (const row of matched) {
+            const clash = all.some((other) => other !== row && other.card_id === row.card_id && other.status === 'checkout');
+            if (clash) return { data: [], error: { message: 'duplicate key value violates unique constraint "holiday_card_orders_one_checkout_per_card"', code: '23505' } };
+          }
+        }
         for (const row of matched) {
           Object.assign(row, patch);
           if (!('updated_at' in patch)) row.updated_at = (db.options.clock ?? (() => new Date().toISOString()))();
@@ -119,15 +213,18 @@ export class FakeDb {
         db.log.push({ table, op: 'delete', patch: {}, matched: matched.length });
         return { data: matched.map(project), error: null };
       }
-      if (orderBy) {
-        const { col, ascending } = orderBy;
+      if (orderBy.length > 0) {
+        // Every `.order()` call is a tie-breaker for the one before it, like PostgREST.
         matched = [...matched].sort((a, b) => {
-          const left = a[col] as string | number | null;
-          const right = b[col] as string | number | null;
-          if (left === right) return 0;
-          if (left === null || left === undefined) return 1;
-          if (right === null || right === undefined) return -1;
-          return (left < right ? -1 : 1) * (ascending ? 1 : -1);
+          for (const { col, ascending } of orderBy) {
+            const left = a[col] as string | number | null;
+            const right = b[col] as string | number | null;
+            if (left === right) continue;
+            if (left === null || left === undefined) return 1;
+            if (right === null || right === undefined) return -1;
+            return (left < right ? -1 : 1) * (ascending ? 1 : -1);
+          }
+          return 0;
         });
       }
       if (limitN !== null) matched = matched.slice(0, limitN);
@@ -156,7 +253,7 @@ export class FakeDb {
         return chain;
       },
       eq: (col: string, val: unknown) => {
-        filters.push((r) => (r[col] ?? null) === val);
+        filters.push((r) => valueAt(r, col) === val);
         return chain;
       },
       neq: (col: string, val: unknown) => {
@@ -168,16 +265,28 @@ export class FakeDb {
         return chain;
       },
       is: (col: string, val: unknown) => {
-        filters.push((r) => (r[col] ?? null) === val);
+        filters.push((r) => valueAt(r, col) === val);
         return chain;
       },
       not: (col: string, op: string, val: unknown) => {
         if (op !== 'is') throw new Error('fake db: only not(col, "is", x) is supported');
-        filters.push((r) => (r[col] ?? null) !== val);
+        filters.push((r) => valueAt(r, col) !== val);
         return chain;
       },
       lt: (col: string, val: string | number) => {
-        filters.push((r) => r[col] !== null && r[col] !== undefined && (r[col] as string | number) < val);
+        filters.push((r) => valueAt(r, col) !== null && (valueAt(r, col) as string | number) < val);
+        return chain;
+      },
+      // Only `col.is.null` and `col.eq.value` terms (what the order flow uses).
+      or: (expression: string) => {
+        const terms = expression.split(',').map((term) => {
+          const [col, op, ...rest] = term.split('.');
+          const value = rest.join('.');
+          if (op === 'is' && value === 'null') return (r: Row) => valueAt(r, col) === null;
+          if (op === 'eq') return (r: Row) => String(valueAt(r, col)) === value;
+          throw new Error(`fake db: unsupported or() term ${term}`);
+        });
+        filters.push((r) => terms.some((t) => t(r)));
         return chain;
       },
       lte: (col: string, val: string | number) => {
@@ -189,7 +298,7 @@ export class FakeDb {
         return chain;
       },
       order: (col: string, opts?: { ascending?: boolean }) => {
-        orderBy = { col, ascending: opts?.ascending !== false };
+        orderBy.push({ col, ascending: opts?.ascending !== false });
         return chain;
       },
       limit: (n: number) => {
@@ -324,10 +433,12 @@ export interface StripeFakeState {
   paymentIntents: Map<string, { amount: number; amount_refunded: number }>;
   /** Make every payment intent read fail with this HTTP status. */
   paymentIntentStatus: number;
+  /** When set, a NEW session (not an idempotent replay) must expire at least 30 minutes after this clock (Stripe's rule). */
+  now: (() => number) | null;
 }
 
 export function makeStripeFake(): { state: StripeFakeState; fetch: typeof fetch } {
-  const state: StripeFakeState = { calls: [], sessions: new Map(), nextSession: 1, expireStatus: 200, paymentIntents: new Map(), paymentIntentStatus: 200 };
+  const state: StripeFakeState = { calls: [], sessions: new Map(), nextSession: 1, expireStatus: 200, paymentIntents: new Map(), paymentIntentStatus: 200, now: null };
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
   const idempotent = new Map<string, Response>();
   const fakeFetch = (async (input: Request | URL | string, init?: RequestInit) => {
@@ -342,6 +453,10 @@ export function makeStripeFake(): { state: StripeFakeState; fetch: typeof fetch 
     if (method === 'POST' && path === '/customers') {
       response = json(200, { id: `cus_${state.calls.length}` });
     } else if (method === 'POST' && path === '/checkout/sessions') {
+      const expiresAt = Number(new URLSearchParams(body).get('expires_at'));
+      if (state.now && Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt * 1000 - state.now() < 30 * 60_000) {
+        return json(400, { error: { message: 'The `expires_at` timestamp must be at least 30 minutes in the future.' } });
+      }
       const id = `cs_test_${String(state.nextSession++).padStart(6, '0')}`;
       const params = new URLSearchParams(body);
       state.sessions.set(id, {
@@ -452,7 +567,7 @@ export interface WorldFetch {
   /** Objects the fake render service "uploaded" (key -> bytes), for the R2 HEAD check. */
   objects: Map<string, number>;
   headObject: (key: string) => Promise<{ contentLength: number | null } | null>;
-  /** Replace the render service's answer (default: 200 with front.pdf + back.pdf). */
+  /** Replace the render service's answer (default: 200 with one card.pdf for `one_pdf`, front.pdf + back.pdf for `two_files`). */
   setRender: (handler: (call: RenderCall) => Response) => void;
 }
 
@@ -509,12 +624,17 @@ export function cardWorldSeed(overrides: {
   film?: SeedRow | null;
   token?: SeedRow | null;
   family?: SeedRow;
+  /** `holiday_card_settings` (the kill switch + the canary hold list); defaults to ordering on, nobody held. */
+  settings?: SeedRow;
 } = {}): Record<string, SeedRow[]> {
   const film = overrides.film === null ? [] : [{
     id: IDS.film, status: 'ready', blocked: false, video_key: 'films/example.mp4', poster_key: 'films/example.jpg', ready_at: '2026-10-02T10:00:00Z', ...(overrides.film ?? {}),
   }];
   const token = overrides.token === null ? [] : [{ token: SHARE_TOKEN, film_id: IDS.film, revoked_at: null, ...(overrides.token ?? {}) }];
   return {
+    holiday_card_settings: [{
+      id: true, mode: 'canary', canary_family_ids: [IDS.family], orders_enabled: true, hold_confirm_family_ids: [], ...(overrides.settings ?? {}),
+    }],
     families: [{ id: IDS.family, name: 'The Example Family', deleted_at: null, ...(overrides.family ?? {}) }],
     holiday_cards: [{
       id: IDS.card,
@@ -535,6 +655,9 @@ export function cardWorldSeed(overrides: {
       qr_caption: 'Watch our year',
       signature: 'With love, the Example family',
       edits: {},
+      edits_version: 0,
+      checkout_order_id: null,
+      checkout_claimed_at: null,
       last_failure_code: null,
       generation_attempts: 1,
       created_at: '2026-10-01T10:00:00.000Z',
@@ -575,7 +698,7 @@ export const QUOTED_ORDER: Record<string, unknown> = {
   region: 'us_ca',
   format: '5R',
   product_uid: 'pack_of_cards_qt_10_pcs_pf_5r_upt_350-gsm-130lb-coated-silk_cl_4-4_ct_glossy-protection_prt_1-0_sft_none_set_none_hor_ept_standard',
-  file_layout: 'two_files',
+  file_layout: 'one_pdf',
   packs: 2,
   currency: 'USD',
   price_cents: 4980,

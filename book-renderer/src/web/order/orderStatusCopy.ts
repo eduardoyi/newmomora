@@ -96,6 +96,10 @@ const COPY: Record<MemoryBookOrderStatus, OrderStatusCopy> = {
 export const CANCELLED_AFTER_PAYMENT_MESSAGE =
   'This order was cancelled and your payment was refunded.';
 
+/** The one-time banner on the first arrival from Stripe (`?checkout=success`), shared by the book and card order pages. */
+export const ORDER_THANKS_MESSAGE =
+  "Thanks for your order! We'll keep this page updated as it moves through printing and shipping.";
+
 export function orderStatusCopy(status: MemoryBookOrderStatus): OrderStatusCopy {
   return COPY[status];
 }

@@ -56,6 +56,14 @@ keepsakes" link into that child's shelf.
     playable tile plus an "Updating…" badge (`keepsakes-film-{filmId}-updating`).
     A blocked film whose remake failed is hidden (filtered in the hook). The
     recaps grid and the child page use the same tile, so the states apply there.
+- **Holiday card tile** (`holiday-card-tile`, tab only, owners/managers only, above the
+  year sections in its own block so an empty year can't hide it): shown when the family
+  has this year's card or the server switch is on (`holiday_card_summary`). States:
+  **make** ("Make your holiday card", opens the greeting sheet), **generating**
+  ("Preparing your card…"), **ready** ("Edit & order your card"), **failed** ("We couldn't
+  make your card", hello@usemomora.com) and **ordered** ("Your cards are ordered"); all but
+  *make* open `shop.usemomora.com/c/<cardId>` through `openShopUrl` (signed-in handoff).
+  Viewers never see it. Details: [holiday-cards.md](./holiday-cards.md).
 - **Empty state** (no books **and** no films anywhere): **one family-level
   pitch**, not one per child, below whatever year sections exist (e.g. the
   upcoming card).
@@ -181,8 +189,10 @@ generation pipeline.
 | Routes | `app/(app)/(tabs)/keepsakes.tsx`, `app/(app)/keepsakes/[memberId].tsx`, `app/(app)/keepsakes/recaps/[year].tsx` | Tab (focus → today + poll gate + `keepsakes_opened`), the one-child route, the recaps grid |
 | Components | `src/components/memory-books/memory-books-body.tsx` (`KeepsakesBody`, `MemoryBookFlowHost`), `child-picker-sheet.tsx`, plus the existing `book-cover-tile`, `create-book-sheet`, `retry-book-sheet`, `book-toast` | Year sections + shelves, pitch, CTA, the create/retry flow |
 | Components (films) | `src/components/keepsakes/` (`keepsake-year-section`, `keepsake-film-tile`, `upcoming-recap-card`), `src/components/year-films/film-cover.tsx` (`FilmCover`, shared with the Timeline card and the drawer) | Year section layout, pressable film tiles, the upcoming card, the 9:16 poster |
+| Components (holiday card) | `src/components/keepsakes/holiday-card-tile.tsx` (`HolidayCardTile`, `holidayCardTileState`), `holiday-greeting-sheet.tsx` (`HolidayGreetingSheet`) | The tile's five states; the choices-only greeting sheet (create → region note → shop). testIDs `holiday-card-tile`, `holiday-card-tile-{make,generating,ready,failed,ordered}`, `holiday-greeting-{christmas,holidays,new-year}`, `holiday-greeting-{confirm,cancel,continue,error,region,note}` |
 | Hooks | `src/hooks/useMemoryBooks.ts` (`useFamilyMemoryBooks`, `useMemoryBooks`, `buildMemoryBookRows`), `src/hooks/useYearFilms.ts` (`useFamilyYearFilms`, `useYearFilmsEnabled`, `useYearFilmPosters`) | Family queries + book polling; per-child create/retry; films, upcoming gate, posters |
-| Services | `src/services/memory-books.ts` (`fetchMemoryBooksForFamily`), `src/services/year-films.ts` | Family-wide reads |
+| Hooks (holiday card) | `src/hooks/useHolidayCard.ts` (`useHolidayCard`: summary query keyed `holidayCardQueryKey`, polls 10 s while generating and focused, `create` mutation that invalidates it) | Summary + create |
+| Services | `src/services/memory-books.ts` (`fetchMemoryBooksForFamily`), `src/services/year-films.ts`, `src/services/holiday-cards.ts` (`fetchHolidayCardSummary`, `createHolidayCard`, `holidayCardWebUrl`, typed create errors) | Family-wide reads; the holiday-card RPC + `holiday-cards` create |
 | Utils | `src/utils/family-relationships.ts` (`isOwnChild`), `src/utils/year-films.ts` (`buildKeepsakeYears`, `filmTitle`, `filmSubtitle`) | Shelf membership; year grouping and titles |
 | Analytics | `keepsakes_opened`, `keepsakes_create_book_tapped { children_count }`, `year_film_recaps_opened { year }` (the player logs `year_film_opened` from the route's `source`) | [analytics.md](./analytics.md) |
 
@@ -221,6 +231,12 @@ generation pipeline.
     empty state + Back.
   `remaking` tile (placeholder, not pressable) and `updating` badge (still
   pressable) in the tab and the recaps grid, focus state passed to the hook.
+- Holiday card entry: `src/components/keepsakes/holiday-card-tile.test.tsx` (state table,
+  viewer/switch-off hiding, tap targets with `openShopUrl`), `holiday-greeting-sheet.test.tsx`
+  (greetings per language, create, double-tap guard, region note, error copy),
+  `src/services/holiday-cards.test.ts`, `src/hooks/useHolidayCard.integration.test.tsx`, and a
+  "Holiday card entry" block in `keepsakes.integration.test.tsx` (above the year sections,
+  hidden for viewers / switch off / child page, per-state shop open, create flow).
 - `src/components/year-films/film-cover.test.tsx` (poster, placeholder, sizes,
   re-sign on error, no poster request for a blocked film),
   `src/components/year-films/remaking-placeholder.test.tsx`, `src/components/keepsakes/upcoming-recap-card.test.tsx`
@@ -241,4 +257,5 @@ generation pipeline.
 | 2026-09-29 | Keepsakes tab replaces Calendar; books move off the child profile (plan Phase C) |
 | 2026-09-29 | Year Film P2: tab restructured into year sections (Family films, upcoming-recap card, child shelves with birthday films + books), recaps grid route, films on the child page, viewers see films (books still hidden), `MemoryBooksBody` → `KeepsakesBody`, shelf test ids → `keepsakes-shelf-{year}-{memberId}` |
 | 2026-10-02 | Example book cover uses illustrations too, with the kid's portrait as a fallback (was blank for a new family). New-family empty state: a films intro that explains what makes a film (until the dated upcoming card takes over), and a "not enough memories yet" create sheet with progress and a gallery-import offer instead of a list of options that can't work |
+| 2026-10-06 | Holiday card tile + greeting sheet above the year sections (Holiday Cards P2 Step 6) |
 | 2026-09-30 | Film tiles get *remaking* (placeholder, not pressable) and *updating* (badge) states; the films query polls every 20 s while focused and any film is in progress |

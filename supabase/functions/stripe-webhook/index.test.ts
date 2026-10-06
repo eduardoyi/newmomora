@@ -1,6 +1,7 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import { handleStripeWebhook, productRouteOf } from './index.ts';
 import { FakeDb, IDS, makeGelatoFake, makeR2Fake, makeStripeFake, US_ADDRESS } from '../_shared/holiday-card-orders.test-support.ts';
+import { confirmPaidOrder, type FulfillmentDeps } from '../_shared/holiday-card-fulfillment.ts';
 
 const ORDER_ID = '44444444-4444-4444-8444-444444444444';
 const BOOK_ID = '33333333-3333-4333-8333-333333333333';
@@ -779,5 +780,189 @@ Deno.test('a refund while Gelato is unreachable records refunded_at and leaves t
     assertEquals(typeof row.refunded_at, 'string');
     assertEquals(row.status, 'submitted');
     assertEquals(rig.mails.length, 0);
+  }));
+});
+
+
+// ── Card-level checkout claim: released when the order leaves `checkout` ──
+
+const CLAIMED_CARD = { id: IDS.card, checkout_order_id: IDS.order, checkout_claimed_at: '2026-10-06T08:05:00.000Z' };
+const claimOf = (rig: CardRig) => rig.db.row('holiday_cards', IDS.card).checkout_order_id;
+
+Deno.test('card paid: the card claim is released with the paid CAS (also when the payment mismatches), and another order\'s claim is never touched', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const ok = cardRig(cardOrder(), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    await ok.send(fakeEvent('checkout.session.completed', cardSession()));
+    assertEquals(claimOf(ok), null);
+    assertEquals(ok.db.row('holiday_cards', IDS.card).checkout_claimed_at, null);
+    assertEquals(ok.db.rpcCalls.filter((c) => c.name === 'release_holiday_card_checkout').length, 1);
+
+    const mismatch = cardRig(cardOrder(), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    await mismatch.send(fakeEvent('checkout.session.completed', cardSession({ amount_subtotal: 100 })));
+    assertEquals(mismatch.db.row('holiday_card_orders', IDS.order).status, 'paid');
+    assertEquals(claimOf(mismatch), null);
+
+    const other = cardRig(cardOrder(), { holiday_cards: [{ ...CLAIMED_CARD, checkout_order_id: '99999999-0000-4000-8000-000000000001' }] });
+    await other.send(fakeEvent('checkout.session.completed', cardSession()));
+    assertEquals(claimOf(other), '99999999-0000-4000-8000-000000000001');
+  }));
+});
+
+Deno.test('card paid replay or an order not in checkout does not release anything', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder({ status: 'cancelled' }), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    await rig.send(fakeEvent('checkout.session.completed', cardSession()));
+    assertEquals(rig.db.rpcCalls.filter((c) => c.name === 'release_holiday_card_checkout').length, 0);
+    assertEquals(claimOf(rig), IDS.order);
+  }));
+});
+
+Deno.test('card checkout.session.expired releases the card claim; an expiry from another session does not', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder(), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    await rig.send(fakeEvent('checkout.session.expired', { id: 'cs_test_other', metadata: { productType: 'holiday_card', orderId: IDS.order } }));
+    assertEquals(claimOf(rig), IDS.order);
+    await rig.send(fakeEvent('checkout.session.expired', { id: SESSION_ID, metadata: { productType: 'holiday_card', orderId: IDS.order } }));
+    await rig.settle();
+    assertEquals(rig.db.row('holiday_card_orders', IDS.order).status, 'cancelled');
+    assertEquals(claimOf(rig), null);
+  }));
+});
+
+Deno.test('a full refund that cancels an order releases the card claim', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder({ status: 'paid', stripe_payment_intent_id: 'pi_card_1' }), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    await rig.send(fakeEvent('charge.refunded', { payment_intent: 'pi_card_1', refunded: true }));
+    assertEquals(rig.db.row('holiday_card_orders', IDS.order).status, 'cancelled');
+    assertEquals(claimOf(rig), null);
+  }));
+});
+
+// ── Held canary ──────────────────────────────────────────────────────────
+
+const HOLD = { holiday_card_settings: [{ id: true, mode: 'canary', orders_enabled: true, hold_confirm_family_ids: [IDS.family], canary_family_ids: [IDS.family] }] };
+const HELD_ORDER = () => cardOrder({ status: 'paid', stripe_payment_intent_id: 'pi_card_1' });
+const heldMails = (rig: CardRig) => rig.mails.filter((m) => m.subject.includes('HELD_FOR_CANARY'));
+
+Deno.test('held canary: a paid order of a listed family is flagged HELD_FOR_CANARY, alerted once, and NEVER touches Stripe or Gelato', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder(), { ...HOLD, holiday_cards: [{ ...CLAIMED_CARD }] });
+    const response = await rig.send(fakeEvent('checkout.session.completed', cardSession()));
+    assertEquals(response.status, 200);
+    await rig.settle();
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'paid');
+    assertEquals(row.failure_reason, 'HELD_FOR_CANARY');
+    assertEquals(patches(rig).length, 0);
+    assertEquals(rig.gelato.state.calls.length, 0); // not even a GET
+    assertEquals(rig.stripe.state.calls.length, 0); // no refund check either: the hold is first
+    assertEquals(heldMails(rig).length, 1);
+    assertEquals(rig.mails.some((m) => m.to === 'buyer@example.com'), false); // no confirmation email
+    assertEquals(claimOf(rig), null); // paid -> the card claim is released as usual
+    assertEquals(rig.gelato.state.orders.size, 1); // the draft is kept for inspection
+  }));
+});
+
+Deno.test('held canary: webhook and sweep racing on the same order produce exactly one alert and zero PATCHes', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(HELD_ORDER(), HOLD);
+    const deps: FulfillmentDeps = {
+      fetch: ((input: Request | URL | string, init?: RequestInit) =>
+        new URL(String(input)).hostname === 'api.stripe.com' ? rig.stripe.fetch(input, init) : rig.gelato.fetch(input, init)) as typeof fetch,
+      sendEmail: async (input) => { rig.mails.push({ to: input.to, subject: input.subject }); return 'sent'; },
+      listKeys: rig.r2.listKeys,
+      deleteKey: rig.r2.deleteKey,
+      gelatoApiKey: 'gelato-test-key',
+      stripeSecretKey: 'sk_test_x',
+    };
+    const outcomes = await Promise.all([
+      confirmPaidOrder(deps, rig.db.build(), IDS.order),
+      confirmPaidOrder(deps, rig.db.build(), IDS.order),
+      confirmPaidOrder(deps, rig.db.build(), IDS.order),
+    ]);
+    assertEquals(outcomes, ['blocked', 'blocked', 'blocked']);
+    assertEquals(heldMails(rig).length, 1);
+    assertEquals(patches(rig).length, 0);
+    assertEquals(rig.gelato.state.calls.length, 0);
+    assertEquals(rig.db.row('holiday_card_orders', IDS.order).failure_reason, 'HELD_FOR_CANARY');
+    // Later calls (the sweep tick) see the flag and stay quiet.
+    assertEquals(await confirmPaidOrder(deps, rig.db.build(), IDS.order), 'blocked');
+    assertEquals(heldMails(rig).length, 1);
+  }));
+});
+
+Deno.test('held canary fails closed: an unreadable hold list (error or no answer) is a retry, never a PATCH', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const errored = cardRig(HELD_ORDER(), HOLD);
+    errored.db.rpcFailures.set('holiday_card_hold_confirm', { message: 'boom', code: 'XX000' });
+    const deps = (rig: CardRig): FulfillmentDeps => ({
+      fetch: ((input: Request | URL | string, init?: RequestInit) =>
+        new URL(String(input)).hostname === 'api.stripe.com' ? rig.stripe.fetch(input, init) : rig.gelato.fetch(input, init)) as typeof fetch,
+      sendEmail: async () => 'sent',
+      listKeys: rig.r2.listKeys,
+      deleteKey: rig.r2.deleteKey,
+      gelatoApiKey: 'gelato-test-key',
+      stripeSecretKey: 'sk_test_x',
+    });
+    assertEquals(await confirmPaidOrder(deps(errored), errored.db.build(), IDS.order), 'retry');
+    assertEquals(errored.gelato.state.calls.length, 0);
+    assertEquals(errored.stripe.state.calls.length, 0);
+    assertEquals(errored.db.row('holiday_card_orders', IDS.order).failure_reason, null);
+    assertEquals(errored.db.row('holiday_card_orders', IDS.order).status, 'paid');
+
+    const silent = cardRig(HELD_ORDER(), HOLD);
+    silent.db.rpcHandlers.set('holiday_card_hold_confirm', () => null);
+    assertEquals(await confirmPaidOrder(deps(silent), silent.db.build(), IDS.order), 'retry');
+    assertEquals(silent.gelato.state.calls.length, 0);
+
+    // Through the webhook: the order stays paid, nothing PATCHed, nothing flagged.
+    const viaWebhook = cardRig(cardOrder(), HOLD);
+    viaWebhook.db.rpcFailures.set('holiday_card_hold_confirm', { message: 'boom' });
+    await viaWebhook.send(fakeEvent('checkout.session.completed', cardSession()));
+    await viaWebhook.settle();
+    assertEquals(viaWebhook.db.row('holiday_card_orders', IDS.order).status, 'paid');
+    assertEquals(viaWebhook.db.row('holiday_card_orders', IDS.order).failure_reason, null);
+    assertEquals(patches(viaWebhook).length, 0);
+  }));
+});
+
+Deno.test('held canary: a family that is not listed is confirmed as before', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder(), { holiday_card_settings: [{ id: true, mode: 'canary', orders_enabled: true, hold_confirm_family_ids: ['99999999-0000-4000-8000-000000000009'] }] });
+    await rig.send(fakeEvent('checkout.session.completed', cardSession()));
+    await rig.settle();
+    assertEquals(rig.db.row('holiday_card_orders', IDS.order).status, 'submitted');
+    assertEquals(patches(rig).length, 1);
+    assertEquals(heldMails(rig).length, 0);
+  }));
+});
+
+Deno.test('held canary: a full refund of the held order deletes the draft, cancels it and releases the card claim', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder({ status: 'paid', stripe_payment_intent_id: 'pi_card_1', failure_reason: 'HELD_FOR_CANARY' }), { ...HOLD, holiday_cards: [{ ...CLAIMED_CARD }] });
+    await rig.send(fakeEvent('charge.refunded', { payment_intent: 'pi_card_1', refunded: true, amount: 4980, amount_refunded: 4980 }));
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'cancelled');
+    assertEquals(typeof row.refunded_at, 'string');
+    assertEquals(rig.gelato.state.orders.size, 0); // the draft is gone: Gelato never prints
+    assertEquals(patches(rig).length, 0);
+    assertEquals(claimOf(rig), null);
+  }));
+});
+
+Deno.test('held canary: a refunded held order whose draft Gelato will not delete is flagged REFUND_NOT_CANCELLED (the hold marker does not hide it)', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(cardOrder({ status: 'paid', stripe_payment_intent_id: 'pi_card_1', failure_reason: 'HELD_FOR_CANARY' }), HOLD);
+    rig.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_DRAFT}`, 400);
+    await rig.send(fakeEvent('charge.refunded', { payment_intent: 'pi_card_1', refunded: true }));
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'paid');
+    assertEquals(row.failure_reason, 'REFUND_NOT_CANCELLED');
+    assertEquals(rig.mails.filter((m) => m.subject.includes('REFUND_NOT_CANCELLED')).length, 1);
+    // A different reason is never overwritten.
+    const other = cardRig(cardOrder({ status: 'paid', stripe_payment_intent_id: 'pi_card_1', failure_reason: 'PAYMENT_MISMATCH_AMOUNT' }), HOLD);
+    other.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_DRAFT}`, 400);
+    await other.send(fakeEvent('charge.refunded', { payment_intent: 'pi_card_1', refunded: true }));
+    assertEquals(other.db.row('holiday_card_orders', IDS.order).failure_reason, 'PAYMENT_MISMATCH_AMOUNT');
   }));
 });

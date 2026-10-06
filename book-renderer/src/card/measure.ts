@@ -1,5 +1,6 @@
 import { EXPECTED_PRINT_FACES } from '../print/fonts/expectedFaces';
 import { assertPrintFontsLoaded } from '../print/fonts/expectedFaces';
+import { DEFAULT_CARD_FONTS, type CardFontFamilies } from './fonts';
 import { PT_TO_MM } from './geometry';
 import type { FontSpec, MeasureFn } from './textFit';
 
@@ -11,16 +12,28 @@ import type { FontSpec, MeasureFn } from './textFit';
  */
 let canvas: HTMLCanvasElement | null = null;
 
-export function createCanvasMeasure(): MeasureFn {
-  const ctx = (canvas ??= document.createElement('canvas')).getContext('2d');
+const REF_PX = 200;
+
+/** The canvas `font` string for a spec, with the family mapped through the injected names (default = the spec's own). */
+export function canvasFontString(font: FontSpec, families: CardFontFamilies = DEFAULT_CARD_FONTS): string {
+  return `${font.style} ${font.weight} ${REF_PX}px "${families[font.family]}"`;
+}
+
+/** The slice of a 2d context the measure needs (a test can pass a stub). */
+export interface MeasureContext {
+  font: string;
+  measureText(text: string): { width: number };
+}
+
+export function createCanvasMeasure(families: CardFontFamilies = DEFAULT_CARD_FONTS, context?: MeasureContext): MeasureFn {
+  const ctx = context ?? (canvas ??= document.createElement('canvas')).getContext('2d');
   if (!ctx) throw new Error('canvas 2d context unavailable');
-  const REF_PX = 200;
   const cache = new Map<string, number>();
   return (text: string, font: FontSpec, sizePt: number) => {
     const key = `${font.family}|${font.weight}|${font.style}|${text}`;
     let width = cache.get(key);
     if (width === undefined) {
-      ctx.font = `${font.style} ${font.weight} ${REF_PX}px "${font.family}"`;
+      ctx.font = canvasFontString(font, families);
       width = ctx.measureText(text).width;
       cache.set(key, width);
     }

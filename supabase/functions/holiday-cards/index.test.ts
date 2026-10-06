@@ -1,6 +1,8 @@
 import { assertEquals, assertStringIncludes } from 'jsr:@std/assert@1';
 import { CHECKOUT_CLAIM_TTL_MS } from '../_shared/holiday-card-fulfillment.ts';
+import { buildCardSnapshot } from '../_shared/holiday-card-snapshot.ts';
 import {
+  CARD_CLAIM_FRESH_MS,
   cardLanguageFor,
   civilDate,
   classifyTimezone,
@@ -33,6 +35,7 @@ interface Query {
   action: 'select' | 'update';
   columns: string;
   filters: Array<[string, string, unknown]>;
+  orders: Array<[string, boolean]>;
   patch?: Record<string, unknown>;
 }
 
@@ -57,7 +60,7 @@ function createFake(
   const rpcCalls: Fake['rpcCalls'] = [];
   const client = () => ({
     from(table: string) {
-      const query: Query = { table, action: 'select', columns: '', filters: [] };
+      const query: Query = { table, action: 'select', columns: '', filters: [], orders: [] };
       const run = (): Promise<Result> => {
         queries.push(query);
         const handler = tables[table];
@@ -81,7 +84,8 @@ function createFake(
         gte: (c: string, v: unknown) => (query.filters.push(['gte', c, v]), chain),
         lt: (c: string, v: unknown) => (query.filters.push(['lt', c, v]), chain),
         like: (c: string, v: unknown) => (query.filters.push(['like', c, v]), chain),
-        order: () => chain,
+        order: (column: string, options?: { ascending?: boolean }) => (query.orders.push([column, options?.ascending !== false]), chain),
+        limit: (n: number) => (query.filters.push(['limit', 'limit', n]), chain),
         range: (from: number, to: number) => (query.filters.push(['range', 'range', [from, to]]), chain),
         maybeSingle: async () => {
           const result = await run();
@@ -264,7 +268,8 @@ Deno.test('rejects an unauthenticated caller, a non-POST, bad JSON and an unknow
 
 // ── create ───────────────────────────────────────────────────────────────
 
-const rpcsForCreate = (card: Record<string, unknown>, attempt: number | null = 1) => ({
+const rpcsForCreate = (card: Record<string, unknown>, attempt: number | null = 1, enabled = true) => ({
+  holiday_card_family_enabled: () => ({ data: enabled }),
   create_holiday_card: () => ({ data: card }),
   increment_holiday_card_generation_attempt: () => ({ data: attempt }),
 });
@@ -373,6 +378,7 @@ Deno.test('create: slot used by a deleted card is 409, a non-manager is 403, bil
   const slot = harness({
     tables: createTables(cardRow()),
     rpcs: {
+      holiday_card_family_enabled: () => ({ data: true }),
       create_holiday_card: () => ({ data: null, error: { code: '23505', message: 'holiday_card_slot_used', hint: 'holiday_card_slot_used' } }),
     },
   });
@@ -409,25 +415,78 @@ Deno.test('create: the card year follows the caller timezone', async () => {
 
 // ── get ──────────────────────────────────────────────────────────────────
 
+const MEDIA_PICK = '99999999-9999-4999-8999-999999999999';
+const USER_OTHER = '12121212-1212-4212-8212-121212121212';
+const MEMBER_MARTA = 'a1a1a1a1-1111-4111-8111-111111111111';
+const MEMBER_LUCIA = 'a2a2a2a2-2222-4222-8222-222222222222';
+
+type OrderFixture = {
+  id: string;
+  status: string;
+  packs?: number | null;
+  price_cents?: number | null;
+  requested_by?: string | null;
+  created_at?: string;
+  snapshot_hash?: string | null;
+  format?: string | null;
+  region?: string | null;
+  card_snapshot?: unknown;
+};
+
+/** Emulates the filters the handler puts on holiday_card_orders (status `in`, ordering, limit). */
+function ordersHandler(rows: OrderFixture[]): TableHandler {
+  return (q) => {
+    let out = rows.map((r) => ({
+      packs: null, price_cents: null, requested_by: USER_OTHER, created_at: '2026-10-06T14:10:00Z', snapshot_hash: null, format: null, region: null, card_snapshot: null, ...r,
+    }));
+    const statuses = q.filters.find(([k, c]) => k === 'in' && c === 'status')?.[2] as string[] | undefined;
+    if (statuses) out = out.filter((r) => statuses.includes(r.status));
+    const [first] = q.orders;
+    if (first?.[0] === 'created_at') out.sort((a, b) => (first[1] ? 1 : -1) * (Date.parse(a.created_at) - Date.parse(b.created_at)));
+    const limit = q.filters.find(([k]) => k === 'limit')?.[2] as number | undefined;
+    return { data: limit ? out.slice(0, limit) : out };
+  };
+}
+
 function getTables(options: {
   card?: Record<string, unknown>;
   film?: Record<string, unknown> | null;
   revokedAt?: string | null;
-  orders?: Array<{ id: string; status: string }>;
+  tokenRow?: 'missing';
+  orders?: OrderFixture[];
+  media?: unknown[];
+  shipByNote?: string | null;
 } = {}): Record<string, TableHandler> {
+  const media = options.media ?? [
+    { id: MEDIA_A, memory_id: MEMORY_A, object_key: 'owner/memories/m/media/a.jpg', preview_object_key: 'owner/memories/m/media/a-preview.jpg', aspect_ratio: 1.33, content_type: 'image/jpeg', memories: { family_id: FAMILY_ID, memory_date: '2026-07-04' } },
+    { id: MEDIA_B, memory_id: MEMORY_A, object_key: 'owner/memories/m/media/b.png', preview_object_key: null, aspect_ratio: 0.75, content_type: 'image/png', memories: { family_id: FAMILY_ID, memory_date: '2026-08-15' } },
+    { id: MEDIA_PICK, memory_id: MEMORY_A, object_key: 'owner/memories/m/media/pick.jpg', preview_object_key: 'owner/memories/m/media/pick-preview.jpg', aspect_ratio: 0.5, content_type: 'image/jpeg', memories: { family_id: FAMILY_ID, memory_date: '2026-09-01' } },
+    { id: MEDIA_FOREIGN, memory_id: MEMORY_A, object_key: 'other/f.jpg', preview_object_key: null, aspect_ratio: 1, content_type: 'image/jpeg', memories: { family_id: OTHER_FAMILY_ID, memory_date: '2026-01-01' } },
+    { id: MEDIA_HEIC, memory_id: MEMORY_A, object_key: 'owner/h.heic', preview_object_key: 'owner/h-prev.jpg', aspect_ratio: 1.33, content_type: 'image/heic', memories: { family_id: FAMILY_ID, memory_date: '2026-02-02' } },
+  ];
   return {
     holiday_cards: () => ({ data: options.card ?? cardRow() }),
     year_films: () => ({ data: options.film ?? null }),
-    film_share_tokens: () => ({ data: { revoked_at: options.revokedAt ?? null } }),
-    holiday_card_orders: () => ({ data: options.orders ?? [] }),
-    memory_media: () => ({
+    film_share_tokens: () => ({ data: options.tokenRow === 'missing' ? null : { revoked_at: options.revokedAt ?? null } }),
+    holiday_card_orders: ordersHandler(options.orders ?? []),
+    memory_media: (q) => {
+      const ids = q.filters.find(([k, c]) => k === 'in' && c === 'id')?.[2] as string[] | undefined;
+      return { data: ids ? media.filter((m) => ids.includes((m as { id: string }).id)) : media };
+    },
+    memories: () => ({ data: [{ id: MEMORY_A, media_key: 'owner/legacy.jpg', media_content_type: 'image/jpeg' }] }),
+    families: () => ({ data: { name: 'Rivera Soto' } }),
+    holiday_card_settings: () => ({ data: { ship_by_note: options.shipByNote ?? null } }),
+    family_members: () => ({
       data: [
-        { id: MEDIA_A, object_key: 'owner/memories/m/media/a.jpg', preview_object_key: 'owner/memories/m/media/a-preview.jpg', content_type: 'image/jpeg', memories: { family_id: FAMILY_ID } },
-        { id: MEDIA_FOREIGN, object_key: 'other/f.jpg', preview_object_key: null, content_type: 'image/jpeg', memories: { family_id: OTHER_FAMILY_ID } },
-        { id: MEDIA_HEIC, object_key: 'owner/h.heic', preview_object_key: 'owner/h-prev.jpg', content_type: 'image/heic', memories: { family_id: FAMILY_ID } },
+        { id: MEMBER_MARTA, name: 'Marta Rivera', date_of_birth: '1989-05-05', relationship: 'parent', illustrated_profile_key: 'owner/portraits/marta.png', illustrated_profile_status: 'ready' },
+        { id: MEMBER_LUCIA, name: 'Lucia Rivera', date_of_birth: '2022-03-02', relationship: 'child', illustrated_profile_key: 'owner/portraits/lucia-now.png', illustrated_profile_status: 'ready' },
       ],
     }),
-    memories: () => ({ data: [{ id: MEMORY_A, media_key: 'owner/legacy.jpg', media_content_type: 'image/jpeg' }] }),
+    family_member_portrait_versions: () => ({
+      data: [
+        { id: 'v1', family_member_id: MEMBER_LUCIA, reference_date: '2026-01-01', profile_picture_key: 'owner/in/lucia.jpg', illustrated_profile_key: 'owner/portraits/lucia-jan.png', illustrated_profile_status: 'ready', deletion_token: null, created_at: '2026-01-02T00:00:00Z' },
+      ],
+    }),
   };
 }
 
@@ -441,7 +500,7 @@ Deno.test('get: a ready film yields the QR url, signed candidate previews, and n
     letters: [{ tone: 'classic', text: 'Dear friends' }],
   });
   const h = harness({
-    tables: getTables({ card, film: { status: 'ready', blocked: false, ready_at: '2026-10-06T14:30:00Z' }, orders: [{ id: 'o1', status: 'draft' }] }),
+    tables: getTables({ card, film: { status: 'ready', blocked: false, ready_at: '2026-10-06T14:30:00Z', video_key: 'films/a.mp4' }, orders: [{ id: 'o1', status: 'draft' }] }),
   });
   const res = await call({ op: 'get', cardId: CARD_ID }, h.deps);
   const json = await res.json();
@@ -459,6 +518,15 @@ Deno.test('get: a ready film yields the QR url, signed candidate previews, and n
   assertEquals(json.card.letters, [{ tone: 'classic', text: 'Dear friends' }]);
   assertEquals(json.card.edits.version, 1);
   assertEquals(json.card.editsVersion, 0);
+  // The editor view: unordered, one printable candidate, the chosen front signed from its ORIGINAL, QR on.
+  assertEquals(json.editorView.locked, false);
+  assertEquals(json.editorView.qrState, 'on');
+  assertEquals(json.editorView.frontMissing, false);
+  assertEquals(json.editorView.cardData.frontOptions.map((o: { id: string }) => o.id), [MEDIA_A]);
+  assertEquals(json.editorView.assets['assets/photo-55555555.jpg'], 'https://signed.test/owner/memories/m/media/a.jpg');
+  assertEquals(json.editorView.cardData.qr.url, `https://m.usemomora.com/f/${TOKEN}`);
+  assertEquals(json.openCheckout, null);
+  assertEquals(json.myOrders, []);
   const text = JSON.stringify(json);
   for (const secret of ['editor_facts', 'heartbeat_at', 'attempt_id', 'workflow_instance_id', 'share_token', 'shareToken']) {
     assertEquals(text.includes(secret), false, secret);
@@ -480,6 +548,8 @@ Deno.test('get: open checkout and ordered flags come from the orders; a revoked 
   const ordered = harness({ tables: getTables({ card, film, orders: [{ id: 'o1', status: 'shipped' }], revokedAt: '2026-10-06T00:00:00Z' }) });
   const b = await (await call({ op: 'get', cardId: CARD_ID }, ordered.deps)).json();
   assertEquals([b.hasOpenCheckout, b.isOrdered, b.linkDisabled, b.qrUrl], [false, true, true, null]);
+  // An ordered card whose frozen snapshot is unreadable still answers (status/orders), without a made-up view.
+  assertEquals(b.editorView, null);
 });
 
 Deno.test('get: a generating card without a film has film state none, no QR, no previews', async () => {
@@ -525,7 +595,11 @@ function poolRow(n: number, memory: Record<string, unknown> = {}) {
 function poolTables(rows: unknown[], extra: { reports?: string[]; milestones?: Array<Record<string, unknown>> } = {}): Record<string, TableHandler> {
   return {
     holiday_cards: () => ({ data: cardRow() }),
-    memory_media: () => ({ data: rows }),
+    memory_media: (q) => {
+      // Honour the .range() the handler asks for (the real table pages by offset).
+      const range = q.filters.find(([k]) => k === 'range')?.[2] as [number, number] | undefined;
+      return { data: range ? rows.slice(range[0], range[1] + 1) : rows };
+    },
     content_reports: () => ({ data: (extra.reports ?? []).map((target_id) => ({ target_id })) }),
     memory_milestones: () => ({ data: extra.milestones ?? [] }),
   };
@@ -569,18 +643,51 @@ Deno.test('picker_pool: keys only, the card window, and the same share-safety as
   assertEquals(query.filters.find(([k, c]) => k === 'in' && c === 'content_type')?.[2], ['image/jpeg', 'image/png', 'image/webp']);
 });
 
-Deno.test('picker_pool: a full raw page returns a cursor, the cursor pages by offset, a bad cursor is a 400', async () => {
-  const rows = [poolRow(1), poolRow(2)];
+Deno.test('picker_pool: newest first (date desc, id desc) and each photo carries its aspect ratio (null allowed)', async () => {
+  const rows = [poolRow(1), { ...poolRow(2), aspect_ratio: null }];
   const h = harness({ tables: poolTables(rows), rpcs: { year_film_parent_blocked_users: () => ({ data: [] }) } });
-  const first = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 2 }, h.deps)).json();
+  const json = await (await call({ op: 'picker_pool', cardId: CARD_ID }, h.deps)).json();
+  assertEquals(json.items.map((i: { aspectRatio: number | null }) => i.aspectRatio), [1.5, null]);
+  const query = h.fake.queries.find((q) => q.table === 'memory_media')!;
+  assertEquals(query.orders, [['memories(memory_date)', false], ['id', false]]);
+});
+
+Deno.test('picker_pool: the cursor points at the first photo NOT returned, so a cursor never leads to an empty page', async () => {
+  const rows = [poolRow(1), poolRow(2), poolRow(3)];
+  const rpcs = { year_film_parent_blocked_users: () => ({ data: [] }) };
+  const first = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 2 }, harness({ tables: poolTables(rows), rpcs }).deps)).json();
+  assertEquals(first.items.map((i: { mediaId: string }) => i.mediaId), [rows[0].id, rows[1].id]);
   assertEquals(first.nextCursor, btoa('2'));
-  const next = harness({ tables: poolTables(rows), rpcs: { year_film_parent_blocked_users: () => ({ data: [] }) } });
-  await call({ op: 'picker_pool', cardId: CARD_ID, limit: 2, cursor: first.nextCursor }, next.deps);
-  assertEquals(next.fake.queries.find((q) => q.table === 'memory_media')!.filters.find(([k]) => k === 'range')?.[2], [2, 3]);
-  assertEquals((await call({ op: 'picker_pool', cardId: CARD_ID, cursor: '!!!' }, h.deps)).status, 400);
-  assertEquals((await call({ op: 'picker_pool', cardId: CARD_ID, cursor: btoa('-3') }, h.deps)).status, 400);
+  const second = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 2, cursor: first.nextCursor }, harness({ tables: poolTables(rows), rpcs }).deps)).json();
+  assertEquals(second.items.map((i: { mediaId: string }) => i.mediaId), [rows[2].id]);
+  assertEquals(second.nextCursor, null);
+
+  // Exactly `limit` photos left: no cursor (nothing more to show).
+  const exact = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 3 }, harness({ tables: poolTables(rows), rpcs }).deps)).json();
+  assertEquals([exact.items.length, exact.nextCursor], [3, null]);
+
+  const bad = harness({ tables: poolTables(rows), rpcs });
+  assertEquals((await call({ op: 'picker_pool', cardId: CARD_ID, cursor: '!!!' }, bad.deps)).status, 400);
+  assertEquals((await call({ op: 'picker_pool', cardId: CARD_ID, cursor: btoa('-3') }, bad.deps)).status, 400);
   // Viewers do not browse the pool.
   assertEquals((await call({ op: 'picker_pool', cardId: CARD_ID }, harness({ role: 'viewer', tables: poolTables(rows) }).deps)).status, 403);
+});
+
+Deno.test('picker_pool: unsafe rows are skipped server-side across raw pages: the page fills up to the limit, never empty while photos remain', async () => {
+  // 60 raw rows: the first 55 are unsafe (a bath topic), then 5 fine ones. A page of 3 must come back full (raw batches are 50).
+  const rows = Array.from({ length: 60 }, (_, i) => poolRow(i + 1, i < 55 ? { topics: ['bath'] } : {}));
+  const rpcs = { year_film_parent_blocked_users: () => ({ data: [] }) };
+  const h = harness({ tables: poolTables(rows), rpcs });
+  const json = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 3 }, h.deps)).json();
+  assertEquals(json.items.map((i: { mediaId: string }) => i.mediaId), [rows[55].id, rows[56].id, rows[57].id]);
+  // The cursor resumes at the first photo not returned (raw offset 58), and the next page has the remaining two.
+  assertEquals(json.nextCursor, btoa('58'));
+  const next = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 3, cursor: json.nextCursor }, harness({ tables: poolTables(rows), rpcs }).deps)).json();
+  assertEquals(next.items.length, 2);
+  assertEquals(next.nextCursor, null);
+  // Everything unsafe: an empty pool ends with no cursor instead of an endless chain of empty pages.
+  const none = await (await call({ op: 'picker_pool', cardId: CARD_ID, limit: 3 }, harness({ tables: poolTables(rows.slice(0, 10)), rpcs }).deps)).json();
+  assertEquals([none.items, none.nextCursor], [[], null]);
 });
 
 // ── save_edits ───────────────────────────────────────────────────────────
@@ -838,6 +945,21 @@ Deno.test('delete: a quoted order with a FRESH create_checkout claim (print_file
   assertEquals((await call({ op: 'delete', cardId: CARD_ID }, draft.deps)).status, 200);
 });
 
+Deno.test('delete: a fresh CARD-level checkout claim (checkout_order_id + checkout_claimed_at < 10 min) blocks with 423; a stale or absent claim does not', async () => {
+  const claimed = (agoMs: number | null, orderId: string | null = 'o1') =>
+    cardRow({ status: 'ready', film_id: FILM_ID, share_token: TOKEN, checkout_order_id: orderId, checkout_claimed_at: agoMs === null ? null : new Date(NOW.getTime() - agoMs).toISOString() });
+  const fresh = deleteHarness({ card: claimed(60_000), orders: [{ id: 'o1', status: 'quoted' }] });
+  const res = await call({ op: 'delete', cardId: CARD_ID }, fresh.deps);
+  assertEquals(res.status, 423);
+  assertEquals((await res.json()).code, 'holiday_card_checkout_open');
+  assertEquals(fresh.updates, []);
+  assertEquals(fresh.fake.rpcCalls, []);
+  for (const card of [claimed(CARD_CLAIM_FRESH_MS + 1), claimed(null), claimed(60_000, null)]) {
+    const h = deleteHarness({ card, orders: [{ id: 'o1', status: 'quoted' }] });
+    assertEquals((await call({ op: 'delete', cardId: CARD_ID }, h.deps)).status, 200);
+  }
+});
+
 Deno.test('delete: only keys inside THIS card\'s film directory are ever deleted (never another film, e.g. the dogfood one)', async () => {
   // RPC answers with a foreign film id and keys: nothing is deleted.
   const foreign = deleteHarness({
@@ -965,4 +1087,323 @@ Deno.test('log lines carry ids and codes only: no letter text or names reach con
     assertEquals(line.includes('Fictional'), false, line);
   }
   assertStringIncludes(logged.join('\n'), 'holiday-cards');
+});
+
+// ── create: the server switch ────────────────────────────────────────────
+
+Deno.test('create: refuses a NEW card with 403 HOLIDAY_CARDS_DISABLED when the switch is off for the family', async () => {
+  const card = cardRow();
+  const h = harness({ tables: createTables(card), rpcs: rpcsForCreate(card, 1, false) });
+  const res = await call({ op: 'create', familyId: FAMILY_ID, greeting: 'christmas', timezone: 'America/Denver' }, h.deps);
+  assertEquals(res.status, 403);
+  assertEquals((await res.json()).code, 'HOLIDAY_CARDS_DISABLED');
+  assertEquals(h.fake.rpcCalls.map((c) => c.name), ['holiday_card_family_enabled']);
+  assertEquals(h.fake.rpcCalls[0].args, { p_family_id: FAMILY_ID });
+  assertEquals(h.dispatched, []);
+});
+
+Deno.test('create: with the switch off an EXISTING card is still returned (checked after the existing-card lookup)', async () => {
+  const existing = cardRow({ generation_attempts: 1 });
+  const h = harness({
+    tables: createTables(existing, { existing: { id: CARD_ID, deleted_at: null } }),
+    rpcs: rpcsForCreate(existing, 2, false),
+  });
+  const res = await call({ op: 'create', familyId: FAMILY_ID, greeting: 'christmas', timezone: 'America/Denver' }, h.deps);
+  assertEquals(res.status, 200);
+  const json = await res.json();
+  assertEquals([json.created, json.card.id], [false, CARD_ID]);
+  assertEquals(h.fake.rpcCalls.some((c) => c.name === 'holiday_card_family_enabled'), false);
+});
+
+Deno.test('create: a failing switch lookup fails closed (500, nothing created)', async () => {
+  const card = cardRow();
+  const h = harness({
+    tables: createTables(card),
+    rpcs: { ...rpcsForCreate(card), holiday_card_family_enabled: () => ({ data: null, error: { code: 'XX000', message: 'boom' } }) },
+  });
+  const res = await call({ op: 'create', familyId: FAMILY_ID, greeting: 'christmas', timezone: 'America/Denver' }, h.deps);
+  assertEquals(res.status, 500);
+  assertEquals(h.fake.rpcCalls.some((c) => c.name === 'create_holiday_card'), false);
+});
+
+// ── save_edits: ordered cards ────────────────────────────────────────────
+
+Deno.test('save_edits: card_ordered (message or hint) is a 409 card_ordered; the open-checkout lock stays 423', async () => {
+  for (const error of [
+    { code: 'P0001', message: 'card_ordered', hint: 'card_ordered' },
+    { code: 'P0001', message: 'card_ordered' },
+    { code: 'P0001', hint: 'card_ordered' },
+  ]) {
+    const h = harness({ tables: editTables(), rpcs: saveRpc({ data: null, error }) });
+    const res = await call(saveBody({ letters: { classic: 'x' } }), h.deps);
+    assertEquals(res.status, 409);
+    assertEquals((await res.json()).code, 'card_ordered');
+  }
+  const locked = harness({ tables: editTables(), rpcs: saveRpc({ data: null, error: { code: '55000', message: 'holiday_card_checkout_open', hint: 'holiday_card_checkout_open' } }) });
+  const res = await call(saveBody({ letters: { classic: 'x' } }), locked.deps);
+  assertEquals(res.status, 423);
+  assertEquals((await res.json()).code, 'holiday_card_checkout_open');
+});
+
+// ── get: the editor view ─────────────────────────────────────────────────
+
+const PUBLISHED_FILM = { status: 'ready', blocked: false, ready_at: '2026-10-06T14:30:00Z', video_key: 'films/a.mp4' };
+
+function readyCard(overrides: Record<string, unknown> = {}) {
+  return cardRow({
+    status: 'ready',
+    film_id: FILM_ID,
+    share_token: TOKEN,
+    front_candidates: [
+      { mediaId: MEDIA_A, memoryId: MEMORY_A, rank: 1, width: 4000, height: 3000 },
+      { mediaId: MEDIA_B, memoryId: MEMORY_A, rank: 2, width: 3000, height: 4000 },
+      { mediaId: MEDIA_HEIC, rank: 3, width: 4000, height: 3000 },
+    ],
+    letters: [{ tone: 'classic', text: 'Dear friends' }, { tone: 'warm', text: 'Dearest ones' }, { tone: 'playful', text: 'Hi hi' }],
+    signature: 'Marta and Lucia',
+    qr_caption: 'Watch our year',
+    ...overrides,
+  });
+}
+
+const getView = async (h: Harness) => await (await call({ op: 'get', cardId: CARD_ID }, h.deps)).json();
+
+Deno.test('get editorView: every printable candidate plus the saved non-candidate front; the chosen front signed from its original', async () => {
+  const card = readyCard({ edits: { frontImage: MEDIA_PICK, focalPoints: { [MEDIA_PICK]: { x: 0.3, y: 0.6 } }, choices: { tone: 'warm', layout: 'full-bleed' } } });
+  const h = harness({ tables: getTables({ card, film: PUBLISHED_FILM }) });
+  const json = await getView(h);
+  const view = json.editorView;
+  assertEquals(view.locked, false);
+  // The HEIC candidate cannot be printed: absent. The pick (not a candidate) is appended, sized from its aspect ratio 0.5.
+  assertEquals(view.cardData.frontOptions.map((o: { id: string }) => o.id), [MEDIA_A, MEDIA_B, MEDIA_PICK]);
+  assertEquals(view.cardData.frontOptions.map((o: { rank?: number }) => o.rank), [1, 2, undefined]);
+  assertEquals(view.cardData.frontOptions[0], {
+    id: MEDIA_A, kind: 'photo', file: 'assets/photo-55555555.jpg', thumb: 'assets/thumb-55555555.jpg', width: 4000, height: 3000, date: '2026-07-04', rank: 1,
+  });
+  assertEquals(view.cardData.frontOptions[2], {
+    id: MEDIA_PICK, kind: 'photo', file: 'assets/photo-99999999.jpg', thumb: 'assets/thumb-99999999.jpg', width: 1500, height: 3000, date: '2026-09-01',
+  });
+  // The default photo (no pick) is candidate #1; the saved pick is the chosen front.
+  assertEquals(view.cardData.photo.mediaId, MEDIA_A);
+  assertEquals(view.frontMissing, false);
+  assertEquals(view.edits.frontImage, MEDIA_PICK);
+  assertEquals(view.edits.focalPoints, { [MEDIA_PICK]: { x: 0.3, y: 0.6 } });
+  // Assets: chosen front from its ORIGINAL, other options from their PREVIEW (the original when there is none), thumbs from previews.
+  assertEquals(view.assets['assets/photo-99999999.jpg'], 'https://signed.test/owner/memories/m/media/pick.jpg');
+  assertEquals(view.assets['assets/thumb-99999999.jpg'], 'https://signed.test/owner/memories/m/media/pick-preview.jpg');
+  assertEquals(view.assets['assets/photo-55555555.jpg'], 'https://signed.test/owner/memories/m/media/a-preview.jpg');
+  assertEquals(view.assets['assets/photo-66666666.png'], 'https://signed.test/owner/memories/m/media/b.png');
+  // Card content: stored writer tone `warm` is the renderer's `reflective`, in the letters and in the edits.
+  assertEquals(view.cardData.letters.map((l: { tone: string }) => l.tone), ['classic', 'reflective', 'playful']);
+  assertEquals(view.edits.choices.tone, 'reflective');
+  assertEquals(
+    [view.cardData.format, view.cardData.familyName, view.cardData.greeting, view.cardData.signature, view.cardData.qrCaption, view.cardData.year, view.cardData.slug],
+    ['5R', 'Rivera Soto', 'christmas', 'Marta and Lucia', 'Watch our year', 2026, CARD_ID],
+  );
+});
+
+Deno.test('get editorView: portraits as of the card date (dated version wins), square 1024 without any R2 probe', async () => {
+  let fetched = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = (() => { fetched++; return Promise.reject(new Error('no network')); }) as typeof fetch;
+  try {
+    const h = harness({ tables: getTables({ card: readyCard(), film: PUBLISHED_FILM }) });
+    const view = (await getView(h)).editorView;
+    assertEquals(view.cardData.portraits.map((p: { name: string; role: string; file: string; width: number; height: number }) => [p.name, p.role, p.file, p.width, p.height]), [
+      ['Marta', 'parent', 'assets/portrait-a1a1a1a1.png', 1024, 1024],
+      ['Lucia', 'child', 'assets/portrait-a2a2a2a2.png', 1024, 1024],
+    ]);
+    // Lucia's dated version applies, not her current portrait.
+    assertEquals(view.assets['assets/portrait-a2a2a2a2.png'], 'https://signed.test/owner/portraits/lucia-jan.png');
+    assertEquals(view.assets['assets/portrait-a1a1a1a1.png'], 'https://signed.test/owner/portraits/marta.png');
+    assertEquals(h.probed, []);
+    assertEquals(fetched, 0);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test('get editorView: frontMissing when the saved front (or, with no pick, the default front) is not a printable family photo', async () => {
+  // A pick that is HEIC, foreign or gone.
+  for (const frontImage of [MEDIA_HEIC, MEDIA_FOREIGN, '12345678-1234-4234-8234-123456789012', `legacy:${MEMORY_A}`]) {
+    const h = harness({ tables: getTables({ card: readyCard({ edits: { frontImage } }), film: PUBLISHED_FILM }) });
+    const view = (await getView(h)).editorView;
+    assertEquals(view.frontMissing, true, frontImage);
+    // The other candidates are still offered and the default photo exists (the editor forces a re-pick).
+    assertEquals(view.cardData.frontOptions.map((o: { id: string }) => o.id), [MEDIA_A, MEDIA_B]);
+  }
+  // No pick and NO candidate printable: missing.
+  const allHeic = readyCard({ front_candidates: [{ mediaId: MEDIA_HEIC, rank: 1, width: 4000, height: 3000 }] });
+  assertEquals((await getView(harness({ tables: getTables({ card: allHeic, film: PUBLISHED_FILM }) }))).editorView.frontMissing, true);
+  // No candidates at all: missing with a zero-size placeholder photo.
+  const none = (await getView(harness({ tables: getTables({ card: readyCard({ front_candidates: [] }), film: PUBLISHED_FILM }) }))).editorView;
+  assertEquals([none.frontMissing, none.cardData.frontOptions, none.cardData.photo.width], [true, [], 0]);
+  // Pick = candidate #1 explicitly, and no pick: both fine.
+  for (const edits of [{ frontImage: MEDIA_A }, {}]) {
+    const ok = (await getView(harness({ tables: getTables({ card: readyCard({ edits }), film: PUBLISHED_FILM }) }))).editorView;
+    assertEquals(ok.frontMissing, false);
+  }
+});
+
+Deno.test('get editorView: no pick and candidate #1 unusable -> the first USABLE candidate is the front, not missing; an unusable pick still is', async () => {
+  const heicFirst = readyCard({ front_candidates: [{ mediaId: MEDIA_HEIC, rank: 1, width: 4000, height: 3000 }, { mediaId: MEDIA_B, rank: 2, width: 3000, height: 4000 }] });
+  const view = (await getView(harness({ tables: getTables({ card: heicFirst, film: PUBLISHED_FILM }) }))).editorView;
+  assertEquals([view.frontMissing, view.cardData.photo.mediaId], [false, MEDIA_B]);
+  // Re-picking that same photo (saved as no pick) is stable: still not missing.
+  assertEquals(view.assets['assets/photo-66666666.png'], 'https://signed.test/owner/memories/m/media/b.png');
+  // An explicit pick that is unusable stays missing (never silently replaced).
+  const badPick = readyCard({ edits: { frontImage: MEDIA_HEIC } });
+  assertEquals((await getView(harness({ tables: getTables({ card: badPick, film: PUBLISHED_FILM }) }))).editorView.frontMissing, true);
+});
+
+Deno.test('get: shipByNote comes from holiday_card_settings (trimmed), null when empty or unreadable', async () => {
+  const note = await getView(harness({ tables: getTables({ card: readyCard(), shipByNote: '  Order by Dec 10 for Christmas delivery  ' }) }));
+  assertEquals(note.shipByNote, 'Order by Dec 10 for Christmas delivery');
+  assertEquals((await getView(harness({ tables: getTables({ card: readyCard() }) }))).shipByNote, null);
+  assertEquals((await getView(harness({ tables: getTables({ card: readyCard(), shipByNote: '   ' }) }))).shipByNote, null);
+  const broken = harness({ tables: { ...getTables({ card: readyCard() }), holiday_card_settings: () => ({ data: null, error: { code: 'XX000' } }) } });
+  const res = await call({ op: 'get', cardId: CARD_ID }, broken.deps);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).shipByNote, null);
+  // Also present while the card is generating.
+  assertEquals((await getView(harness({ tables: getTables({ shipByNote: 'x' }) }))).shipByNote, 'x');
+});
+
+Deno.test('get editorView: absent while generating, absent without letters', async () => {
+  const generating = await getView(harness({ tables: getTables({ card: readyCard({ status: 'generating' }) }) }));
+  assertEquals(generating.editorView, null);
+  const failedEarly = await getView(harness({ tables: getTables({ card: readyCard({ status: 'failed', letters: null }) }) }));
+  assertEquals(failedEarly.editorView, null);
+  assertEquals(failedEarly.generation.state, 'failed');
+});
+
+Deno.test('get editorView: qrState follows the token, the choice and the film (carried url even when off)', async () => {
+  const state = async (opts: { card?: Record<string, unknown>; film?: Record<string, unknown> | null; revokedAt?: string | null; tokenRow?: 'missing' }) => {
+    const view = (await getView(harness({ tables: getTables({ card: opts.card ?? readyCard(), film: opts.film === undefined ? PUBLISHED_FILM : opts.film, revokedAt: opts.revokedAt, tokenRow: opts.tokenRow }) }))).editorView;
+    return [view.qrState, view.cardData.qr.enabled, view.cardData.qr.url] as const;
+  };
+  const url = `https://m.usemomora.com/f/${TOKEN}`;
+  assertEquals(await state({}), ['on', true, url]);
+  assertEquals(await state({ film: { status: 'rendering', blocked: false, ready_at: null, video_key: null } }), ['waiting_film', true, url]);
+  assertEquals(await state({ card: readyCard({ edits: { choices: { qr: false } } }) }), ['off', true, url]);
+  assertEquals(await state({ revokedAt: '2026-10-06T00:00:00Z' }), ['off', false, url]);
+  assertEquals(await state({ film: { ...PUBLISHED_FILM, blocked: true } }), ['unavailable', false, url]);
+  assertEquals(await state({ film: { status: 'failed', blocked: false, ready_at: null, video_key: null } }), ['unavailable', false, url]);
+  assertEquals(await state({ tokenRow: 'missing' }), ['unavailable', false, url]);
+  assertEquals(await state({ card: readyCard({ film_id: null, share_token: null }), film: null }), ['unavailable', false, '']);
+});
+
+// ── get: ordered cards read the first paid order's frozen snapshot ───────
+
+function frozen(letter: string, extra: { mediaKey?: string } = {}) {
+  const snap = buildCardSnapshot({
+    cardId: CARD_ID,
+    year: 2026,
+    language: 'en',
+    locale: 'en-US',
+    greeting: 'christmas',
+    familyName: 'Rivera Soto',
+    signature: 'Marta and Lucia',
+    qrCaption: 'Watch our year',
+    shareToken: TOKEN,
+    format: '5R',
+    letters: [{ tone: 'classic', text: letter }],
+    edits: { frontImage: MEDIA_A },
+    frontCandidateIds: [MEDIA_A],
+    media: [{ id: MEDIA_A, originalKey: extra.mediaKey ?? 'owner/frozen/front.jpg', previewKey: 'owner/frozen/front-prev.jpg', width: 4000, height: 3000, date: '2026-07-04' }],
+    people: [{ id: MEMBER_MARTA, name: 'Marta', dateOfBirth: '1989-05-05', relationship: 'parent', illustratedProfileKey: 'owner/frozen/marta.png', illustratedProfileStatus: 'ready' }],
+    portraitVersions: [],
+    portraitDimensions: { 'owner/frozen/marta.png': { width: 800, height: 900 } },
+    asOfDate: '2026-10-06',
+  });
+  return { card: snap.card, edits: snap.edits, assets: snap.assets, qrUrl: snap.qrUrl, front: snap.front };
+}
+
+Deno.test('get: an ordered card shows the FIRST paid order\'s frozen snapshot (locked), signed from the snapshot keys', async () => {
+  const card = readyCard({ edits: { letters: { classic: 'EDITED AFTER THE ORDER' } } });
+  const orders: OrderFixture[] = [
+    // Cancelled and refunded-looking orders never lock and are never "first"; the oldest PAID order wins.
+    { id: 'o0', status: 'cancelled', created_at: '2026-09-28T10:00:00Z', card_snapshot: frozen('Cancelled order letter') },
+    { id: 'o1', status: 'shipped', created_at: '2026-10-01T10:00:00Z', packs: 2, price_cents: 4980, requested_by: USER_ID, card_snapshot: frozen('First order letter') },
+    { id: 'o2', status: 'paid', created_at: '2026-10-03T10:00:00Z', packs: 3, price_cents: 7470, requested_by: USER_ID, card_snapshot: frozen('Reorder letter', { mediaKey: 'owner/frozen/other.jpg' }) },
+  ];
+  const h = harness({ tables: getTables({ card, film: PUBLISHED_FILM, orders }) });
+  const json = await getView(h);
+  const view = json.editorView;
+  assertEquals(json.isOrdered, true);
+  assertEquals(view.locked, true);
+  assertEquals(view.cardData.letters, [{ tone: 'classic', text: 'First order letter' }]);
+  assertEquals(view.edits.frontImage, MEDIA_A);
+  assertEquals(view.frontMissing, false);
+  assertEquals(view.qrState, 'on');
+  assertEquals(view.assets, {
+    'assets/photo-55555555.jpg': 'https://signed.test/owner/frozen/front.jpg',
+    'assets/portrait-a1a1a1a1.png': 'https://signed.test/owner/frozen/marta.png',
+  });
+  // The frozen view never touches the live card rows.
+  for (const table of ['families', 'family_members', 'family_member_portrait_versions']) {
+    assertEquals(h.fake.queries.some((q) => q.table === table), false, table);
+  }
+  const snapshotQuery = h.fake.queries.filter((q) => q.table === 'holiday_card_orders').find((q) => q.columns.includes('card_snapshot'))!;
+  assertEquals(snapshotQuery.filters.find(([k, c]) => k === 'in' && c === 'status')?.[2], ['paid', 'submitted', 'in_production', 'shipped']);
+  assertEquals(snapshotQuery.orders[0], ['created_at', true]);
+});
+
+Deno.test('get: only cancelled / failed / unpaid orders do not lock the card (live editable view)', async () => {
+  const orders: OrderFixture[] = [
+    { id: 'o0', status: 'cancelled', created_at: '2026-09-28T10:00:00Z', card_snapshot: frozen('Cancelled order letter') },
+    { id: 'o1', status: 'failed', created_at: '2026-09-29T10:00:00Z', card_snapshot: frozen('Failed order letter') },
+    { id: 'o2', status: 'quoted', created_at: '2026-09-30T10:00:00Z' },
+  ];
+  const json = await getView(harness({ tables: getTables({ card: readyCard(), film: PUBLISHED_FILM, orders }) }));
+  assertEquals(json.isOrdered, false);
+  assertEquals(json.editorView.locked, false);
+  assertEquals(json.editorView.cardData.letters[0].text, 'Dear friends');
+});
+
+Deno.test('get: a frozen snapshot whose QR printed is live-checked (revoked link -> off); one that printed no QR stays off', async () => {
+  const printedQr = frozen('Letter');
+  const orders: OrderFixture[] = [{ id: 'o1', status: 'paid', created_at: '2026-10-01T10:00:00Z', card_snapshot: printedQr }];
+  const revoked = await getView(harness({ tables: getTables({ card: readyCard(), film: PUBLISHED_FILM, orders, revokedAt: '2026-10-06T00:00:00Z' }) }));
+  assertEquals(revoked.editorView.qrState, 'off');
+  const noQr = { ...printedQr, card: { ...printedQr.card, qr: { enabled: false, token: '', url: '' } } };
+  const printedNone = await getView(harness({ tables: getTables({ card: readyCard(), film: PUBLISHED_FILM, orders: [{ ...orders[0], card_snapshot: noQr }] }) }));
+  assertEquals(printedNone.editorView.qrState, 'off');
+});
+
+// ── get: openCheckout + myOrders ─────────────────────────────────────────
+
+Deno.test('get: openCheckout names the open order (mine only for its buyer) or a fresh card-level claim; myOrders are the caller\'s, newest first', async () => {
+  const film = PUBLISHED_FILM;
+  const orders: OrderFixture[] = [
+    { id: 'o-old', status: 'shipped', created_at: '2026-10-01T10:00:00Z', packs: 2, price_cents: 4980, requested_by: USER_ID, card_snapshot: frozen('L') },
+    { id: 'o-other', status: 'checkout', created_at: '2026-10-05T10:00:00Z', packs: 5, price_cents: 12450, requested_by: USER_OTHER },
+    { id: 'o-new', status: 'draft', created_at: '2026-10-06T09:00:00Z', packs: null, price_cents: null, requested_by: USER_ID },
+  ];
+  const json = await getView(harness({ tables: getTables({ card: readyCard(), film, orders }) }));
+  assertEquals(json.openCheckout, { orderId: 'o-other', mine: false });
+  assertEquals(json.hasOpenCheckout, true);
+  assertEquals(json.myOrders, [
+    { id: 'o-new', status: 'draft', packs: null, cards: null, priceCents: null, createdAt: '2026-10-06T09:00:00Z' },
+    { id: 'o-old', status: 'shipped', packs: 2, cards: 20, priceCents: 4980, createdAt: '2026-10-01T10:00:00Z' },
+  ]);
+
+  const mine = await getView(harness({ tables: getTables({ card: readyCard(), film, orders: [{ id: 'o-mine', status: 'checkout', requested_by: USER_ID, packs: 3, price_cents: 7470 }] }) }));
+  assertEquals(mine.openCheckout, { orderId: 'o-mine', mine: true });
+
+  // No order in `checkout` yet, but create_checkout holds the card (fresh claim): open. A stale claim is not.
+  const claimed = (at: string) => readyCard({ checkout_order_id: 'o-claim', checkout_claimed_at: at });
+  const claimOrders: OrderFixture[] = [{ id: 'o-claim', status: 'quoted', requested_by: USER_ID, packs: 2, price_cents: 4980 }];
+  const fresh = await getView(harness({ tables: getTables({ card: claimed('2026-10-06T14:55:00Z'), film, orders: claimOrders }) }));
+  assertEquals([fresh.openCheckout, fresh.hasOpenCheckout], [{ orderId: 'o-claim', mine: true }, true]);
+  const stale = await getView(harness({ tables: getTables({ card: claimed('2026-10-06T14:49:00Z'), film, orders: claimOrders }) }));
+  assertEquals([stale.openCheckout, stale.hasOpenCheckout], [null, false]);
+  const noClaim = await getView(harness({ tables: getTables({ card: readyCard(), film, orders: claimOrders }) }));
+  assertEquals(noClaim.openCheckout, null);
+});
+
+Deno.test('get: a database failure while building the editor view is a 500 (never a silent empty view)', async () => {
+  const tables = getTables({ card: readyCard(), film: PUBLISHED_FILM });
+  const res = await call({ op: 'get', cardId: CARD_ID }, harness({ tables: { ...tables, family_members: () => ({ data: null, error: { code: 'XX000', message: 'boom' } }) } }).deps);
+  assertEquals(res.status, 500);
 });

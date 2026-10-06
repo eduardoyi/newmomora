@@ -2334,9 +2334,44 @@ export type Database = {
           },
         ]
       }
+      holiday_card_settings: {
+        Row: {
+          canary_family_ids: string[]
+          closes_on: string | null
+          hold_confirm_family_ids: string[]
+          id: boolean
+          mode: string
+          orders_enabled: boolean
+          ship_by_note: string | null
+          updated_at: string
+        }
+        Insert: {
+          canary_family_ids?: string[]
+          closes_on?: string | null
+          hold_confirm_family_ids?: string[]
+          id?: boolean
+          mode?: string
+          orders_enabled?: boolean
+          ship_by_note?: string | null
+          updated_at?: string
+        }
+        Update: {
+          canary_family_ids?: string[]
+          closes_on?: string | null
+          hold_confirm_family_ids?: string[]
+          id?: boolean
+          mode?: string
+          orders_enabled?: boolean
+          ship_by_note?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       holiday_cards: {
         Row: {
           attempt_id: string | null
+          checkout_claimed_at: string | null
+          checkout_order_id: string | null
           created_at: string
           created_by: string | null
           deleted_at: string | null
@@ -2364,6 +2399,8 @@ export type Database = {
         }
         Insert: {
           attempt_id?: string | null
+          checkout_claimed_at?: string | null
+          checkout_order_id?: string | null
           created_at?: string
           created_by?: string | null
           deleted_at?: string | null
@@ -2391,6 +2428,8 @@ export type Database = {
         }
         Update: {
           attempt_id?: string | null
+          checkout_claimed_at?: string | null
+          checkout_order_id?: string | null
           created_at?: string
           created_by?: string | null
           deleted_at?: string | null
@@ -3745,6 +3784,30 @@ export type Database = {
           },
         ]
       }
+      web_handoff_codes: {
+        Row: {
+          code_hash: string
+          created_at: string
+          expires_at: string
+          used_at: string | null
+          user_id: string
+        }
+        Insert: {
+          code_hash: string
+          created_at?: string
+          expires_at: string
+          used_at?: string | null
+          user_id: string
+        }
+        Update: {
+          code_hash?: string
+          created_at?: string
+          expires_at?: string
+          used_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       year_film_bridge_nonces: {
         Row: {
           created_at: string
@@ -4419,6 +4482,44 @@ export type Database = {
           family_id: string
         }[]
       }
+      claim_holiday_card_checkout: {
+        Args: { p_expected_version: number; p_order_id: string }
+        Returns: {
+          attempt_id: string | null
+          checkout_claimed_at: string | null
+          checkout_order_id: string | null
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          editor_facts: Json | null
+          edits: Json
+          edits_version: number
+          family_id: string
+          film_id: string | null
+          front_candidates: Json | null
+          generation_attempts: number
+          greeting: string
+          heartbeat_at: string | null
+          id: string
+          language: string
+          last_failure_code: string | null
+          letters: Json | null
+          locale: string | null
+          qr_caption: string | null
+          share_token: string | null
+          signature: string | null
+          status: string
+          updated_at: string
+          workflow_instance_id: string | null
+          year: number
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "holiday_cards"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       claim_memory_illustration_workflow_generation: {
         Args: {
           p_actor_user_id: string
@@ -4450,6 +4551,7 @@ export type Database = {
           run_id: string
         }[]
       }
+      claim_web_handoff: { Args: { p_code_hash: string }; Returns: string }
       claim_year_film_by_id: {
         Args: { p_film_id: string }
         Returns: {
@@ -4637,6 +4739,8 @@ export type Database = {
         }
         Returns: {
           attempt_id: string | null
+          checkout_claimed_at: string | null
+          checkout_order_id: string | null
           created_at: string
           created_by: string | null
           deleted_at: string | null
@@ -4681,6 +4785,10 @@ export type Database = {
           film_id: string
           token: string
         }[]
+      }
+      create_web_handoff: {
+        Args: { p_code_hash: string; p_user_id: string }
+        Returns: string
       }
       current_user_local_date: { Args: never; Returns: string }
       delete_family: {
@@ -5154,7 +5262,28 @@ export type Database = {
         Args: { fam: string; roles: string[] }
         Returns: boolean
       }
+      holiday_card_family_enabled: {
+        Args: { p_family_id: string }
+        Returns: boolean
+      }
+      holiday_card_hold_confirm: {
+        Args: { p_family_id: string }
+        Returns: boolean
+      }
       holiday_card_new_share_token: { Args: never; Returns: string }
+      holiday_card_orders_enabled: { Args: never; Returns: boolean }
+      holiday_card_summary: {
+        Args: { p_family_id: string }
+        Returns: {
+          card_id: string
+          enabled: boolean
+          language: string
+          last_failure_code: string
+          ordered: boolean
+          status: string
+          year: number
+        }[]
+      }
       increment_holiday_card_generation_attempt: {
         Args: { p_cap: number; p_card_id: string }
         Returns: number
@@ -5571,6 +5700,10 @@ export type Database = {
       release_family_member_deletion_fence: {
         Args: { p_delete_token: string; p_family_member_id: string }
         Returns: boolean
+      }
+      release_holiday_card_checkout: {
+        Args: { p_order_id: string }
+        Returns: undefined
       }
       replace_memory_media_assets: {
         Args: { assets: Json; target_memory_id: string }

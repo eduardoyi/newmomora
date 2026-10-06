@@ -1,13 +1,11 @@
 import { CARD_STYLE, type BackDoc } from './document';
 import { box } from './CardSheet';
 import { CardQr } from './CardQr';
+import { cardFontStacks, type CardFontFamilies } from './fonts';
 
-const SERIF = "'Newsreader', Georgia, serif";
-const SANS = "'Plus Jakarta Sans', -apple-system, sans-serif";
-const SCRIPT = "'Caveat', cursive";
-
-/** The back side, from a fitted `BackDoc` (pure presentational). */
-export function CardBack({ doc }: { doc: BackDoc }) {
+/** The back side, from a fitted `BackDoc` (pure presentational). `fonts` injects the family names (default: the print app's). */
+export function CardBack({ doc, fonts }: { doc: BackDoc; fonts?: CardFontFamilies }) {
+  const { serif: SERIF, sans: SANS, script: SCRIPT } = cardFontStacks(fonts);
   const { heading, rule, letter, signature, portraits, qr, caption, divider, blockRule, wordmark } = doc;
   const fit = letter.fit;
   return (

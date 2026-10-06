@@ -601,3 +601,177 @@ Deno.test('generation retry: a card whose status or code changed under us is lef
   assertEquals(r.dispatches.length, 0);
   assertEquals(r.db.row('holiday_cards', IDS.card).last_failure_code, 'NO_LETTERS');
 });
+
+
+// ── Checkout aging by the Stripe session's own expiry ────────────────────
+
+const CLAIMED = (orderId: string, ageMin: number): Row => ({
+  id: IDS.card, family_id: IDS.family, status: 'ready', deleted_at: null, checkout_order_id: orderId, checkout_claimed_at: minutesAgo(ageMin), heartbeat_at: null, film_id: null,
+});
+const checkoutWithExpiry = (expiresMinutesAgo: number, overrides: Row = {}): Row =>
+  order({
+    status: 'checkout',
+    stripe_payment_intent_id: null,
+    updated_at: minutesAgo(30),
+    print_files: { files: [], snapshotHash: 'h1', sessionExpiresAt: minutesAgo(expiresMinutesAgo) },
+    ...overrides,
+  });
+const openSession = (r: Rig) => r.stripe.state.sessions.set('cs_test_000001', { status: 'open', payment_status: 'unpaid', url: 'u', metadata: {}, payment_intent: null });
+
+Deno.test('aging: a checkout is aged 1 hour AFTER its session expires_at (not 48 h after it was created), and its card claim is released', async () => {
+  // Expired 61 minutes ago: due, although the order is only 30 minutes old.
+  const due = rig({ holiday_card_orders: [checkoutWithExpiry(61)], holiday_cards: [CLAIMED(IDS.order, 100)] });
+  openSession(due);
+  const result = await due.run();
+  assertEquals(result.aging.cancelled, 1);
+  assertEquals(row(due).status, 'cancelled');
+  assertEquals(due.stripe.state.sessions.get('cs_test_000001')?.status, 'expired');
+  assertEquals(due.gelato.state.orders.size, 0);
+  assertEquals(due.db.row('holiday_cards', IDS.card).checkout_order_id, null);
+
+  // Expired 59 minutes ago: the webhook's `expired` event has had its hour; not yet the backstop's turn.
+  const early = rig({ holiday_card_orders: [checkoutWithExpiry(59)], holiday_cards: [CLAIMED(IDS.order, 100)] });
+  openSession(early);
+  assertEquals((await early.run()).aging.cancelled, 0);
+  assertEquals(row(early).status, 'checkout');
+  assertEquals(early.db.row('holiday_cards', IDS.card).checkout_order_id, IDS.order);
+
+  // Still open (expires in the future).
+  const live = rig({ holiday_card_orders: [checkoutWithExpiry(-20)] });
+  openSession(live);
+  assertEquals((await live.run()).aging.cancelled, 0);
+  assertEquals(row(live).status, 'checkout');
+});
+
+Deno.test('aging: a checkout with no stored expiry falls back to the 48 h rule; a flagged one waits for a human', async () => {
+  const legacy = rig({ holiday_card_orders: [order({ status: 'checkout', stripe_payment_intent_id: null, updated_at: minutesAgo(10 * 60) })] });
+  openSession(legacy);
+  assertEquals((await legacy.run()).aging.cancelled, 0);
+
+  const flagged = rig({ holiday_card_orders: [checkoutWithExpiry(120, { failure_reason: 'PAID_WEBHOOK_MISSED' })] });
+  openSession(flagged);
+  assertEquals((await flagged.run()).aging.cancelled, 0);
+  assertEquals(row(flagged).status, 'checkout');
+});
+
+Deno.test('aging: a checkout past its expiry whose session turns out PAID is still never cancelled', async () => {
+  const r = rig({ holiday_card_orders: [checkoutWithExpiry(90)], holiday_cards: [CLAIMED(IDS.order, 100)] });
+  r.stripe.state.sessions.set('cs_test_000001', { status: 'complete', payment_status: 'paid', url: 'u', metadata: {}, payment_intent: 'pi_test_1' });
+  const result = await r.run();
+  assertEquals(result.aging.paidWebhookMissed, 1);
+  assertEquals(row(r).status, 'checkout');
+  assertEquals(row(r).failure_reason, 'PAID_WEBHOOK_MISSED');
+  assertEquals(r.gelato.state.orders.size, 1);
+  assertEquals(r.db.row('holiday_cards', IDS.card).checkout_order_id, IDS.order); // the order is still the card's checkout
+});
+
+Deno.test('aging: an old quoted order also gives back a card claim a crashed create_checkout left', async () => {
+  const r = rig({
+    holiday_card_orders: [order({ status: 'quoted', stripe_payment_intent_id: null, stripe_session_id: null, updated_at: minutesAgo(49 * 60) })],
+    holiday_cards: [CLAIMED(IDS.order, 100)],
+  });
+  await r.run();
+  assertEquals(row(r).status, 'cancelled');
+  assertEquals(r.db.row('holiday_cards', IDS.card).checkout_order_id, null);
+});
+
+// ── Stale card-level checkout claims ─────────────────────────────────────
+
+Deno.test('card claims: a claim older than 10 minutes whose order is not in checkout is released; live ones are kept', async () => {
+  const id = (n: number) => `c0000000-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`;
+  const oid = (n: number) => `d0000000-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`;
+  const claimCard = (n: number, orderId: string, ageMin: number): Row => ({ ...CLAIMED(orderId, ageMin), id: id(n) });
+  const claimOrder = (n: number, overrides: Row): Row => order({ id: oid(n), card_id: id(n), stripe_payment_intent_id: null, ...overrides });
+  const r = rig({
+    holiday_cards: [
+      claimCard(1, oid(1), 11), // cancelled order: stale -> released
+      claimCard(2, oid(2), 11), // order in checkout: the live claim -> kept
+      claimCard(3, oid(3), 5), // young -> kept
+      claimCard(4, oid(4), 11), // quoted with a fresh create_checkout claim -> kept
+      claimCard(5, oid(5), 11), // quoted, no live work -> released
+      claimCard(6, oid(6), 11), // paid order -> released
+      claimCard(7, oid(7), 11), // order row gone -> released
+      claimCard(8, oid(8), 11), // quoted with an OLD create_checkout claim -> released
+    ],
+    holiday_card_orders: [
+      claimOrder(1, { status: 'cancelled' }),
+      claimOrder(2, { status: 'checkout', print_files: { files: [], sessionExpiresAt: minutesAgo(-20) } }),
+      claimOrder(3, { status: 'cancelled' }),
+      claimOrder(4, { status: 'quoted', print_files: { claim: { id: 'x', at: minutesAgo(3) } }, updated_at: minutesAgo(3) }),
+      claimOrder(5, { status: 'quoted', print_files: null, updated_at: minutesAgo(11) }),
+      claimOrder(6, { status: 'paid', failure_reason: 'HELD_FOR_CANARY' }),
+      claimOrder(8, { status: 'quoted', print_files: { claim: { id: 'x', at: minutesAgo(20) } }, updated_at: minutesAgo(20) }),
+    ],
+  });
+  const result = await r.run();
+  assertEquals(result.claims.released, 5);
+  const owner = (n: number) => r.db.row('holiday_cards', id(n)).checkout_order_id;
+  assertEquals([1, 2, 3, 4, 5, 6, 7, 8].map(owner), [null, oid(2), oid(3), oid(4), null, null, null, null]);
+  // Each release is the by-order RPC (a stale release can never clear another order's claim).
+  assertEquals(r.db.rpcCalls.filter((c) => c.name === 'release_holiday_card_checkout').map((c) => c.args.p_order_id).sort(), [oid(1), oid(5), oid(6), oid(7), oid(8)].sort());
+  // Idempotent.
+  assertEquals((await r.run()).claims.released, 0);
+});
+
+// ── Held canary ──────────────────────────────────────────────────────────
+
+const HOLD_SETTINGS: Row = { id: true, mode: 'canary', orders_enabled: true, hold_confirm_family_ids: [IDS.family], canary_family_ids: [IDS.family] };
+
+Deno.test('held canary: the sweep flags a held family\'s paid order once, alerts once, never touches Stripe or Gelato, and never fails it by age', async () => {
+  const r = rig({ holiday_card_orders: [order()], holiday_card_settings: [HOLD_SETTINGS] });
+  const first = await r.run();
+  assertEquals(first.confirm.submitted, 0);
+  assertEquals(row(r).status, 'paid');
+  assertEquals(row(r).failure_reason, 'HELD_FOR_CANARY');
+  assertEquals(alertsFor(r, 'HELD_FOR_CANARY').length, 1);
+  assertEquals(r.mails.find((m) => m.subject.includes('HELD_FOR_CANARY'))?.body.includes('paid order held before Gelato confirm (canary)'), true);
+  assertEquals(patches(r).length, 0);
+  assertEquals(r.gelato.state.calls.length, 0);
+  assertEquals(r.stripe.state.calls.length, 0);
+  // Later ticks (even 7 hours later) leave it alone: no alert, no failure, no PATCH.
+  await r.run({ now: NOW + 20 * 60_000 });
+  await r.run({ now: NOW + 7 * 60 * 60_000 });
+  assertEquals(alertsFor(r, 'HELD_FOR_CANARY').length, 1);
+  assertEquals(row(r).status, 'paid');
+  assertEquals(patches(r).length, 0);
+  assertEquals(r.gelato.state.calls.length, 0);
+});
+
+Deno.test('held canary: an unreadable hold list leaves the order alone this tick (no PATCH, no flag) and a listed-elsewhere family is unaffected', async () => {
+  const broken = rig({ holiday_card_orders: [order()], holiday_card_settings: [HOLD_SETTINGS] });
+  broken.db.rpcFailures.set('holiday_card_hold_confirm', { message: 'boom' });
+  const result = await broken.run();
+  assertEquals(result.confirm.retry, 1);
+  assertEquals(row(broken).status, 'paid');
+  assertEquals(row(broken).failure_reason, null);
+  assertEquals(patches(broken).length, 0);
+  assertEquals(broken.gelato.state.calls.length, 0);
+
+  const unlisted = rig({ holiday_card_orders: [order()], holiday_card_settings: [{ ...HOLD_SETTINGS, hold_confirm_family_ids: ['99999999-0000-4000-8000-000000000009'] }] });
+  await unlisted.run();
+  assertEquals(row(unlisted).status, 'submitted');
+  assertEquals(patches(unlisted).length, 1);
+});
+
+Deno.test('held canary: the sweep finishes the refund of a held order (draft deleted, cancelled); a refusal flags REFUND_NOT_CANCELLED once even though HELD_FOR_CANARY was set', async () => {
+  const ok = rig({ holiday_card_orders: [order({ failure_reason: 'HELD_FOR_CANARY', refunded_at: minutesAgo(20) })], holiday_card_settings: [HOLD_SETTINGS], holiday_cards: [CLAIMED(IDS.order, 30)] });
+  const done = await ok.run();
+  assertEquals(done.refunds.cancelled, 1);
+  assertEquals(row(ok).status, 'cancelled');
+  assertEquals(ok.gelato.state.orders.size, 0);
+  assertEquals(patches(ok).length, 0);
+
+  const refused = rig({ holiday_card_orders: [order({ failure_reason: 'HELD_FOR_CANARY', refunded_at: minutesAgo(20) })], holiday_card_settings: [HOLD_SETTINGS] });
+  refused.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_ID}`, 400);
+  const first = await refused.run();
+  assertEquals(first.refunds.flagged, 1);
+  assertEquals(row(refused).failure_reason, 'REFUND_NOT_CANCELLED');
+  await refused.run();
+  assertEquals(alertsFor(refused, 'REFUND_NOT_CANCELLED').length, 1);
+
+  // Another reason is never overwritten by the refund flag.
+  const mismatch = rig({ holiday_card_orders: [order({ failure_reason: 'PAYMENT_MISMATCH_AMOUNT', refunded_at: minutesAgo(20) })] });
+  mismatch.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_ID}`, 400);
+  await mismatch.run();
+  assertEquals(row(mismatch).failure_reason, 'PAYMENT_MISMATCH_AMOUNT');
+});

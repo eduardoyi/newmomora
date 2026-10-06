@@ -1203,6 +1203,56 @@ cards/orders and refuses (`55000`) while a card is `generating` with a heartbeat
 (every 10 minutes, Vault `project_url` + `cron_secret`) calls the
 `sweep-holiday-card-orders` Edge Function (not yet deployed).
 
+**Holiday Cards P2 additions** (migration `20261007120000_holiday_cards_p2.sql`; pgTAP
+`supabase/tests/holiday_cards_p2.sql`; rollback
+`supabase/rollbacks/20261007120000_holiday_cards_p2_down.sql`, applied by hand; plan
+[holiday-cards-p2.md](plans/holiday-cards-p2.md) §4).
+
+- **`holiday_card_settings`** (single row, `id boolean` check true): `mode`
+  (`off | canary | all`, default `off`; the migration seeds the row as `canary`),
+  `canary_family_ids uuid[]`, `closes_on date` (UTC; null = open), `orders_enabled`
+  (ordering kill switch, default true), `ship_by_note`, `hold_confirm_family_ids uuid[]`
+  (held canary), `updated_at`. RLS on, `revoke all` from `anon`/`authenticated`.
+  Service-role gates: `holiday_card_family_enabled(p_family_id) → boolean` (live family
+  AND (`all` OR canary-listed) AND (`closes_on` null OR UTC today ≤ `closes_on`)),
+  `holiday_card_orders_enabled() → boolean`, `holiday_card_hold_confirm(p_family_id) →
+  boolean`.
+- **`holiday_card_summary(p_family_id) → table (enabled boolean, card_id uuid, year int,
+  status text, last_failure_code text, ordered boolean, language text)`** — `security
+  definer`, **granted to `authenticated`** (not `anon`). Zero rows unless the caller is a
+  non-anonymous owner/manager of a **live** family. One row otherwise: `enabled` =
+  `holiday_card_family_enabled` AND `billing_write_allowed(family, auth.uid())`; the card
+  fields come from the newest non-deleted card by `created_at` of ANY year (all null when
+  there is none; `enabled`/`language` still returned); `ordered` = an order of that card
+  (any buyer) in `paid | submitted | in_production | shipped`; `language` = `es` when
+  `families.gallery_caption_language` starts with `es` (case-insensitive), else `en`
+  (mirrors `cardLanguageFor`).
+- **Card-level checkout claim.** `holiday_cards.checkout_order_id uuid`,
+  `checkout_claimed_at timestamptz` (service role only — not in the column-level SELECT
+  grant). `claim_holiday_card_checkout(p_order_id, p_expected_version) → setof
+  holiday_cards` locks the order's card row and raises `P0002 card_not_found` (order
+  missing/no card/card deleted), `40001 CARD_CHANGED` (`edits_version` mismatch),
+  `55000 CHECKOUT_OPEN_ELSEWHERE` (another order of the card in `checkout`, or another
+  order's claim younger than 10 minutes; hint = message); otherwise sets the claim
+  (the same order re-claiming refreshes the timestamp) and returns the re-read card.
+  Reorders of an already-ordered card may claim. `release_holiday_card_checkout(
+  p_order_id) → void` clears the claim only if it belongs to that order. Partial unique
+  index `holiday_card_orders_one_checkout_per_card` on `(card_id) where status =
+  'checkout'` is the backstop (`23505`).
+- **`save_holiday_card_edits`** (replaced; same signature): check order = not found
+  (`P0002`) → invalid edits (`22023`) → `55000 holiday_card_checkout_open` (an order in
+  `checkout` OR a claim younger than 10 minutes) → **`P0001 card_ordered`** (hint
+  `card_ordered`; any order of the card in `paid | submitted | in_production | shipped`;
+  `failed`/`cancelled` never lock) → `40001 edits_version_mismatch`.
+- **`web_handoff_codes`** (`code_hash` text PK = sha256 of the code, base64url; `user_id`
+  → `auth.users` cascade; `created_at`; `expires_at`; `used_at`). RLS on, `revoke all`
+  from `anon`/`authenticated`. Service-role RPCs: `create_web_handoff(p_user_id,
+  p_code_hash) → timestamptz` (purges rows of any user expired over a day ago; `P0001
+  rate_limited` (hint `rate_limited`) at 10 codes per user per 10 minutes, serialized
+  with a per-user advisory lock; inserts with `expires_at = now() + 2 minutes`; returns
+  the expiry) and `claim_web_handoff(p_code_hash) → uuid` (one `update … where used_at
+  is null and expires_at > now() returning user_id`; null when unknown, used or expired).
+
 ### 2.2 Indexes
 
 ```sql

@@ -1,11 +1,21 @@
 import { useAuthSession } from './auth/useAuthSession';
 import { LoginScreen } from './auth/LoginScreen';
+import { useHandoff } from './auth/useHandoff';
+import { ConfirmSwitchAccount, HandoffFailedNotice, SignedInChip, SigningYouIn } from './auth/HandoffScreens';
+import { HANDOFF_FAILED_NOTICE, isHandoffPending } from './auth/handoffController';
 import { BookListScreen } from './books/BookListScreen';
 import { BookViewScreen } from './book/BookViewScreen';
 import { OrderStatusScreen } from './order/OrderStatusScreen';
 import { OrdersListScreen } from './order/OrdersListScreen';
+import { CardRouteLazy } from './card/CardRouteLazy';
+import { CardCheckoutLazy } from './card/checkout/CardCheckoutLazy';
 import { useRouter } from './router';
 import { getFixtureSlug } from './dev/fixture';
+
+/** The holiday card route: the editor, with the checkout (its own lazy chunk) rendered in its place when ordering. */
+function CardScreen({ cardId, onOpenOrders }: { cardId: string; onOpenOrders?: () => void }) {
+  return <CardRouteLazy cardId={cardId} renderCheckout={(ctx) => <CardCheckoutLazy ctx={ctx} />} onOpenOrders={onOpenOrders} />;
+}
 
 export function App() {
   // DEV-ONLY fixture mode (owner-approved follow-up round, "diagnose
@@ -16,12 +26,22 @@ export function App() {
   // production build — see `dev/fixture.ts`'s header comment.
   if (import.meta.env.DEV) {
     const fixtureSlug = getFixtureSlug();
+    // `?fixture=card`: the holiday card editor + checkout walkthrough (inline
+    // fictional data, no auth). See card/dev/cardFixture.ts.
+    if (fixtureSlug === 'card') {
+      return <CardScreen cardId="00000000-0000-4000-8000-0000000000c1" />;
+    }
     if (fixtureSlug) {
       return <FixtureApp bookId={fixtureSlug} />;
     }
   }
 
-  return <AuthenticatedApp />;
+  return (
+    <>
+      <AuthenticatedApp />
+      <HandoffChipHost />
+    </>
+  );
 }
 
 /**
@@ -77,7 +97,21 @@ function FixtureApp({ bookId }: { bookId: string }) {
 
 function AuthenticatedApp() {
   const { session, loading } = useAuthSession();
+  const handoff = useHandoff();
   const [route, navigate] = useRouter();
+
+  // A sign-in handoff from the app is in flight: render nothing but its status
+  // (no route, no LoginScreen) so no screen mounts for the old account.
+  if (isHandoffPending(handoff)) {
+    if (handoff.phase === 'confirm') {
+      return <ConfirmSwitchAccount
+          maskedEmail={handoff.maskedEmail}
+          currentEmail={handoff.currentEmail}
+          hasSession={handoff.hasSession}
+        />;
+    }
+    return <SigningYouIn />;
+  }
 
   if (loading) {
     return (
@@ -88,7 +122,11 @@ function AuthenticatedApp() {
   }
 
   if (!session) {
-    return <LoginScreen />;
+    return <LoginScreen notice={handoff.phase === 'failed' ? HANDOFF_FAILED_NOTICE : undefined} />;
+  }
+
+  if (route.screen === 'card') {
+    return <CardScreen key={route.cardId} cardId={route.cardId} onOpenOrders={() => navigate('/orders')} />;
   }
 
   if (route.screen === 'book') {
@@ -107,8 +145,31 @@ function AuthenticatedApp() {
   }
 
   if (route.screen === 'orders') {
-    return <OrdersListScreen onOpenOrder={(orderId) => navigate(`/order/${orderId}`)} onBack={() => navigate('/')} />;
+    return (
+      <OrdersListScreen
+        onOpenOrder={(orderId) => navigate(`/order/${orderId}`)}
+        // A holiday card order opens on its card's page, at that order's status.
+        onOpenCardOrder={(cardId, orderId) => navigate(`/c/${encodeURIComponent(cardId)}?order=${encodeURIComponent(orderId)}`)}
+        onBack={() => navigate('/')}
+      />
+    );
   }
 
   return <BookListScreen onOpenBook={(bookId) => navigate(`/b/${bookId}`)} onOpenOrders={() => navigate('/orders')} />;
+}
+
+/**
+ * After a handoff: the "Signed in as … · Not you?" chip (only while the current
+ * session is still that handoff's user), or -- when the link failed while another
+ * account is signed in -- a dismissible "still signed in as …" notice.
+ */
+function HandoffChipHost() {
+  const { session } = useAuthSession();
+  const handoff = useHandoff();
+  if (!session) return null;
+  if (handoff.phase === 'signedIn' && handoff.userId === session.user.id) {
+    return <SignedInChip maskedEmail={handoff.maskedEmail} />;
+  }
+  if (handoff.phase === 'failed') return <HandoffFailedNotice currentEmail={session.user.email ?? null} />;
+  return null;
 }

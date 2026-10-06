@@ -1,5 +1,4 @@
-import { PROGRESS_STEPS, currentProgressStepIndex, progressStepState } from './orderProgressSteps';
-import type { MemoryBookOrderStatus } from '../types';
+import { BOOK_STEPPER, currentProgressStepIndex, progressStepState, type StepperConfig } from './orderProgressSteps';
 import './OrderProgressStepper.css';
 
 /**
@@ -13,8 +12,12 @@ import './OrderProgressStepper.css';
 export function OrderProgressStepper({
   status,
   carrier,
+  config = BOOK_STEPPER,
 }: {
-  status: MemoryBookOrderStatus;
+  /** A status the config's steps know (a Memory Book status by default). */
+  status: string;
+  /** Another product's waypoints (holiday cards); omitted = the Memory Book's six steps, exactly as before. */
+  config?: StepperConfig;
   /** Prodigi's carrier name (memory-book-5c order-status UX round, item 3
    * — `_shared/prodigi.ts#getProdigiOrderStatus`'s shipments parse), shown
    * as the `shipped` step's "carrier estimate line" while that step is
@@ -22,13 +25,14 @@ export function OrderProgressStepper({
    * hasn't shipped yet) simply omits the line — never a fabricated ETA. */
   carrier?: string | null;
 }) {
-  const currentIndex = currentProgressStepIndex(status);
+  const { steps } = config;
+  const currentIndex = currentProgressStepIndex(status, steps);
 
   return (
     <ol className="order-progress" aria-label="Order progress">
-      {PROGRESS_STEPS.map((step, i) => {
-        const state = progressStepState(i, currentIndex, status);
-        const isLast = i === PROGRESS_STEPS.length - 1;
+      {steps.map((step, i) => {
+        const state = progressStepState(i, currentIndex, status, config.terminalKey);
+        const isLast = i === steps.length - 1;
         const hint =
           state === 'current' ? (step.key === 'shipped' ? (carrier ? `Shipped via ${carrier}` : undefined) : step.hint) : undefined;
 

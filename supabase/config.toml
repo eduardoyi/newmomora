@@ -493,6 +493,12 @@ verify_jwt = false
 [functions.sweep-holiday-card-orders]
 verify_jwt = false
 
+# App -> shop sign-in handoff: `create` checks the user JWT itself
+# (getAuthenticatedNonAnonymousUser); `redeem` is called by a browser with no
+# session and is authorised by the single-use code alone.
+[functions.web-handoff]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 64327

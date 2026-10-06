@@ -9,6 +9,7 @@
  * "pulled out to be pure + unit-testable" rationale). The only caller is
  * `StripeAddressForm.tsx`.
  */
+import { resolveShipsToCountries } from './shippingCountries';
 import type { ShippingAddressInput } from './types';
 
 /** Minimal local shape of `StripeAddressElementChangeEvent['value']`
@@ -35,5 +36,28 @@ export function toShippingAddressInput(value: StripeAddressValue): ShippingAddre
     state: address.state.trim() || undefined,
     postalCode: address.postal_code.trim(),
     countryCode: address.country,
+  };
+}
+
+/** The Address Element's `allowedCountries`: the book list by default, or `allowed` narrowed to it. */
+export function addressElementCountries(allowed?: readonly string[]): string[] {
+  return resolveShipsToCountries(allowed).map((country) => country.code);
+}
+
+/** The Address Element's `defaultValues` for a previously entered address. */
+export function toStripeDefaultValues(address: ShippingAddressInput): {
+  name: string;
+  address: { line1: string; line2?: string; city?: string; state?: string; postal_code: string; country: string };
+} {
+  return {
+    name: address.name,
+    address: {
+      line1: address.line1,
+      ...(address.line2 ? { line2: address.line2 } : {}),
+      ...(address.city ? { city: address.city } : {}),
+      ...(address.state ? { state: address.state } : {}),
+      postal_code: address.postalCode,
+      country: address.countryCode,
+    },
   };
 }

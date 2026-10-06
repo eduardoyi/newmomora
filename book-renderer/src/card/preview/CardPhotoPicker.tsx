@@ -25,6 +25,8 @@ export function CardPhotoPicker({
   onPick,
   onReset,
   onClose,
+  title = 'Choose the front',
+  dismissible = true,
 }: {
   provider: FrontPhotoProvider;
   currentId: string;
@@ -33,6 +35,9 @@ export function CardPhotoPicker({
   onPick: (item: PickerItem) => void;
   onReset: () => void;
   onClose: () => void;
+  title?: string;
+  /** False = the sheet cannot be closed without picking (a forced re-pick). */
+  dismissible?: boolean;
 }) {
   const [items, setItems] = useState<PickerItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -67,13 +72,15 @@ export function CardPhotoPicker({
   const hasIllustrations = items.some((i) => i.kind === 'illustration');
 
   return (
-    <div className="picker-sheet__backdrop" onClick={onClose}>
+    <div className="picker-sheet__backdrop" onClick={dismissible ? onClose : undefined}>
       <div className="picker-sheet" onClick={(e) => e.stopPropagation()}>
         <header className="picker-sheet__header">
-          <h2 className="picker-sheet__title">Choose the front</h2>
-          <button type="button" className="picker-sheet__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
+          <h2 className="picker-sheet__title">{title}</h2>
+          {dismissible && (
+            <button type="button" className="picker-sheet__close" onClick={onClose} aria-label="Close">
+              ×
+            </button>
+          )}
         </header>
 
         {canReset && (

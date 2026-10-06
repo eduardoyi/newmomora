@@ -14,9 +14,12 @@
 
 export type CardRegion = 'us_ca';
 export type CardPrintFormat = '5R' | 'A5';
-/** `two_files`: separate Gelato `default` (front) + `back` PDFs (the US/CA 5R
- * product; both single-file attempts were refused). `one_pdf`: ONE 2-page PDF as
- * `default` (the EU A5 pack, confirmed by Gelato support 2026-10-05). */
+/** `one_pdf`: ONE 2-page PDF (page 1 front, page 2 back) as Gelato `default`.
+ * Both card lines need it: the EU A5 pack (confirmed by Gelato support
+ * 2026-10-05) and the US 5R pack — order 05f43f74 with separate `default` +
+ * `back` files was refused on 2026-10-06 ("Can't combine multiple files into
+ * production one"). `two_files` (separate `default` + `back`) stays supported
+ * by the renderer and the Gelato client but no product uses it. */
 export type CardFileLayout = 'two_files' | 'one_pdf';
 export type CardCurrency = 'USD' | 'EUR';
 
@@ -42,11 +45,11 @@ export const CARD_PRODUCTS: Record<CardRegion, CardProduct> = {
     region: 'us_ca',
     // 5R, 350 gsm coated silk, 4/4, gloss protection on the FRONT only (the back
     // stays writable), standard envelopes, pack of 10. Verified with a real
-    // draft + quote 2026-10-06 (US 5R sample order 05f43f74...).
+    // draft + quote 2026-10-06; files as ONE 2-page PDF (see CardFileLayout).
     productUid:
       'pack_of_cards_qt_10_pcs_pf_5r_upt_350-gsm-130lb-coated-silk_cl_4-4_ct_glossy-protection_prt_1-0_sft_none_set_none_hor_ept_standard',
     format: '5R',
-    fileLayout: 'two_files',
+    fileLayout: 'one_pdf',
     currency: 'USD',
     pricePerCardCents: 249,
     countries: ENABLED_COUNTRIES,

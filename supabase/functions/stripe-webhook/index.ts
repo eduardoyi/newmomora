@@ -47,7 +47,9 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import {
   confirmPaidOrder,
   type FulfillmentDeps,
+  flagRefundNotCancelled,
   processRefundedOrder,
+  releaseCardClaim,
   releaseUnpaidArtifacts,
 } from '../_shared/holiday-card-fulfillment.ts';
 import { alertCardOwner } from '../_shared/holiday-card-order-notify.ts';
@@ -479,6 +481,8 @@ async function handleCardCheckoutCompleted(
     return errorResponse('Failed to record payment', 500, 'internal_error');
   }
   if (!paidRow) return jsonResponse({ received: true, alreadyHandled: true });
+  // The order left `checkout`: it no longer holds the card's checkout claim (mismatch or not).
+  await releaseCardClaim(supabase, orderId);
 
   if (mismatch) {
     console.error('stripe-webhook card payment mismatch', orderId, mismatch);
@@ -523,6 +527,7 @@ async function handleCardCheckoutExpired(
     return errorResponse('Failed to record checkout expiry', 500, 'internal_error');
   }
   if (cancelled) {
+    await releaseCardClaim(supabase, orderId);
     const fulfillmentDeps = fulfillmentDepsFor(dependencies);
     dependencies.waitUntil(
       releaseUnpaidArtifacts(fulfillmentDeps, supabase, orderId)
@@ -613,11 +618,8 @@ async function handleCardChargeRefunded(
 
     const outcome = await processRefundedOrder(fulfillmentDeps, supabase, row);
     if (outcome === 'failed') {
-      await supabase
-        .from('holiday_card_orders')
-        .update({ failure_reason: 'REFUND_NOT_CANCELLED' })
-        .eq('id', row.id)
-        .is('failure_reason', null);
+      // Also matches a canary-held order (HELD_FOR_CANARY), which a plain `is null` would skip.
+      await flagRefundNotCancelled(supabase, row.id);
       await alertCardOwner(
         dependencies.sendEmail,
         row.id,

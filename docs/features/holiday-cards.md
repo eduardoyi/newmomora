@@ -1,9 +1,10 @@
 # Feature: Holiday Cards
 
-**Status:** `in-progress` (P1 backend built 2026-10-06; P2 shop/app UI next)
+**Status:** `in-progress` (P1 backend live 2026-10-06; P2 shop editor + app entry built 2026-10-06, not yet deployed)
 **Last updated:** 2026-10-06
 **Plans:** [holiday-cards.md](../plans/holiday-cards.md) (C0–C5 dogfood, Gelato lessons) ·
-[holiday-cards-p1.md](../plans/holiday-cards-p1.md) (P1 backend, hardened)
+[holiday-cards-p1.md](../plans/holiday-cards-p1.md) (P1 backend, hardened) ·
+[holiday-cards-p2.md](../plans/holiday-cards-p2.md) (P2 shop + app + handoff, hardened)
 
 ## Overview
 
@@ -94,8 +95,39 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
 
 ## Client integration
 
-None yet — P2 builds the shop editor (`/c/<cardId>`) and the app's Keepsakes
-entry against the contracts above.
+| Layer | Files | Responsibility |
+|---|---|---|
+| App tile | `src/components/keepsakes/holiday-card-tile.tsx`, `holiday-greeting-sheet.tsx` | Keepsakes entry above the year sections (owners/managers; shown when a card exists or the switch allows): make → greeting sheet → `create` → shop; generating / ready / failed / ordered states. A card ordered last year stays visible as "ordered" through Jan 31. |
+| App data | `src/services/holiday-cards.ts`, `src/hooks/useHolidayCard.ts` | `holiday_card_summary` RPC (switch + billing + newest card + `ordered` + language), `createHolidayCard`, `holidayCardWebUrl`. |
+| Handoff | `src/services/web-handoff.ts` (`openShopUrl`), `supabase/functions/web-handoff`, `book-renderer/src/web/auth/handoff*` | App opens `shop.usemomora.com/...#h=<code>` (books AND cards); single-use 2-min code; the shop asks "Continue as …?" and verifies in the browser; falls back to the email code. |
+| Shop route | `book-renderer/src/web/router.ts` (`/c/:id`), `card/CardRouteLazy.tsx` | Lazy card chunk (own CSS + aliased print fonts — never loaded on book pages). |
+| Shop editor | `book-renderer/src/web/card/` (`useHolidayCard`, `CardEditsProvider` + `editQueue`, `pickerProvider`, `CardEditorScreen`, `editorState`) | `get` → `editorView`; CAS save queue above the route (flush before ordering); front picker; QR tri-state; phone reading/editing sheet. |
+| Shop checkout | `book-renderer/src/web/card/checkout/` + shared `order/CheckoutShell`, `OrderStatusLayout`, `OrderProgressStepper` | Same flow and look as the Memory Book checkout: quantity → US/CA address → quote + front/back thumbnails → `create_checkout(expectedEditsVersion)` → Stripe → status (same status page + stepper); card orders listed in `/orders`. |
+
+### Operator runbook
+
+- **Canary families** (who sees the app tile):
+  `update holiday_card_settings set mode = 'canary', canary_family_ids = array['<family_id>']::uuid[];`
+  Launch: `update holiday_card_settings set mode = 'all', closes_on = '2026-12-31';`
+- **Ship-by note** shown at checkout (US):
+  `update holiday_card_settings set ship_by_note = 'Order by Dec 10 for Christmas delivery in the US.';`
+- **Kill switches**: new cards — `mode = 'off'`; ordering —
+  `orders_enabled = false` (existing checkouts can still be cancelled).
+- **Held canary** — a paid order of a listed family stops before Gelato:
+  `update holiday_card_settings set hold_confirm_family_ids = array['<family_id>']::uuid[];`
+  Pay through the real flow → alert email "HELD_FOR_CANARY" → inspect
+  (order row, Stripe payment, Gelato draft, print files). Then EITHER
+  **release to print** (within 7 days — the Gelato draft's file links expire
+  after 7 days):
+  `update holiday_card_settings set hold_confirm_family_ids = array_remove(hold_confirm_family_ids, '<family_id>');`
+  then `update holiday_card_orders set failure_reason = null where id = '<order_id>' and status = 'paid' and failure_reason = 'HELD_FOR_CANARY';`
+  (the next sweep, ≤ 10 min, confirms at Gelato; the update restarts the
+  6 h confirm clock), OR **abort**: refund the FULL amount in Stripe (before
+  any family deletion) → the webhook deletes the draft and cancels.
+  **Empty the hold list before launch.**
+- **Deploy order**: migration → Edge Functions → shop (rebuild `dist-web`
+  from the release commit first — `memory-book-web` deploys whatever is in
+  `book-renderer/dist-web`) → app OTA (1.4.3 + 1.4.2).
 
 ## Extension guide
 
@@ -169,3 +201,5 @@ npx supabase test db supabase/tests/holiday_cards.sql
 | Date | Change |
 |---|---|
 | 2026-10-06 | P1 backend: tables/RPCs, generation Workflow, orders (Gelato + Stripe), sweep, `/render-card` |
+| 2026-10-06 | US 5R switched to ONE 2-page PDF (`one_pdf`) after Gelato refused separate files |
+| 2026-10-06 | P2: switch + summary, card-level checkout claim + version pin, reorders from the frozen first order, orders kill switch, held canary, shop editor + checkout (book-consistent), `/orders` with cards, app tile, sign-in handoff (books + cards), local sign-out |

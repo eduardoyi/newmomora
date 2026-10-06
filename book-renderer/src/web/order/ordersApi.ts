@@ -5,6 +5,7 @@ import {
   fixtureQuoteOrder,
   fixtureCreateCheckout,
 } from '../dev/fixture';
+import { raceInvokeTimeout, TIMED_OUT } from '../invokeTimeout';
 import type { CreateCheckoutResult, QuoteResult, ShippingAddressInput } from './types';
 
 export type { ShippingAddressInput, QuoteResult, CreateCheckoutResult };
@@ -40,38 +41,14 @@ async function describeFunctionError(error: { message: string; context?: unknown
   return error.message;
 }
 
-/**
- * Hang guard on every order op (owner-hit 2026-09-09: an infinite "Getting
- * your quote…" spinner). `supabase.functions.invoke` can fail to settle at
- * all — supabase-js serializes the pre-flight auth-token refresh through a
- * cross-tab `navigator.locks` lock that is known to deadlock with the same
- * origin open in other tabs, and neither it nor a stalled network request
- * carries any timeout of its own. Racing the invoke against this cap turns
- * any such hang into an ordinary `{ error }` the screens already render
- * with a retry path. Retrying after a timeout is safe for every op: `quote`
- * re-quotes a draft/quoted row idempotently, a duplicate `create_draft`
- * just leaves one more hidden draft shell, and an abandoned Checkout
- * Session from `create_checkout` simply expires unused. 45s comfortably
- * exceeds the server's own 30s upstream timeout (memory-book-orders'
- * `DEFAULT_DEPENDENCIES.fetch`), so a slow-but-alive server still answers
- * first with its more specific error.
- */
-const INVOKE_TIMEOUT_MS = 45_000;
-const TIMED_OUT = Symbol('invoke-timed-out');
-
-async function raceInvokeTimeout<T>(promise: Promise<T>): Promise<T | typeof TIMED_OUT> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<typeof TIMED_OUT>((resolve) => {
-        timer = setTimeout(() => resolve(TIMED_OUT), INVOKE_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+// Hang guard on every order op (owner-hit 2026-09-09: an infinite "Getting
+// your quote…" spinner) -- see `../invokeTimeout.ts` for the full rationale.
+// Retrying after a timeout is safe for every op: `quote` re-quotes a
+// draft/quoted row idempotently, a duplicate `create_draft` just leaves one
+// more hidden draft shell, and an abandoned Checkout Session from
+// `create_checkout` simply expires unused. The default cap stays 45 s;
+// callers with a slower op (the holiday card `create_checkout`) pass their own.
+export { raceInvokeTimeout, TIMED_OUT };
 
 const TIMED_OUT_MESSAGE = 'This is taking longer than expected. Please try again.';
 

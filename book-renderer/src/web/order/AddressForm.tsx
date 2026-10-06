@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
-import { SHIPS_TO_COUNTRIES, DEFAULT_SHIPS_TO_COUNTRY_CODE } from './shippingCountries';
+import { DEFAULT_SHIPS_TO_COUNTRY_CODE, resolveShipsToCountries } from './shippingCountries';
+import { regionsForCountry, validateCardAddress } from './cardAddress';
 import type { ShippingAddressInput } from './types';
 
 /**
@@ -33,23 +34,51 @@ import type { ShippingAddressInput } from './types';
 export function AddressForm({
   submitting,
   onSubmit,
+  allowedCountries,
+  requireRegion = false,
+  defaultAddress,
 }: {
   submitting: boolean;
   onSubmit: (address: ShippingAddressInput) => void;
+  /** Narrows the country list (ISO codes). Omitted = the Memory Book list. */
+  allowedCountries?: readonly string[];
+  /**
+   * Holiday cards: city is required, state/province is a select of the chosen
+   * country's regions, and the postal code is checked against the server's
+   * rule (`cardAddress.ts`). Omitted = the book form, exactly as before.
+   */
+  requireRegion?: boolean;
+  /** Pre-fills the form (coming back to change the address). */
+  defaultAddress?: ShippingAddressInput;
 }) {
-  const [name, setName] = useState('');
-  const [line1, setLine1] = useState('');
-  const [line2, setLine2] = useState('');
-  const [city, setCity] = useState('');
-  const [state, setState] = useState('');
-  const [postalCode, setPostalCode] = useState('');
-  const [countryCode, setCountryCode] = useState(DEFAULT_SHIPS_TO_COUNTRY_CODE);
+  const countries = resolveShipsToCountries(allowedCountries);
+  const [name, setName] = useState(defaultAddress?.name ?? '');
+  const [line1, setLine1] = useState(defaultAddress?.line1 ?? '');
+  const [line2, setLine2] = useState(defaultAddress?.line2 ?? '');
+  const [city, setCity] = useState(defaultAddress?.city ?? '');
+  const [state, setState] = useState(defaultAddress?.state ?? '');
+  const [postalCode, setPostalCode] = useState(defaultAddress?.postalCode ?? '');
+  const [countryCode, setCountryCode] = useState(
+    defaultAddress?.countryCode ??
+      (countries.some((c) => c.code === DEFAULT_SHIPS_TO_COUNTRY_CODE) ? DEFAULT_SHIPS_TO_COUNTRY_CODE : (countries[0]?.code ?? DEFAULT_SHIPS_TO_COUNTRY_CODE)),
+  );
+  const [showErrors, setShowErrors] = useState(false);
 
-  const valid = name.trim().length > 0 && line1.trim().length > 0 && postalCode.trim().length > 0 && countryCode.length > 0;
+  const cardCheck = requireRegion ? validateCardAddress({ name, line1, line2, city, state, postalCode, countryCode }) : null;
+  const errors = cardCheck && !cardCheck.ok ? cardCheck.errors : {};
+  const valid = requireRegion
+    ? cardCheck?.ok === true
+    : name.trim().length > 0 && line1.trim().length > 0 && postalCode.trim().length > 0 && countryCode.length > 0;
+  const regions = requireRegion ? regionsForCountry(countryCode) : [];
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setShowErrors(true);
     if (!valid || submitting) return;
+    if (cardCheck?.ok) {
+      onSubmit(cardCheck.address);
+      return;
+    }
     onSubmit({
       name: name.trim(),
       line1: line1.trim(),
@@ -114,29 +143,51 @@ export function AddressForm({
             type="text"
             name="city"
             autoComplete="shipping address-level2"
+            required={requireRegion}
             maxLength={200}
             value={city}
             onChange={(e) => setCity(e.target.value)}
             className="address-field__input"
           />
         </label>
-        <label className="address-field">
-          <span className="address-field__label">State / region</span>
-          <input
-            type="text"
-            name="state"
-            autoComplete="shipping address-level1"
-            maxLength={200}
-            value={state}
-            onChange={(e) => setState(e.target.value)}
-            className="address-field__input"
-          />
-        </label>
+        {requireRegion ? (
+          <label className="address-field">
+            <span className="address-field__label">{countryCode === 'CA' ? 'Province' : 'State'}</span>
+            <select
+              name="state"
+              autoComplete="shipping address-level1"
+              required
+              value={state}
+              onChange={(e) => setState(e.target.value)}
+              className="address-field__input address-field__select"
+            >
+              <option value="">Select…</option>
+              {regions.map((region) => (
+                <option key={region.code} value={region.code}>
+                  {region.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label className="address-field">
+            <span className="address-field__label">State / region</span>
+            <input
+              type="text"
+              name="state"
+              autoComplete="shipping address-level1"
+              maxLength={200}
+              value={state}
+              onChange={(e) => setState(e.target.value)}
+              className="address-field__input"
+            />
+          </label>
+        )}
       </div>
 
       <div className="address-form__row">
         <label className="address-field">
-          <span className="address-field__label">Postal code</span>
+          <span className="address-field__label">{requireRegion && countryCode === 'US' ? 'ZIP code' : 'Postal code'}</span>
           <input
             type="text"
             name="postal-code"
@@ -155,10 +206,14 @@ export function AddressForm({
             autoComplete="shipping country"
             required
             value={countryCode}
-            onChange={(e) => setCountryCode(e.target.value)}
+            onChange={(e) => {
+              setCountryCode(e.target.value);
+              // A state/province belongs to one country: never carry it across.
+              if (requireRegion) setState('');
+            }}
             className="address-field__input address-field__select"
           >
-            {SHIPS_TO_COUNTRIES.map((country) => (
+            {countries.map((country) => (
               <option key={country.code} value={country.code}>
                 {country.name}
               </option>
@@ -166,6 +221,17 @@ export function AddressForm({
           </select>
         </label>
       </div>
+
+      {requireRegion && postalCode.trim().length > 0 && errors.postalCode && (
+        <p className="address-form__field-error" role="alert">
+          {errors.postalCode}
+        </p>
+      )}
+      {requireRegion && showErrors && !valid && !errors.postalCode && (
+        <p className="address-form__field-error" role="alert">
+          {Object.values(errors)[0]}
+        </p>
+      )}
 
       <button type="submit" className="address-form__submit" disabled={!valid || submitting}>
         {submitting ? 'Getting your quote…' : 'Get quote'}

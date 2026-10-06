@@ -5,8 +5,8 @@
  *
  *   create_draft     { cardId }                       -> insert a bare draft order
  *   quote            { orderId, address, packs }      -> Gelato quote + our fixed price, CAS draft|quoted -> quoted
- *   create_checkout  { orderId }                      -> freeze the snapshot, render print files, create the Gelato
- *                                                        DRAFT, create the Stripe Checkout Session, CAS quoted -> checkout
+ *   create_checkout  { orderId, expectedEditsVersion } -> claim the card, freeze the snapshot, render print files, create
+ *                                                        the Gelato DRAFT, create the Stripe Checkout Session, CAS quoted -> checkout
  *   cancel_checkout  { orderId }                      -> expire the open session, cancel, delete draft + files
  *   status           { orderId }                      -> the buyer's view of the order
  *
@@ -15,16 +15,26 @@
  *   quote -> checkout (render + Gelato draft + Stripe session) -> paid (webhook)
  *   -> Gelato PATCH draft -> submitted -> in_production -> shipped (sweep).
  *
+ * Ordering kill switch: create_draft, quote and create_checkout answer 403
+ * HOLIDAY_CARD_ORDERS_PAUSED while `holiday_card_settings.orders_enabled` is false
+ * (500 if the setting cannot be read: fail closed).
+ *
  * Idempotency of `create_checkout` (all inside `status = 'quoted'`, so a retry
  * after any crash resumes instead of duplicating):
  *   - a transient claim in `print_files.claim` (taken by an optimistic
- *     `updated_at` compare-and-set) stops a double tap from running twice;
+ *     `updated_at` compare-and-set) stops a double tap on the same order from
+ *     running twice; the CARD-level claim (`claim_holiday_card_checkout`) is the
+ *     lock across orders (version pin, one open checkout per card, edit lock) and
+ *     is held while the order is in `checkout`;
  *   - the frozen snapshot + hash and the rendered files are persisted before
  *     the Gelato draft is created; an existing draft id is verified and reused,
  *     never duplicated;
  *   - Stripe customer and session are created with idempotency keys derived
- *     from (order, snapshot hash, price, packs, address), so a retry returns the
- *     same session;
+ *     from (order, snapshot hash, price, packs, address, session expiry), so a
+ *     retry of the same attempt sends an identical request and returns the same
+ *     session;
+ *   - a card that was already ordered reprints the first paid order's frozen
+ *     snapshot (reorders), never live data;
  *   - an order already in `checkout` returns its still-open session.
  *
  * Privacy: ids, statuses and codes only in logs and errors. Addresses, names,
@@ -60,9 +70,10 @@ import {
   type PrintFileRecord,
   type PrintFilesState,
   printOrderPrefix,
+  releaseCardClaim,
   releaseUnpaidArtifacts,
 } from '../_shared/holiday-card-fulfillment.ts';
-import { canonicalJson } from '../_shared/holiday-card-snapshot.ts';
+import { canonicalJson, type FrozenCardSnapshot, snapshotHash } from '../_shared/holiday-card-snapshot.ts';
 import {
   cardUnchangedForPrint,
   CardLoadError,
@@ -70,6 +81,8 @@ import {
   HOLIDAY_CARD_COLUMNS,
   type HolidayCardRow,
   loadCardSnapshot,
+  loadOrderedSnapshot,
+  type OrderedSnapshot,
   type SnapshotLoaderDeps,
 } from '../_shared/holiday-card-snapshot-loader.ts';
 import { createPresignedGetUrls, deleteObject, headObject, listObjectKeys } from '../_shared/r2.ts';
@@ -83,6 +96,7 @@ import {
   createStripeCustomer,
   expireCheckoutSession,
   retrieveCheckoutSession,
+  StripeApiError,
 } from '../_shared/stripe.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
@@ -102,7 +116,7 @@ export interface CardShippingAddress {
 export type HolidayCardOrdersRequestBody =
   | { op: 'create_draft'; cardId: string }
   | { op: 'quote'; orderId: string; address: unknown; packs: unknown }
-  | { op: 'create_checkout'; orderId: string }
+  | { op: 'create_checkout'; orderId: string; expectedEditsVersion: number }
   | { op: 'cancel_checkout'; orderId: string }
   | { op: 'status'; orderId: string };
 
@@ -480,6 +494,9 @@ async function handleQuote(
       : errorResponse('Order was already quoted', 409, 'ORDER_NOT_QUOTABLE');
   }
 
+  // A re-quote resets the checkout progress: a claim a crashed attempt left behind goes too.
+  await releaseCardClaim(supabase, order.id);
+
   // Best-effort: whatever a previous attempt had created for the OLD quote.
   if (order.gelato_order_id) {
     try {
@@ -553,7 +570,15 @@ async function resumeOpenCheckout(dependencies: HolidayCardOrdersDependencies, o
   try {
     const session = await retrieveCheckoutSession(dependencies.fetch, stripeSecretKey, order.stripe_session_id);
     if (session.status === 'open' && session.url) {
-      return jsonResponse({ success: true, orderId: order.id, status: 'checkout', checkoutUrl: session.url, sessionId: session.id, resumed: true });
+      return jsonResponse({
+        success: true,
+        orderId: order.id,
+        status: 'checkout',
+        checkoutUrl: session.url,
+        sessionId: session.id,
+        resumed: true,
+        expiresAt: parsePrintFiles(order.print_files).sessionExpiresAt ?? null,
+      });
     }
     if (session.status === 'complete') return errorResponse('This order has already been paid', 409, 'ORDER_ALREADY_PAID');
     return errorResponse('The checkout session is no longer open', 409, 'CHECKOUT_NOT_OPEN');
@@ -563,13 +588,123 @@ async function resumeOpenCheckout(dependencies: HolidayCardOrdersDependencies, o
   }
 }
 
+/** Stripe Checkout Session lifetime (Stripe requires 30 minutes to 24 hours; 35 leaves margin). */
+export const STRIPE_SESSION_TTL_MS = 35 * 60_000;
+/**
+ * A retry of the same attempt reuses the persisted session expiry (identical
+ * Stripe request -> the same session) only while at least this much of it is
+ * left; otherwise it is a NEW attempt with a new expiry, hence a new key.
+ */
+export const SESSION_REUSE_MIN_LEFT_MS = 10 * 60_000;
+
+/** The `expires_at` (unix seconds + ISO) for this attempt: the persisted one while it still has life, else now + 35 min. */
+export function chooseSessionExpiry(
+  stored: string | undefined,
+  nowMs: number,
+): { seconds: number; iso: string; reused: boolean } {
+  const storedMs = stored ? Date.parse(stored) : NaN;
+  if (Number.isFinite(storedMs) && storedMs - nowMs >= SESSION_REUSE_MIN_LEFT_MS) {
+    return { seconds: Math.floor(storedMs / 1000), iso: new Date(Math.floor(storedMs / 1000) * 1000).toISOString(), reused: true };
+  }
+  const seconds = Math.floor((nowMs + STRIPE_SESSION_TTL_MS) / 1000);
+  return { seconds, iso: new Date(seconds * 1000).toISOString(), reused: false };
+}
+
+/** The columns `claim_holiday_card_checkout` returns beyond what the loader types. */
+type ClaimedCardRow = HolidayCardRow & {
+  edits_version: number | null;
+  checkout_order_id: string | null;
+  checkout_claimed_at: string | null;
+};
+
+interface RpcFailure {
+  code?: string;
+  message?: string;
+  hint?: string | null;
+}
+
+/** Maps what `claim_holiday_card_checkout` raises (SQLSTATE in `code`, tag in `hint` = message). */
+function claimFailureResponse(orderId: string, error: RpcFailure): Response {
+  const tag = error.hint || error.message || '';
+  if (tag === 'CARD_CHANGED' || error.code === '40001') {
+    return errorResponse('The card was changed since you last looked at it; reload it and try again', 409, 'CARD_CHANGED');
+  }
+  if (tag === 'CHECKOUT_OPEN_ELSEWHERE' || error.code === '55000') {
+    return errorResponse('Another checkout is already open for this card', 409, 'CHECKOUT_OPEN_ELSEWHERE');
+  }
+  if (tag === 'card_not_found' || error.code === 'P0002') return errorResponse('Card not found', 404, 'CARD_NOT_FOUND');
+  console.error('holiday-card-orders create_checkout card claim failed', orderId, error.code ?? 'unknown');
+  return errorResponse('Failed to start checkout', 500, 'internal_error');
+}
+
+/** FILM_BLOCKED / FILM_NOT_READY / QR_LINK_DISABLED copy. */
+function gateFailureResponse(code: 'FILM_NOT_READY' | 'FILM_BLOCKED' | 'QR_LINK_DISABLED', reorder: boolean): Response {
+  if (code === 'QR_LINK_DISABLED') {
+    return errorResponse('The QR link printed on this card was turned off, so it cannot be reprinted as it was', 409, code);
+  }
+  if (reorder) return errorResponse('The card film is unavailable, so this card cannot be reprinted with its QR code', 409, code);
+  const message = code === 'FILM_NOT_READY'
+    ? 'The card film is still being made; try again in a moment or switch the QR code off'
+    : 'The card film is unavailable; switch the QR code off to order';
+  return errorResponse(message, 409, code);
+}
+
+/**
+ * A reorder prints the FIRST paid order's frozen QR. It is refused (never printed
+ * differently) when that QR's link was disabled or replaced, or its film is
+ * blocked / gone. Uses `checkFilmGate` with `strict: true` (a blocked or given-up
+ * film is a refusal here, not "print without a QR" as for a new order) on the
+ * printed token, with the buyer's QR choice taken out of the picture (the frozen
+ * card already printed it).
+ */
+async function checkFrozenQr(
+  supabase: SupabaseClient,
+  card: HolidayCardRow,
+  printedToken: string,
+): Promise<'FILM_NOT_READY' | 'FILM_BLOCKED' | 'QR_LINK_DISABLED' | null> {
+  if (card.share_token !== printedToken) return 'QR_LINK_DISABLED';
+  const gate = await checkFilmGate(supabase, { ...card, edits: {} }, { strict: true });
+  if (!gate.ok) return gate.code;
+  return gate.shareTokenActive ? null : 'QR_LINK_DISABLED';
+}
+
+/** Rendered sides that make a complete set for a layout (a P1 two_files order meets a one_pdf product). */
+function filesMatchLayout(files: PrintFileRecord[], layout: string): boolean {
+  const sides = files.map((f) => f.side).sort().join(',');
+  return layout === 'two_files' ? sides === 'back,front' : sides === 'both';
+}
+
+async function cardEditsVersion(supabase: SupabaseClient, cardId: string): Promise<number | null> {
+  const { data, error } = await supabase.from('holiday_cards').select('id, edits_version').eq('id', cardId).maybeSingle<{ id: string; edits_version: number | null }>();
+  if (error) throw new CardLoadError('LOAD_FAILED');
+  return data?.edits_version ?? null;
+}
+
+/**
+ * `create_checkout`. Two locks, two jobs:
+ *   - the ORDER-level `print_files.claim` (an optimistic CAS on `updated_at`) stops a
+ *     double tap on the SAME order from running twice, and carries the resumable
+ *     progress (rendered files, snapshot hash, session expiry);
+ *   - the CARD-level claim (`claim_holiday_card_checkout`) is the exclusion lock
+ *     across orders: it checks the version the buyer looked at, allows one open
+ *     checkout per card, blocks edits while it is fresh, and returns the re-read
+ *     card row the snapshot is built from. The order claim is taken first (a lost
+ *     order claim must never release the card claim its winner holds).
+ * The card claim stays while the order is in `checkout` and is released when the
+ * order leaves it (paid, expired, cancelled, aged, refunded) or an attempt fails.
+ */
 async function handleCreateCheckout(
   dependencies: HolidayCardOrdersDependencies,
   supabase: SupabaseClient,
   callerId: string,
   callerEmail: string | null,
-  body: { orderId: string },
+  body: { orderId: string; expectedEditsVersion?: unknown },
 ): Promise<Response> {
+  const expectedVersion = body.expectedEditsVersion;
+  if (typeof expectedVersion !== 'number' || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    return errorResponse('expectedEditsVersion is required', 400, 'validation_error');
+  }
+
   const owned = await loadOwnedOrder(supabase, body.orderId, callerId);
   if ('response' in owned) return owned.response;
   const order = owned.order;
@@ -609,28 +744,8 @@ async function handleCreateCheckout(
     return errorResponse('Checkout is not configured', 500, 'internal_error');
   }
 
-  // Preconditions on the card (before anything is rendered or created).
-  const loadedCard = await loadCard(supabase, order.card_id);
-  if ('response' in loadedCard) return loadedCard.response;
-  const card = loadedCard.card;
-  const notReady = requireReadyCard(card);
-  if (notReady) return notReady;
-  if (!(await familyIsLive(supabase, order.family_id))) return errorResponse('Family not found', 404, 'CARD_NOT_FOUND');
-  let gate;
-  try {
-    gate = await checkFilmGate(supabase, card);
-  } catch {
-    return errorResponse('Failed to check the card film', 500, 'internal_error');
-  }
-  if (!gate.ok) {
-    const message = gate.code === 'FILM_NOT_READY'
-      ? 'The card film is still being made; try again in a moment or switch the QR code off'
-      : 'The card film is unavailable; switch the QR code off to order';
-    return errorResponse(message, 409, gate.code);
-  }
-
-  // The claim: an optimistic compare-and-set on updated_at. Whoever wins runs
-  // the render + draft + session; the other gets CHECKOUT_IN_PROGRESS.
+  // The order-level claim: an optimistic compare-and-set on updated_at. Whoever
+  // wins runs the render + draft + session; the other gets CHECKOUT_IN_PROGRESS.
   const nowMs = dependencies.now();
   const prior = parsePrintFiles(order.print_files);
   if (isFreshClaim(prior, nowMs)) return errorResponse('Checkout is already being prepared for this order', 409, 'CHECKOUT_IN_PROGRESS');
@@ -638,7 +753,8 @@ async function handleCreateCheckout(
   const claimed: PrintFilesState = { ...prior, claim: { id: claimId, at: new Date(nowMs).toISOString() } };
   const { data: claimRow, error: claimError } = await supabase
     .from('holiday_card_orders')
-    .update({ print_files: claimed })
+    // file_layout / format follow the CURRENT product (an order quoted under an older layout is re-pointed).
+    .update({ print_files: claimed, file_layout: product.fileLayout, format: product.format })
     .eq('id', order.id)
     .eq('status', 'quoted')
     .eq('updated_at', order.updated_at)
@@ -649,30 +765,102 @@ async function handleCreateCheckout(
     return errorResponse('Failed to start checkout', 500, 'internal_error');
   }
   if (!claimRow) return errorResponse('Checkout is already being prepared for this order', 409, 'CHECKOUT_IN_PROGRESS');
+  // What `print_files` holds right now (this call's own writes keep it in step).
+  let dbState: PrintFilesState = claimed;
 
+  // Every failure from here on gives both claims back (the order keeps whatever
+  // progress it made, so a retry resumes).
   const fail = async (response: Response): Promise<Response> => {
     await releaseClaim(supabase, order.id, claimId);
+    await releaseCardClaim(supabase, order.id);
     return response;
   };
 
-  // 1. Freeze the snapshot (front ORIGINAL key, portraits, letters, QR).
-  let loaded;
+  // The card-level claim: version pin + one open checkout per card + the edit lock.
+  // The card the snapshot is built from is the row this RPC re-read under its lock.
+  const { data: claimData, error: cardClaimError } = await supabase.rpc('claim_holiday_card_checkout', {
+    p_order_id: order.id,
+    p_expected_version: expectedVersion,
+  });
+  if (cardClaimError) return fail(claimFailureResponse(order.id, cardClaimError as RpcFailure));
+  const claimedCard = (Array.isArray(claimData) ? claimData[0] : claimData) as ClaimedCardRow | null | undefined;
+  if (!claimedCard || typeof claimedCard !== 'object' || typeof claimedCard.id !== 'string') {
+    console.error('holiday-card-orders create_checkout card claim returned no card', order.id);
+    return fail(errorResponse('Failed to start checkout', 500, 'internal_error'));
+  }
+  const card: HolidayCardRow = claimedCard;
+
+  // Preconditions on the card (before anything is rendered or created).
+  const notReady = requireReadyCard(card);
+  if (notReady) return fail(notReady);
+  if (!(await familyIsLive(supabase, order.family_id))) return fail(errorResponse('Family not found', 404, 'CARD_NOT_FOUND'));
+
+  // 1. What prints. A card that was already ordered reprints the FIRST paid order's
+  //    frozen snapshot (same hash: a reorder can never silently differ); any other
+  //    card is snapshotted from the row the claim just re-read.
+  let ordered: OrderedSnapshot | null;
   try {
-    loaded = await loadCardSnapshot(
-      { createPresignedGetUrls: dependencies.createPresignedGetUrls, fetch: dependencies.fetch, imageSize: dependencies.imageSize },
-      supabase,
-      card,
-      { format: product.format, shareTokenActive: gate.shareTokenActive },
-    );
+    ordered = await loadOrderedSnapshot(supabase, card.id);
   } catch (error) {
-    if (error instanceof CardLoadError) {
-      console.error('holiday-card-orders create_checkout snapshot refused', order.id, error.code);
-      return fail(errorResponse(`The card cannot be printed yet (${error.code})`, LOAD_ERROR_STATUS[error.code] ?? 422, error.code));
+    const code = error instanceof CardLoadError ? error.code : 'unknown';
+    console.error('holiday-card-orders create_checkout ordered snapshot unavailable', order.id, code);
+    if (code === 'INVALID_CARD') {
+      return fail(errorResponse('This card cannot be reprinted right now', 409, 'REORDER_UNAVAILABLE'));
     }
-    console.error('holiday-card-orders create_checkout snapshot failed', order.id, error instanceof Error ? error.name : 'unknown');
     return fail(errorResponse('Failed to prepare the card for printing', 500, 'internal_error'));
   }
-  const { snapshot, hash } = loaded;
+
+  let snapshot: FrozenCardSnapshot;
+  let hash: string;
+  /** The share token the print carries as a QR (null = prints without one). */
+  let printedToken: string | null;
+  if (ordered) {
+    const frozen = ordered.snapshot;
+    if (frozen.card.format !== product.format) {
+      console.error('holiday-card-orders create_checkout reorder format differs', order.id);
+      return fail(errorResponse('This card cannot be reprinted in this format', 409, 'REORDER_UNAVAILABLE'));
+    }
+    printedToken = frozen.qrUrl && frozen.card.qr.token ? frozen.card.qr.token : null;
+    if (printedToken) {
+      let blocked;
+      try {
+        blocked = await checkFrozenQr(supabase, card, printedToken);
+      } catch {
+        return fail(errorResponse('Failed to check the card film', 500, 'internal_error'));
+      }
+      if (blocked) return fail(gateFailureResponse(blocked, true));
+    }
+    snapshot = frozen;
+    const storedHash = ordered.order.snapshotHash;
+    hash = storedHash && /^[0-9a-f]{16,64}$/.test(storedHash) ? storedHash : await snapshotHash(frozen);
+  } else {
+    let gate;
+    try {
+      gate = await checkFilmGate(supabase, card);
+    } catch {
+      return fail(errorResponse('Failed to check the card film', 500, 'internal_error'));
+    }
+    if (!gate.ok) return fail(gateFailureResponse(gate.code, false));
+    let loaded;
+    try {
+      loaded = await loadCardSnapshot(
+        { createPresignedGetUrls: dependencies.createPresignedGetUrls, fetch: dependencies.fetch, imageSize: dependencies.imageSize },
+        supabase,
+        card,
+        { format: product.format, shareTokenActive: gate.shareTokenActive },
+      );
+    } catch (error) {
+      if (error instanceof CardLoadError) {
+        console.error('holiday-card-orders create_checkout snapshot refused', order.id, error.code);
+        return fail(errorResponse(`The card cannot be printed yet (${error.code})`, LOAD_ERROR_STATUS[error.code] ?? 422, error.code));
+      }
+      console.error('holiday-card-orders create_checkout snapshot failed', order.id, error instanceof Error ? error.name : 'unknown');
+      return fail(errorResponse('Failed to prepare the card for printing', 500, 'internal_error'));
+    }
+    snapshot = loaded.snapshot;
+    hash = loaded.hash;
+    printedToken = snapshot.qrUrl ? card.share_token : null;
+  }
 
   // 2. Print files: content-addressed by the snapshot hash. Reuse the ones already
   //    rendered for this exact snapshot (if they are still in R2 at the size the
@@ -690,7 +878,7 @@ async function handleCreateCheckout(
   };
   let files: PrintFileRecord[];
   const sameSnapshot = prior.snapshotHash === hash && order.snapshot_hash === hash;
-  if (sameSnapshot && prior.files && prior.files.length > 0 && await filesIntact(prior.files)) {
+  if (sameSnapshot && prior.files && prior.files.length > 0 && filesMatchLayout(prior.files, product.fileLayout) && await filesIntact(prior.files)) {
     files = prior.files;
   } else {
     try {
@@ -740,6 +928,7 @@ async function handleCreateCheckout(
     for (const old of prior.files ?? []) {
       if (!files.some((f) => f.key === old.key)) await dependencies.deleteKey(old.key).catch(() => undefined);
     }
+    // A new snapshot is a new attempt: the previous session expiry is not carried over.
     const progress: PrintFilesState = { claim: { id: claimId, at: new Date(dependencies.now()).toISOString() }, files, snapshotHash: hash, renderedAt: new Date(dependencies.now()).toISOString() };
     const { data: saved, error: saveError } = await supabase
       .from('holiday_card_orders')
@@ -756,8 +945,9 @@ async function handleCreateCheckout(
       .maybeSingle();
     if (saveError || !saved) {
       console.error('holiday-card-orders create_checkout snapshot persist failed', order.id);
-      return errorResponse('Failed to record the print files', saveError ? 500 : 409, saveError ? 'internal_error' : 'ORDER_NOT_QUOTED');
+      return fail(errorResponse('Failed to record the print files', saveError ? 500 : 409, saveError ? 'internal_error' : 'ORDER_NOT_QUOTED'));
     }
+    dbState = progress;
     order.gelato_order_id = null;
   }
 
@@ -819,53 +1009,104 @@ async function handleCreateCheckout(
     }
   }
 
-  // 4. The Stripe Checkout Session.
-  const attemptKey = (await sha256Hex(canonicalJson({
-    orderId: order.id,
-    hash,
-    priceCents: order.price_cents,
-    packs: order.packs,
-    currency: order.currency,
-    address: order.shipping_address,
-  }))).slice(0, 32);
+  // 4. The Stripe Checkout Session. Its `expires_at` is fixed per ATTEMPT: chosen
+  //    once (now + 35 min), persisted in `print_files.sessionExpiresAt` BEFORE the
+  //    call and reused by a retry while >= 10 minutes of it remain, so a retry sends
+  //    a byte-identical request and Stripe hands back the same session. The expiry
+  //    is part of the idempotency key: a new attempt (the old expiry has run low)
+  //    gets a new expiry AND a new key. (The card claim's timestamp is not used: it
+  //    is refreshed by every re-claim, so it is not stable across retries.)
+  // The Customer does not depend on the session: one per (order, email, address), whatever the attempt.
+  const customerKey = (await sha256Hex(canonicalJson({ orderId: order.id, email: callerEmail, address: order.shipping_address }))).slice(0, 32);
+  let expiry = chooseSessionExpiry(dbState.sessionExpiresAt, dependencies.now());
   let session: { sessionId: string; url: string | null };
-  try {
-    const customerId = await createStripeCustomer(dependencies.fetch, stripeSecretKey, {
-      email: callerEmail,
-      address: {
-        line1: order.shipping_address.line1,
-        line2: order.shipping_address.line2 ?? null,
-        city: order.shipping_address.city,
-        state: order.shipping_address.state,
-        postalCode: order.shipping_address.postalCode,
-        countryCode: order.shipping_address.countryCode,
-      },
-      idempotencyKey: `hc-cust-${attemptKey}`,
-    });
-    session = await createGenericCheckoutSession(dependencies.fetch, stripeSecretKey, {
-      customerId,
-      currency: order.currency.toLowerCase(),
-      lineItems: [{ name: HOLIDAY_CARD_PRODUCT_NAME, taxCode: HOLIDAY_CARD_TAX_CODE, unitAmountCents: order.price_cents }],
-      metadata: { productType: 'holiday_card', orderId: order.id, snapshotHash: hash },
-      successUrl: `${checkoutOrigin}/c/${card.id}?order=${order.id}&checkout=success`,
-      cancelUrl: `${checkoutOrigin}/c/${card.id}?order=${order.id}&checkout=cancelled`,
-      idempotencyKey: `hc-sess-${attemptKey}`,
-    });
-  } catch (error) {
-    console.error('holiday-card-orders create_checkout Stripe failed', order.id, error instanceof Error ? error.name : 'unknown');
-    return fail(errorResponse('Unable to start checkout', 502, 'STRIPE_UNAVAILABLE'));
+  for (let round = 0;; round += 1) {
+    if (!expiry.reused) {
+      const withExpiry: PrintFilesState = { ...dbState, sessionExpiresAt: expiry.iso };
+      const { data: stored, error: storeError } = await supabase
+        .from('holiday_card_orders')
+        .update({ print_files: withExpiry })
+        .eq('id', order.id)
+        .eq('status', 'quoted')
+        .select('id')
+        .maybeSingle();
+      if (storeError || !stored) {
+        console.error('holiday-card-orders create_checkout session expiry persist failed', order.id);
+        return fail(errorResponse('Failed to start checkout', storeError ? 500 : 409, storeError ? 'internal_error' : 'ORDER_NOT_QUOTED'));
+      }
+      dbState = withExpiry;
+    }
+    const attemptKey = (await sha256Hex(canonicalJson({
+      orderId: order.id,
+      hash,
+      priceCents: order.price_cents,
+      packs: order.packs,
+      currency: order.currency,
+      address: order.shipping_address,
+      expiresAt: expiry.seconds,
+    }))).slice(0, 32);
+    try {
+      const customerId = await createStripeCustomer(dependencies.fetch, stripeSecretKey, {
+        email: callerEmail,
+        address: {
+          line1: order.shipping_address.line1,
+          line2: order.shipping_address.line2 ?? null,
+          city: order.shipping_address.city,
+          state: order.shipping_address.state,
+          postalCode: order.shipping_address.postalCode,
+          countryCode: order.shipping_address.countryCode,
+        },
+        idempotencyKey: `hc-cust-${customerKey}`,
+      });
+      session = await createGenericCheckoutSession(dependencies.fetch, stripeSecretKey, {
+        customerId,
+        currency: order.currency.toLowerCase(),
+        lineItems: [{ name: HOLIDAY_CARD_PRODUCT_NAME, taxCode: HOLIDAY_CARD_TAX_CODE, unitAmountCents: order.price_cents }],
+        metadata: { productType: 'holiday_card', orderId: order.id, snapshotHash: hash },
+        successUrl: `${checkoutOrigin}/c/${card.id}?order=${order.id}&checkout=success`,
+        cancelUrl: `${checkoutOrigin}/c/${card.id}?order=${order.id}&checkout=cancelled`,
+        idempotencyKey: `hc-sess-${attemptKey}`,
+        expiresAt: expiry.seconds,
+      });
+      break;
+    } catch (error) {
+      // A REUSED expiry that Stripe refuses (400: under its 30-minute minimum) means the
+      // previous attempt never reached Stripe (a replay of one that did would have succeeded):
+      // nothing exists there, so start a new attempt with a fresh expiry and key, once.
+      if (round === 0 && expiry.reused && error instanceof StripeApiError && error.status === 400) {
+        expiry = chooseSessionExpiry(undefined, dependencies.now());
+        continue;
+      }
+      console.error('holiday-card-orders create_checkout Stripe failed', order.id, error instanceof Error ? error.name : 'unknown');
+      return fail(errorResponse('Unable to start checkout', 502, 'STRIPE_UNAVAILABLE'));
+    }
   }
   if (!session.url) {
     console.error('holiday-card-orders create_checkout session has no url', order.id);
     return fail(errorResponse('Unable to start checkout', 502, 'STRIPE_UNAVAILABLE'));
   }
 
-  // 5. Last look: the card may have been deleted, or its link disabled, while we worked.
+  // Closing a session we just made also forgets its expiry: with the expiry kept, a retry
+  // would reuse the same idempotency key and Stripe would replay the dead session.
+  const closeOwnSession = async (): Promise<void> => {
+    await expireCheckoutSession(dependencies.fetch, stripeSecretKey, session.sessionId).catch(() => undefined);
+    const { sessionExpiresAt: _dropped, ...rest } = dbState;
+    dbState = rest;
+    await supabase
+      .from('holiday_card_orders')
+      .update({ print_files: rest })
+      .eq('id', order.id)
+      .eq('status', 'quoted');
+  };
+
+  // 5. Last look: the card may have been deleted, its link disabled or its edits
+  //    changed (a claim older than 10 minutes no longer blocks edits) while we worked.
   let unchanged = false;
   try {
-    unchanged = await cardUnchangedForPrint(supabase, card.id, snapshot.qrUrl ? card.share_token : null);
+    unchanged = await cardUnchangedForPrint(supabase, card.id, printedToken) &&
+      (await cardEditsVersion(supabase, card.id)) === expectedVersion;
   } catch {
-    await expireCheckoutSession(dependencies.fetch, stripeSecretKey, session.sessionId).catch(() => undefined);
+    await closeOwnSession();
     return fail(errorResponse('Failed to re-check the card', 500, 'internal_error'));
   }
   if (!unchanged) {
@@ -878,11 +1119,13 @@ async function handleCreateCheckout(
       .update({ gelato_order_id: null, gelato_status: null, print_files: null, card_snapshot: null, snapshot_hash: null })
       .eq('id', order.id)
       .eq('status', 'quoted');
+    await releaseCardClaim(supabase, order.id);
     return errorResponse('The card was changed or deleted while preparing checkout', 409, 'CARD_CHANGED');
   }
 
   // 6. quoted -> checkout (the snapshot, hash and draft id are already persisted).
-  const finalFiles: PrintFilesState = { files, snapshotHash: hash, renderedAt: new Date(dependencies.now()).toISOString() };
+  //    The card claim is KEPT from here: the order is now the card's open checkout.
+  const finalFiles: PrintFilesState = { files, snapshotHash: hash, renderedAt: new Date(dependencies.now()).toISOString(), sessionExpiresAt: expiry.iso };
   const { data: advanced, error: advanceError } = await supabase
     .from('holiday_card_orders')
     .update({ status: 'checkout', stripe_session_id: session.sessionId, print_files: finalFiles })
@@ -891,16 +1134,24 @@ async function handleCreateCheckout(
     .select('id')
     .maybeSingle();
   if (advanceError) {
+    if ((advanceError as RpcFailure).code === '23505') {
+      // holiday_card_orders_one_checkout_per_card: another order of this card is in
+      // `checkout`. Close the session we just made and give our claims back.
+      console.error('holiday-card-orders create_checkout another checkout is open for the card', order.id);
+      await closeOwnSession();
+      return fail(errorResponse('Another checkout is already open for this card', 409, 'CHECKOUT_OPEN_ELSEWHERE'));
+    }
     console.error('holiday-card-orders create_checkout checkout CAS failed', order.id, advanceError.message);
     return fail(errorResponse('Failed to record the checkout session', 500, 'internal_error'));
   }
   if (!advanced) {
     // The order was cancelled/aged while we worked: close the session we just made.
     await expireCheckoutSession(dependencies.fetch, stripeSecretKey, session.sessionId).catch(() => undefined);
+    await releaseCardClaim(supabase, order.id);
     return errorResponse('Order is no longer awaiting checkout', 409, 'ORDER_NOT_QUOTED');
   }
 
-  return jsonResponse({ success: true, orderId: order.id, status: 'checkout', checkoutUrl: session.url, sessionId: session.sessionId });
+  return jsonResponse({ success: true, orderId: order.id, status: 'checkout', checkoutUrl: session.url, sessionId: session.sessionId, expiresAt: expiry.iso });
 }
 
 // ── cancel_checkout ──────────────────────────────────────────────────────
@@ -950,6 +1201,8 @@ async function handleCancelCheckout(
     return errorResponse('Failed to cancel the order', 500, 'internal_error');
   }
   if (!cancelled) return errorResponse('The order changed while cancelling', 409, 'ORDER_NOT_CANCELLABLE');
+  // The order no longer holds the card.
+  await releaseCardClaim(supabase, order.id);
 
   const fulfillmentDeps: FulfillmentDeps = {
     fetch: dependencies.fetch,
@@ -998,6 +1251,21 @@ async function handleStatus(supabase: SupabaseClient, callerId: string, body: { 
   });
 }
 
+// ── Orders kill switch ───────────────────────────────────────────────────
+
+/**
+ * `holiday_card_settings.orders_enabled`. Null = ordering is on. Fails CLOSED: a
+ * settings read error (or an answer that is not a boolean) is a 500, never a pass.
+ */
+async function checkOrdersEnabled(supabase: SupabaseClient): Promise<Response | null> {
+  const { data, error } = await supabase.rpc('holiday_card_orders_enabled');
+  if (error || typeof data !== 'boolean') {
+    console.error('holiday-card-orders kill switch read failed', (error as { code?: string } | null)?.code ?? 'no_boolean');
+    return errorResponse('Ordering is temporarily unavailable', 500, 'internal_error');
+  }
+  return data ? null : errorResponse('Holiday card ordering is paused right now', 403, 'HOLIDAY_CARD_ORDERS_PAUSED');
+}
+
 // ── Entry point ──────────────────────────────────────────────────────────
 
 export async function handleHolidayCardOrders(
@@ -1024,13 +1292,20 @@ export async function handleHolidayCardOrders(
 
   const supabase = dependencies.createServiceClient();
 
+  // The ordering kill switch covers every op that starts or advances an order
+  // (cancel_checkout and status stay available while ordering is paused).
+  if (body.op === 'create_draft' || body.op === 'quote' || body.op === 'create_checkout') {
+    const paused = await checkOrdersEnabled(supabase);
+    if (paused) return paused;
+  }
+
   switch (body.op) {
     case 'create_draft':
       return handleCreateDraft(dependencies, supabase, user.id, (body as { cardId: unknown }).cardId);
     case 'quote':
       return handleQuote(dependencies, supabase, user.id, user.email ?? null, body as { orderId: string; address: unknown; packs: unknown });
     case 'create_checkout':
-      return handleCreateCheckout(dependencies, supabase, user.id, user.email ?? null, body as { orderId: string });
+      return handleCreateCheckout(dependencies, supabase, user.id, user.email ?? null, body as { orderId: string; expectedEditsVersion?: unknown });
     case 'cancel_checkout':
       return handleCancelCheckout(dependencies, supabase, user.id, body as { orderId: string });
     case 'status':

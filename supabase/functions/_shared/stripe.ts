@@ -172,6 +172,14 @@ export interface CreateGenericCheckoutSessionInput {
   cancelUrl: string;
   /** Stripe `Idempotency-Key`: a retry with the same key returns the same session. */
   idempotencyKey?: string;
+  /**
+   * Session expiry, unix SECONDS (Stripe accepts 30 minutes to 24 hours ahead).
+   * Holiday-card shop only: it must be a value that is identical across retries
+   * of one attempt (and part of the idempotency key), or Stripe rejects the
+   * retry for changed parameters. Omitted (the book): no `expires_at` is sent,
+   * so the book's request body is unchanged byte for byte.
+   */
+  expiresAt?: number;
 }
 
 /**
@@ -221,6 +229,8 @@ export async function createGenericCheckoutSession(
     payment_intent_data: { metadata: input.metadata },
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
+    // Undefined (the book) is skipped by the form encoder: nothing is sent.
+    expires_at: input.expiresAt,
   }, input.idempotencyKey);
   return {
     sessionId: String(result.id),

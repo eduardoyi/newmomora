@@ -159,6 +159,26 @@ Deno.test('createGenericCheckoutSession sends one line item, both metadata block
   assertEquals(params.get('managed_payments[enabled]'), 'false');
 });
 
+Deno.test('createGenericCheckoutSession sends expires_at only when asked (unix seconds); without it the body has no expires_at', async () => {
+  const input = {
+    customerId: 'cus_1',
+    currency: 'usd',
+    lineItems: [{ name: 'Momora Holiday Cards', taxCode: 'txcd_99999999', unitAmountCents: 4980 }],
+    metadata: { productType: 'holiday_card', orderId: 'ord-9', snapshotHash: 'abc123' },
+    successUrl: 'https://shop.test/ok',
+    cancelUrl: 'https://shop.test/no',
+    idempotencyKey: 'hc-sess-1',
+  };
+  const without: CapturedCall[] = [];
+  await createGenericCheckoutSession(capturingFetch(without), 'sk_test_x', input);
+  assertEquals(new URLSearchParams(without[0].body).has('expires_at'), false);
+  const withExpiry: CapturedCall[] = [];
+  await createGenericCheckoutSession(capturingFetch(withExpiry), 'sk_test_x', { ...input, expiresAt: 1790000000 });
+  assertEquals(new URLSearchParams(withExpiry[0].body).get('expires_at'), '1790000000');
+  // Everything else is identical: the expiry is the only difference.
+  assertEquals(withExpiry[0].body.replace(/&expires_at=\d+$/, ''), without[0].body);
+});
+
 Deno.test('retrieveCheckoutSession and expireCheckoutSession parse the session and validate the id', async () => {
   const calls: CapturedCall[] = [];
   const fakeFetch = capturingFetch(calls, { id: 'cs_test_abc123', status: 'open', payment_status: 'unpaid', url: 'https://c.test/x', payment_intent: null, metadata: { orderId: 'o1', n: 5 } });

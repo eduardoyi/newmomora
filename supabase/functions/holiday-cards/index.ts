@@ -35,14 +35,29 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
 import { frontPoolStart, frontPrintFit } from '../_shared/holiday-card-photos.ts';
 import { isFreshClaim, parsePrintFiles } from '../_shared/holiday-card-fulfillment.ts';
-import { regionGuessForTimezone } from '../_shared/holiday-card-products.ts';
+import { CARDS_PER_PACK, regionGuessForTimezone } from '../_shared/holiday-card-products.ts';
 import {
+  buildEditorView,
+  buildFrozenEditorView,
   CARD_GREETING_KEYS,
   CARD_QR_BASE_URL,
   type CardEdits,
+  CardSnapshotError,
   type CardGreetingKey,
+  type EditorMedia,
+  type EditorView,
   normalizeCardEdits,
+  type QrFilmFacts,
+  type QrTokenFacts,
 } from '../_shared/holiday-card-snapshot.ts';
+import {
+  CardLoadError,
+  editsForRenderer,
+  lettersFrom,
+  loadOrderedSnapshot,
+  ORDERED_ORDER_STATUSES,
+} from '../_shared/holiday-card-snapshot-loader.ts';
+import type { PortraitVersionCandidate } from '../_shared/portrait-versions.ts';
 import { addDaysToDateOnly } from '../_shared/memory-book-scope-window.ts';
 import { createPresignedGetUrls, deleteObject } from '../_shared/r2.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
@@ -246,7 +261,8 @@ async function probeDimensionsByRangedGet(objectKey: string): Promise<{ width: n
 // heartbeat_at) in what a client may see.
 const CARD_COLUMNS =
   'id, family_id, year, status, language, locale, film_id, share_token, greeting, front_candidates, letters, ' +
-  'qr_caption, signature, edits, edits_version, generation_attempts, last_failure_code, created_at, updated_at, deleted_at';
+  'qr_caption, signature, edits, edits_version, generation_attempts, last_failure_code, created_at, updated_at, deleted_at, ' +
+  'checkout_order_id, checkout_claimed_at';
 
 interface CardRow {
   id: string;
@@ -269,6 +285,9 @@ interface CardRow {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  /** Card-level checkout claim (migration 20261007120000): fresh for 10 minutes. */
+  checkout_order_id: string | null;
+  checkout_claimed_at: string | null;
 }
 
 type LoadCardResult = { card: CardRow } | { response: Response };
@@ -310,6 +329,7 @@ interface FilmRow {
   status: string;
   blocked: boolean;
   ready_at: string | null;
+  video_key?: string | null;
 }
 
 /**
@@ -354,7 +374,7 @@ function toCardView(card: CardRow): CardView {
 }
 
 /** The stored `front_candidates` (array, or `{ candidates: [...] }`) as safe views without URLs. */
-export function readFrontCandidates(raw: unknown): Omit<FrontCandidateView, 'previewUrl'>[] {
+export function readFrontCandidates(raw: unknown, max = MAX_FRONT_CANDIDATES): Omit<FrontCandidateView, 'previewUrl'>[] {
   const list = Array.isArray(raw) ? raw : isPlainObject(raw) && Array.isArray(raw.candidates) ? raw.candidates : [];
   const out: Omit<FrontCandidateView, 'previewUrl'>[] = [];
   for (const item of list) {
@@ -369,7 +389,7 @@ export function readFrontCandidates(raw: unknown): Omit<FrontCandidateView, 'pre
       width: num(item.width),
       height: num(item.height),
     });
-    if (out.length >= MAX_FRONT_CANDIDATES) break;
+    if (out.length >= max) break;
   }
   return out;
 }
@@ -383,6 +403,13 @@ interface FamilyPhoto {
   isImage: boolean;
   /** jpeg / png / webp: can be the printed front. */
   isPrintable: boolean;
+  /** The stored preview key (null = none; `previewKey` then falls back to the original). */
+  rawPreviewKey: string | null;
+  /** `memory_media.aspect_ratio` (width / height); null = unknown. */
+  aspectRatio: number | null;
+  memoryId: string | null;
+  /** Memory date, YYYY-MM-DD. */
+  date: string | null;
 }
 
 /**
@@ -410,7 +437,7 @@ async function resolveFamilyPhotos(
   if (mediaUuids.length > 0) {
     const { data, error } = await supabase
       .from('memory_media')
-      .select('id, object_key, preview_object_key, content_type, memories!inner(family_id)')
+      .select('id, memory_id, object_key, preview_object_key, aspect_ratio, content_type, memories!inner(family_id, memory_date)')
       .in('id', mediaUuids);
     if (error) throw new Error(`media_lookup_failed ${dbCode(error)}`);
     for (const row of (data ?? []) as Array<Record<string, unknown>>) {
@@ -423,6 +450,10 @@ async function resolveFamilyPhotos(
         previewKey: typeof row.preview_object_key === 'string' ? row.preview_object_key : row.object_key,
         isImage: typeof row.content_type === 'string' && row.content_type.startsWith('image/'),
         isPrintable: isPrintableContentType(row.content_type),
+        rawPreviewKey: typeof row.preview_object_key === 'string' ? row.preview_object_key : null,
+        aspectRatio: typeof row.aspect_ratio === 'number' && Number.isFinite(row.aspect_ratio) ? row.aspect_ratio : null,
+        memoryId: typeof row.memory_id === 'string' ? row.memory_id : null,
+        date: typeof memory.memory_date === 'string' ? memory.memory_date : null,
       });
     }
   }
@@ -442,6 +473,10 @@ async function resolveFamilyPhotos(
         previewKey: row.media_key,
         isImage: typeof row.media_content_type === 'string' && row.media_content_type.startsWith('image/'),
         isPrintable: isPrintableContentType(row.media_content_type),
+        rawPreviewKey: null,
+        aspectRatio: null,
+        memoryId: row.id,
+        date: null,
       });
     }
   }
@@ -508,6 +543,19 @@ async function handleCreate(
   if (existingError) {
     console.error('holiday-cards create lookup failed', dbCode(existingError));
     return errorResponse('Failed to create card', 500, 'internal_error');
+  }
+  // The server switch (holiday_card_settings) gates NEW cards only; checked
+  // after the lookup so a family with a card still gets it back when it is off.
+  // Fails closed: a lookup error is a 500, never an open door.
+  if (!existing) {
+    const { data: enabled, error: enabledError } = await supabase.rpc('holiday_card_family_enabled', { p_family_id: familyId });
+    if (enabledError) {
+      console.error('holiday-cards switch lookup failed', dbCode(enabledError));
+      return errorResponse('Failed to create card', 500, 'internal_error');
+    }
+    if (enabled !== true) {
+      return errorResponse('Holiday cards are not available for this family yet', 403, 'HOLIDAY_CARDS_DISABLED');
+    }
   }
   const { data: family } = await supabase.from('families').select('gallery_caption_language').eq('id', familyId).maybeSingle();
   const { language, locale } = cardLanguageFor((family as { gallery_caption_language?: unknown } | null)?.gallery_caption_language);
@@ -599,18 +647,69 @@ function generationState(card: Pick<CardRow, 'status' | 'last_failure_code' | 'g
 // ── get ──────────────────────────────────────────────────────────────────
 
 const OPEN_ORDER_STATUSES = ['checkout'];
-const ORDERED_STATUSES = ['paid', 'submitted', 'in_production', 'shipped'];
+const ORDERED_STATUSES: readonly string[] = ORDERED_ORDER_STATUSES;
+/** A card-level checkout claim (`checkout_claimed_at`) holds the card for 10 minutes. */
+export const CARD_CLAIM_FRESH_MS = 10 * 60 * 1000;
+
+/** What `get` returns for the editor: `buildEditorView` with its asset keys signed (1 h) into URLs. */
+export interface EditorViewResponse {
+  /** `book-renderer/src/card/types.ts` CardData. */
+  cardData: EditorView['cardData'];
+  /** Raw (unfrozen) CardEdits for an editable card; the frozen printed edits for an ordered one. */
+  edits: EditorView['edits'];
+  /** `cardData` asset file (photo, thumb, portrait) -> signed GET url. A file that could not be signed is absent. */
+  assets: Record<string, string>;
+  frontMissing: boolean;
+  qrState: EditorView['qrState'];
+  /** True once any order is paid | submitted | in_production | shipped: the view is the first such order's frozen snapshot. */
+  locked: boolean;
+}
+
+export interface OpenCheckoutView {
+  orderId: string;
+  /** The caller owns that checkout (only the buyer can cancel it). */
+  mine: boolean;
+}
+
+export interface MyOrderView {
+  id: string;
+  status: string;
+  packs: number | null;
+  cards: number | null;
+  priceCents: number | null;
+  createdAt: string;
+}
+
+interface OrderListRow {
+  id: string;
+  status: string;
+  packs: number | null;
+  price_cents: number | null;
+  requested_by: string | null;
+  created_at: string;
+}
+
+async function signAssets(
+  dependencies: HolidayCardsDependencies,
+  assets: Record<string, string>,
+): Promise<Record<string, string>> {
+  const signed = await presignPreviews(dependencies, Object.values(assets));
+  const out: Record<string, string> = {};
+  for (const [file, key] of Object.entries(assets)) if (signed[key]) out[file] = signed[key];
+  return out;
+}
 
 async function handleGet(
   dependencies: HolidayCardsDependencies,
   supabase: SupabaseClient,
+  callerId: string,
   card: CardRow,
 ): Promise<Response> {
   let film: FilmRow | null = null;
   if (card.film_id) {
     const { data, error } = await supabase
       .from('year_films')
-      .select('status, blocked, ready_at')
+      .select('status, blocked, ready_at, video_key')
       .eq('id', card.film_id)
       .maybeSingle();
     if (error) {
@@ -622,6 +721,7 @@ async function handleGet(
   const filmState = deriveFilmState(film);
 
   let linkRevoked = false;
+  let tokenFacts: QrTokenFacts | null = null;
   if (card.share_token) {
     const { data, error } = await supabase
       .from('film_share_tokens')
@@ -633,38 +733,97 @@ async function handleGet(
       return errorResponse('Failed to load card', 500, 'internal_error');
     }
     linkRevoked = (data as { revoked_at?: string | null } | null)?.revoked_at != null;
+    tokenFacts = data === null || data === undefined ? 'missing' : linkRevoked ? 'revoked' : 'live';
   }
+  const qrFacts = {
+    token: tokenFacts,
+    film: film
+      ? { status: film.status, blocked: film.blocked, videoKey: film.video_key ?? null, readyAt: film.ready_at } satisfies QrFilmFacts
+      : null,
+  };
 
   // Orders are buyer-only under RLS; the card's open-checkout flag is computed
   // here with the service client so every manager sees it.
   const { data: orders, error: ordersError } = await supabase
     .from('holiday_card_orders')
-    .select('id, status')
-    .eq('card_id', card.id);
+    .select('id, status, packs, price_cents, requested_by, created_at')
+    .eq('card_id', card.id)
+    .order('created_at', { ascending: false });
   if (ordersError) {
     console.error('holiday-cards orders lookup failed', dbCode(ordersError));
     return errorResponse('Failed to load card', 500, 'internal_error');
   }
-  const statuses = ((orders ?? []) as Array<{ status: string }>).map((o) => o.status);
-  const hasOpenCheckout = statuses.some((s) => OPEN_ORDER_STATUSES.includes(s));
-  const isOrdered = statuses.some((s) => ORDERED_STATUSES.includes(s));
+  const orderRows = (orders ?? []) as OrderListRow[];
+  const isOrdered = orderRows.some((o) => ORDERED_STATUSES.includes(o.status));
+
+  // An open checkout: an order in `checkout`, or a fresh card-level claim
+  // (create_checkout is running right now, before its order reached `checkout`).
+  const checkoutOrder = orderRows.find((o) => OPEN_ORDER_STATUSES.includes(o.status));
+  const claimAt = card.checkout_claimed_at ? Date.parse(card.checkout_claimed_at) : NaN;
+  const claimFresh = card.checkout_order_id !== null && Number.isFinite(claimAt) && dependencies.now().getTime() - claimAt < CARD_CLAIM_FRESH_MS;
+  let openCheckout: OpenCheckoutView | null = null;
+  if (checkoutOrder) {
+    openCheckout = { orderId: checkoutOrder.id, mine: checkoutOrder.requested_by === callerId };
+  } else if (claimFresh && card.checkout_order_id) {
+    const claimOrder = orderRows.find((o) => o.id === card.checkout_order_id);
+    openCheckout = { orderId: card.checkout_order_id, mine: claimOrder?.requested_by === callerId };
+  }
+  const hasOpenCheckout = openCheckout !== null;
+
+  const myOrders: MyOrderView[] = orderRows
+    .filter((o) => o.requested_by === callerId)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+    .map((o) => ({
+      id: o.id,
+      status: o.status,
+      packs: o.packs,
+      cards: o.packs === null ? null : o.packs * CARDS_PER_PACK,
+      priceCents: o.price_cents,
+      createdAt: o.created_at,
+    }));
 
   // Signed previews: the front candidates plus the currently chosen front.
-  const candidates = readFrontCandidates(card.front_candidates);
+  // The editor view carries ALL ranked candidates; the legacy `frontCandidates` field keeps its cap.
+  const allCandidates = readFrontCandidates(card.front_candidates, 100);
+  const candidates = allCandidates.slice(0, MAX_FRONT_CANDIDATES);
   const edits = normalizeCardEdits(card.edits);
-  const wanted = [...new Set([...candidates.map((c) => c.mediaId), ...(edits.frontImage ? [edits.frontImage] : [])])];
+  const wanted = [...new Set([...allCandidates.map((c) => c.mediaId), ...(edits.frontImage ? [edits.frontImage] : [])])];
   let previewByMedia = new Map<string, string>();
   let printableIds: Set<string> | null = null;
+  let photos: Map<string, FamilyPhoto> | null = null;
   try {
-    const photos = await resolveFamilyPhotos(supabase, card.family_id, wanted);
+    photos = await resolveFamilyPhotos(supabase, card.family_id, wanted);
     // Legacy ids, other families' media and HEIC/video originals cannot be the printed front.
     printableIds = new Set([...photos.values()].filter((p) => p.isPrintable && !p.id.startsWith(LEGACY_MEDIA_PREFIX)).map((p) => p.id));
-    const signed = await presignPreviews(dependencies, [...photos.values()].map((p) => p.previewKey));
+    const shown = new Set([...candidates.map((c) => c.mediaId), ...(edits.frontImage ? [edits.frontImage] : [])]);
+    const shownPhotos = [...photos.values()].filter((p) => shown.has(p.id));
+    const signed = await presignPreviews(dependencies, shownPhotos.map((p) => p.previewKey));
     previewByMedia = new Map(
-      [...photos.values()].filter((p) => signed[p.previewKey]).map((p) => [p.id, signed[p.previewKey]]),
+      shownPhotos.filter((p) => signed[p.previewKey]).map((p) => [p.id, signed[p.previewKey]]),
     );
   } catch (error) {
     console.error('holiday-cards preview lookup failed', error instanceof Error ? error.message : 'unknown');
+  }
+
+  // The optional checkout note from the server settings (a failed read just hides it).
+  let shipByNote: string | null = null;
+  const { data: settings, error: settingsError } = await supabase.from('holiday_card_settings').select('ship_by_note').maybeSingle();
+  if (settingsError) {
+    console.error('holiday-cards settings lookup failed', dbCode(settingsError));
+  } else {
+    const note = (settings as { ship_by_note?: unknown } | null)?.ship_by_note;
+    shipByNote = typeof note === 'string' && note.trim() ? note.trim() : null;
+  }
+
+  // The editor's view (absent while generating).
+  let editorView: EditorViewResponse | null = null;
+  if (card.status !== 'generating') {
+    try {
+      editorView = await loadEditorView(dependencies, supabase, card, { isOrdered, photos, qrFacts });
+    } catch (error) {
+      console.error('holiday-cards editor view failed', card.id, error instanceof CardLoadError ? error.code : error instanceof Error ? error.message : 'unknown');
+      return errorResponse('Failed to load card', 500, 'internal_error');
+    }
   }
 
   const published = filmState === 'ready';
@@ -680,7 +839,117 @@ async function handleGet(
     hasOpenCheckout,
     isOrdered,
     generation: generationState(card),
+    editorView,
+    openCheckout,
+    myOrders,
+    shipByNote,
   });
+}
+
+// ── editor view ──────────────────────────────────────────────────────────
+
+/**
+ * Builds `get`'s `editorView`: for an ORDERED card the first paid order's
+ * frozen snapshot (exactly what was printed; asset keys as stored), otherwise
+ * `buildEditorView` over live rows (portraits re-resolved as of the card's
+ * creation date, no R2 probes). Null when the card has nothing to show yet (no
+ * letters). Database errors throw; presign failures just leave assets out.
+ */
+async function loadEditorView(
+  dependencies: HolidayCardsDependencies,
+  supabase: SupabaseClient,
+  card: CardRow,
+  context: { isOrdered: boolean; photos: Map<string, FamilyPhoto> | null; qrFacts: { token: QrTokenFacts | null; film: QrFilmFacts | null } },
+): Promise<EditorViewResponse | null> {
+  if (context.isOrdered) {
+    let ordered: Awaited<ReturnType<typeof loadOrderedSnapshot>> = null;
+    try {
+      ordered = await loadOrderedSnapshot(supabase, card.id);
+    } catch (error) {
+      // A frozen snapshot we cannot read: show the order status, never a made-up card (the order path refuses it too).
+      if (error instanceof CardLoadError && error.code === 'INVALID_CARD') {
+        console.error('holiday-cards frozen snapshot unreadable', card.id);
+        return null;
+      }
+      throw error;
+    }
+    if (ordered) {
+      const view = buildFrozenEditorView(ordered.snapshot, context.qrFacts);
+      return { ...view, assets: await signAssets(dependencies, view.assets), locked: true };
+    }
+    // The order that made the card "ordered" left the paid statuses between the two reads: fall through to the live view.
+  }
+
+  // Without the photo rows every front would look "missing": fail the read instead.
+  if (!context.photos) throw new CardLoadError('LOAD_FAILED');
+  const must = <T>(result: { data: T | null; error: unknown }): T => {
+    if (result.error) throw new CardLoadError('LOAD_FAILED');
+    return (result.data ?? ([] as unknown)) as T;
+  };
+  const { data: family, error: familyError } = await supabase
+    .from('families')
+    .select('name')
+    .eq('id', card.family_id)
+    .maybeSingle<{ name: string }>();
+  if (familyError) throw new CardLoadError('LOAD_FAILED');
+  const members = must(await supabase
+    .from('family_members')
+    .select('id, name, date_of_birth, relationship, illustrated_profile_key, illustrated_profile_status')
+    .eq('family_id', card.family_id)) as Array<{
+      id: string;
+      name: string;
+      date_of_birth: string | null;
+      relationship: string | null;
+      illustrated_profile_key: string | null;
+      illustrated_profile_status: string | null;
+    }>;
+  const versions = members.length === 0
+    ? []
+    : must(await supabase
+      .from('family_member_portrait_versions')
+      .select('id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at')
+      .in('family_member_id', members.map((m) => m.id))) as PortraitVersionCandidate[];
+
+  // Only printable photos of THIS family can be a front (foreign, legacy and HEIC ids are absent).
+  const media: EditorMedia[] = [...context.photos.values()]
+    .filter((p) => p.isPrintable && !p.id.startsWith(LEGACY_MEDIA_PREFIX))
+    .map((p) => ({ id: p.id, originalKey: p.originalKey, previewKey: p.rawPreviewKey, aspectRatio: p.aspectRatio, memoryId: p.memoryId, date: p.date }));
+
+  let view: EditorView;
+  try {
+    view = buildEditorView({
+      cardId: card.id,
+      year: card.year,
+      language: card.language === 'es' ? 'es' : 'en',
+      locale: card.locale ?? card.language,
+      greeting: card.greeting,
+      familyName: family?.name ?? '',
+      signature: card.signature ?? '',
+      qrCaption: card.qr_caption,
+      shareToken: card.share_token,
+      qrFacts: context.qrFacts,
+      format: '5R',
+      letters: lettersFrom(card.letters),
+      edits: editsForRenderer(card.edits),
+      candidates: readFrontCandidates(card.front_candidates, 100).map((c) => ({ mediaId: c.mediaId, width: c.width, height: c.height, rank: c.rank })),
+      media,
+      people: members.map((m) => ({
+        id: m.id,
+        name: m.name,
+        dateOfBirth: m.date_of_birth,
+        relationship: m.relationship,
+        illustratedProfileKey: m.illustrated_profile_key,
+        illustratedProfileStatus: m.illustrated_profile_status,
+      })),
+      portraitVersions: versions,
+      asOfDate: card.created_at.slice(0, 10),
+    });
+  } catch (error) {
+    // A card with no letters yet (e.g. failed before the writers ran) has nothing to edit.
+    if (error instanceof CardSnapshotError && error.code === 'NO_LETTERS') return null;
+    throw error;
+  }
+  return { ...view, assets: await signAssets(dependencies, view.assets), locked: false };
 }
 
 // ── picker_pool ──────────────────────────────────────────────────────────
@@ -711,52 +980,24 @@ export interface PickerPoolItem {
   aspectRatio: number | null;
 }
 
-async function handlePickerPool(
-  dependencies: HolidayCardsDependencies,
+/** Raw rows read per query while filling a page, and the most queries one request may run (bounds the scan). */
+const POOL_RAW_BATCH = 50;
+const POOL_MAX_BATCHES = 8;
+
+type PoolRaw = Record<string, unknown>;
+
+/**
+ * Applies the picker's share-safety to one raw batch (same rules as the card
+ * front): open content reports, bath / doctor / tough-day topics, the
+ * sensitive-text pattern, sensitive milestones, parent-blocked authors and
+ * onboarding-pending memories. Returns the kept rows as items (null = a lookup failed).
+ */
+async function filterPoolBatch(
   supabase: SupabaseClient,
   card: CardRow,
-  cursorInput: unknown,
-  limitInput: unknown,
-): Promise<Response> {
-  const limit = typeof limitInput === 'number' && Number.isInteger(limitInput) && limitInput > 0
-    ? Math.min(limitInput, MAX_PAGE_SIZE)
-    : DEFAULT_PAGE_SIZE;
-  let offset = 0;
-  if (typeof cursorInput === 'string' && cursorInput.length > 0) {
-    const decoded = decodeCursor(cursorInput);
-    if (decoded === null) return errorResponse('Invalid cursor', 400, 'validation_error');
-    offset = decoded;
-  }
-
-  // Dec 1 of the previous year -> today (UTC today + 1 day so a parent east of
-  // UTC still sees today's photos). Same window start as the front pick.
-  const start = frontPoolStart(`${card.year}-12-31`);
-  const endExclusive = addDaysToDateOnly(dependencies.now().toISOString().slice(0, 10), 2);
-
-  const { data: rows, error } = await supabase
-    .from('memory_media')
-    .select(
-      'id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, ' +
-        'memories!inner(memory_date, family_id, user_id, topics, content, onboarding_media_pending)',
-    )
-    .eq('memories.family_id', card.family_id)
-    .gte('memories.memory_date', start)
-    .lt('memories.memory_date', endExclusive)
-    .in('content_type', [...PRINTABLE_CONTENT_TYPES])
-    .order('memories(memory_date)', { ascending: true })
-    .order('id', { ascending: true })
-    .range(offset, offset + limit - 1);
-  if (error) {
-    console.error('holiday-cards picker_pool query failed', dbCode(error));
-    return errorResponse('Failed to load photo pool', 500, 'internal_error');
-  }
-  const typedRows = (rows ?? []) as unknown as Array<Record<string, unknown>>;
-  const memoryIds = [...new Set(typedRows.map((r) => r.memory_id).filter((id): id is string => typeof id === 'string'))];
-
-  // The same share-safety the card front applies, so the picker never offers a
-  // photo the pipeline itself would refuse: open content reports, bath /
-  // doctor / tough-day topics, the sensitive-text pattern, sensitive
-  // milestones, parent-blocked authors and onboarding-pending memories.
+  rows: PoolRaw[],
+): Promise<Array<PickerPoolItem | null> | null> {
+  const memoryIds = [...new Set(rows.map((r) => r.memory_id).filter((id): id is string => typeof id === 'string'))];
   const reported = new Set<string>();
   const sensitiveMilestoneMemories = new Set<string>();
   let blockedAuthors = new Set<string>();
@@ -775,10 +1016,7 @@ async function handlePickerPool(
         .in('memory_id', memoryIds),
       supabase.rpc('year_film_parent_blocked_users', { p_family_id: card.family_id }),
     ]);
-    if (reports.error || milestones.error || blocked.error) {
-      console.error('holiday-cards picker_pool safety lookup failed', card.id);
-      return errorResponse('Failed to load photo pool', 500, 'internal_error');
-    }
+    if (reports.error || milestones.error || blocked.error) return null;
     for (const r of (reports.data ?? []) as Array<{ target_id: string }>) reported.add(r.target_id);
     for (const m of (milestones.data ?? []) as Array<{ memory_id: string; milestone_id: string; status: string }>) {
       if (m.status !== 'dismissed' && SHARE_SENSITIVE_MILESTONES.has(m.milestone_id)) sensitiveMilestoneMemories.add(m.memory_id);
@@ -786,30 +1024,99 @@ async function handlePickerPool(
     blockedAuthors = new Set(Array.isArray(blocked.data) ? (blocked.data as string[]) : []);
   }
 
-  const items: PickerPoolItem[] = [];
-  for (const row of typedRows) {
+  return rows.map((row) => {
     const memory = Array.isArray(row.memories) ? row.memories[0] : row.memories;
-    if (!isPlainObject(memory)) continue;
+    if (!isPlainObject(memory)) return null;
     const memoryId = row.memory_id as string;
     const topics = Array.isArray(memory.topics) ? (memory.topics as unknown[]).filter((t): t is string => typeof t === 'string') : [];
-    if (memory.onboarding_media_pending === true) continue;
-    if (typeof memory.user_id === 'string' && blockedAuthors.has(memory.user_id)) continue;
-    if (reported.has(memoryId) || sensitiveMilestoneMemories.has(memoryId)) continue;
-    if (topics.some((t) => SHARE_SENSITIVE_TOPICS.has(t))) continue;
-    if (typeof memory.content === 'string' && SHARE_SENSITIVE_TEXT.test(memory.content)) continue;
-    items.push({
+    if (memory.onboarding_media_pending === true) return null;
+    if (typeof memory.user_id === 'string' && blockedAuthors.has(memory.user_id)) return null;
+    if (reported.has(memoryId) || sensitiveMilestoneMemories.has(memoryId)) return null;
+    if (topics.some((t) => SHARE_SENSITIVE_TOPICS.has(t))) return null;
+    if (typeof memory.content === 'string' && SHARE_SENSITIVE_TEXT.test(memory.content)) return null;
+    return {
       memoryId,
       mediaId: row.id as string,
       previewKey: (row.preview_object_key as string | null) ?? (row.object_key as string),
       date: typeof memory.memory_date === 'string' ? memory.memory_date : '',
       aspectRatio: typeof row.aspect_ratio === 'number' ? row.aspect_ratio : null,
-    });
+    };
+  });
+}
+
+/**
+ * Newest first. A page is filled up to `limit` by scanning raw rows (skipping
+ * the share-unsafe ones server-side) and `nextCursor` is the raw offset of the
+ * first photo NOT returned, so a cursor always leads to at least one more
+ * photo -- there are no empty pages. A pathological pool (more than
+ * POOL_MAX_BATCHES * POOL_RAW_BATCH unsafe rows in a row) ends the page early
+ * with a cursor at the scan position.
+ */
+async function handlePickerPool(
+  _dependencies: HolidayCardsDependencies,
+  supabase: SupabaseClient,
+  card: CardRow,
+  cursorInput: unknown,
+  limitInput: unknown,
+  now: Date,
+): Promise<Response> {
+  const limit = typeof limitInput === 'number' && Number.isInteger(limitInput) && limitInput > 0
+    ? Math.min(limitInput, MAX_PAGE_SIZE)
+    : DEFAULT_PAGE_SIZE;
+  let offset = 0;
+  if (typeof cursorInput === 'string' && cursorInput.length > 0) {
+    const decoded = decodeCursor(cursorInput);
+    if (decoded === null) return errorResponse('Invalid cursor', 400, 'validation_error');
+    offset = decoded;
   }
 
-  // The cursor follows the RAW page (offset pagination, like the book's
-  // picker), so a page can come back with fewer items than `limit`, or none,
-  // while `nextCursor` is still set.
-  const nextCursor = typedRows.length === limit ? encodeCursor(offset + limit) : null;
+  // Dec 1 of the previous year -> today (UTC today + 1 day so a parent east of
+  // UTC still sees today's photos). Same window start as the front pick.
+  const start = frontPoolStart(`${card.year}-12-31`);
+  const endExclusive = addDaysToDateOnly(now.toISOString().slice(0, 10), 2);
+
+  const items: PickerPoolItem[] = [];
+  let nextCursor: string | null = null;
+  let scanned = offset;
+  for (let batch = 0; batch < POOL_MAX_BATCHES; batch++) {
+    const { data: rows, error } = await supabase
+      .from('memory_media')
+      .select(
+        'id, memory_id, preview_object_key, object_key, aspect_ratio, content_type, ' +
+          'memories!inner(memory_date, family_id, user_id, topics, content, onboarding_media_pending)',
+      )
+      .eq('memories.family_id', card.family_id)
+      .gte('memories.memory_date', start)
+      .lt('memories.memory_date', endExclusive)
+      .in('content_type', [...PRINTABLE_CONTENT_TYPES])
+      .order('memories(memory_date)', { ascending: false })
+      .order('id', { ascending: false })
+      .range(scanned, scanned + POOL_RAW_BATCH - 1);
+    if (error) {
+      console.error('holiday-cards picker_pool query failed', dbCode(error));
+      return errorResponse('Failed to load photo pool', 500, 'internal_error');
+    }
+    const rawRows = (rows ?? []) as unknown as PoolRaw[];
+    const kept = await filterPoolBatch(supabase, card, rawRows);
+    if (kept === null) {
+      console.error('holiday-cards picker_pool safety lookup failed', card.id);
+      return errorResponse('Failed to load photo pool', 500, 'internal_error');
+    }
+    for (let i = 0; i < kept.length; i++) {
+      const item = kept[i];
+      if (!item) continue;
+      if (items.length === limit) {
+        // The first photo past this page: the cursor points right at it.
+        nextCursor = encodeCursor(scanned + i);
+        break;
+      }
+      items.push(item);
+    }
+    if (nextCursor !== null) break;
+    scanned += rawRows.length;
+    if (rawRows.length < POOL_RAW_BATCH) break; // end of the pool
+    if (batch === POOL_MAX_BATCHES - 1) nextCursor = encodeCursor(scanned); // scan budget spent: resume here
+  }
   return jsonResponse({ items, nextCursor });
 }
 
@@ -953,6 +1260,10 @@ async function handleSaveEdits(
         409,
       );
     }
+    // Once any order is paid the content is locked (checked before the checkout lock: both are raised by the RPC).
+    if ([asDbError(error).hint, asDbError(error).message].some((text) => typeof text === 'string' && text.includes('card_ordered'))) {
+      return errorResponse('This card has been ordered and can no longer be edited', 409, 'card_ordered');
+    }
     if (code === '55000') return errorResponse('A checkout is open for this card', 423, 'holiday_card_checkout_open');
     if (code === '22023') return errorResponse('Invalid edits', 400, 'invalid_edits');
     if (code === 'P0002') return errorResponse('Card not found', 404, 'card_not_found');
@@ -989,7 +1300,11 @@ async function handleDelete(
   // Checkout session: treat it as open. Same shape + TTL as that function.
   const nowMs = dependencies.now().getTime();
   const checkoutRunning = orderRows.some((o) => o.status === 'quoted' && isFreshClaim(parsePrintFiles(o.print_files), nowMs));
-  if (checkoutRunning || statuses.some((s) => OPEN_ORDER_STATUSES.includes(s))) {
+  // The card-level claim (claim_holiday_card_checkout) is taken before the order
+  // reaches `checkout`: a fresh one (< 10 min) is an open checkout too.
+  const claimAt = card.checkout_claimed_at ? Date.parse(card.checkout_claimed_at) : NaN;
+  const cardClaimFresh = card.checkout_order_id !== null && Number.isFinite(claimAt) && nowMs - claimAt < CARD_CLAIM_FRESH_MS;
+  if (checkoutRunning || cardClaimFresh || statuses.some((s) => OPEN_ORDER_STATUSES.includes(s))) {
     return errorResponse('A checkout is open for this card', 423, 'holiday_card_checkout_open');
   }
 
@@ -1095,9 +1410,9 @@ export async function handleHolidayCards(
 
     switch (body.op) {
       case 'get':
-        return await handleGet(dependencies, supabase, card);
+        return await handleGet(dependencies, supabase, user.id, card);
       case 'picker_pool':
-        return await handlePickerPool(dependencies, supabase, card, body.cursor, body.limit);
+        return await handlePickerPool(dependencies, supabase, card, body.cursor, body.limit, dependencies.now());
       case 'save_edits':
         return await handleSaveEdits(dependencies, supabase, user.id, card, body);
       case 'delete':

@@ -220,7 +220,7 @@ Deno.test('loadCardSnapshot refuses unprintable cards with codes', async () => {
   assertEquals(await code(cardWorldSeed({ card: { edits: { frontImage: IDS.mediaOther } } })), 'FRONT_PHOTO_UNREADABLE');
 });
 
-Deno.test('loadCardSnapshot with no pick uses front candidate #1 only: if it is not printable the card is refused, never another photo', async () => {
+Deno.test('loadCardSnapshot with no pick uses the first USABLE candidate (the editor\'s rule); nothing usable is refused', async () => {
   const code = async (candidates: unknown[]) => {
     const db = new FakeDb(cardWorldSeed({ card: { front_candidates: candidates } }));
     try {
@@ -230,8 +230,9 @@ Deno.test('loadCardSnapshot with no pick uses front candidate #1 only: if it is 
       return error instanceof CardLoadError ? error.code : 'other';
     }
   };
-  // #1 belongs to another family (not printable for this card); #2 would be fine: it must NOT be used.
-  assertEquals(await code([{ mediaId: IDS.mediaOther }, { mediaId: IDS.mediaFront }]), 'FRONT_PHOTO_UNREADABLE');
+  // #1 belongs to another family (not printable for this card): the first usable candidate is the front, as in the editor.
+  assertEquals(await code([{ mediaId: IDS.mediaOther }, { mediaId: IDS.mediaFront }]), IDS.mediaFront);
+  assertEquals(await code([{ mediaId: IDS.mediaOther }]), 'FRONT_PHOTO_UNREADABLE');
   assertEquals(await code([{ mediaId: IDS.mediaFront }, { mediaId: IDS.mediaOther }]), IDS.mediaFront);
   assertEquals(await code([]), 'NO_FRONT_PHOTO');
 });
@@ -246,12 +247,25 @@ Deno.test('checkFilmGate: QR off wins, a revoked/missing token is QR off, a live
   for (const status of ['rendering', 'queued', 'curating', 'failed', 'skipped']) {
     assertEquals(await gate(cardWorldSeed({ film: { status } })), { ok: true, shareTokenActive: true });
   }
-  // Never published, lost its video, or ended: not ready.
+  // Still being made (never published, not given up): not ready -- wait, or switch the QR off.
   assertEquals(await gate(cardWorldSeed({ film: { video_key: null } })), { ok: false, code: 'FILM_NOT_READY' });
   assertEquals(await gate(cardWorldSeed({ film: { ready_at: null } })), { ok: false, code: 'FILM_NOT_READY' });
-  assertEquals(await gate(cardWorldSeed({ film: { status: 'ended', video_key: null } })), { ok: false, code: 'FILM_NOT_READY' });
-  assertEquals(await gate(cardWorldSeed({ film: { status: 'ended' } })), { ok: false, code: 'FILM_NOT_READY' });
-  assertEquals(await gate(cardWorldSeed({ film: { blocked: true } })), { ok: false, code: 'FILM_BLOCKED' });
+  // Blocked, or the render gave up (failed / skipped / ended without a published video): prints WITHOUT a QR (editor "unavailable").
+  const noQr = { ok: true as const, shareTokenActive: false };
+  assertEquals(await gate(cardWorldSeed({ film: { status: 'ended', video_key: null } })), noQr);
+  assertEquals(await gate(cardWorldSeed({ film: { status: 'ended' } })), noQr);
+  assertEquals(await gate(cardWorldSeed({ film: { blocked: true } })), noQr);
+  assertEquals(await gate(cardWorldSeed({ film: { status: 'failed', video_key: null, ready_at: null } })), noQr);
+  assertEquals(await gate(cardWorldSeed({ film: { status: 'skipped', video_key: null, ready_at: null } })), noQr);
+  // strict (a reorder of a card whose first print HAD a QR) keeps refusing.
+  const strict = async (seed: ReturnType<typeof cardWorldSeed>) => {
+    const db = new FakeDb(seed);
+    return await checkFilmGate(db.client()(), cardOf(db), { strict: true });
+  };
+  assertEquals(await strict(cardWorldSeed({ film: { blocked: true } })), { ok: false, code: 'FILM_BLOCKED' });
+  assertEquals(await strict(cardWorldSeed({ film: { status: 'failed', video_key: null, ready_at: null } })), { ok: false, code: 'FILM_NOT_READY' });
+  assertEquals(await strict(cardWorldSeed({ film: { status: 'ended' } })), { ok: false, code: 'FILM_NOT_READY' });
+  assertEquals(await strict(cardWorldSeed()), { ok: true, shareTokenActive: true });
   assertEquals(await gate(cardWorldSeed({ film: { status: 'failed' }, card: { edits: { choices: { layout: 'bordered', tone: 'classic', qr: false } } } })), { ok: true, shareTokenActive: false });
   assertEquals(await gate(cardWorldSeed({ film: { blocked: true }, token: { revoked_at: '2026-10-05T00:00:00Z' } })), { ok: true, shareTokenActive: false });
   assertEquals(await gate(cardWorldSeed({ film: { blocked: true }, token: null })), { ok: true, shareTokenActive: false });

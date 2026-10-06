@@ -25,7 +25,7 @@ function quote(productsCents: number | null, shipping: (number | null)[], curren
 Deno.test('us_ca product: 5R, two files, USD, $2.49 per card', () => {
   const product = CARD_PRODUCTS.us_ca;
   assertEquals(product.format, '5R');
-  assertEquals(product.fileLayout, 'two_files');
+  assertEquals(product.fileLayout, 'one_pdf');
   assertEquals(product.currency, 'USD');
   assertEquals(product.pricePerCardCents, 249);
   assert(product.productUid.startsWith('pack_of_cards_qt_10_pcs_pf_5r_'));

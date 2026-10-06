@@ -56,3 +56,14 @@ export const DEFAULT_SHIPS_TO_COUNTRY_CODE = 'US';
 export function isShipsToCountryCode(code: string): boolean {
   return SHIPS_TO_COUNTRIES.some((c) => c.code === code);
 }
+
+/**
+ * The countries an address step offers. `allowed` (a list of ISO codes) narrows
+ * the book list for another product (holiday cards pass `['US', 'CA']`);
+ * omitted = today's book list, the very same array (so Memory Book checkout is
+ * unchanged).
+ */
+export function resolveShipsToCountries(allowed?: readonly string[]): ShipsToCountry[] {
+  if (!allowed) return SHIPS_TO_COUNTRIES;
+  return SHIPS_TO_COUNTRIES.filter((country) => allowed.includes(country.code));
+}

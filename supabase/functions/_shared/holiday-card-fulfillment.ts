@@ -11,7 +11,9 @@
  *   - `releaseUnpaidArtifacts` / `releasePrintFiles`: delete the Gelato draft
  *     and the rendered print files of an order that will never be produced.
  *   - the `print_files` column's shape (a transient checkout claim, then the
- *     rendered files).
+ *     rendered files and the Stripe session expiry of the attempt).
+ *   - `releaseCardClaim`: clears the card-level checkout claim
+ *     (`release_holiday_card_checkout`) when an order leaves `checkout`.
  *
  * Privacy: ids, statuses and codes only. Never an address, a name, letter text
  * or a secret in a log, an error or an alert.
@@ -44,6 +46,13 @@ export interface PrintFilesState {
   files?: PrintFileRecord[];
   snapshotHash?: string;
   renderedAt?: string;
+  /**
+   * ISO time the Stripe Checkout Session of this attempt expires (the `expires_at`
+   * sent to Stripe, and part of its idempotency key). Persisted BEFORE the session
+   * is created so a retry of the same attempt sends an identical request; the
+   * sweep ages a `checkout` order one hour after it.
+   */
+  sessionExpiresAt?: string;
 }
 
 export function parsePrintFiles(value: unknown): PrintFilesState {
@@ -61,6 +70,7 @@ export function parsePrintFiles(value: unknown): PrintFilesState {
   }
   if (typeof raw.snapshotHash === 'string') out.snapshotHash = raw.snapshotHash;
   if (typeof raw.renderedAt === 'string') out.renderedAt = raw.renderedAt;
+  if (typeof raw.sessionExpiresAt === 'string') out.sessionExpiresAt = raw.sessionExpiresAt;
   return out;
 }
 
@@ -76,6 +86,22 @@ export function isFreshClaim(state: PrintFilesState, nowMs: number): boolean {
   if (!state.claim) return false;
   const at = Date.parse(state.claim.at);
   return Number.isFinite(at) && nowMs - at < CHECKOUT_CLAIM_TTL_MS;
+}
+
+/**
+ * Clears the card-level checkout claim held by `orderId` (`release_holiday_card_
+ * checkout`: a no-op unless the claim belongs to that order). Call it whenever an
+ * order leaves `checkout` (paid, expired, cancelled, aged, refunded) or a
+ * `create_checkout` attempt fails. Best effort: a failure is logged and the claim
+ * simply goes stale after 10 minutes (the sweep also clears it).
+ */
+export async function releaseCardClaim(supabase: SupabaseClient, orderId: string): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('release_holiday_card_checkout', { p_order_id: orderId });
+    if (error) console.error('holiday-card could not release the card checkout claim', orderId);
+  } catch {
+    console.error('holiday-card could not release the card checkout claim', orderId);
+  }
 }
 
 const ORDER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -129,6 +155,9 @@ export function classifyGelatoError(error: unknown): GelatoFailure {
 
 // ── Confirm after payment ────────────────────────────────────────────────
 
+/** `failure_reason` of a paid order held back for the canary (the sweep never confirms a flagged order). */
+export const HELD_FOR_CANARY = 'HELD_FOR_CANARY';
+
 export type ConfirmOutcome =
   | 'submitted' // this call did the paid -> submitted CAS
   | 'already_advanced' // another path moved it (webhook vs sweep) or the CAS lost
@@ -139,6 +168,7 @@ export type ConfirmOutcome =
 
 interface PaidOrderRow {
   id: string;
+  family_id: string | null;
   status: string;
   gelato_order_id: string | null;
   requested_by: string | null;
@@ -179,12 +209,40 @@ export async function confirmPaidOrder(
 ): Promise<ConfirmOutcome> {
   const { data: order, error } = await supabase
     .from('holiday_card_orders')
-    .select('id, status, gelato_order_id, requested_by, packs, refunded_at, failure_reason, stripe_payment_intent_id')
+    .select('id, family_id, status, gelato_order_id, requested_by, packs, refunded_at, failure_reason, stripe_payment_intent_id')
     .eq('id', orderId)
     .maybeSingle<PaidOrderRow>();
   if (error || !order) return 'retry';
   if (order.status !== 'paid') return 'not_paid';
   if (order.refunded_at || order.failure_reason) return 'blocked';
+
+  // Held canary (docs/plans/holiday-cards-p2.md Step 2): a paid order of a listed
+  // family is NEVER confirmed at Gelato. This is the first thing that happens,
+  // before any Stripe or Gelato call, and it fails closed: a settings read error
+  // (or an answer that is not a boolean) is a `retry`, never a confirm.
+  if (!order.family_id) return 'retry';
+  const { data: held, error: holdError } = await supabase.rpc('holiday_card_hold_confirm', { p_family_id: order.family_id });
+  if (holdError || typeof held !== 'boolean') {
+    console.error('holiday-card confirm: cannot read the canary hold list, will retry', orderId);
+    return 'retry';
+  }
+  if (held) {
+    // One CAS marks it (and decides who alerts): the webhook and the sweep can race here.
+    const { data: flagged } = await supabase
+      .from('holiday_card_orders')
+      .update({ failure_reason: HELD_FOR_CANARY })
+      .eq('id', orderId)
+      .eq('status', 'paid')
+      .is('failure_reason', null)
+      .is('refunded_at', null)
+      .select('id')
+      .maybeSingle();
+    if (flagged) {
+      await alertCardOwner(deps.sendEmail, orderId, HELD_FOR_CANARY, 'paid order held before Gelato confirm (canary)');
+    }
+    return 'blocked';
+  }
+
   if (!order.gelato_order_id) {
     return (await failPaidOrder(deps, supabase, orderId, 'GELATO_DRAFT_MISSING')) ? 'failed' : 'already_advanced';
   }
@@ -306,7 +364,26 @@ export async function processRefundedOrder(
     .update({ status: 'cancelled' })
     .eq('id', row.id)
     .eq('status', row.status);
+  // A refunded order no longer holds the card (a no-op unless it still held the claim).
+  await releaseCardClaim(supabase, row.id);
   return 'cancelled';
+}
+
+/**
+ * Flags a refunded order whose Gelato side could not be cancelled
+ * (`REFUND_NOT_CANCELLED`). Matches an order with no reason yet AND a canary-held
+ * one (`HELD_FOR_CANARY`: refunded while held, then Gelato refused the delete),
+ * never overwriting any other reason. Returns true when this call set the flag.
+ */
+export async function flagRefundNotCancelled(supabase: SupabaseClient, orderId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('holiday_card_orders')
+    .update({ failure_reason: 'REFUND_NOT_CANCELLED' })
+    .eq('id', orderId)
+    .or(`failure_reason.is.null,failure_reason.eq.${HELD_FOR_CANARY}`)
+    .select('id')
+    .maybeSingle();
+  return Boolean(data);
 }
 
 // ── Release artifacts of an order that will not be produced ──────────────

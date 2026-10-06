@@ -243,6 +243,68 @@ function hasDims(media: SnapshotMedia): media is SnapshotMedia & { width: number
   return typeof media.width === 'number' && typeof media.height === 'number' && media.width > 0 && media.height > 0;
 }
 
+/** The film's public share token when it has the 22-char shape; anything else is "no token". */
+export function parseShareToken(token: string | null | undefined): string | null {
+  return token && /^[0-9A-Za-z]{22}$/.test(token) ? token : null;
+}
+
+/** The file name a front photo gets inside the print app's `<slug>/` directory. */
+export function photoFileFor(mediaId: string, originalKey: string): string {
+  return `assets/photo-${mediaId.slice(0, 8)}.${extensionOf(originalKey)}`;
+}
+
+/**
+ * The shared default-front rule (editor view AND checkout): a saved pick wins
+ * (whether it is usable is for the caller to decide: an unusable pick is
+ * "missing", never silently replaced); with no pick the front is the best
+ * ranked candidate that is USABLE (a printable photo of the family), so a
+ * card whose #1 candidate was deleted still has a front that the editor shows
+ * and the print uses. Without `isUsable`, every candidate counts (#1 wins).
+ * Null = nothing usable.
+ */
+export function resolveFrontId(
+  pickId: string | null | undefined,
+  candidateIds: readonly string[],
+  isUsable?: (mediaId: string) => boolean,
+): string | null {
+  if (pickId) return pickId;
+  return candidateIds.find((id) => !isUsable || isUsable(id)) ?? null;
+}
+
+export interface CorePortraitPick {
+  member: SnapshotPerson;
+  /** The age-appropriate ready portrait key (dated version, else the member's own ready portrait); null = none. */
+  key: string | null;
+}
+
+/** Core family members (parents first, then children by birth date; at most 6) with their portrait key as of `asOfDate`. */
+export function pickCorePortraits(people: SnapshotPerson[], versions: PortraitVersionCandidate[], asOfDate: string): CorePortraitPick[] {
+  const coreIds = coreFamilyMemberIds(
+    people.map((p) => ({ id: p.id, dateOfBirth: p.dateOfBirth, relationship: p.relationship })),
+    asOfDate,
+  );
+  const core = people.filter((p) => coreIds.has(p.id)).sort((a, b) => {
+    const rank = (m: SnapshotPerson) => (m.relationship === 'parent' ? 0 : 1);
+    return rank(a) - rank(b) || (a.dateOfBirth ?? '').localeCompare(b.dateOfBirth ?? '') || a.id.localeCompare(b.id);
+  });
+  return core.slice(0, MAX_PORTRAITS).map((member) => {
+    const resolved = resolvePortraitVersionAtDate(versions.filter((v) => v.family_member_id === member.id), asOfDate);
+    const key = resolved?.illustrated_profile_key ?? (member.illustratedProfileStatus === 'ready' ? member.illustratedProfileKey ?? null : null);
+    return { member, key };
+  });
+}
+
+function portraitFor(member: SnapshotPerson, key: string, width: number, height: number): CardPortrait {
+  return {
+    memberId: member.id,
+    name: member.name.trim().split(/\s+/)[0] ?? member.name,
+    role: member.relationship === 'parent' ? 'parent' : 'child',
+    file: `assets/portrait-${member.id.slice(0, 8)}.${extensionOf(key)}`,
+    width,
+    height,
+  };
+}
+
 export function buildCardSnapshot(input: BuildCardSnapshotInput): CardSnapshot {
   const slug = input.slug ?? input.cardId;
   if (!SLUG.test(slug) || !Number.isInteger(input.year)) throw new CardSnapshotError('INVALID_INPUT');
@@ -261,10 +323,10 @@ export function buildCardSnapshot(input: BuildCardSnapshotInput): CardSnapshot {
   if (!chosen || !hasDims(chosen)) throw new CardSnapshotError('NO_FRONT_PHOTO');
   const frontWidth = chosen.width as number;
   const frontHeight = chosen.height as number;
-  const photoFile = `assets/photo-${chosen.id.slice(0, 8)}.${extensionOf(chosen.originalKey)}`;
+  const photoFile = photoFileFor(chosen.id, chosen.originalKey);
 
   // QR: only with a published film token; an edit can switch it off, never on without a token.
-  const token = input.shareToken && /^[0-9A-Za-z]{22}$/.test(input.shareToken) ? input.shareToken : null;
+  const token = parseShareToken(input.shareToken);
   const qrEnabled = token !== null && (edits.choices.qr ?? true);
   const qrUrl = qrEnabled && token ? `${input.qrBaseUrl ?? CARD_QR_BASE_URL}/${token}` : null;
 
@@ -281,17 +343,7 @@ export function buildCardSnapshot(input: BuildCardSnapshotInput): CardSnapshot {
   const warnings: SnapshotWarning[] = [];
   const assets: { file: string; key: string }[] = [{ file: photoFile, key: chosen.originalKey }];
   const portraits: CardPortrait[] = [];
-  const coreIds = coreFamilyMemberIds(
-    input.people.map((p) => ({ id: p.id, dateOfBirth: p.dateOfBirth, relationship: p.relationship })),
-    input.asOfDate,
-  );
-  const core = input.people.filter((p) => coreIds.has(p.id)).sort((a, b) => {
-    const rank = (m: SnapshotPerson) => (m.relationship === 'parent' ? 0 : 1);
-    return rank(a) - rank(b) || (a.dateOfBirth ?? '').localeCompare(b.dateOfBirth ?? '') || a.id.localeCompare(b.id);
-  });
-  for (const member of core.slice(0, MAX_PORTRAITS)) {
-    const resolved = resolvePortraitVersionAtDate(input.portraitVersions.filter((v) => v.family_member_id === member.id), input.asOfDate);
-    const key = resolved?.illustrated_profile_key ?? (member.illustratedProfileStatus === 'ready' ? member.illustratedProfileKey ?? null : null);
+  for (const { member, key } of pickCorePortraits(input.people, input.portraitVersions, input.asOfDate)) {
     if (!key) {
       warnings.push({ code: 'portrait_missing', memberId: member.id });
       continue;
@@ -301,16 +353,9 @@ export function buildCardSnapshot(input: BuildCardSnapshotInput): CardSnapshot {
       warnings.push({ code: 'portrait_no_dimensions', memberId: member.id });
       continue;
     }
-    const file = `assets/portrait-${member.id.slice(0, 8)}.${extensionOf(key)}`;
-    portraits.push({
-      memberId: member.id,
-      name: member.name.trim().split(/\s+/)[0] ?? member.name,
-      role: member.relationship === 'parent' ? 'parent' : 'child',
-      file,
-      width: dims.width,
-      height: dims.height,
-    });
-    assets.push({ file, key });
+    const portrait = portraitFor(member, key, dims.width, dims.height);
+    portraits.push(portrait);
+    assets.push({ file: portrait.file, key });
   }
 
   const card: CardData = {
@@ -377,4 +422,292 @@ export async function snapshotHash(snapshot: Pick<CardSnapshot, 'card' | 'edits'
   const bytes = new TextEncoder().encode(canonicalJson({ card: snapshot.card, edits: snapshot.edits, assets: snapshot.assets, qrUrl: snapshot.qrUrl }));
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ── QR state (editor) ────────────────────────────────────────────────────
+
+/**
+ * What the editor shows for the QR code, computed with the same decisions as
+ * `checkFilmGate` (snapshot-loader) plus the film's render state:
+ *   on            the film is published and the link is live
+ *   waiting_film  a live link, the film is still rendering (the default before publish)
+ *   off           the parent switched it off, or the public link was disabled
+ *   unavailable   no link/film (below the floors, never made), the film is blocked,
+ *                 its token row is gone, it ended, or its render gave up unpublished
+ */
+export type QrState = 'on' | 'waiting_film' | 'off' | 'unavailable';
+
+/** The share token's row: live, revoked (`disable_link`) or missing. */
+export type QrTokenFacts = 'live' | 'revoked' | 'missing';
+
+export interface QrFilmFacts {
+  status: string;
+  blocked: boolean;
+  videoKey: string | null;
+  readyAt: string | null;
+}
+
+export interface QrStateInput {
+  /** `edits.choices.qr` (undefined = the card's own setting). */
+  qrChoice: boolean | undefined;
+  /** The card has a (well-formed) share token. */
+  hasToken: boolean;
+  /** The token's row; null when not looked up (no token). */
+  token: QrTokenFacts | null;
+  /** The card's film; null = no film row. */
+  film: QrFilmFacts | null;
+}
+
+/** A film is published once it has a video, was ready at some point and was not ended (whatever its current status). */
+export function isFilmPublished(film: QrFilmFacts): boolean {
+  return Boolean(film.videoKey) && film.readyAt !== null && film.status !== 'ended';
+}
+
+export function computeQrState(input: QrStateInput): QrState {
+  if (input.qrChoice === false) return 'off';
+  if (!input.hasToken) return 'unavailable';
+  if (input.token === 'revoked') return 'off';
+  if (input.token !== 'live') return 'unavailable';
+  const film = input.film;
+  if (!film || film.blocked) return 'unavailable';
+  if (isFilmPublished(film)) return 'on';
+  if (film.status === 'failed' || film.status === 'ended' || film.status === 'skipped') return 'unavailable';
+  return 'waiting_film';
+}
+
+// ── Editor view ──────────────────────────────────────────────────────────
+
+/** Square illustration size used when the file's size is not known (portraits are generated 1024 x 1024). */
+export const DEFAULT_PORTRAIT_SIZE = 1024;
+const FALLBACK_LONG_SIDE = 3000;
+
+export interface EditorMedia {
+  id: string;
+  /** R2 key of the ORIGINAL (the chosen front is shown from it). */
+  originalKey: string;
+  /** R2 key of the downscaled preview; null = none (the original is used). */
+  previewKey: string | null;
+  /** `memory_media.aspect_ratio` (width / height) for photos whose pixel size is not stored. */
+  aspectRatio?: number | null;
+  memoryId?: string | null;
+  /** Memory date, YYYY-MM-DD. */
+  date?: string | null;
+}
+
+export interface EditorCandidate {
+  mediaId: string;
+  width: number | null;
+  height: number | null;
+  rank: number | null;
+}
+
+export interface BuildEditorViewInput {
+  cardId: string;
+  year: number;
+  language: CardLanguage;
+  locale: string;
+  greeting: CardGreetingKey;
+  familyName: string;
+  signature: string;
+  qrCaption: string | null;
+  /** The card's share token (carried into the card data whenever present, even when switched off). */
+  shareToken: string | null;
+  qrBaseUrl?: string;
+  qrFacts: { token: QrTokenFacts | null; film: QrFilmFacts | null };
+  format?: CardFormat;
+  /** Letter variants with renderer tones (`lettersFrom`). */
+  letters: { tone: string; text: string }[];
+  /** The card row's `edits` (any shape; normalized, NOT frozen). Pass `editsForRenderer(card.edits)` so tone names match `letters`. */
+  edits: unknown;
+  /** Ranked candidates, best first (`front_candidates`). */
+  candidates: EditorCandidate[];
+  /** Media of this family that can be a front: the printable candidates and the saved pick. Anything else is absent. */
+  media: EditorMedia[];
+  people: SnapshotPerson[];
+  portraitVersions: PortraitVersionCandidate[];
+  /** Known pixel sizes of portrait files by R2 key; unknown = 1024 x 1024. */
+  portraitDimensions?: Record<string, { width: number; height: number }>;
+  asOfDate: string;
+}
+
+export interface EditorView {
+  cardData: CardData;
+  edits: CardEdits;
+  /** `cardData` asset file -> R2 key (the endpoint signs them). */
+  assets: Record<string, string>;
+  /** The saved front (or, with no pick, the default front) is not a printable photo of the family any more: force a re-pick. */
+  frontMissing: boolean;
+  qrState: QrState;
+}
+
+function sizeOf(width: number | null | undefined, height: number | null | undefined, aspectRatio: number | null | undefined): { width: number; height: number } {
+  if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) return { width, height };
+  // No stored pixel size: a placeholder with the right proportions (square when even the ratio is unknown).
+  const ratio = typeof aspectRatio === 'number' && aspectRatio > 0 ? aspectRatio : 1;
+  return ratio >= 1
+    ? { width: FALLBACK_LONG_SIDE, height: Math.max(1, Math.round(FALLBACK_LONG_SIDE / ratio)) }
+    : { width: Math.max(1, Math.round(FALLBACK_LONG_SIDE * ratio)), height: FALLBACK_LONG_SIDE };
+}
+
+/**
+ * The editor's view of a card that can still change: every ranked candidate
+ * (plus the saved front when it is not one) as `frontOptions`, the family's
+ * portraits as of the card's creation date WITHOUT probing any file, raw
+ * edits, and the keys the endpoint has to sign. Shares its helpers with
+ * `buildCardSnapshot` (default front, token, portrait choice, file names) so
+ * the editor and the print cannot drift. Throws `NO_LETTERS` / `INVALID_INPUT`
+ * like the snapshot; a card with no usable front returns `frontMissing`.
+ */
+export function buildEditorView(input: BuildEditorViewInput): EditorView {
+  const slug = input.cardId;
+  if (!SLUG.test(slug) || !Number.isInteger(input.year)) throw new CardSnapshotError('INVALID_INPUT');
+  if (!(CARD_GREETING_KEYS as readonly string[]).includes(input.greeting)) throw new CardSnapshotError('INVALID_INPUT');
+  const letters = input.letters.filter((l) => typeof l.tone === 'string' && typeof l.text === 'string' && l.text.trim());
+  if (letters.length === 0) throw new CardSnapshotError('NO_LETTERS');
+
+  const edits = normalizeCardEdits(input.edits);
+  const mediaById = new Map(input.media.map((m) => [m.id, m]));
+  const candidateIds = [...new Set(input.candidates.map((c) => c.mediaId))];
+
+  // Options: every ranked candidate we can show, then the saved front when it is not a candidate.
+  interface Option { option: FrontOption; media: EditorMedia }
+  const options: Option[] = [];
+  const addOption = (id: string, candidate: EditorCandidate | null) => {
+    const media = mediaById.get(id);
+    if (!media || options.some((o) => o.option.id === id)) return;
+    const { width, height } = sizeOf(candidate?.width, candidate?.height, media.aspectRatio);
+    const hasThumb = media.previewKey !== null && media.previewKey !== media.originalKey;
+    options.push({
+      media,
+      option: {
+        id,
+        kind: 'photo',
+        file: photoFileFor(id, media.originalKey),
+        ...(hasThumb ? { thumb: `assets/thumb-${id.slice(0, 8)}.${extensionOf(media.previewKey as string)}` } : {}),
+        width,
+        height,
+        ...(media.date ? { date: media.date } : {}),
+        ...(candidate?.rank !== null && candidate?.rank !== undefined ? { rank: candidate.rank } : {}),
+      },
+    });
+  };
+  for (const candidate of input.candidates) addOption(candidate.mediaId, candidate);
+  if (edits.frontImage) addOption(edits.frontImage, null);
+
+  // The card's own photo (the default front): candidate #1 when usable, else the best option left.
+  const wantedId = resolveFrontId(edits.frontImage, candidateIds, (id) => options.some((o) => o.option.id === id));
+  const frontMissing = wantedId === null || !options.some((o) => o.option.id === wantedId);
+  // The card's own photo: the first usable candidate (the rule above), else the best option left (the saved pick).
+  const defaultOption = options.find((o) => candidateIds.includes(o.option.id)) ?? options[0] ?? null;
+  const chosenOption = options.find((o) => o.option.id === wantedId) ?? defaultOption;
+
+  const assets: Record<string, string> = {};
+  for (const { option, media } of options) {
+    // The chosen front is shown sharp from its original; every other option from its preview.
+    assets[option.file] = option === chosenOption?.option ? media.originalKey : media.previewKey ?? media.originalKey;
+    if (option.thumb) assets[option.thumb] = media.previewKey as string;
+  }
+
+  // Portraits as of the card's creation date; squares of unknown size, no probes.
+  const portraits: CardPortrait[] = [];
+  for (const { member, key } of pickCorePortraits(input.people, input.portraitVersions, input.asOfDate)) {
+    if (!key) continue;
+    const dims = input.portraitDimensions?.[key];
+    const known = dims && dims.width > 0 && dims.height > 0;
+    const portrait = portraitFor(member, key, known ? dims.width : DEFAULT_PORTRAIT_SIZE, known ? dims.height : DEFAULT_PORTRAIT_SIZE);
+    portraits.push(portrait);
+    assets[portrait.file] = key;
+  }
+
+  const token = parseShareToken(input.shareToken);
+  const qrState = computeQrState({
+    qrChoice: edits.choices.qr,
+    hasToken: token !== null,
+    token: token === null ? null : input.qrFacts.token,
+    film: input.qrFacts.film,
+  });
+  const qrUrl = token ? `${input.qrBaseUrl ?? CARD_QR_BASE_URL}/${token}` : '';
+  // The link is carried whenever the card has one (the editor can switch it back on); `enabled` only when it could work.
+  const linkWorks = token !== null && input.qrFacts.token === 'live' && qrState !== 'unavailable';
+
+  const photo = defaultOption
+    ? {
+      mediaId: defaultOption.option.id,
+      ...(defaultOption.media.memoryId ? { memoryId: defaultOption.media.memoryId } : {}),
+      file: defaultOption.option.file,
+      width: defaultOption.option.width,
+      height: defaultOption.option.height,
+    }
+    : { file: '', width: 0, height: 0 };
+
+  const cardData: CardData = {
+    version: 1,
+    slug,
+    year: input.year,
+    language: input.language,
+    locale: input.locale,
+    greeting: input.greeting,
+    familyName: input.familyName,
+    signature: input.signature,
+    qrCaption: input.qrCaption,
+    qr: { enabled: linkWorks, token: token ?? '', url: qrUrl },
+    format: input.format ?? '5R',
+    letters: letters.map((l) => ({ tone: l.tone, text: l.text })),
+    photo,
+    illustrations: [],
+    frontOptions: options.map((o) => o.option),
+    portraits,
+  };
+
+  return { cardData, edits, assets, frontMissing, qrState };
+}
+
+// ── Frozen (ordered) snapshot ────────────────────────────────────────────
+
+/** What `create_checkout` stores in `holiday_card_orders.card_snapshot`. */
+export type FrozenCardSnapshot = Pick<CardSnapshot, 'card' | 'edits' | 'assets' | 'qrUrl' | 'front'>;
+
+/** Validates the stored `card_snapshot` jsonb enough to render and sign it; null = unusable. */
+export function parseFrozenSnapshot(raw: unknown): FrozenCardSnapshot | null {
+  if (!isObj(raw) || !isObj(raw.card) || !isObj(raw.edits) || !Array.isArray(raw.assets)) return null;
+  const card = raw.card as unknown as CardData;
+  if (card.version !== 1 || typeof card.slug !== 'string' || !Array.isArray(card.letters) || card.letters.length === 0) return null;
+  if (!isObj(card.photo) || typeof card.photo.file !== 'string' || !isObj(card.qr)) return null;
+  const assets: { file: string; key: string }[] = [];
+  for (const a of raw.assets) {
+    if (!isObj(a) || typeof a.file !== 'string' || typeof a.key !== 'string') return null;
+    assets.push({ file: a.file, key: a.key });
+  }
+  const front = isObj(raw.front) ? (raw.front as unknown as CardSnapshot['front']) : { mediaId: card.photo.mediaId ?? '', originalKey: '', previewKey: null, width: card.photo.width, height: card.photo.height };
+  return {
+    card: { ...card, illustrations: card.illustrations ?? [], frontOptions: card.frontOptions ?? [], portraits: card.portraits ?? [] },
+    edits: normalizeCardEdits(raw.edits),
+    assets,
+    qrUrl: typeof raw.qrUrl === 'string' ? raw.qrUrl : null,
+    front,
+  };
+}
+
+/**
+ * The editor view of an ORDERED card: exactly what was printed (frozen card,
+ * frozen edits, the snapshot's own asset keys). Only the QR state is live: a
+ * frozen snapshot that printed a QR follows the link/film as they are now; one
+ * that printed none stays `off`.
+ */
+export function buildFrozenEditorView(frozen: FrozenCardSnapshot, qrFacts: BuildEditorViewInput['qrFacts']): EditorView {
+  const token = parseShareToken(frozen.card.qr.token);
+  const printedQr = frozen.card.qr.enabled && token !== null;
+  const qrState = computeQrState({
+    qrChoice: printedQr ? undefined : false,
+    hasToken: token !== null,
+    token: token === null ? null : qrFacts.token,
+    film: qrFacts.film,
+  });
+  return {
+    cardData: frozen.card,
+    edits: frozen.edits,
+    assets: Object.fromEntries(frozen.assets.map((a) => [a.file, a.key])),
+    frontMissing: false,
+    qrState,
+  };
 }

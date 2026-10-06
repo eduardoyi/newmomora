@@ -1,15 +1,10 @@
 import { useOrders } from './useOrders';
-import { orderStatusCopy } from './orderStatusCopy';
 import { useDocumentTitle } from '../useDocumentTitle';
 // Reuses `.order-status-chip*` from OrderStatusScreen.css rather than
 // redefining the same tone→color mapping a second time — the two screens
 // share the exact same status vocabulary (`orderStatusCopy.ts`).
 import './OrderStatusScreen.css';
 import './OrdersListScreen.css';
-
-function formatMoney(cents: number, currency: string): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
-}
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -23,7 +18,17 @@ function formatDate(iso: string): string {
  * `BookViewScreen` near "Order this book" (only once `useHasPastOrders`
  * confirms the buyer actually has one).
  */
-export function OrdersListScreen({ onOpenOrder, onBack }: { onOpenOrder: (orderId: string) => void; onBack: () => void }) {
+export function OrdersListScreen({
+  onOpenOrder,
+  onOpenCardOrder,
+  onBack,
+}: {
+  /** A Memory Book order's status page. */
+  onOpenOrder: (orderId: string) => void;
+  /** A holiday card order: the card page opens on that order's status. Rows for cards are inert without it. */
+  onOpenCardOrder?: (cardId: string, orderId: string) => void;
+  onBack: () => void;
+}) {
   useDocumentTitle('Your orders · Momora');
   const { loading, error, orders } = useOrders();
 
@@ -49,23 +54,27 @@ export function OrdersListScreen({ onOpenOrder, onBack }: { onOpenOrder: (orderI
         {!loading && !error && (orders?.length ?? 0) > 0 && (
           <ul className="orders-list__items">
             {(orders ?? []).map((order) => {
-              const copy = orderStatusCopy(order.status);
-              const total =
-                order.price_cents !== null && order.shipping_cost_cents !== null
-                  ? formatMoney(order.price_cents + order.shipping_cost_cents, order.currency)
-                  : null;
+              const open =
+                order.kind === 'card'
+                  ? order.cardId && onOpenCardOrder
+                    ? () => onOpenCardOrder(order.cardId as string, order.id)
+                    : undefined
+                  : () => onOpenOrder(order.id);
               return (
-                <li key={order.id}>
-                  <button type="button" className="orders-list__item" onClick={() => onOpenOrder(order.id)}>
+                <li key={`${order.kind}:${order.id}`}>
+                  <button type="button" className="orders-list__item" onClick={open} disabled={!open}>
                     <div className="orders-list__item-main">
-                      <span className="orders-list__item-title">{order.book_title}</span>
-                      <span className="orders-list__item-date">{formatDate(order.created_at)}</span>
+                      <span className="orders-list__item-title">{order.title}</span>
+                      <span className="orders-list__item-date">
+                        {formatDate(order.createdAt)}
+                        {order.detail ? ` · ${order.detail}` : ''}
+                      </span>
                     </div>
                     <div className="orders-list__item-meta">
-                      <span className={`order-status-chip order-status-chip--${copy.tone}`}>{copy.label}</span>
-                      {total && <span className="orders-list__item-total">{total}</span>}
+                      <span className={`order-status-chip order-status-chip--${order.chip.tone}`}>{order.chip.label}</span>
+                      {order.total && <span className="orders-list__item-total">{order.total}</span>}
                     </div>
-                    {order.refunded_at && <span className="orders-list__item-refunded">Refunded</span>}
+                    {order.refunded && <span className="orders-list__item-refunded">Refunded</span>}
                   </button>
                 </li>
               );

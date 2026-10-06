@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { getFixtureSlug, fixtureHasOrders } from '../dev/fixture';
+import { hasCardOrders } from '../card/checkout/cardOrderList';
 
 /**
  * Cheap existence check backing `BookViewScreen`'s "Your orders" entry
@@ -29,8 +30,10 @@ export function useHasPastOrders(): boolean {
       // rows are abandoned draft shells has nothing to see on /orders, so
       // the link shouldn't render for them either.
       const { data, error } = await supabase.from('memory_book_orders').select('id').neq('status', 'draft').limit(1);
-      if (cancelled || error) return;
-      setHasOrders((data?.length ?? 0) > 0);
+      if (cancelled) return;
+      // A buyer with only holiday card orders has something on /orders too.
+      const hasBookOrders = !error && (data?.length ?? 0) > 0;
+      setHasOrders(hasBookOrders || (await hasCardOrders()));
     }
 
     void load();

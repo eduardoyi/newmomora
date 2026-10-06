@@ -9,9 +9,13 @@ import KeepsakeRecapsScreen from '../../app/(app)/keepsakes/recaps/[year]';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { useHolidayCard } from '@/hooks/useHolidayCard';
 import { useFamilyMemoryBooks, useMemoryBooks, type MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
 import { useFamilyYearFilms, useYearFilmsEnabled } from '@/hooks/useYearFilms';
+import { invokeEdgeFunction } from '@/services/ai';
+import type { HolidayCardSummary } from '@/services/holiday-cards';
 import type { MemoryBookListRow } from '@/services/memory-books';
+import { resetWebHandoffForTests } from '@/services/web-handoff';
 import type { YearFilm } from '@/services/year-films';
 
 // Keepsakes (docs/plans/timeline-calendar-keepsakes.md C2-C5,
@@ -50,6 +54,7 @@ jest.mock('@/hooks/useMemoryBooks', () => ({
   useFamilyMemoryBooks: jest.fn(),
   useMemoryBooks: jest.fn(),
 }));
+jest.mock('@/hooks/useHolidayCard', () => ({ useHolidayCard: jest.fn() }));
 jest.mock('@/hooks/useYearFilms', () => ({
   useFamilyYearFilms: jest.fn(),
   useYearFilmsEnabled: jest.fn(),
@@ -66,6 +71,8 @@ jest.mock('@/services/memory-books', () => ({
   fetchExampleCoverAssetKey: jest.fn(async () => ({ data: null, error: null })),
 }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
+// openShopUrl asks the web-handoff Edge Function for a sign-in code.
+jest.mock('@/services/ai', () => ({ invokeEdgeFunction: jest.fn() }));
 jest.mock('react-native-safe-area-context', () => {
   const actual = jest.requireActual('react-native-safe-area-context');
   return { ...actual, useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) };
@@ -77,6 +84,7 @@ const mockedUseFamilyMemoryBooks = useFamilyMemoryBooks as jest.MockedFunction<t
 const mockedUseMemoryBooks = useMemoryBooks as jest.MockedFunction<typeof useMemoryBooks>;
 const mockedUseFamilyYearFilms = useFamilyYearFilms as jest.MockedFunction<typeof useFamilyYearFilms>;
 const mockedUseYearFilmsEnabled = useYearFilmsEnabled as jest.MockedFunction<typeof useYearFilmsEnabled>;
+const mockedUseHolidayCard = useHolidayCard as jest.MockedFunction<typeof useHolidayCard>;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { trackEvent: mockTrackEvent } = require('@/services/analytics') as { trackEvent: jest.Mock };
 
@@ -173,6 +181,21 @@ function mockFilms(films: YearFilm[], { upcoming = false, isLoading = false } = 
   mockedUseYearFilmsEnabled.mockReturnValue({ enabled: upcoming, isLoading: false, isError: false });
 }
 
+const createHolidayCard = jest.fn();
+
+function holidaySummary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummary {
+  return {
+    enabled: true, cardId: null, year: null, status: null, lastFailureCode: null, ordered: false, language: 'en',
+    ...overrides,
+  };
+}
+
+function mockHolidayCard(summary: HolidayCardSummary | null) {
+  mockedUseHolidayCard.mockReturnValue({
+    summary, isLoading: false, isError: false, refetch: jest.fn(), create: createHolidayCard, isCreating: false,
+  } as unknown as ReturnType<typeof useHolidayCard>);
+}
+
 function sheetRow(overrides: Partial<MemoryBookScopeRow>): MemoryBookScopeRow {
   return {
     key: 'age_year:2022-06-01:2023-05-31',
@@ -200,12 +223,18 @@ function renderWithQuery(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
+const mockedInvokeEdgeFunction = invokeEdgeFunction as jest.MockedFunction<typeof invokeEdgeFunction>;
+const HANDOFF_CODE = 'Ab-_'.repeat(10) + 'Abc';
+
 beforeEach(() => {
   jest.clearAllMocks();
+  resetWebHandoffForTests();
+  mockedInvokeEdgeFunction.mockResolvedValue({ data: { code: HANDOFF_CODE }, error: null });
   mockGalleryImportEnabled = true;
   mockMemberId = 'child-1';
   mockYear = '2026';
   mockFilms([]);
+  mockHolidayCard(null);
   mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' } as ReturnType<typeof useFamily>);
   mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
   mockedUseMemoryBooks.mockReturnValue({
@@ -236,6 +265,17 @@ describe('One child\'s keepsakes (keepsakes/[memberId])', () => {
   });
 
   it('opens the web viewer for a ready book', async () => {
+    mockBooks([yearOneReady]);
+    const { getByTestId } = renderWithQuery(<MemberKeepsakesScreen />);
+    fireEvent.press(getByTestId(`memory-book-tile-${YEAR_ONE_KEY}`));
+    await waitFor(() =>
+      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/b/book-1#h=${HANDOFF_CODE}`),
+    );
+    expect(mockedInvokeEdgeFunction).toHaveBeenCalledWith('web-handoff', { op: 'create' });
+  });
+
+  it('opens the plain web viewer URL when the sign-in handoff fails', async () => {
+    mockedInvokeEdgeFunction.mockResolvedValue({ data: null, error: { message: 'unavailable' } });
     mockBooks([yearOneReady]);
     const { getByTestId } = renderWithQuery(<MemberKeepsakesScreen />);
     fireEvent.press(getByTestId(`memory-book-tile-${YEAR_ONE_KEY}`));
@@ -395,7 +435,9 @@ describe('Keepsakes tab', () => {
     expect(getByTestId('keepsakes-shelf-2026-child-1')).toBeTruthy();
 
     fireEvent.press(getByTestId(`memory-book-tile-${YEAR_ONE_KEY}`));
-    await waitFor(() => expect(Linking.openURL).toHaveBeenCalledWith('https://shop.usemomora.com/b/book-1'));
+    await waitFor(() =>
+      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/b/book-1#h=${HANDOFF_CODE}`),
+    );
 
     fireEvent.press(getByTestId(`memory-book-tile-${YEAR_THREE_KEY}`));
     await waitFor(() => expect(getByTestId('retry-book-sheet')).toBeTruthy());
@@ -539,6 +581,98 @@ describe('Keepsakes tab', () => {
     mockBooks([]);
     renderWithQuery(<KeepsakesScreen />);
     expect(refetch).toHaveBeenCalled();
+  });
+});
+
+describe('Holiday card entry (holiday-cards-p2 Step 6)', () => {
+  const readyCard = () => holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready' });
+
+  it('renders above the year sections for an owner/manager, even when the year is empty', () => {
+    mockHolidayCard(holidaySummary());
+    mockBooks([]);
+    const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+    expect(getByTestId('holiday-card-tile')).toBeTruthy();
+    expect(getByText('Make your holiday card')).toBeTruthy();
+    // Nothing to draw in 2026 (no films, no books): the empty-year guard hides the section, not the tile.
+    expect(queryByTestId('keepsakes-year-2026')).toBeNull();
+    expect(mockedUseHolidayCard).toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+  });
+
+  it('sits above the year sections', () => {
+    mockHolidayCard(readyCard());
+    mockFilms([recap(9)]);
+    mockBooks([]);
+    const { toJSON } = renderWithQuery(<KeepsakesScreen />);
+    const json = JSON.stringify(toJSON());
+    expect(json.indexOf('holiday-card-tile')).toBeGreaterThan(-1);
+    expect(json.indexOf('holiday-card-tile')).toBeLessThan(json.indexOf('keepsakes-year-2026'));
+  });
+
+  it('is hidden from viewers, even when a card exists', () => {
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
+    mockHolidayCard(readyCard());
+    mockFilms([recap(9)]);
+    mockBooks([]);
+    const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+    expect(queryByTestId('holiday-card-tile')).toBeNull();
+    expect(mockedUseHolidayCard).not.toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+  });
+
+  it('is hidden when the switch is off and there is no card', () => {
+    mockHolidayCard(holidaySummary({ enabled: false }));
+    mockBooks([]);
+    expect(renderWithQuery(<KeepsakesScreen />).queryByTestId('holiday-card-tile')).toBeNull();
+  });
+
+  it('is not part of one child\'s keepsakes page', () => {
+    mockHolidayCard(readyCard());
+    mockBooks([yearOneReady]);
+    expect(renderWithQuery(<MemberKeepsakesScreen />).queryByTestId('holiday-card-tile')).toBeNull();
+  });
+
+  it.each([
+    ['ready', readyCard()],
+    ['generating', holidaySummary({ cardId: 'card-1', year: 2026, status: 'generating' })],
+    ['failed', holidaySummary({ cardId: 'card-1', year: 2026, status: 'failed' })],
+    ['ordered', holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', ordered: true })],
+  ])('%s: opens the shop card page signed in', async (state, summary) => {
+    mockHolidayCard(summary);
+    mockBooks([]);
+    const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+    fireEvent.press(getByTestId(`holiday-card-tile-${state}`));
+    await waitFor(() =>
+      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-1#h=${HANDOFF_CODE}`),
+    );
+  });
+
+  it('make: pick a greeting, create the card, then open the shop', async () => {
+    mockHolidayCard(holidaySummary());
+    mockBooks([]);
+    createHolidayCard.mockResolvedValue({ ok: true, result: { cardId: 'card-9', created: true, regionWarning: false } });
+    const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+    fireEvent.press(getByTestId('holiday-card-tile-make'));
+    fireEvent.press(getByTestId('holiday-greeting-holidays'));
+    fireEvent.press(getByTestId('holiday-greeting-confirm'));
+
+    await waitFor(() =>
+      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-9#h=${HANDOFF_CODE}`),
+    );
+    expect(createHolidayCard).toHaveBeenCalledWith('holidays');
+  });
+
+  it('make: a server refusal shows inline and opens nothing', async () => {
+    mockHolidayCard(holidaySummary());
+    mockBooks([]);
+    createHolidayCard.mockResolvedValue({ ok: false, error: { code: 'disabled', message: 'x' } });
+    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+
+    fireEvent.press(getByTestId('holiday-card-tile-make'));
+    fireEvent.press(getByTestId('holiday-greeting-christmas'));
+    fireEvent.press(getByTestId('holiday-greeting-confirm'));
+
+    await waitFor(() => expect(getByText("Holiday cards aren't available yet")).toBeTruthy());
+    expect(Linking.openURL).not.toHaveBeenCalled();
   });
 });
 

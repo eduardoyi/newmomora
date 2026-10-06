@@ -3,6 +3,7 @@ import { CardBack } from '../CardBack';
 import { CardFront } from '../CardFront';
 import { CardSheet, type CardOverlays } from '../CardSheet';
 import type { CardDocument, RegionTarget, TextRegion } from '../document';
+import type { CardFontFamilies } from '../fonts';
 import type { Rect } from '../geometry';
 import { TextPopoverView } from '../../web/overlay/TextPopoverView';
 import '../../web/overlay/EditOverlay.css';
@@ -43,6 +44,8 @@ export function EditableSheet({
   onResetText,
   onReplace,
   onReposition,
+  fonts,
+  onPhotoClick,
 }: {
   doc: CardDocument;
   side: 'front' | 'back';
@@ -60,6 +63,10 @@ export function EditableSheet({
   onResetText: (t: RegionTarget) => void;
   onReplace: () => void;
   onReposition: () => void;
+  /** Injected font families (the web shop's aliased faces); default = the print app's names. */
+  fonts?: CardFontFamilies;
+  /** When set, tapping the front picture calls this instead of showing Replace / Reposition (phone: tap to zoom). */
+  onPhotoClick?: () => void;
 }) {
   const { geometry } = doc;
   const w = geometry.pageW * zoom;
@@ -91,7 +98,7 @@ export function EditableSheet({
       <div className="cp-frame" style={{ width: w, height: h }}>
         <div style={{ transform: `scale(${zoom / MM_PX})`, transformOrigin: 'top left', width: geometry.pageW * MM_PX, height: geometry.pageH * MM_PX }}>
           <CardSheet geometry={geometry} background={side === 'front' ? doc.front.paper : doc.back.paper} overlays={overlays} testId={`sheet-${side}`}>
-            {side === 'front' ? <CardFront doc={doc.front} /> : <CardBack doc={doc.back} />}
+            {side === 'front' ? <CardFront doc={doc.front} fonts={fonts} /> : <CardBack doc={doc.back} fonts={fonts} />}
           </CardSheet>
         </div>
       </div>
@@ -102,10 +109,11 @@ export function EditableSheet({
             <div
               className={`edit-overlay__photo${photoActive ? ' edit-overlay__photo--active' : ''}`}
               style={px(clip)}
-              onClick={() => setPhotoActive((a) => !a)}
+              onClick={onPhotoClick ?? (() => setPhotoActive((a) => !a))}
               onMouseLeave={() => setPhotoActive(false)}
               data-testid="photo-hotspot"
             >
+              {!onPhotoClick && (
               <div className="edit-overlay__photo-actions">
                 <button type="button" className="edit-overlay__photo-button" onClick={(e) => { e.stopPropagation(); onReplace(); }}>
                   Replace
@@ -116,6 +124,7 @@ export function EditableSheet({
                   </button>
                 )}
               </div>
+              )}
             </div>
           )}
           {regions.map((r) => (

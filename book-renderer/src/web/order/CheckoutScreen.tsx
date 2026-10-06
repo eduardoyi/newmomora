@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AddressStep } from './AddressStep';
+import { CheckoutError, CheckoutFrame, CheckoutHint, CheckoutQuote } from './CheckoutShell';
+import { formatMoney } from './formatMoney';
 import { createOrderDraft, quoteOrder, createCheckoutSession } from './ordersApi';
 import type { QuoteResult, ShippingAddressInput } from './types';
 import { useDocumentTitle } from '../useDocumentTitle';
@@ -11,10 +13,6 @@ type Step =
   | { kind: 'address'; orderId: string; error: string | null }
   | { kind: 'quoting'; orderId: string }
   | { kind: 'quote'; orderId: string; quote: QuoteResult; submitting: boolean; error: string | null };
-
-function formatMoney(cents: number, currency: string): string {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
-}
 
 /**
  * "Order this book" checkout flow (memory-book-5c plan Step 6, Design
@@ -107,58 +105,42 @@ export function CheckoutScreen({
   }
 
   return (
-    <div className="checkout-screen">
-      <header className="checkout-screen__header">
-        <button type="button" className="checkout-screen__back" onClick={onBack}>
-          ← {bookLabel}
-        </button>
-        <span className="checkout-screen__title">Order this book</span>
-      </header>
+    <CheckoutFrame
+      title="Order this book"
+      backLabel={bookLabel}
+      onBack={onBack}
+      // Design Decision 6: edits freeze at payment. Shown on every step of
+      // this flow, not just once, since a parent may have opened this
+      // screen, wandered off, and come back later after editing more.
+      notice="Your book prints exactly as it looks right now. Edits you make after ordering only affect future orders."
+    >
+      {step.kind === 'starting' && <CheckoutHint>Starting your order…</CheckoutHint>}
 
-      <div className="checkout-screen__body">
-        {/* Design Decision 6: edits freeze at payment. Shown on every step of
-            this flow, not just once, since a parent may have opened this
-            screen, wandered off, and come back later after editing more. */}
-        <p className="checkout-screen__freeze-notice">
-          Your book prints exactly as it looks right now. Edits you make after ordering only affect future orders.
-        </p>
+      {step.kind === 'start_failed' && <CheckoutError message={step.error} />}
 
-        {step.kind === 'starting' && <p className="checkout-screen__hint">Starting your order…</p>}
+      {step.kind === 'address' && (
+        <>
+          {step.error && <CheckoutError message={step.error} />}
+          <AddressStep submitting={false} onSubmit={(address) => void handleAddressSubmit(step.orderId, address)} />
+        </>
+      )}
 
-        {step.kind === 'start_failed' && <p className="checkout-screen__error">{step.error}</p>}
+      {step.kind === 'quoting' && <CheckoutHint>Getting your quote…</CheckoutHint>}
 
-        {step.kind === 'address' && (
-          <>
-            {step.error && <p className="checkout-screen__error">{step.error}</p>}
-            <AddressStep submitting={false} onSubmit={(address) => void handleAddressSubmit(step.orderId, address)} />
-          </>
-        )}
-
-        {step.kind === 'quoting' && <p className="checkout-screen__hint">Getting your quote…</p>}
-
-        {step.kind === 'quote' && (
-          <div className="checkout-quote">
-            <dl className="checkout-quote__lines">
-              <dt>Book</dt>
-              <dd>{formatMoney(step.quote.priceCents, step.quote.currency)}</dd>
-              <dt>Shipping</dt>
-              <dd>{formatMoney(step.quote.shippingCostCents, step.quote.currency)}</dd>
-              <dt className="checkout-quote__total-label">Total</dt>
-              <dd className="checkout-quote__total-value">{formatMoney(step.quote.totalCents, step.quote.currency)}</dd>
-            </dl>
-            <p className="checkout-quote__tax-note">Tax, if applicable, is calculated at checkout.</p>
-            {step.error && <p className="checkout-screen__error">{step.error}</p>}
-            <button
-              type="button"
-              className="checkout-quote__pay"
-              disabled={step.submitting}
-              onClick={() => void handlePay(step.orderId, step.quote)}
-            >
-              {step.submitting ? 'Redirecting to checkout…' : 'Continue to payment'}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+      {step.kind === 'quote' && (
+        <CheckoutQuote
+          lines={[
+            { label: 'Book', value: formatMoney(step.quote.priceCents, step.quote.currency) },
+            { label: 'Shipping', value: formatMoney(step.quote.shippingCostCents, step.quote.currency) },
+          ]}
+          total={formatMoney(step.quote.totalCents, step.quote.currency)}
+          taxNote="Tax, if applicable, is calculated at checkout."
+          error={step.error ? <CheckoutError message={step.error} /> : null}
+          payLabel={step.submitting ? 'Redirecting to checkout…' : 'Continue to payment'}
+          paying={step.submitting}
+          onPay={() => void handlePay(step.orderId, step.quote)}
+        />
+      )}
+    </CheckoutFrame>
   );
 }

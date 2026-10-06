@@ -1,13 +1,23 @@
 import { assert, assertEquals, assertNotEquals, assertThrows } from 'jsr:@std/assert@1';
 import {
   buildCardSnapshot,
+  buildEditorView,
+  buildFrozenEditorView,
   canonicalJson,
   CARD_QR_BASE_URL,
   CardSnapshotError,
+  computeQrState,
   normalizeCardEdits,
+  parseFrozenSnapshot,
+  resolveFrontId,
   snapshotHash,
   type BuildCardSnapshotInput,
+  type BuildEditorViewInput,
+  type QrFilmFacts,
+  type QrState,
+  type QrTokenFacts,
 } from './holiday-card-snapshot.ts';
+import { checkFilmGate, type HolidayCardRow } from './holiday-card-snapshot-loader.ts';
 
 // Fictional fixture (the repo is public): the Rivera Soto family.
 const TOKEN = 'Ab3dEf6hIj9lMn2pQr5tUv';
@@ -239,4 +249,288 @@ Deno.test('snapshotHash: stable hex sha256, key-order independent, sensitive to 
     seen.add(next);
   }
   assertEquals(seen.size, changes.length + 1);
+});
+
+// ── Shared default-front rule ────────────────────────────────────────────
+
+Deno.test('resolveFrontId: no pick -> candidate #1, a pick -> the pick, nothing -> null', () => {
+  assertEquals(resolveFrontId(null, [MEDIA_A, MEDIA_B]), MEDIA_A);
+  assertEquals(resolveFrontId(undefined, [MEDIA_B]), MEDIA_B);
+  assertEquals(resolveFrontId(MEDIA_B, [MEDIA_A]), MEDIA_B);
+  assertEquals(resolveFrontId(MEDIA_B, []), MEDIA_B);
+  assertEquals(resolveFrontId(null, []), null);
+  assertEquals(resolveFrontId('', [MEDIA_A]), MEDIA_A);
+  // With a usability test, no pick falls back to the first USABLE candidate; a pick is never replaced; nothing usable -> null.
+  assertEquals(resolveFrontId(null, [MEDIA_A, MEDIA_B], (id) => id === MEDIA_B), MEDIA_B);
+  assertEquals(resolveFrontId(MEDIA_A, [MEDIA_A, MEDIA_B], (id) => id === MEDIA_B), MEDIA_A);
+  assertEquals(resolveFrontId(null, [MEDIA_A, MEDIA_B], () => false), null);
+});
+
+Deno.test('buildEditorView: no pick with candidate #1 unusable uses the first usable one (not frontMissing)', () => {
+  const view = buildEditorView(editorFixture({ media: [{ id: MEDIA_B, originalKey: 'fam/orig/b.png', previewKey: null }] }));
+  assertEquals([view.frontMissing, view.cardData.photo.mediaId], [false, MEDIA_B]);
+  assertEquals(view.assets['assets/photo-bbbbbbbb.png'], 'fam/orig/b.png'); // the chosen front: original
+  // An unusable explicit pick is still missing.
+  assertEquals(buildEditorView(editorFixture({ edits: { frontImage: MEDIA_A }, media: [{ id: MEDIA_B, originalKey: 'fam/orig/b.png', previewKey: null }] })).frontMissing, true);
+});
+
+// ── qrState: one table over every combination ────────────────────────────
+
+const published: QrFilmFacts = { status: 'ready', blocked: false, videoKey: 'films/x.mp4', readyAt: '2026-10-06T00:00:00Z' };
+const FILMS = {
+  none: null,
+  blocked: { ...published, blocked: true },
+  published,
+  publishedRerendering: { ...published, status: 'rendering' },
+  rendering: { status: 'rendering', blocked: false, videoKey: null, readyAt: null },
+  queued: { status: 'queued', blocked: false, videoKey: null, readyAt: null },
+  failedUnpublished: { status: 'failed', blocked: false, videoKey: null, readyAt: null },
+  failedPublished: { ...published, status: 'failed' },
+  endedPublished: { ...published, status: 'ended' },
+  endedUnpublished: { status: 'ended', blocked: false, videoKey: null, readyAt: null },
+  skipped: { status: 'skipped', blocked: false, videoKey: null, readyAt: null },
+  // a video that never became ready is not published
+  videoWithoutReadyAt: { status: 'rendering', blocked: false, videoKey: 'films/x.mp4', readyAt: null },
+} satisfies Record<string, QrFilmFacts | null>;
+type FilmKind = keyof typeof FILMS;
+type TokenKind = 'noToken' | QrTokenFacts;
+
+// Expected state when the parent has NOT switched the QR off (qr choice undefined or true).
+const EXPECTED: Record<TokenKind, Record<FilmKind, QrState>> = {
+  noToken: Object.fromEntries(Object.keys(FILMS).map((k) => [k, 'unavailable'])) as Record<FilmKind, QrState>,
+  revoked: Object.fromEntries(Object.keys(FILMS).map((k) => [k, 'off'])) as Record<FilmKind, QrState>,
+  missing: Object.fromEntries(Object.keys(FILMS).map((k) => [k, 'unavailable'])) as Record<FilmKind, QrState>,
+  live: {
+    none: 'unavailable',
+    blocked: 'unavailable',
+    published: 'on',
+    publishedRerendering: 'on',
+    rendering: 'waiting_film',
+    queued: 'waiting_film',
+    failedUnpublished: 'unavailable',
+    failedPublished: 'on',
+    endedPublished: 'unavailable',
+    endedUnpublished: 'unavailable',
+    skipped: 'unavailable',
+    videoWithoutReadyAt: 'waiting_film',
+  },
+};
+
+Deno.test('computeQrState: every (qr choice x token x film) combination', () => {
+  let combos = 0;
+  for (const qrChoice of [undefined, true, false] as const) {
+    for (const tokenKind of ['noToken', 'live', 'revoked', 'missing'] as TokenKind[]) {
+      for (const filmKind of Object.keys(FILMS) as FilmKind[]) {
+        const state = computeQrState({
+          qrChoice,
+          hasToken: tokenKind !== 'noToken',
+          token: tokenKind === 'noToken' ? null : tokenKind,
+          film: FILMS[filmKind],
+        });
+        // The parent's explicit "off" beats everything else, like the checkout gate.
+        const expected = qrChoice === false ? 'off' : EXPECTED[tokenKind][filmKind];
+        assertEquals(state, expected, `${String(qrChoice)} / ${tokenKind} / ${filmKind}`);
+        combos++;
+      }
+    }
+  }
+  assertEquals(combos, 3 * 4 * Object.keys(FILMS).length);
+});
+
+/** A minimal supabase stand-in for checkFilmGate: three tables, `.select().eq().maybeSingle()`. */
+function gateClient(rows: { token: { token: string; revoked_at: string | null } | null; film: Record<string, unknown> | null }) {
+  const answer = (table: string) => (table === 'film_share_tokens' ? rows.token : table === 'year_films' ? rows.film : null);
+  return {
+    from: (table: string) => {
+      const chain = { select: () => chain, eq: () => chain, maybeSingle: () => Promise.resolve({ data: answer(table), error: null }) };
+      return chain;
+    },
+  } as never;
+}
+
+Deno.test('computeQrState agrees with checkFilmGate (the checkout gate) on every combination', async () => {
+  for (const qrChoice of [undefined, true, false] as const) {
+    for (const tokenKind of ['noToken', 'live', 'revoked', 'missing'] as TokenKind[]) {
+      for (const filmKind of Object.keys(FILMS) as FilmKind[]) {
+        const film = FILMS[filmKind];
+        const label = `${String(qrChoice)} / ${tokenKind} / ${filmKind}`;
+        const card = {
+          id: 'c', film_id: film ? 'film-1' : null, share_token: tokenKind === 'noToken' ? null : TOKEN,
+          edits: qrChoice === undefined ? {} : { choices: { qr: qrChoice } },
+        } as unknown as HolidayCardRow;
+        const rows = {
+          token: tokenKind === 'live' ? { token: TOKEN, revoked_at: null } : tokenKind === 'revoked' ? { token: TOKEN, revoked_at: '2026-10-06T00:00:00Z' } : null,
+          film: film ? { id: 'film-1', status: film.status, blocked: film.blocked, video_key: film.videoKey, ready_at: film.readyAt } : null,
+        };
+        const gate = await checkFilmGate(gateClient(rows), card);
+        const state = computeQrState({
+          qrChoice,
+          hasToken: tokenKind !== 'noToken',
+          token: tokenKind === 'noToken' ? null : tokenKind,
+          film,
+        });
+        const prints = gate.ok && gate.shareTokenActive;
+        assertEquals(state === 'on', prints, label);
+        // Orderable states print: only `waiting_film` is a refusal (wait, or switch the QR off).
+        if (state === 'waiting_film') assert(!gate.ok && gate.code === 'FILM_NOT_READY', label);
+        else assert(gate.ok, label);
+        // `unavailable` / `off` print WITHOUT a QR.
+        if (state === 'unavailable' || state === 'off') assertEquals(gate, { ok: true, shareTokenActive: false }, label);
+        // Strict (reorders of a card that printed a QR) still refuses a blocked / given-up film.
+        const strict = await checkFilmGate(gateClient(rows), card, { strict: true });
+        if (state === 'unavailable' && film && tokenKind === 'live') assert(!strict.ok, label);
+        else assertEquals(strict, gate, label);
+      }
+    }
+  }
+});
+
+// ── buildEditorView ──────────────────────────────────────────────────────
+
+const MEDIA_PICK = 'dddddddd-4444-4444-8444-444444444444';
+
+function editorFixture(over: Partial<BuildEditorViewInput> = {}): BuildEditorViewInput {
+  const base = fixture();
+  return {
+    cardId: base.cardId,
+    year: 2026,
+    language: 'es',
+    locale: 'es-CO',
+    greeting: 'christmas',
+    familyName: 'Rivera Soto',
+    signature: 'Marta, Diego, Tomás y Lucía',
+    qrCaption: 'Mira nuestro año',
+    shareToken: TOKEN,
+    qrFacts: { token: 'live', film: published },
+    letters: base.letters,
+    edits: {},
+    candidates: [
+      { mediaId: MEDIA_A, width: 4032, height: 3024, rank: 1 },
+      { mediaId: MEDIA_B, width: 3000, height: 4000, rank: 2 },
+    ],
+    media: [
+      { id: MEDIA_A, originalKey: 'fam/orig/a.JPG', previewKey: 'fam/prev/a.jpg', memoryId: 'mem-a', date: '2026-07-04' },
+      { id: MEDIA_B, originalKey: 'fam/orig/b.png', previewKey: null, date: '2026-08-15' },
+      { id: MEDIA_PICK, originalKey: 'fam/orig/p.webp', previewKey: 'fam/prev/p.jpg', aspectRatio: 2 },
+    ],
+    people: base.people,
+    portraitVersions: base.portraitVersions,
+    asOfDate: '2026-10-06',
+    ...over,
+  };
+}
+
+Deno.test('buildEditorView: all candidates, the saved non-candidate front, original for the chosen one, previews for the rest', () => {
+  const view = buildEditorView(editorFixture({ edits: { frontImage: MEDIA_PICK } }));
+  assertEquals(view.cardData.frontOptions?.map((o) => o.id), [MEDIA_A, MEDIA_B, MEDIA_PICK]);
+  // Size of a non-candidate comes from its aspect ratio (2:1 -> 3000 x 1500).
+  assertEquals(view.cardData.frontOptions?.[2], { id: MEDIA_PICK, kind: 'photo', file: 'assets/photo-dddddddd.webp', thumb: 'assets/thumb-dddddddd.jpg', width: 3000, height: 1500 });
+  assertEquals(view.cardData.photo.mediaId, MEDIA_A); // the generated default
+  assertEquals(view.cardData.photo.memoryId, 'mem-a');
+  assertEquals(view.assets['assets/photo-dddddddd.webp'], 'fam/orig/p.webp');
+  assertEquals(view.assets['assets/photo-aaaaaaaa.jpg'], 'fam/prev/a.jpg');
+  assertEquals(view.assets['assets/photo-bbbbbbbb.png'], 'fam/orig/b.png'); // no preview stored
+  assertEquals(view.assets['assets/thumb-aaaaaaaa.jpg'], 'fam/prev/a.jpg');
+  assertEquals(view.frontMissing, false);
+  // Edits are raw (nothing frozen, greeting choice kept for the editor to see).
+  assertEquals(view.edits.frontImage, MEDIA_PICK);
+  assertEquals(view.edits.choices.qr, undefined);
+
+  // No pick: the default front (candidate #1) is the one served from its original.
+  const noPick = buildEditorView(editorFixture());
+  assertEquals(noPick.assets['assets/photo-aaaaaaaa.jpg'], 'fam/orig/a.JPG');
+  assertEquals(noPick.assets['assets/photo-bbbbbbbb.png'], 'fam/orig/b.png');
+  assertEquals(noPick.cardData.frontOptions?.length, 2);
+  // A pick that is also a candidate is not duplicated.
+  assertEquals(buildEditorView(editorFixture({ edits: { frontImage: MEDIA_B } })).cardData.frontOptions?.map((o) => o.id), [MEDIA_A, MEDIA_B]);
+});
+
+Deno.test('buildEditorView: unknown sizes are placeholders with the right proportions (square when even the ratio is unknown)', () => {
+  const view = buildEditorView(editorFixture({
+    candidates: [{ mediaId: MEDIA_A, width: null, height: null, rank: 1 }, { mediaId: MEDIA_B, width: null, height: null, rank: 2 }],
+    media: [
+      { id: MEDIA_A, originalKey: 'fam/orig/a.jpg', previewKey: null, aspectRatio: 0.75 },
+      { id: MEDIA_B, originalKey: 'fam/orig/b.jpg', previewKey: null },
+    ],
+  }));
+  assertEquals(view.cardData.frontOptions?.map((o) => [o.width, o.height]), [[2250, 3000], [3000, 3000]]);
+});
+
+Deno.test('buildEditorView: frontMissing for an unusable pick or default; never throws for a missing photo', () => {
+  assertEquals(buildEditorView(editorFixture({ edits: { frontImage: 'eeeeeeee-5555-4555-8555-555555555555' } })).frontMissing, true);
+  assertEquals(buildEditorView(editorFixture({ media: [] })).frontMissing, true);
+  const noFront = buildEditorView(editorFixture({ candidates: [], media: [] }));
+  assertEquals([noFront.frontMissing, noFront.cardData.frontOptions, noFront.cardData.photo], [true, [], { file: '', width: 0, height: 0 }]);
+  assertEquals(buildEditorView(editorFixture({ edits: { frontImage: MEDIA_B } })).frontMissing, false);
+});
+
+Deno.test('buildEditorView: portraits resolved as of the card date without probes (1024 square unless a size is passed)', () => {
+  const view = buildEditorView(editorFixture());
+  assertEquals(view.cardData.portraits?.map((p) => [p.name, p.role, p.width, p.height]), [
+    ['Diego', 'parent', 1024, 1024],
+    ['Marta', 'parent', 1024, 1024],
+    ['Tomás', 'child', 1024, 1024],
+    ['Lucía', 'child', 1024, 1024],
+  ]);
+  assertEquals(view.assets['assets/portrait-22222222.webp'], 'fam/portrait/diego.webp');
+  // Same members and order the print snapshot uses.
+  assertEquals(view.cardData.portraits?.map((p) => p.file), buildCardSnapshot(fixture()).card.portraits?.map((p) => p.file));
+  const sized = buildEditorView(editorFixture({ portraitDimensions: { 'fam/portrait/tomas.png': { width: 800, height: 1200 } } }));
+  assertEquals(sized.cardData.portraits?.find((p) => p.name === 'Tomás')?.height, 1200);
+  // Nobody has a portrait: none, no throw.
+  assertEquals(buildEditorView(editorFixture({ people: [], portraitVersions: [] })).cardData.portraits, []);
+});
+
+Deno.test('buildEditorView: the QR url is carried whenever the card has a token; `enabled` only when the link can work', () => {
+  const on = buildEditorView(editorFixture());
+  assertEquals([on.qrState, on.cardData.qr], ['on', { enabled: true, token: TOKEN, url: `${CARD_QR_BASE_URL}/${TOKEN}` }]);
+  const off = buildEditorView(editorFixture({ edits: { choices: { qr: false } } }));
+  assertEquals([off.qrState, off.cardData.qr.url, off.cardData.qr.enabled], ['off', `${CARD_QR_BASE_URL}/${TOKEN}`, true]);
+  const none = buildEditorView(editorFixture({ shareToken: null, qrFacts: { token: null, film: null } }));
+  assertEquals([none.qrState, none.cardData.qr], ['unavailable', { enabled: false, token: '', url: '' }]);
+  const blocked = buildEditorView(editorFixture({ qrFacts: { token: 'live', film: FILMS.blocked } }));
+  assertEquals([blocked.qrState, blocked.cardData.qr.enabled], ['unavailable', false]);
+});
+
+Deno.test('buildEditorView: carries the card text; errors are codes only', () => {
+  const view = buildEditorView(editorFixture({ format: 'A5' }));
+  assertEquals(
+    [view.cardData.format, view.cardData.language, view.cardData.locale, view.cardData.familyName, view.cardData.signature, view.cardData.qrCaption, view.cardData.slug],
+    ['A5', 'es', 'es-CO', 'Rivera Soto', 'Marta, Diego, Tomás y Lucía', 'Mira nuestro año', fixture().cardId],
+  );
+  assertEquals(view.cardData.letters.map((l) => l.tone), ['classic', 'playful']);
+  let code: string | null = null;
+  try {
+    buildEditorView(editorFixture({ letters: [] }));
+  } catch (e) {
+    assert(e instanceof CardSnapshotError);
+    assert(!e.message.includes('Rivera'));
+    code = e.code;
+  }
+  assertEquals(code, 'NO_LETTERS');
+  assertThrows(() => buildEditorView(editorFixture({ greeting: 'easter' as never })), CardSnapshotError);
+});
+
+// ── Frozen (ordered) snapshots ───────────────────────────────────────────
+
+Deno.test('parseFrozenSnapshot / buildFrozenEditorView: what was printed comes back, keys by file, QR checked live', () => {
+  const snap = buildCardSnapshot(fixture());
+  const stored = JSON.parse(JSON.stringify({ card: snap.card, edits: snap.edits, assets: snap.assets, qrUrl: snap.qrUrl, front: snap.front }));
+  const frozen = parseFrozenSnapshot(stored)!;
+  assertEquals(frozen.card, snap.card);
+  assertEquals(frozen.assets, snap.assets);
+  const view = buildFrozenEditorView(frozen, { token: 'live', film: published });
+  assertEquals(view.cardData, snap.card);
+  assertEquals(view.assets['assets/photo-aaaaaaaa.jpg'], 'fam/orig/a.JPG');
+  assertEquals(Object.keys(view.assets).length, snap.assets.length);
+  assertEquals([view.qrState, view.frontMissing], ['on', false]);
+  assertEquals(buildFrozenEditorView(frozen, { token: 'revoked', film: published }).qrState, 'off');
+  assertEquals(buildFrozenEditorView(frozen, { token: 'live', film: FILMS.blocked }).qrState, 'unavailable');
+  // A snapshot that printed no QR stays off whatever the film does.
+  const noQr = buildCardSnapshot(fixture({ shareToken: null }));
+  assertEquals(buildFrozenEditorView(parseFrozenSnapshot(JSON.parse(JSON.stringify(noQr)))!, { token: 'live', film: published }).qrState, 'off');
+
+  for (const bad of [null, 'x', {}, { card: {}, edits: {}, assets: [] }, { ...stored, assets: [{ file: 1 }] }, { ...stored, card: { ...stored.card, letters: [] } }]) {
+    assertEquals(parseFrozenSnapshot(bad), null);
+  }
 });

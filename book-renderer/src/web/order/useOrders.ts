@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import type { MemoryBookOrderListRow } from '../types';
-import { isTerminalOrderStatus } from './orderStatusCopy';
+import { fetchCardOrderItems } from '../card/checkout/cardOrderList';
+import { bookOrderItem, mergeOrderItems, type OrderListItem } from './orderListItems';
 import { getFixtureSlug, fixtureListOrders } from '../dev/fixture';
 
 const POLL_INTERVAL_MS = 5000;
@@ -10,7 +11,8 @@ const FALLBACK_BOOK_TITLE = 'Memory Book';
 interface State {
   loading: boolean;
   error: string | null;
-  orders: MemoryBookOrderListRow[] | null;
+  /** Memory Book and holiday card orders together, newest first. */
+  orders: OrderListItem[] | null;
 }
 
 interface OrderListQueryRow {
@@ -66,16 +68,17 @@ export function useOrders() {
     // DEV-ONLY fixture mode — see `dev/fixture.ts`'s header comment for the
     // tree-shaking contract `check-web-bundle.mjs` verifies.
     if (import.meta.env.DEV && getFixtureSlug()) {
-      const orders = fixtureListOrders();
+      const orders = fixtureListOrders().map(bookOrderItem);
       setState({ loading: false, error: null, orders });
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-      if (orders.some((o) => !isTerminalOrderStatus(o.status))) {
+      if (orders.some((o) => !o.terminal)) {
         pollTimerRef.current = setTimeout(() => void load(true), POLL_INTERVAL_MS);
       }
       return;
     }
 
-    const { data, error } = await supabase
+    const [{ data, error }, cardOrders] = await Promise.all([
+      supabase
       .from('memory_book_orders')
       .select(
         'id, book_id, status, price_cents, shipping_cost_cents, currency, refunded_at, created_at, book:memory_books(scope_label, child:family_members(name))',
@@ -87,7 +90,9 @@ export function useOrders() {
       // (owner-reported, 2026-09-09). The first status a buyer should ever
       // see here is `quoted` (they at least entered an address).
       .neq('status', 'draft')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false }),
+      fetchCardOrderItems(),
+    ]);
 
     if (error) {
       setState({ loading: false, error: error.message, orders: null });
@@ -95,7 +100,7 @@ export function useOrders() {
     }
 
     const rows = (data ?? []) as unknown as OrderListQueryRow[];
-    const orders: MemoryBookOrderListRow[] = rows.map((row) => ({
+    const bookRows: MemoryBookOrderListRow[] = rows.map((row) => ({
       id: row.id,
       book_id: row.book_id,
       status: row.status,
@@ -106,10 +111,12 @@ export function useOrders() {
       created_at: row.created_at,
       book_title: bookTitle(row.book),
     }));
+    // Holiday card orders sit in the same list, newest first.
+    const orders = mergeOrderItems(bookRows.map(bookOrderItem), cardOrders);
     setState({ loading: false, error: null, orders });
 
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    if (orders.some((o) => !isTerminalOrderStatus(o.status))) {
+    if (orders.some((o) => !o.terminal)) {
       pollTimerRef.current = setTimeout(() => void load(true), POLL_INTERVAL_MS);
     }
   }, []);

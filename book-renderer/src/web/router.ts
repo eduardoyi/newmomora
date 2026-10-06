@@ -4,7 +4,11 @@ export type Route =
   | { screen: 'list' }
   | { screen: 'book'; bookId: string }
   | { screen: 'order'; orderId: string }
-  | { screen: 'orders' };
+  | { screen: 'orders' }
+  // Holiday card editor (`/c/<cardId>`). Stripe returns to
+  // `/c/<cardId>?order=<orderId>&checkout=success|cancelled`; like the book
+  // screens, the card screens read that query string themselves.
+  | { screen: 'card'; cardId: string };
 
 const BOOK_PATH_PATTERN = /^\/b\/([^/]+)\/?$/;
 // memory-book-5c plan Step 6 routing correction: the hosting Worker already
@@ -18,20 +22,23 @@ const ORDER_PATH_PATTERN = /^\/order\/([^/]+)\/?$/;
 // there's no ambiguity even though the two patterns can't actually collide
 // (`/order/<id>` always has a segment after `order`, `/orders` never does).
 const ORDERS_PATH_PATTERN = /^\/orders\/?$/;
+const CARD_PATH_PATTERN = /^\/c\/([^/]+)\/?$/;
 
-function parsePath(pathname: string): Route {
+export function parsePath(pathname: string): Route {
   const bookMatch = BOOK_PATH_PATTERN.exec(pathname);
   if (bookMatch) return { screen: 'book', bookId: decodeURIComponent(bookMatch[1]) };
   const orderMatch = ORDER_PATH_PATTERN.exec(pathname);
   if (orderMatch) return { screen: 'order', orderId: decodeURIComponent(orderMatch[1]) };
   if (ORDERS_PATH_PATTERN.test(pathname)) return { screen: 'orders' };
+  const cardMatch = CARD_PATH_PATTERN.exec(pathname);
+  if (cardMatch) return { screen: 'card', cardId: decodeURIComponent(cardMatch[1]) };
   return { screen: 'list' };
 }
 
 /**
  * Minimal client-side router (no dependency added — this app has exactly
- * three screens): `/` is the book list, `/b/<id>` is a single book,
- * `/order/<id>` is one order's status. The hosting Worker
+ * five screens): `/` is the book list, `/b/<id>` is a single book,
+ * `/order/<id>` is one order's status, `/c/<id>` is a holiday card. The hosting Worker
  * (`cloudflare/memory-book-web`) SPA-falls-back any unmatched path to
  * `web.html`, so a hard reload/deep link on `/b/<id>` or `/order/<id>`
  * still resolves here client-side.

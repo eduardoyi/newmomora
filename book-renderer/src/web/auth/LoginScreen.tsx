@@ -1,10 +1,43 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { requestSignInOtp, verifyEmailOtp } from './useAuthSession';
+import { friendlyAuthError, loginCopyForPath } from './authCopy';
+import { clearLoginStep, getSessionStepStorage, loadLoginStep, saveLoginStep, type LoginStep } from './loginStep';
 import './LoginScreen.css';
 
 const RESEND_COOLDOWN_SECONDS = 60;
 
-type Step = { kind: 'email' } | { kind: 'code'; email: string };
+type Step = LoginStep;
+
+/** A seconds countdown (ticks once a second, cleaned up on unmount). */
+function useCountdown(): [number, (seconds: number) => void] {
+  const [remaining, setRemaining] = useState(0);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearInterval(timer.current);
+    },
+    [],
+  );
+
+  function start(seconds: number) {
+    if (timer.current) clearInterval(timer.current);
+    setRemaining(seconds);
+    const interval = setInterval(() => {
+      setRemaining((value) => {
+        if (value <= 1) {
+          clearInterval(interval);
+          if (timer.current === interval) timer.current = null;
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
+    timer.current = interval;
+  }
+
+  return [remaining, start];
+}
 
 /**
  * Sign-in for an EXISTING Momora account (email OTP code) — mirrors the
@@ -12,14 +45,31 @@ type Step = { kind: 'email' } | { kind: 'code'; email: string };
  * `src/hooks/use-auth.tsx`) collapsed into one component since this app has
  * no navigation stack of its own (plan Design Decision 1: a third Vite
  * entry, not a framework with routing).
+ *
+ * `notice` is a banner above the form (e.g. a failed app -> shop sign-in
+ * handoff: "That sign-in link expired — enter your email to get a code"). The
+ * step (email form vs. code entry) is kept in sessionStorage so a reload after
+ * switching to the Mail app resumes at the code step.
  */
-export function LoginScreen() {
-  const [step, setStep] = useState<Step>({ kind: 'email' });
-  const [email, setEmail] = useState('');
+export function LoginScreen({ notice }: { notice?: string } = {}) {
+  const [step, setStepState] = useState<Step>(() => loadLoginStep(getSessionStepStorage()));
+  const [email, setEmail] = useState(() => {
+    const restored = loadLoginStep(getSessionStepStorage());
+    return restored.kind === 'code' ? restored.email : '';
+  });
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
+  // Resend cooldown after a send, and a separate wait after GoTrue's "you can
+  // only request this after N seconds" rate limit.
+  const copy = loginCopyForPath(typeof window !== 'undefined' ? window.location.pathname : '/');
+  const [cooldown, startCooldown] = useCountdown();
+  const [rateWait, startRateWait] = useCountdown();
+
+  function setStep(next: Step) {
+    setStepState(next);
+    saveLoginStep(getSessionStepStorage(), next);
+  }
 
   async function handleRequestCode(e: FormEvent) {
     e.preventDefault();
@@ -29,24 +79,18 @@ export function LoginScreen() {
     const { error: reqError } = await requestSignInOtp(email);
     setBusy(false);
     if (reqError) {
-      setError(reqError);
+      showAuthError(reqError);
       return;
     }
     setStep({ kind: 'code', email: email.trim() });
-    startCooldown();
+    startCooldown(RESEND_COOLDOWN_SECONDS);
   }
 
-  function startCooldown() {
-    setCooldown(RESEND_COOLDOWN_SECONDS);
-    const timer = setInterval(() => {
-      setCooldown((c) => {
-        if (c <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return c - 1;
-      });
-    }, 1000);
+  /** GoTrue's "you can only request this after N seconds" gets friendly copy and a countdown. */
+  function showAuthError(message: string) {
+    const friendly = friendlyAuthError(message);
+    setError(friendly.message);
+    if (friendly.waitSeconds !== null) startRateWait(friendly.waitSeconds);
   }
 
   async function handleVerify(candidate: string, currentEmail: string) {
@@ -56,25 +100,26 @@ export function LoginScreen() {
     const { error: verifyError } = await verifyEmailOtp(currentEmail, candidate);
     setBusy(false);
     if (verifyError) {
-      setError(verifyError);
+      showAuthError(verifyError);
       return;
     }
+    clearLoginStep(getSessionStepStorage());
     // No further routing needed — App.tsx's auth gate re-renders on the
     // supabase-js session change this triggers.
   }
 
   async function handleResend(currentEmail: string) {
-    if (cooldown > 0 || busy) return;
+    if (cooldown > 0 || rateWait > 0 || busy) return;
     setBusy(true);
     setError('');
     const { error: reqError } = await requestSignInOtp(currentEmail);
     setBusy(false);
     if (reqError) {
-      setError(reqError);
+      showAuthError(reqError);
       return;
     }
     setCode('');
-    startCooldown();
+    startCooldown(RESEND_COOLDOWN_SECONDS);
   }
 
   if (step.kind === 'email') {
@@ -84,7 +129,12 @@ export function LoginScreen() {
           <div className="login-card__wordmark">
             Momora<span className="login-card__wordmark-dot">.</span>
           </div>
-          <h1 className="login-card__title">Sign in to your Memory Book</h1>
+          {notice && (
+            <p className="login-card__notice" role="status">
+              {notice}
+            </p>
+          )}
+          <h1 className="login-card__title">{copy.title}</h1>
           <p className="login-card__subtitle">Use the email address for your Momora family account.</p>
           <form onSubmit={handleRequestCode} className="login-card__form">
             <label className="login-field">
@@ -102,13 +152,11 @@ export function LoginScreen() {
               />
             </label>
             {error && <p className="login-card__error">{error}</p>}
-            <button type="submit" className="login-card__button" disabled={busy}>
-              {busy ? 'Sending…' : 'Send code'}
+            <button type="submit" className="login-card__button" disabled={busy || rateWait > 0}>
+              {busy ? 'Sending…' : rateWait > 0 ? `Try again in ${rateWait}s` : 'Send code'}
             </button>
           </form>
-          <p className="login-card__hint">
-            New to Momora? Create your family and start a book from the Momora app first.
-          </p>
+          <p className="login-card__hint">{copy.hint}</p>
         </div>
       </div>
     );
@@ -122,6 +170,11 @@ export function LoginScreen() {
         <div className="login-card__wordmark">
           Momora<span className="login-card__wordmark-dot">.</span>
         </div>
+        {notice && (
+          <p className="login-card__notice" role="status">
+            {notice}
+          </p>
+        )}
         <h1 className="login-card__title">Check your email</h1>
         <p className="login-card__subtitle">Enter the 6-digit code we sent to {step.email}.</p>
 
@@ -158,10 +211,10 @@ export function LoginScreen() {
         <button
           type="button"
           className="login-card__button login-card__button--ghost"
-          disabled={cooldown > 0 || busy}
+          disabled={cooldown > 0 || rateWait > 0 || busy}
           onClick={() => void handleResend(step.email)}
         >
-          {cooldown > 0 ? `Resend code (${cooldown}s)` : 'Resend code'}
+          {cooldown > 0 || rateWait > 0 ? `Resend code (${Math.max(cooldown, rateWait)}s)` : 'Resend code'}
         </button>
         <button type="button" className="login-card__link" onClick={() => setStep({ kind: 'email' })}>
           Wrong email? Go back

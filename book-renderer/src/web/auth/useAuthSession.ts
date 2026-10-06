@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../supabaseClient';
+import { clearLoginStep, getSessionStepStorage } from './loginStep';
 
 /**
  * Session state + the OTP auth idiom (mirrors the app's `src/hooks/use-auth.tsx`
@@ -47,6 +48,12 @@ export async function verifyEmailOtp(email: string, token: string): Promise<{ er
   return { error: error?.message ?? null };
 }
 
+/**
+ * Signs out THIS browser only. supabase-js's default scope is 'global', which
+ * revokes every session of the account -- including the Momora app's -- so the
+ * shop always passes `scope: 'local'` (docs/plans/holiday-cards-p2.md Step 2b).
+ */
 export async function signOut(): Promise<void> {
-  await supabase.auth.signOut();
+  clearLoginStep(getSessionStepStorage());
+  await supabase.auth.signOut({ scope: 'local' });
 }

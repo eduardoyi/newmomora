@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Elements, AddressElement } from '@stripe/react-stripe-js';
 import type { Appearance, Stripe, StripeAddressElementChangeEvent } from '@stripe/stripe-js';
-import { SHIPS_TO_COUNTRIES } from './shippingCountries';
-import { toShippingAddressInput, type StripeAddressValue } from './stripeAddressMapping';
+import { addressElementCountries, toShippingAddressInput, toStripeDefaultValues, type StripeAddressValue } from './stripeAddressMapping';
 import type { ShippingAddressInput } from './types';
 
 /**
@@ -67,10 +66,16 @@ export function StripeAddressForm({
   stripe,
   submitting,
   onSubmit,
+  allowedCountries,
+  defaultAddress,
 }: {
   stripe: Stripe;
   submitting: boolean;
   onSubmit: (address: ShippingAddressInput) => void;
+  /** Narrows the element's country list (ISO codes); omitted = the book list. */
+  allowedCountries?: readonly string[];
+  /** Pre-fills the element (coming back to change the address). */
+  defaultAddress?: ShippingAddressInput;
 }) {
   const [value, setValue] = useState<StripeAddressValue | null>(null);
 
@@ -91,8 +96,9 @@ export function StripeAddressForm({
           options={{
             mode: 'shipping',
             display: { name: 'full' },
-            allowedCountries: SHIPS_TO_COUNTRIES.map((country) => country.code),
+            allowedCountries: addressElementCountries(allowedCountries),
             autocomplete: { mode: 'automatic' },
+            ...(defaultAddress ? { defaultValues: toStripeDefaultValues(defaultAddress) } : {}),
           }}
           onChange={handleChange}
         />

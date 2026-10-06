@@ -1,12 +1,11 @@
 import { CARD_STYLE, type FrontDoc } from './document';
 import { box } from './CardSheet';
+import { cardFontStacks, type CardFontFamilies } from './fonts';
 import type { Rect } from './geometry';
 
-const SERIF = "'Newsreader', Georgia, serif";
-const SANS = "'Plus Jakarta Sans', -apple-system, sans-serif";
-
-/** The front side, from a fitted `FrontDoc` (pure presentational). */
-export function CardFront({ doc }: { doc: FrontDoc }) {
+/** The front side, from a fitted `FrontDoc` (pure presentational). `fonts` injects the family names (default: the print app's). */
+export function CardFront({ doc, fonts }: { doc: FrontDoc; fonts?: CardFontFamilies }) {
+  const { serif: SERIF, sans: SANS } = cardFontStacks(fonts);
   const { image, greeting, scrim } = doc;
   const light = greeting.tone === 'light';
   const spacing = `${CARD_STYLE.sublineSpacingEm}em`;

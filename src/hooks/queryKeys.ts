@@ -60,6 +60,7 @@ export const yearFilmsQueryKeyBase = 'year-films' as const;
 export const yearFilmViewsQueryKeyBase = 'year-film-views' as const;
 export const yearFilmPosterQueryKeyBase = 'year-film-poster' as const;
 export const yearFilmsEnabledQueryKeyBase = 'year-films-enabled' as const;
+export const holidayCardQueryKeyBase = 'holiday-card' as const;
 
 export function memoriesQueryKey(familyId: string | null | undefined) {
   return [memoriesQueryKeyBase, familyId] as const;
@@ -226,6 +227,11 @@ export function yearFilmPosterQueryKey(filmId: string) {
 
 export function yearFilmsEnabledQueryKey(familyId: string | null | undefined) {
   return [yearFilmsEnabledQueryKeyBase, familyId] as const;
+}
+
+/** The Keepsakes holiday-card tile's `holiday_card_summary` row. */
+export function holidayCardQueryKey(familyId: string | null | undefined) {
+  return [holidayCardQueryKeyBase, familyId] as const;
 }
 
 /** The edit sheet's options for one film. Under the films base key so

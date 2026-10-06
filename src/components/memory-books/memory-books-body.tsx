@@ -12,7 +12,7 @@
 // create/retry flow (useMemoryBooks: eligibility counts, example cover, the
 // generate call) only mounts once a flow starts, for that one child.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BookCoverTile, type BookCoverTileStatus } from '@/components/memory-books/book-cover-tile';
+import { HolidayCardTile } from '@/components/keepsakes/holiday-card-tile';
 import { KeepsakeFilmTile } from '@/components/keepsakes/keepsake-film-tile';
 import { KeepsakeYearSection } from '@/components/keepsakes/keepsake-year-section';
 import { BookToast } from '@/components/memory-books/book-toast';
@@ -39,6 +40,7 @@ import {
 import { trackEvent } from '@/services/analytics';
 import type { FamilyMember } from '@/services/family-members';
 import { fetchExampleCoverAssetKey, memoryBookWebUrl } from '@/services/memory-books';
+import { openShopUrl } from '@/services/web-handoff';
 import { familyRosterRoute } from '@/lib/routes';
 import { getMemberAvatarImageKey } from '@/utils/family-members';
 import { isOwnChild } from '@/utils/family-relationships';
@@ -343,7 +345,7 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
 
   const handleTilePress = (shelf: Shelf, row: MemoryBookScopeRow) => {
     if (row.status === 'ready' && row.book) {
-      void Linking.openURL(memoryBookWebUrl(row.book.id));
+      void openShopUrl(memoryBookWebUrl(row.book.id));
       return;
     }
     if (row.status === 'failed' && canGenerate) {
@@ -475,6 +477,9 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
     }
     return (
       <>
+        {/* Own block above the year sections: an empty year renders nothing,
+            which must never hide the holiday-card entry. */}
+        <HolidayCardTile canEdit={canGenerate} familyId={familyId} isFocused={isFocused} todayIso={todayIso} />
         {keepsakeYears.map((year) => (
           <KeepsakeYearSection
             key={year.year}

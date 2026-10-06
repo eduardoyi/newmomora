@@ -14,10 +14,14 @@
  *                    printing -> `in_production`; shipped (+ tracking) ->
  *                    `shipped` + email; failed / canceled -> `failed` + owner
  *                    alert; on_hold is NOT terminal (one alert, keeps polling). `gelato_status` is always persisted.
- *   3. aging         `quoted` / `checkout` older than 48 h -> `cancelled` + the
- *                    Gelato draft and print files deleted. A `checkout` order
- *                    whose Stripe session turns out to be PAID (a lost webhook)
- *                    is never cancelled: the owner is alerted once instead.
+ *   3. aging         `quoted` older than 48 h, and `checkout` orders 1 h after their
+ *                    Stripe session's `expires_at` (kept in `print_files.sessionExpiresAt`;
+ *                    the webhook's `expired` handler is the primary path, this is the
+ *                    backstop; an order with no stored expiry falls back to 48 h) ->
+ *                    `cancelled` + the Gelato draft and print files deleted + the card's
+ *                    checkout claim released. A `checkout` order whose Stripe session
+ *                    turns out to be PAID (a lost webhook) is never cancelled: the owner
+ *                    is alerted once instead.
  *   4. clean-up      cancelled-and-never-paid orders that still hold a draft or
  *                    files (a clean-up that failed earlier), and retention:
  *                    `print-orders/<orderId>/` is deleted 30 days after
@@ -32,6 +36,9 @@
  *                    re-dispatch to the year-film worker, or fail the card. FAILED cards with a
  *                    retryable code (and attempts left, 10 min after the failure) are
  *                    reset to generating and re-dispatched.
+ *   5b. card claims  a card-level checkout claim (`holiday_cards.checkout_order_id`)
+ *                    older than 10 min whose order is not in `checkout` (and not
+ *                    mid-`create_checkout`) is released.
  *   6. ordered films hourly: an ordered card whose film failed or lost its
  *                    video -> owner alert (once: the card's `last_failure_code`
  *                    is the dedupe marker).
@@ -51,7 +58,11 @@ import {
   confirmPaidOrder,
   failPaidOrder,
   type FulfillmentDeps,
+  flagRefundNotCancelled,
+  isFreshClaim,
+  parsePrintFiles,
   processRefundedOrder,
+  releaseCardClaim,
   releasePrintFiles,
   releaseUnpaidArtifacts,
 } from '../_shared/holiday-card-fulfillment.ts';
@@ -72,6 +83,10 @@ export const PAID_FAIL_AFTER_MS = 6 * 60 * 60_000;
 export const SUBMITTED_MISSING_GRACE_MS = 15 * 60_000;
 export const SHIPPED_WITHOUT_TRACKING_AFTER_MS = 24 * 60 * 60_000;
 export const QUOTED_AGING_MS = 48 * 60 * 60_000;
+/** A `checkout` order is aged this long after its Stripe session's `expires_at` (the webhook's `expired` event is the primary path). */
+export const CHECKOUT_AGING_AFTER_EXPIRY_MS = 60 * 60_000;
+/** A card-level checkout claim older than this is stale (same 10 minutes as `claim_holiday_card_checkout`). */
+export const CARD_CLAIM_STALE_MS = 10 * 60_000;
 export const RETENTION_AFTER_SHIPPED_MS = 30 * 24 * 60 * 60_000;
 export const GENERATION_STALE_HEARTBEAT_MS = 20 * 60_000;
 export const GENERATION_NEVER_LEASED_MS = 10 * 60_000;
@@ -356,6 +371,8 @@ interface AgingRow {
   stripe_session_id: string | null;
 }
 
+const SESSION_EXPIRES_PATH = 'print_files->>sessionExpiresAt';
+
 async function ageOrders(
   dependencies: SweepDependencies,
   supabase: SupabaseClient,
@@ -386,29 +403,46 @@ async function ageOrders(
       .maybeSingle();
     if (!cancelled) continue;
     out.cancelled += 1;
+    await releaseCardClaim(supabase, row.id); // a crashed create_checkout may have left the card claim
     await releaseUnpaidArtifacts(fulfillmentDeps, supabase, row.id);
   }
 
   const stripeSecretKey = Deno.env.get('STRIPE_SECRET_KEY');
   // `failure_reason is null` skips checkouts already flagged (PAID_WEBHOOK_MISSED), which wait for a human.
-  const { data: checkouts, error: checkoutError } = await supabase
-    .from('holiday_card_orders')
-    .select('id, status, stripe_session_id')
-    .eq('status', 'checkout')
-    .is('failure_reason', null)
-    .lt('updated_at', cutoff)
-    .order('updated_at', { ascending: true })
-    .limit(AGING_BATCH)
-    .returns<AgingRow[]>();
+  // Due: 1 h after the session's own `expires_at`; an order with no stored expiry (created before the
+  // expiry was recorded) falls back to the 48 h rule. Two bounded queries, so neither starves the other.
+  const [byExpiry, legacy] = await Promise.all([
+    supabase
+      .from('holiday_card_orders')
+      .select('id, status, stripe_session_id')
+      .eq('status', 'checkout')
+      .is('failure_reason', null)
+      .lt(SESSION_EXPIRES_PATH, iso(now - CHECKOUT_AGING_AFTER_EXPIRY_MS))
+      .order('updated_at', { ascending: true })
+      .limit(AGING_BATCH)
+      .returns<AgingRow[]>(),
+    supabase
+      .from('holiday_card_orders')
+      .select('id, status, stripe_session_id')
+      .eq('status', 'checkout')
+      .is('failure_reason', null)
+      .is(SESSION_EXPIRES_PATH, null)
+      .lt('updated_at', cutoff)
+      .order('updated_at', { ascending: true })
+      .limit(AGING_BATCH)
+      .returns<AgingRow[]>(),
+  ]);
+  const checkoutError = byExpiry.error ?? legacy.error;
   if (checkoutError) {
     console.error('sweep-holiday-card-orders checkout aging lookup failed', checkoutError.message);
     return out;
   }
-  if ((checkouts ?? []).length > 0 && !stripeSecretKey) {
+  const checkouts = [...new Map([...(byExpiry.data ?? []), ...(legacy.data ?? [])].map((row) => [row.id, row])).values()].slice(0, AGING_BATCH);
+  if (checkouts.length > 0 && !stripeSecretKey) {
     console.error('sweep-holiday-card-orders checkout aging skipped: STRIPE_SECRET_KEY is not configured');
     return out;
   }
-  for (const row of checkouts ?? []) {
+  for (const row of checkouts) {
     if (!stripeSecretKey || !row.stripe_session_id) continue;
     try {
       const session = await retrieveCheckoutSession(dependencies.fetch, stripeSecretKey, row.stripe_session_id);
@@ -443,7 +477,57 @@ async function ageOrders(
       .maybeSingle();
     if (!cancelled) continue;
     out.cancelled += 1;
+    await releaseCardClaim(supabase, row.id);
     await releaseUnpaidArtifacts(fulfillmentDeps, supabase, row.id);
+  }
+  return out;
+}
+
+// ── 3b. stale card-level checkout claims ─────────────────────────────────
+
+/**
+ * `claim_holiday_card_checkout` is released when an order leaves `checkout` or a
+ * `create_checkout` attempt fails; a crash can leave one behind. Anything older
+ * than 10 minutes whose order is not in `checkout` (and is not a `quoted` order
+ * with a fresh `create_checkout` claim) is released. A claim whose order is in
+ * `checkout` is the live one and is never touched.
+ */
+async function clearStaleCardClaims(
+  dependencies: SweepDependencies,
+  supabase: SupabaseClient,
+): Promise<{ released: number }> {
+  const now = dependencies.now();
+  const out = { released: 0 };
+  const { data: cards, error } = await supabase
+    .from('holiday_cards')
+    .select('id, checkout_order_id, checkout_claimed_at')
+    .not('checkout_order_id', 'is', null)
+    .lt('checkout_claimed_at', iso(now - CARD_CLAIM_STALE_MS))
+    .order('checkout_claimed_at', { ascending: true })
+    .limit(CLEANUP_BATCH)
+    .returns<{ id: string; checkout_order_id: string; checkout_claimed_at: string }[]>();
+  if (error) {
+    console.error('sweep-holiday-card-orders stale claim lookup failed', error.message);
+    return out;
+  }
+  const claims = cards ?? [];
+  if (claims.length === 0) return out;
+  const { data: orders, error: orderError } = await supabase
+    .from('holiday_card_orders')
+    .select('id, status, print_files')
+    .in('id', claims.map((c) => c.checkout_order_id))
+    .returns<{ id: string; status: string; print_files: unknown }[]>();
+  if (orderError) {
+    console.error('sweep-holiday-card-orders stale claim order lookup failed', orderError.message);
+    return out;
+  }
+  const orderById = new Map((orders ?? []).map((o) => [o.id, o]));
+  for (const claim of claims) {
+    const order = orderById.get(claim.checkout_order_id);
+    if (order?.status === 'checkout') continue;
+    if (order?.status === 'quoted' && isFreshClaim(parsePrintFiles(order.print_files), now)) continue;
+    await releaseCardClaim(supabase, claim.checkout_order_id);
+    out.released += 1;
   }
   return out;
 }
@@ -533,14 +617,8 @@ async function finishRefunds(
     // Alert once: when Gelato refuses outright, or when it has been unreachable for 30 minutes.
     const overdue = ageMs(now, row.refunded_at) >= PAID_ALERT_AFTER_MS;
     if (outcome === 'retry' && !overdue) continue;
-    const { data: flagged } = await supabase
-      .from('holiday_card_orders')
-      .update({ failure_reason: 'REFUND_NOT_CANCELLED' })
-      .eq('id', row.id)
-      .is('failure_reason', null)
-      .select('id')
-      .maybeSingle();
-    if (flagged) {
+    // Matches an order with no reason AND a canary-held one (HELD_FOR_CANARY).
+    if (await flagRefundNotCancelled(supabase, row.id)) {
       out.flagged += 1;
       await alertCardOwner(dependencies.sendEmail, row.id, 'REFUND_NOT_CANCELLED', `The order was refunded while "${row.status}" but its Gelato order could not be cancelled automatically. Cancel it in the Gelato dashboard.`);
     }
@@ -751,6 +829,7 @@ export async function handleSweepHolidayCardOrders(
   const confirm = await pass('confirm', null, () => confirmPaidOrders(dependencies, supabase));
   const track = await pass('track', null, () => trackOrders(dependencies, supabase));
   const aging = await pass('aging', null, () => ageOrders(dependencies, supabase));
+  const claims = await pass('card-claims', null, () => clearStaleCardClaims(dependencies, supabase));
   const cleanup = await pass('cleanup', null, () => cleanUp(dependencies, supabase));
   const refunds = await pass('refunds', null, () => finishRefunds(dependencies, supabase));
   const generation = await pass('generation', null, () => recoverGeneration(dependencies, supabase));
@@ -759,7 +838,7 @@ export async function handleSweepHolidayCardOrders(
     ? await pass('ordered-films', null, () => checkOrderedFilms(dependencies, supabase))
     : null;
 
-  return jsonResponse({ success: true, confirm, track, aging, cleanup, refunds, generation, films });
+  return jsonResponse({ success: true, confirm, track, aging, claims, cleanup, refunds, generation, films });
 }
 
 if (import.meta.main) serveWithSentry('sweep-holiday-card-orders', (request) => handleSweepHolidayCardOrders(request));
