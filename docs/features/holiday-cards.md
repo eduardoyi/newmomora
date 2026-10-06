@@ -28,6 +28,13 @@ packs of 10 to US/CA addresses, $2.49/card shipping included.
 - Ordering: address (US/CA) + packs → quote → Checkout. The print files and a
   Gelato draft are made before payment; after payment the only action is
   confirming that draft. Status emails on confirmation and shipping.
+- **Not editable until the film is done** (owner, 2026-10-06): while the film is
+  rendering (`readiness = 'film'`) the app tile and the shop show "Preparing
+  (~20 min)" and `get` returns no `editorView`; when `holiday_card_readiness` flips
+  to `ready` the sweep pushes the creator once ("Your holiday card is ready",
+  route `holiday-card`). A film that failed/was skipped/blocked, no film at all,
+  or a card older than 75 minutes counts as ready (prints without QR). Cards
+  without a film (below the floors) get no push.
 - Below the film floors (20 moments / 12 visuals) the card has no QR.
 - Families outside US/CA can create a card (`regionWarning`) but can only ship
   to US/CA addresses. Europe is not sold (no EU VAT registration).
@@ -68,7 +75,7 @@ flowchart LR
 
 | Table / bucket | Role |
 |---|---|
-| `holiday_cards` | One per family+year (unique incl. soft-deleted). Status `generating \| ready \| failed`, `last_failure_code`, `greeting`, `film_id`, `share_token`, `front_candidates`, `letters`, `qr_caption`, `signature`, `editor_facts` (hidden from clients), `edits` + `edits_version` (CAS), `generation_attempts`, lease columns (hidden). RLS select: owner/manager. No client writes. |
+| `holiday_cards` | One per family+year (unique incl. soft-deleted). Status `generating \| ready \| failed`, `last_failure_code`, `greeting`, `film_id`, `share_token`, `front_candidates`, `letters`, `qr_caption`, `signature`, `editor_facts` (hidden from clients), `edits` + `edits_version` (CAS), `generation_attempts`, lease columns (hidden), `ready_notified_at` (push dedupe, hidden). RLS select: owner/manager. No client writes. |
 | `holiday_card_orders` | Status `draft → quoted → checkout → paid → submitted → in_production → shipped`, `failed`, `cancelled`. Buyer-only select, column-level grants (no `gelato_cost_cents`/`print_files`); clients may insert a bare draft. |
 | `year_films` (kind `family_holiday`, forced) | The card film. Readable by owners/managers through the card; never in Keepsakes/Timeline (the app filters `YEAR_FILM_KINDS`). New terminal status `ended` (card deleted). |
 | `film_share_tokens` | The public QR token (`/f/:token` in `workers/memory-viewer`). |
@@ -97,7 +104,7 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| App tile | `src/components/keepsakes/holiday-card-tile.tsx`, `holiday-greeting-sheet.tsx` | Keepsakes entry above the year sections (owners/managers; shown when a card exists or the switch allows): make → greeting sheet → `create` → shop; generating / ready / failed / ordered states. A card ordered last year stays visible as "ordered" through Jan 31. |
+| App tile | `src/components/keepsakes/holiday-card-tile.tsx`, `holiday-greeting-sheet.tsx` | Keepsakes entry above the year sections (owners/managers; shown when a card exists or the switch allows): make → greeting sheet → `create` → shop; generating / ready / failed / ordered states. `readiness` (`generating`|`film`|`ready`|`failed`) is authoritative: the tile shows "Preparing your card…" (~20 min, push when ready) until the film is done (the summary polls every 60 s while `film`). A card ordered last year stays visible as "ordered" through Jan 31. |
 | App data | `src/services/holiday-cards.ts`, `src/hooks/useHolidayCard.ts` | `holiday_card_summary` RPC (switch + billing + newest card + `ordered` + language), `createHolidayCard`, `holidayCardWebUrl`. |
 | Handoff | `src/services/web-handoff.ts` (`openShopUrl`), `supabase/functions/web-handoff`, `book-renderer/src/web/auth/handoff*` | App opens `shop.usemomora.com/...#h=<code>` (books AND cards); single-use 2-min code; the shop asks "Continue as …?" and verifies in the browser; falls back to the email code. |
 | Shop route | `book-renderer/src/web/router.ts` (`/c/:id`), `card/CardRouteLazy.tsx` | Lazy card chunk (own CSS + aliased print fonts — never loaded on book pages). |
@@ -183,7 +190,7 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
 
 | Area | Files |
 |---|---|
-| pgTAP | `supabase/tests/holiday_cards.sql` |
+| pgTAP | `supabase/tests/holiday_cards.sql`, `holiday_cards_p2.sql`, `holiday_card_readiness.sql` |
 | Shared | `_shared/holiday-card-{products,snapshot,generate}.test.ts`, `_shared/gelato.test.ts`, `_shared/holiday-card-orders-shared.test.ts`, `_shared/year-film-worker-dispatch.test.ts` |
 | Edge | `holiday-cards/`, `holiday-card-orders/`, `sweep-holiday-card-orders/`, `stripe-webhook/`, `get-year-film-url/`, `hard-delete-expired-accounts/`, `workflow-year-film-bridge/card-ops.test.ts` |
 | Worker | `cloudflare/year-film-worker/test/card-*.test.ts`, `stages.test.ts` |

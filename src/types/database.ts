@@ -2390,6 +2390,7 @@ export type Database = {
           letters: Json | null
           locale: string | null
           qr_caption: string | null
+          ready_notified_at: string | null
           share_token: string | null
           signature: string | null
           status: string
@@ -2419,6 +2420,7 @@ export type Database = {
           letters?: Json | null
           locale?: string | null
           qr_caption?: string | null
+          ready_notified_at?: string | null
           share_token?: string | null
           signature?: string | null
           status?: string
@@ -2448,6 +2450,7 @@ export type Database = {
           letters?: Json | null
           locale?: string | null
           qr_caption?: string | null
+          ready_notified_at?: string | null
           share_token?: string | null
           signature?: string | null
           status?: string
@@ -4506,6 +4509,7 @@ export type Database = {
           letters: Json | null
           locale: string | null
           qr_caption: string | null
+          ready_notified_at: string | null
           share_token: string | null
           signature: string | null
           status: string
@@ -4759,6 +4763,7 @@ export type Database = {
           letters: Json | null
           locale: string | null
           qr_caption: string | null
+          ready_notified_at: string | null
           share_token: string | null
           signature: string | null
           status: string
@@ -5272,6 +5277,7 @@ export type Database = {
       }
       holiday_card_new_share_token: { Args: never; Returns: string }
       holiday_card_orders_enabled: { Args: never; Returns: boolean }
+      holiday_card_readiness: { Args: { p_card_id: string }; Returns: string }
       holiday_card_summary: {
         Args: { p_family_id: string }
         Returns: {
@@ -5280,6 +5286,7 @@ export type Database = {
           language: string
           last_failure_code: string
           ordered: boolean
+          readiness: string
           status: string
           year: number
         }[]

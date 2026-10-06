@@ -26,6 +26,7 @@ import {
   yearFilmRoute,
 } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
+import { openShopUrl } from '@/services/web-handoff';
 
 jest.mock('expo-router', () => ({
   router: {
@@ -49,6 +50,15 @@ jest.mock('@/hooks/useUserProfile', () => ({
 
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
+}));
+
+// holiday-cards.ts / web-handoff.ts pull in the Supabase client (native
+// AsyncStorage): stub both; only the URL builder and the opener are used.
+jest.mock('@/services/holiday-cards', () => ({
+  holidayCardWebUrl: (cardId: string) => `https://shop.usemomora.com/c/${cardId}`,
+}));
+jest.mock('@/services/web-handoff', () => ({
+  openShopUrl: jest.fn(() => Promise.resolve()),
 }));
 
 jest.mock('@/hooks/useYearFilms', () => ({
@@ -187,6 +197,10 @@ describe('routeFromPushData - notification_opened target mapping', () => {
     ['memory', { route: 'memory' as const, memoryId: 'memory-1', familyId: 'family-1' }],
     ['memory-book', { route: 'memory-book' as const, memberId: 'member-1', familyId: 'family-1' }],
     ['year-film', { route: 'year-film' as const, filmId: 'film-1', familyId: 'family-1' }],
+    [
+      'holiday-card',
+      { route: 'holiday-card' as const, cardId: '3f2b8c1e-5a47-4d9e-8b36-1c2d3e4f5a6b', familyId: 'family-1' },
+    ],
   ])('reports the literal %s route as the notification_opened target', (target, payload) => {
     routeFromPushData(payload);
 
@@ -348,6 +362,32 @@ describe('routeFromPushData - memory-book route family-context handling', () => 
 
     warnSpy.mockRestore();
   });
+});
+
+describe('routeFromPushData - holiday-card route', () => {
+  const mockedOpenShopUrl = openShopUrl as jest.MockedFunction<typeof openShopUrl>;
+  const cardId = '3f2b8c1e-5a47-4d9e-8b36-1c2d3e4f5a6b';
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('opens the shop card page (signed-in handoff) and does not navigate in-app', () => {
+    routeFromPushData({ route: 'holiday-card', cardId, familyId: 'family-1' });
+
+    expect(mockedOpenShopUrl).toHaveBeenCalledWith(`https://shop.usemomora.com/c/${cardId}`);
+    expect(mockedPush).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '', 'card-1', '../orders', `${cardId}/../x`, 42])(
+    'ignores a missing or non-uuid cardId (%p)',
+    (bad) => {
+      routeFromPushData({ route: 'holiday-card', cardId: bad, familyId: 'family-1' });
+
+      expect(mockedOpenShopUrl).not.toHaveBeenCalled();
+      expect(mockedPush).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('routeFromPushData - year-film route', () => {

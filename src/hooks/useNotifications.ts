@@ -18,6 +18,8 @@ import {
   yearFilmRoute,
 } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
+import { holidayCardWebUrl } from '@/services/holiday-cards';
+import { openShopUrl } from '@/services/web-handoff';
 
 /**
  * expo-notifications registers its native module through expo-modules-core's
@@ -244,9 +246,12 @@ async function registerForPushNotifications(
  * - 'year-film': open the Year Film player for `filmId` (a film was
  *   delivered) -- falls back to the timeline if `filmId` is missing or the
  *   recipient is no longer a member of `familyId`
+ * - 'holiday-card': the card (and its QR film) is ready -- open the shop's
+ *   card editor for `cardId` (signed in via the handoff); ignored when
+ *   `cardId` is missing or not a uuid
  */
 export interface PushRouteData {
-  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book' | 'year-film';
+  route?: 'timeline' | 'approvals' | 'new-memory' | 'memory' | 'memory-book' | 'year-film' | 'holiday-card';
   familyId?: string;
   memoryId?: string;
   /** 'memory-book' only -- the child (`family_members.id`) whose shelf to open. */
@@ -255,6 +260,8 @@ export interface PushRouteData {
   bookId?: string;
   /** 'year-film' only -- the `year_films.id` to play. */
   filmId?: string;
+  /** 'holiday-card' only -- the `holiday_cards.id` whose shop editor to open. */
+  cardId?: string;
 }
 
 /**
@@ -424,7 +431,17 @@ const RECOGNIZED_PUSH_ROUTES = new Set<NonNullable<PushRouteData['route']>>([
   'memory',
   'memory-book',
   'year-film',
+  'holiday-card',
 ]);
+
+const CARD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The card id goes into a shop URL: only a well-formed uuid is ever opened. */
+function routeToHolidayCard(payload: PushRouteData): void {
+  const { cardId } = payload;
+  if (typeof cardId !== 'string' || !CARD_ID_PATTERN.test(cardId)) return;
+  void openShopUrl(holidayCardWebUrl(cardId));
+}
 
 export function routeFromPushData(data: unknown, context: RouteFromPushDataContext = {}): void {
   const payload = data as PushRouteData | undefined;
@@ -465,6 +482,11 @@ export function routeFromPushData(data: unknown, context: RouteFromPushDataConte
 
   if (payload?.route === 'year-film') {
     routeToYearFilm(payload, context);
+    return;
+  }
+
+  if (payload?.route === 'holiday-card') {
+    routeToHolidayCard(payload);
   }
 }
 

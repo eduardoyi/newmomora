@@ -78,6 +78,18 @@ export class FakeDb {
       const list = (settings?.hold_confirm_family_ids ?? []) as string[];
       return list.includes(String(args.p_family_id));
     },
+    // Mirrors holiday_card_readiness (migration 20261008120000).
+    holiday_card_readiness: (args) => {
+      const card = this.rows('holiday_cards').find((c) => c.id === args.p_card_id);
+      if (!card) return null;
+      if (card.status === 'generating') return 'generating';
+      if (card.status === 'failed') return 'failed';
+      if (!card.film_id) return 'ready';
+      if (Date.parse(String(card.created_at)) < this.now() - 75 * 60_000) return 'ready';
+      const film = this.rows('year_films').find((f) => f.id === card.film_id);
+      if (!film || film.blocked || ['failed', 'skipped', 'ended'].includes(String(film.status))) return 'ready';
+      return film.video_key && film.ready_at ? 'ready' : 'film';
+    },
     claim_holiday_card_checkout: (args) => {
       const orderId = String(args.p_order_id);
       const order = this.rows('holiday_card_orders').find((o) => o.id === orderId);

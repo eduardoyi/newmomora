@@ -81,6 +81,14 @@ export type HolidayCardsRequestBody =
 
 export type FilmState = 'none' | 'rendering' | 'ready' | 'blocked' | 'failed';
 
+/**
+ * Owner decision 2026-10-06: a card is not editable/orderable until its film is
+ * done. `holiday_card_readiness` (migration 20261008120000) decides:
+ * `generating` | `film` (card ready, film still rendering: "Preparing") | `ready` | `failed`.
+ */
+export type CardReadiness = 'generating' | 'film' | 'ready' | 'failed';
+const CARD_READINESS: readonly string[] = ['generating', 'film', 'ready', 'failed'];
+
 export interface FrontCandidateView {
   mediaId: string;
   memoryId: string | null;
@@ -720,6 +728,13 @@ async function handleGet(
   }
   const filmState = deriveFilmState(film);
 
+  const { data: readinessData, error: readinessError } = await supabase.rpc('holiday_card_readiness', { p_card_id: card.id });
+  if (readinessError || typeof readinessData !== 'string' || !CARD_READINESS.includes(readinessData)) {
+    console.error('holiday-cards readiness lookup failed', card.id, readinessError ? dbCode(readinessError) : 'unexpected_value');
+    return errorResponse('Failed to load card', 500, 'internal_error');
+  }
+  const readiness = readinessData as CardReadiness;
+
   let linkRevoked = false;
   let tokenFacts: QrTokenFacts | null = null;
   if (card.share_token) {
@@ -815,9 +830,10 @@ async function handleGet(
     shipByNote = typeof note === 'string' && note.trim() ? note.trim() : null;
   }
 
-  // The editor's view (absent while generating).
+  // The editor's view: absent while generating AND while the film is still being made
+  // (readiness 'film' / 'generating': the shop shows "Preparing" instead of the editor).
   let editorView: EditorViewResponse | null = null;
-  if (card.status !== 'generating') {
+  if (card.status !== 'generating' && (readiness === 'ready' || readiness === 'failed')) {
     try {
       editorView = await loadEditorView(dependencies, supabase, card, { isOrdered, photos, qrFacts });
     } catch (error) {
@@ -829,6 +845,7 @@ async function handleGet(
   const published = filmState === 'ready';
   return jsonResponse({
     card: toCardView(card),
+    readiness,
     film: { state: filmState, filmId: card.film_id, readyAt: film?.ready_at ?? null },
     qrUrl: published && !linkRevoked ? cardQrUrl(card.share_token) : null,
     linkDisabled: linkRevoked,

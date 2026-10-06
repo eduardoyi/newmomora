@@ -25,7 +25,7 @@ const mockedCreate = createHolidayCard as jest.MockedFunction<typeof createHolid
 const mockedOpenShopUrl = openShopUrl as jest.MockedFunction<typeof openShopUrl>;
 
 function summary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummary {
-  return { enabled: true, cardId: null, year: null, status: null, lastFailureCode: null, ordered: false, language: 'en', ...overrides };
+  return { enabled: true, cardId: null, year: null, status: null, readiness: null, lastFailureCode: null, ordered: false, language: 'en', ...overrides };
 }
 
 function renderTile() {
@@ -75,6 +75,7 @@ describe('HolidayCardTile with the real hook', () => {
     fireEvent.press(await findByTestId('holiday-card-tile-make'));
     fireEvent.press(getByTestId('holiday-greeting-new-year'));
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
+    fireEvent.press(await findByTestId('holiday-greeting-continue'));
 
     await waitFor(() => expect(mockedOpenShopUrl).toHaveBeenCalledWith('https://shop.usemomora.com/c/card-5'));
     expect(await findByTestId('holiday-card-tile-generating')).toBeTruthy();

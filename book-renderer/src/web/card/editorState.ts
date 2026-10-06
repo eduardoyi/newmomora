@@ -16,6 +16,8 @@ import type { ServerRead } from './editQueue';
 
 export const POLL_GENERATING_MS = 5_000;
 export const POLL_FILM_RENDERING_MS = 30_000;
+/** The QR film takes about 20 minutes: "taking longer than usual" after this. */
+export const FILM_SLOW_AFTER_MS = 45 * 60_000;
 /** An image failing to load (an expired signed URL) refetches at most this often. */
 export const IMAGE_ERROR_REFETCH_MIN_MS = 15_000;
 /** Returning to the tab refetches when the data is at least this old. */
@@ -24,7 +26,8 @@ export const VISIBLE_REFETCH_MIN_AGE_MS = 10_000;
 /** Next poll delay for the loaded card, or null when nothing is in motion. */
 export function pollIntervalMs(view: HolidayCardView | null): number | null {
   if (!view) return null;
-  if (view.card.status === 'generating') return POLL_GENERATING_MS;
+  if (view.readiness === 'film') return POLL_FILM_RENDERING_MS;
+  if (view.card.status === 'generating' || view.readiness === 'generating') return POLL_GENERATING_MS;
   if (view.film.state === 'rendering') return POLL_FILM_RENDERING_MS;
   return null;
 }
@@ -77,7 +80,12 @@ export type ScreenState =
   /** Signed in as someone who cannot see this card (403 / 404). */
   | { kind: 'forbidden' }
   | { kind: 'error'; message: string }
-  | { kind: 'preparing'; slow: boolean }
+  /**
+   * `phase` 'film': the artwork is done and the QR film renders (~20 min); the
+   * editor opens by itself when the server says `ready`. 'generating' (also
+   * the fallback when the server sends no `readiness`): the artwork.
+   */
+  | { kind: 'preparing'; slow: boolean; phase: 'generating' | 'film' }
   | { kind: 'failed'; code: string | null; retrying: boolean }
   /**
    * Ordered: read-only frozen snapshot, order list, "Order more cards".
@@ -109,10 +117,15 @@ export function isForbiddenError(error: { status: number; code: string } | null)
   return error.status === 404 || (error.status === 403 && error.code !== 'SUBSCRIPTION_REQUIRED');
 }
 
-export function isPreparingSlow(createdAtIso: string | null, firstSeenMs: number, nowMs: number): boolean {
+export function isPreparingSlow(createdAtIso: string | null, firstSeenMs: number, nowMs: number, afterMs: number = PREPARING_SLOW_AFTER_MS): boolean {
   const created = createdAtIso ? Date.parse(createdAtIso) : NaN;
   const since = Number.isFinite(created) ? Math.max(created, 0) : firstSeenMs;
-  return nowMs - since > PREPARING_SLOW_AFTER_MS;
+  return nowMs - since > afterMs;
+}
+
+function preparing(view: HolidayCardView, input: ScreenInput, phase: 'generating' | 'film'): ScreenState {
+  const slow = phase === 'film' ? isPreparingSlow(view.card.createdAt, input.firstSeenMs, input.nowMs, FILM_SLOW_AFTER_MS) : isPreparingSlow(view.card.createdAt, input.firstSeenMs, input.nowMs);
+  return { kind: 'preparing', slow, phase };
 }
 
 export function deriveScreenState(input: ScreenInput): ScreenState {
@@ -128,13 +141,15 @@ export function deriveScreenState(input: ScreenInput): ScreenState {
   if (view.card.status === 'failed') {
     return { kind: 'failed', code: view.generation.failureCode ?? view.card.lastFailureCode, retrying: isRetryableFailure(view.generation.failureCode ?? view.card.lastFailureCode) };
   }
-  if (view.card.status === 'generating') {
-    return { kind: 'preparing', slow: isPreparingSlow(view.card.createdAt, input.firstSeenMs, input.nowMs) };
-  }
+  if (view.card.status === 'generating') return preparing(view, input, 'generating');
+  // The card's artwork is done but its QR film is not: not editable yet (the
+  // server withholds `editorView`; never show an editor that cannot order).
+  if (view.readiness === 'film') return preparing(view, input, 'film');
+  if (view.readiness === 'generating') return preparing(view, input, 'generating');
   // Ready.
   if (view.editorViewInvalid) return { kind: 'error', message: 'We could not open the editor for this card. Please try again in a moment.' };
   const editor = view.editorView;
-  if (!editor) return { kind: 'preparing', slow: isPreparingSlow(view.card.createdAt, input.firstSeenMs, input.nowMs) };
+  if (!editor) return preparing(view, input, 'generating');
 
   const checkoutIsOpen = view.hasOpenCheckout || view.openCheckout !== null || input.queueCheckoutOpen;
   const checkout: OpenCheckout | null = checkoutIsOpen ? { mine: view.openCheckout?.mine === true, orderId: view.openCheckout?.orderId ?? null } : null;

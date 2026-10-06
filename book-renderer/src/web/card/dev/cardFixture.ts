@@ -13,7 +13,7 @@ import { CardApiError, type FilmUrls, type PickerPoolPage } from '../cardTypes';
  * SAFETY: every use of this module is behind `import.meta.env.DEV` (a
  * compile-time constant), so a production build drops it and
  * `scripts/check-web-bundle.mjs` (which fails on the word this query parameter
- * is named after) proves it. Variants: `&state=generating|failed|failed-terminal|
+ * is named after) proves it. Variants: `&state=generating|film|failed|failed-terminal|
  * locked|checkout|front-missing|waiting-film|no-film|forbidden|slow-save|conflict`.
  *
  * Checkout (`holiday-card-orders`) walkthrough: the order lifecycle (draft,
@@ -131,6 +131,8 @@ export function fixtureGet(cardId: string): Promise<unknown> {
   const generating = state === 'generating';
   const failed = state === 'failed' || state === 'failed-terminal';
   const locked = state === 'locked';
+  // `film`: artwork done, QR film still rendering: the preparing screen (~20 min), no editor.
+  const film = state === 'film';
   const waiting = state === 'waiting-film';
   const noFilm = state === 'no-film';
   const frontMissing = state === 'front-missing';
@@ -145,6 +147,7 @@ export function fixtureGet(cardId: string): Promise<unknown> {
     frontOptions.push({ id: picked, kind: 'photo', file: `pool-${picked}.jpg`, width: 4032, height: 3024 });
   }
   const view = {
+    readiness: failed ? 'failed' : generating ? 'generating' : film ? 'film' : 'ready',
     card: {
       id: cardId || CARD_ID,
       familyId: 'fx-family',
@@ -159,16 +162,16 @@ export function fixtureGet(cardId: string): Promise<unknown> {
       signature: 'With love, the Rivera family',
       edits: locked ? emptyEdits() : edits,
       editsVersion: version,
-      createdAt: new Date(state === 'generating' ? pendingCreatedAt : Date.now() - 3_600_000).toISOString(),
+      createdAt: new Date(state === 'generating' || film ? pendingCreatedAt : Date.now() - 3_600_000).toISOString(),
     },
-    film: { state: noFilm ? 'none' : waiting ? 'rendering' : 'ready', filmId: 'fx-film', readyAt: waiting || noFilm ? null : '2026-10-01T10:30:00.000Z' },
+    film: { state: noFilm ? 'none' : waiting || film ? 'rendering' : 'ready', filmId: 'fx-film', readyAt: waiting || film || noFilm ? null : '2026-10-01T10:30:00.000Z' },
     qrUrl: null,
     linkDisabled: false,
     hasOpenCheckout: state === 'checkout',
     isOrdered: locked,
     generation: { state: failed ? 'failed' : generating ? 'generating' : 'ready', failureCode: failed ? (state === 'failed' ? 'LETTERS_FAILED' : 'NOT_ENOUGH_PHOTOS') : null, attempts: 1 },
     editorView:
-      generating || failed
+      generating || film || failed
         ? null
         : {
             cardData: cardData({ frontOptions, qrEnabled: qrState !== 'unavailable' && qrState !== 'off' }),

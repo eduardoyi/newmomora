@@ -4,6 +4,8 @@ import {
   HOLIDAY_CREATE_ERROR_MESSAGES,
   HOLIDAY_EXISTING_NOTE,
   HOLIDAY_GREETING_NOTE,
+  HOLIDAY_PREPARING_NOTE,
+  HOLIDAY_PREPARING_TITLE,
   HolidayGreetingSheet,
 } from '@/components/keepsakes/holiday-greeting-sheet';
 import type { CreateHolidayCardOutcome } from '@/hooks/useHolidayCard';
@@ -70,14 +72,21 @@ describe('HolidayGreetingSheet', () => {
     expect(UNSAFE_queryAllByType(TextInput)).toHaveLength(0);
   });
 
-  it('creates with the chosen greeting, opens the card and closes', async () => {
+  it('creates with the chosen greeting, says it takes ~20 minutes, and opens the card on Continue', async () => {
     onCreate.mockResolvedValue(success());
-    const { getByTestId } = renderSheet();
+    const { getByTestId, getByText } = renderSheet();
     fireEvent.press(getByTestId('holiday-greeting-new-year'));
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
 
-    await waitFor(() => expect(onOpenCard).toHaveBeenCalledWith('card-1'));
+    await waitFor(() => expect(getByTestId('holiday-greeting-preparing')).toBeTruthy());
     expect(onCreate).toHaveBeenCalledWith('new-year');
+    expect(getByText(HOLIDAY_PREPARING_TITLE)).toBeTruthy();
+    expect(getByText('This takes about 20 minutes. We’ll send you a notification when it’s ready.')).toBeTruthy();
+    expect(onOpenCard).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.press(getByTestId('holiday-greeting-continue'));
+    expect(onOpenCard).toHaveBeenCalledWith('card-1');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -94,7 +103,9 @@ describe('HolidayGreetingSheet', () => {
     expect(getByTestId('holiday-greeting-confirm').props.accessibilityState).toMatchObject({ disabled: true });
 
     await act(async () => resolve(success()));
-    await waitFor(() => expect(onOpenCard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getByTestId('holiday-greeting-preparing')).toBeTruthy());
+    fireEvent.press(getByTestId('holiday-greeting-continue'));
+    expect(onOpenCard).toHaveBeenCalledTimes(1);
   });
 
   it('on regionWarning shows the US/Canada note and only opens the card on Continue', async () => {
@@ -105,6 +116,7 @@ describe('HolidayGreetingSheet', () => {
 
     await waitFor(() => expect(getByTestId('holiday-greeting-region')).toBeTruthy());
     expect(getByText('Cards ship to the US and Canada')).toBeTruthy();
+    expect(getByText(new RegExp(HOLIDAY_PREPARING_NOTE))).toBeTruthy();
     expect(onOpenCard).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
 
@@ -141,7 +153,9 @@ describe('HolidayGreetingSheet', () => {
     expect(onClose).not.toHaveBeenCalled();
 
     await act(async () => resolve(success()));
-    await waitFor(() => expect(onOpenCard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getByTestId('holiday-greeting-preparing')).toBeTruthy());
+    fireEvent.press(getByTestId('holiday-greeting-continue'));
+    expect(onOpenCard).toHaveBeenCalledTimes(1);
   });
 
   it('does not open the browser when the sheet was closed before the create resolved', async () => {
@@ -198,7 +212,9 @@ describe('HolidayGreetingSheet', () => {
     expect(getByText('Try again')).toBeTruthy();
 
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
-    await waitFor(() => expect(onOpenCard).toHaveBeenCalledWith('card-1'));
+    await waitFor(() => expect(getByTestId('holiday-greeting-preparing')).toBeTruthy());
+    fireEvent.press(getByTestId('holiday-greeting-continue'));
+    expect(onOpenCard).toHaveBeenCalledWith('card-1');
     expect(onCreate).toHaveBeenCalledTimes(2);
     expect(onCreate).toHaveBeenLastCalledWith('holidays');
   });

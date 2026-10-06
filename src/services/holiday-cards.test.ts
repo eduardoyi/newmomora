@@ -55,12 +55,25 @@ describe('fetchHolidayCardSummary', () => {
         cardId: 'card-1',
         year: 2026,
         status: 'ready',
+        readiness: null,
         lastFailureCode: null,
         ordered: false,
         language: 'es',
       },
       error: null,
     });
+  });
+
+  it('maps readiness (generating | film | ready | failed) and drops unknown values', async () => {
+    const row = { enabled: true, card_id: 'card-1', year: 2026, status: 'ready', last_failure_code: null, ordered: false, language: 'en' };
+    for (const readiness of ['generating', 'film', 'ready', 'failed'] as const) {
+      mockedRpc.mockResolvedValue({ data: [{ ...row, readiness }], error: null });
+      expect((await fetchHolidayCardSummary('family-1')).data?.readiness).toBe(readiness);
+    }
+    mockedRpc.mockResolvedValue({ data: [{ ...row, readiness: 'soon' }], error: null });
+    expect((await fetchHolidayCardSummary('family-1')).data?.readiness).toBeNull();
+    mockedRpc.mockResolvedValue({ data: [{ ...row, readiness: null }], error: null });
+    expect((await fetchHolidayCardSummary('family-1')).data?.readiness).toBeNull();
   });
 
   it('maps a switch-only row (no card) and defaults the language to English', async () => {

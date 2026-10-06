@@ -3,7 +3,10 @@
 // owners/managers when the family has a card OR the server switch is on
 // (`holiday_card_summary`). One tile, five states:
 //   make        -> opens the greeting sheet (creates the card, then the shop)
-//   generating  -> "Preparing your card…", opens the shop (it waits/polls)
+//   generating  -> "Preparing your card…" (~20 min; readiness 'generating' OR
+//                  'film': the card is not editable until its QR film is
+//                  done), opens the shop (same message, polls); a push
+//                  notification arrives when it is ready
 //   ready       -> "Edit & order your card", opens the shop editor
 //   failed      -> "We couldn't make your card", opens the shop (details)
 //   ordered     -> "Your cards are ordered", opens the shop (status/reorder)
@@ -40,6 +43,19 @@ export function holidayCardTileState(
   }
   if (!hasCard) return summary.enabled ? 'make' : null;
   if (summary.ordered) return 'ordered';
+  // `readiness` is authoritative when the backend sends it: `status` reads
+  // 'ready' while the film is still rendering. Older backends omit it.
+  switch (summary.readiness) {
+    case 'generating':
+    case 'film':
+      return 'generating';
+    case 'ready':
+      return 'ready';
+    case 'failed':
+      return 'failed';
+    default:
+      break;
+  }
   if (summary.status === 'ready') return 'ready';
   if (summary.status === 'failed') return 'failed';
   return 'generating';
@@ -52,7 +68,7 @@ const COPY: Record<HolidayCardTileState, { title: string; subtitle: string }> = 
   },
   generating: {
     title: 'Preparing your card…',
-    subtitle: 'This takes a couple of minutes. Tap to follow along.',
+    subtitle: 'This takes about 20 minutes. We’ll send you a notification when it’s ready.',
   },
   ready: {
     title: 'Edit & order your card',

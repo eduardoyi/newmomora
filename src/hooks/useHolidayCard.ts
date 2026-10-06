@@ -3,7 +3,8 @@
 // one create mutation that refreshes it. The Keepsakes tab never unmounts, so
 // the caller passes its real focus state: the summary refetches on focus and
 // app foreground, and polls every 10 s only while a card is generating AND
-// the screen is focused.
+// the screen is focused (every 60 s while only the QR film is still rendering,
+// readiness 'film' -- the shop and the push notification take over from there).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
@@ -19,6 +20,20 @@ import {
 
 const SUMMARY_STALE_TIME = 60 * 1000;
 export const HOLIDAY_CARD_POLL_MS = 10 * 1000;
+export const HOLIDAY_CARD_FILM_POLL_MS = 60 * 1000;
+
+/**
+ * How often to poll the summary: fast while the artwork generates, slow while
+ * the film renders (~15-20 min), never otherwise. An older backend sends no
+ * `readiness`: fall back to `status` (fast poll while generating).
+ */
+export function holidayCardPollInterval(summary: HolidayCardSummary | null | undefined): number | false {
+  if (!summary) return false;
+  if (summary.readiness === 'film') return HOLIDAY_CARD_FILM_POLL_MS;
+  if (summary.readiness === 'generating') return HOLIDAY_CARD_POLL_MS;
+  if (summary.readiness === null && summary.status === 'generating') return HOLIDAY_CARD_POLL_MS;
+  return false;
+}
 
 export type CreateHolidayCardOutcome =
   | { ok: true; result: CreateHolidayCardResult }
@@ -42,7 +57,7 @@ export function useHolidayCard(
     enabled: Boolean(familyId) && (options.enabled ?? true),
     staleTime: SUMMARY_STALE_TIME,
     refetchOnWindowFocus: true,
-    refetchInterval: (q) => (isFocused && q.state.data?.status === 'generating' ? HOLIDAY_CARD_POLL_MS : false),
+    refetchInterval: (q) => (isFocused ? holidayCardPollInterval(q.state.data) : false),
   });
 
   const mutation = useMutation({

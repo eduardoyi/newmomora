@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { holidayCardQueryKey } from '@/hooks/queryKeys';
-import { useHolidayCard } from '@/hooks/useHolidayCard';
+import { holidayCardPollInterval, useHolidayCard } from '@/hooks/useHolidayCard';
 import {
   createHolidayCard,
   fetchHolidayCardSummary,
@@ -24,6 +24,7 @@ function summary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummar
     cardId: null,
     year: null,
     status: null,
+    readiness: null,
     lastFailureCode: null,
     ordered: false,
     language: 'en',
@@ -144,5 +145,50 @@ describe('useHolidayCard', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it('polls every 60 s (not 10 s) while only the film is rendering', async () => {
+    jest.useFakeTimers();
+    try {
+      mockedFetch.mockResolvedValue({
+        data: summary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'film' }),
+        error: null,
+      });
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useHolidayCard('family-1', { isFocused: true }), { wrapper });
+      await waitFor(() => expect(result.current.summary?.readiness).toBe('film'));
+      const base = mockedFetch.mock.calls.length;
+
+      await act(async () => {
+        jest.advanceTimersByTime(35_000);
+      });
+      expect(mockedFetch.mock.calls.length).toBe(base);
+
+      await act(async () => {
+        jest.advanceTimersByTime(30_000);
+      });
+      await waitFor(() => expect(mockedFetch.mock.calls.length).toBeGreaterThan(base));
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('holidayCardPollInterval', () => {
+  const card = (overrides: Partial<HolidayCardSummary>) =>
+    summary({ cardId: 'card-1', year: 2026, status: 'ready', ...overrides });
+
+  it('maps readiness to a poll interval', () => {
+    expect(holidayCardPollInterval(null)).toBe(false);
+    expect(holidayCardPollInterval(summary())).toBe(false);
+    expect(holidayCardPollInterval(card({ readiness: 'generating', status: 'generating' }))).toBe(10_000);
+    expect(holidayCardPollInterval(card({ readiness: 'film' }))).toBe(60_000);
+    expect(holidayCardPollInterval(card({ readiness: 'ready' }))).toBe(false);
+    expect(holidayCardPollInterval(card({ readiness: 'failed', status: 'failed' }))).toBe(false);
+  });
+
+  it('falls back to status when the backend sends no readiness', () => {
+    expect(holidayCardPollInterval(card({ readiness: null, status: 'generating' }))).toBe(10_000);
+    expect(holidayCardPollInterval(card({ readiness: null, status: 'ready' }))).toBe(false);
   });
 });

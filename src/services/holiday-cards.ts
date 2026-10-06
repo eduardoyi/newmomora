@@ -9,6 +9,11 @@ import { invokeEdgeFunction, type ServiceError } from '@/services/ai';
 
 export type HolidayCardLanguage = 'es' | 'en';
 export type HolidayCardStatus = 'generating' | 'ready' | 'failed';
+/** What the card can do for the family: 'generating' (artwork), 'film' (artwork
+ * done, the QR film is still rendering -- not editable/orderable yet), 'ready'
+ * (editable + orderable), 'failed'. Null: no card, or an older backend that
+ * does not send it (callers then fall back to `status`). */
+export type HolidayCardReadiness = 'generating' | 'film' | 'ready' | 'failed';
 /** The greeting is baked into the film, so it cannot change after create.
  * Mirrors `CardGreetingKey` in book-renderer/src/card/types.ts. */
 export type HolidayCardGreeting = 'christmas' | 'holidays' | 'new-year';
@@ -36,6 +41,8 @@ export interface HolidayCardSummary {
   cardId: string | null;
   year: number | null;
   status: HolidayCardStatus | null;
+  /** See `HolidayCardReadiness`. */
+  readiness: HolidayCardReadiness | null;
   lastFailureCode: string | null;
   /** A paid order exists for the card (it is locked for the whole family). */
   ordered: boolean;
@@ -51,6 +58,10 @@ export function holidayCardWebUrl(cardId: string): string {
 
 function toStatus(value: unknown): HolidayCardStatus | null {
   return value === 'generating' || value === 'ready' || value === 'failed' ? value : null;
+}
+
+function toReadiness(value: unknown): HolidayCardReadiness | null {
+  return value === 'generating' || value === 'film' || value === 'ready' || value === 'failed' ? value : null;
 }
 
 /**
@@ -72,6 +83,7 @@ export async function fetchHolidayCardSummary(
       cardId: row.card_id ?? null,
       year: typeof row.year === 'number' ? row.year : null,
       status: toStatus(row.status),
+      readiness: toReadiness(row.readiness),
       lastFailureCode: row.last_failure_code ?? null,
       ordered: row.ordered === true,
       language: row.language === 'es' ? 'es' : 'en',

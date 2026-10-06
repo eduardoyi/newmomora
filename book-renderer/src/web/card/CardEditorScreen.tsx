@@ -167,6 +167,24 @@ function StatusPanel({ screen, onRetryLoad, onSignOut }: { screen: ScreenState }
         </Shell>
       );
     case 'preparing':
+      if (screen.phase === 'film') {
+        return (
+          <Shell>
+            <StatusCard
+              title={screen.slow ? 'This is taking longer than usual' : 'Your card is almost ready'}
+              body={
+                screen.slow ? (
+                  <>We are still making the film for the QR code. You can close this page: we will notify you in the Momora app when it is ready. If it does not arrive soon, write to {SUPPORT_EMAIL}.</>
+                ) : (
+                  <>We are making the film for its QR code. This takes about 20 minutes; we will notify you in the Momora app when it is ready. You can close this page.</>
+                )
+              }
+            >
+              <span className="ce-spinner" aria-hidden="true" />
+            </StatusCard>
+          </Shell>
+        );
+      }
       return (
         <Shell>
           <StatusCard

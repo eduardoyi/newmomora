@@ -47,6 +47,16 @@ describe('parseHolidayCard', () => {
     expect(view.openCheckout).toBeNull();
     expect(view.myOrders).toEqual([]);
   });
+  it('parses readiness (top level, or on the card) and drops unknown values', () => {
+    for (const readiness of ['generating', 'film', 'ready', 'failed'] as const) {
+      expect(parseHolidayCard(rawGet({ readiness }, null)).readiness).toBe(readiness);
+    }
+    const raw = rawGet({}, null);
+    (raw.card as Record<string, unknown>).readiness = 'film';
+    expect(parseHolidayCard(raw).readiness).toBe('film');
+    expect(parseHolidayCard(rawGet({ readiness: 'soon' })).readiness).toBeNull();
+    expect(parseHolidayCard(rawGet()).readiness).toBeNull(); // older backend
+  });
   it('flags an editor view that does not parse instead of crashing', () => {
     const view = parseHolidayCard(rawGet({}, { cardData: { version: 2 } }));
     expect(view.editorView).toBeNull();

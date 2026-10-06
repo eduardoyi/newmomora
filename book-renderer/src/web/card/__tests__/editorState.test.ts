@@ -15,6 +15,7 @@ import {
   needsRefetchAfterSave,
   orderGate,
   pollIntervalMs,
+  FILM_SLOW_AFTER_MS,
   PREPARING_SLOW_AFTER_MS,
   previewQrOn,
   qrControl,
@@ -55,12 +56,42 @@ describe('deriveScreenState', () => {
 
   it('generating → preparing, "taking longer than usual" after 5 minutes', () => {
     const young = fictionalView({ card: { ...fictionalView().card, status: 'generating', createdAt: new Date(NOW - 60_000).toISOString() } }, null);
-    expect(deriveScreenState(input({ view: young }))).toEqual({ kind: 'preparing', slow: false });
+    expect(deriveScreenState(input({ view: young }))).toEqual({ kind: 'preparing', slow: false, phase: 'generating' });
     const old = fictionalView({ card: { ...fictionalView().card, status: 'generating', createdAt: new Date(NOW - PREPARING_SLOW_AFTER_MS - 1000).toISOString() } }, null);
-    expect(deriveScreenState(input({ view: old }))).toEqual({ kind: 'preparing', slow: true });
+    expect(deriveScreenState(input({ view: old }))).toEqual({ kind: 'preparing', slow: true, phase: 'generating' });
     // No usable created time: fall back to when this screen first saw the card.
     const noTime = fictionalView({ card: { ...fictionalView().card, status: 'generating', createdAt: null } }, null);
-    expect(deriveScreenState(input({ view: noTime, firstSeenMs: NOW - PREPARING_SLOW_AFTER_MS - 1 }))).toEqual({ kind: 'preparing', slow: true });
+    expect(deriveScreenState(input({ view: noTime, firstSeenMs: NOW - PREPARING_SLOW_AFTER_MS - 1 }))).toEqual({ kind: 'preparing', slow: true, phase: 'generating' });
+  });
+
+  it('readiness "film": preparing (film phase) even though the status is ready, with a 45 minute slow threshold', () => {
+    const base = { readiness: 'film', film: { state: 'rendering', filmId: 'f', readyAt: null } };
+    const young = fictionalView({ ...base, card: { ...fictionalView().card, createdAt: new Date(NOW - PREPARING_SLOW_AFTER_MS - 1000).toISOString() } }, null);
+    // Past the artwork's 5-minute mark but well inside the film's ~20 minutes: not slow.
+    expect(deriveScreenState(input({ view: young }))).toEqual({ kind: 'preparing', slow: false, phase: 'film' });
+    const old = fictionalView({ ...base, card: { ...fictionalView().card, createdAt: new Date(NOW - FILM_SLOW_AFTER_MS - 1000).toISOString() } }, null);
+    expect(deriveScreenState(input({ view: old }))).toEqual({ kind: 'preparing', slow: true, phase: 'film' });
+  });
+
+  it('readiness "film" never shows the editor, even if an editor view were present', () => {
+    expect(deriveScreenState(input({ view: fictionalView({ readiness: 'film' }) })).kind).toBe('preparing');
+  });
+
+  it('readiness "generating" is the artwork phase', () => {
+    expect(deriveScreenState(input({ view: fictionalView({ readiness: 'generating' }, null) }))).toMatchObject({ kind: 'preparing', phase: 'generating' });
+  });
+
+  it('film -> ready switches to the editor by itself once the editor view arrives', () => {
+    const film = fictionalView({ readiness: 'film' }, null);
+    expect(deriveScreenState(input({ view: film })).kind).toBe('preparing');
+    const ready = fictionalView({ readiness: 'ready' });
+    expect(deriveScreenState(input({ view: ready }))).toEqual({ kind: 'editing', needsRepick: false });
+  });
+
+  it('without readiness (older backend) behaves as before: status/editor view decide', () => {
+    expect(fictionalView().readiness).toBeNull();
+    expect(deriveScreenState(input({ view: fictionalView() })).kind).toBe('editing');
+    expect(deriveScreenState(input({ view: fictionalView({}, null) }))).toMatchObject({ kind: 'preparing', phase: 'generating' });
   });
 
   it('ready without an editor view yet is still preparing', () => {
@@ -138,7 +169,7 @@ describe('orderGate', () => {
     expect(orderGate({ ...ok, screen: { kind: 'editing', needsRepick: true } })).toEqual({ enabled: false, blocked: 'front_missing' });
     expect(orderGate({ ...ok, screen: { kind: 'locked', checkout: null } })).toEqual({ enabled: false, blocked: 'locked' });
     expect(orderGate({ ...ok, screen: { kind: 'checkoutOpen', mine: true, orderId: 'o' } })).toEqual({ enabled: false, blocked: 'checkout_open' });
-    expect(orderGate({ ...ok, screen: { kind: 'preparing', slow: false } }).enabled).toBe(false);
+    expect(orderGate({ ...ok, screen: { kind: 'preparing', slow: false, phase: 'generating' } }).enabled).toBe(false);
     expect(orderGate({ ...ok, screen: { kind: 'failed', code: null, retrying: false } }).enabled).toBe(false);
     expect(orderGate({ ...ok, qrState: null }).enabled).toBe(false);
   });
@@ -165,6 +196,10 @@ describe('polling and refetch cadence', () => {
     expect(pollIntervalMs(fictionalView({ card: { ...fictionalView().card, status: 'generating' } }, null))).toBe(5_000);
     expect(pollIntervalMs(fictionalView({ film: { state: 'rendering', filmId: 'f', readyAt: null } }))).toBe(30_000);
     expect(pollIntervalMs(fictionalView())).toBeNull();
+    // Readiness from the server: 'film' polls at the film cadence, 'generating' at the fast one, 'ready' stops.
+    expect(pollIntervalMs(fictionalView({ readiness: 'film' }, null))).toBe(30_000);
+    expect(pollIntervalMs(fictionalView({ readiness: 'generating' }, null))).toBe(5_000);
+    expect(pollIntervalMs(fictionalView({ readiness: 'ready' }))).toBeNull();
     // Generating wins over a rendering film.
     expect(pollIntervalMs(fictionalView({ card: { ...fictionalView().card, status: 'generating' }, film: { state: 'rendering', filmId: 'f', readyAt: null } }, null))).toBe(5_000);
   });

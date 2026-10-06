@@ -1,9 +1,11 @@
 // "Pick your greeting" bottom sheet for the Keepsakes holiday-card tile
 // (docs/plans/holiday-cards-p2.md Step 6). Choices only -- no text input, so
 // no keyboard handling. The greeting is baked into the card's film, so it is
-// fixed once the card is created. Confirm -> create -> open the shop editor
-// (or, when the device timezone is outside US/Canada, first show an inline
-// "Cards ship to the US and Canada" note with Continue). Errors stay inline.
+// fixed once the card is created. Confirm -> create -> an inline confirmation
+// ("Your card is being made", ~20 minutes, we'll send a notification; or the
+// "Cards ship to the US and Canada" note when the device timezone is outside
+// US/Canada; or the "already have this year's card" note) -> Continue opens the
+// shop, which shows the same preparing message. Errors stay inline.
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,6 +23,8 @@ import { getBottomSheetBottomPadding } from '@/utils/bottom-sheet-dismiss';
 
 export const HOLIDAY_GREETING_NOTE = 'The greeting is printed on your card and in your film, so it can’t be changed later.';
 export const HOLIDAY_REGION_NOTE = 'Cards ship to the US and Canada';
+export const HOLIDAY_PREPARING_TITLE = 'Your card is being made';
+export const HOLIDAY_PREPARING_NOTE = 'This takes about 20 minutes. We’ll send you a notification when it’s ready.';
 export const HOLIDAY_EXISTING_NOTE = 'You already have this year’s card — opening it';
 
 export const HOLIDAY_CREATE_ERROR_MESSAGES: Record<CreateHolidayCardErrorCode, string> = {
@@ -88,12 +92,8 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
       }
       if (!visibleRef.current) return; // dismissed before the create resolved: don't pop the browser
       const { cardId, created, regionWarning } = outcome.result;
-      if (!created || regionWarning) {
-        setNotice({ cardId, existing: !created, region: regionWarning });
-        return;
-      }
-      onOpenCard(cardId);
-      onClose();
+      // Always confirm before the browser opens: a new card takes ~20 minutes.
+      setNotice({ cardId, existing: !created, region: regionWarning });
     } finally {
       inFlight.current = false;
       setIsCreating(false);
@@ -134,9 +134,17 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
           {notice ? (
             <View
               style={styles.regionBlock}
-              testID={notice.existing ? 'holiday-greeting-existing' : 'holiday-greeting-region'}
+              testID={
+                notice.existing
+                  ? 'holiday-greeting-existing'
+                  : notice.region
+                    ? 'holiday-greeting-region'
+                    : 'holiday-greeting-preparing'
+              }
             >
-              <Text style={styles.title}>{notice.existing ? HOLIDAY_EXISTING_NOTE : HOLIDAY_REGION_NOTE}</Text>
+              <Text style={styles.title}>
+                {notice.existing ? HOLIDAY_EXISTING_NOTE : notice.region ? HOLIDAY_REGION_NOTE : HOLIDAY_PREPARING_TITLE}
+              </Text>
               {notice.existing ? (
                 <Text style={styles.body}>
                   Its greeting may be different from the one you just picked.
@@ -144,7 +152,9 @@ export function HolidayGreetingSheet({ visible, language, onCreate, onOpenCard, 
                 </Text>
               ) : (
                 <Text style={styles.body}>
-                  Your card is being made. You can still continue and choose a US or Canadian address when you order.
+                  {notice.region
+                    ? `Your card is being made. ${HOLIDAY_PREPARING_NOTE} You can still continue and choose a US or Canadian address when you order.`
+                    : HOLIDAY_PREPARING_NOTE}
                 </Text>
               )}
               <Pressable

@@ -185,7 +185,7 @@ const createHolidayCard = jest.fn();
 
 function holidaySummary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummary {
   return {
-    enabled: true, cardId: null, year: null, status: null, lastFailureCode: null, ordered: false, language: 'en',
+    enabled: true, cardId: null, year: null, status: null, readiness: null, lastFailureCode: null, ordered: false, language: 'en',
     ...overrides,
   };
 }
@@ -655,6 +655,8 @@ describe('Holiday card entry (holiday-cards-p2 Step 6)', () => {
     fireEvent.press(getByTestId('holiday-greeting-holidays'));
     fireEvent.press(getByTestId('holiday-greeting-confirm'));
 
+    // The ~20 minute confirmation comes first; Continue opens the shop.
+    fireEvent.press(await waitFor(() => getByTestId('holiday-greeting-continue')));
     await waitFor(() =>
       expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-9#h=${HANDOFF_CODE}`),
     );

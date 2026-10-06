@@ -24,6 +24,7 @@ function summary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummar
     cardId: null,
     year: null,
     status: null,
+    readiness: null,
     lastFailureCode: null,
     ordered: false,
     language: 'en',
@@ -62,6 +63,25 @@ describe('holidayCardTileState', () => {
     expect(holidayCardTileState(card(), '2026-10-15')).toBe('ready');
     expect(holidayCardTileState(card({ status: 'failed' }), '2026-10-15')).toBe('failed');
     expect(holidayCardTileState(card({ ordered: true }), '2026-10-15')).toBe('ordered');
+  });
+
+  it.each([
+    ['generating', 'generating'],
+    ['film', 'generating'],
+    ['ready', 'ready'],
+    ['failed', 'failed'],
+  ] as const)('readiness %s wins over status and maps to %s', (readiness, expected) => {
+    // `status` reads "ready" while the film is still rendering.
+    expect(holidayCardTileState(card({ status: 'ready', readiness }), '2026-10-15')).toBe(expected);
+  });
+
+  it('falls back to status when readiness is absent (older backend)', () => {
+    expect(holidayCardTileState(card({ status: 'generating', readiness: null }), '2026-10-15')).toBe('generating');
+    expect(holidayCardTileState(card({ status: 'ready', readiness: null }), '2026-10-15')).toBe('ready');
+  });
+
+  it('ordered wins over readiness', () => {
+    expect(holidayCardTileState(card({ ordered: true, readiness: 'film' }), '2026-10-15')).toBe('ordered');
   });
 
   it('shows a card even when the server switch is off', () => {
@@ -137,6 +157,24 @@ describe('HolidayCardTile', () => {
     expect(getByText('Preparing your card…')).toBeTruthy();
     fireEvent.press(getByTestId('holiday-card-tile-generating'));
     expect(mockedOpenShopUrl).toHaveBeenCalledWith('https://shop.usemomora.com/c/card-1');
+  });
+
+  it.each(['generating', 'film'] as const)(
+    'readiness %s: "Preparing your card…" with the ~20 minute notification subtitle, tap opens the shop',
+    (readiness) => {
+      mockSummary(card({ status: 'ready', readiness }));
+      const { getByTestId, getByText, queryByText } = renderTile();
+      expect(getByText('Preparing your card…')).toBeTruthy();
+      expect(getByText('This takes about 20 minutes. We’ll send you a notification when it’s ready.')).toBeTruthy();
+      expect(queryByText('Edit & order your card')).toBeNull();
+      fireEvent.press(getByTestId('holiday-card-tile-generating'));
+      expect(mockedOpenShopUrl).toHaveBeenCalledWith('https://shop.usemomora.com/c/card-1');
+    },
+  );
+
+  it('readiness ready: "Edit & order your card"', () => {
+    mockSummary(card({ status: 'ready', readiness: 'ready' }));
+    expect(renderTile().getByText('Edit & order your card')).toBeTruthy();
   });
 
   it('ready: "Edit & order your card" opens the shop card page', () => {

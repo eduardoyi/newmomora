@@ -152,8 +152,13 @@ function harness(options: {
   billing?: Response | null;
   dispatchResult?: boolean | 'throw';
   probeResult?: { width: number; height: number } | null;
+  /** What `holiday_card_readiness` answers (default 'ready'); `rpcs` can override the whole handler. */
+  readiness?: string | null;
 } = {}): Harness {
-  const fake = createFake(options.tables ?? {}, options.rpcs ?? {});
+  const fake = createFake(options.tables ?? {}, {
+    holiday_card_readiness: () => ({ data: options.readiness === undefined ? 'ready' : options.readiness }),
+    ...(options.rpcs ?? {}),
+  });
   const dispatched: Harness['dispatched'] = [];
   const deletedKeys: string[] = [];
   const probed: string[] = [];
@@ -560,6 +565,50 @@ Deno.test('get: a generating card without a film has film state none, no QR, no 
   assertEquals(json.frontCandidates, []);
   assertEquals(json.frontImage, null);
   assertEquals(json.generation.state, 'generating');
+});
+
+Deno.test('get: readiness comes from the RPC; film/generating hide the editor view but keep film state and the other fields', async () => {
+  const card = cardRow({ status: 'ready', film_id: FILM_ID, share_token: TOKEN, edits: { frontImage: MEDIA_A }, letters: [{ tone: 'classic', text: 'Dear friends' }], front_candidates: [{ mediaId: MEDIA_A, memoryId: MEMORY_A, rank: 1 }] });
+  const rendering = { status: 'rendering', blocked: false, ready_at: null, video_key: null };
+
+  // Film still rendering: readiness 'film', no editor view, everything else intact.
+  const preparing = harness({ readiness: 'film', tables: getTables({ card, film: rendering }) });
+  const a = await (await call({ op: 'get', cardId: CARD_ID }, preparing.deps)).json();
+  assertEquals(a.readiness, 'film');
+  assertEquals(a.editorView, null);
+  assertEquals(a.film, { state: 'rendering', filmId: FILM_ID, readyAt: null });
+  assertEquals(a.card.status, 'ready');
+  assertEquals(a.card.letters, [{ tone: 'classic', text: 'Dear friends' }]);
+  assertEquals(a.isOrdered, false);
+  assertEquals(a.generation.state, 'ready');
+  assertEquals(preparing.fake.rpcCalls.find((c) => c.name === 'holiday_card_readiness')!.args, { p_card_id: CARD_ID });
+
+  // The card flips to ready: the editor view is back.
+  const ready = harness({ readiness: 'ready', tables: getTables({ card, film: { ...rendering, status: 'ready', ready_at: 'x', video_key: 'v.mp4' } }) });
+  const b = await (await call({ op: 'get', cardId: CARD_ID }, ready.deps)).json();
+  assertEquals(b.readiness, 'ready');
+  assertEquals(b.editorView.locked, false);
+
+  // Generating (the RPC says so): no editor view.
+  const generating = harness({ readiness: 'generating', tables: getTables() });
+  const c = await (await call({ op: 'get', cardId: CARD_ID }, generating.deps)).json();
+  assertEquals([c.readiness, c.editorView], ['generating', null]);
+
+  // Failed: the card reports it; the view is whatever the card holds (letters-less here: null).
+  const failed = harness({ readiness: 'failed', tables: getTables({ card: cardRow({ status: 'failed', last_failure_code: 'LETTERS_FAILED' }) }) });
+  const d = await (await call({ op: 'get', cardId: CARD_ID }, failed.deps)).json();
+  assertEquals(d.readiness, 'failed');
+  assertEquals(d.card.lastFailureCode, 'LETTERS_FAILED');
+});
+
+Deno.test('get: an RPC error or an unknown readiness value fails the read (500) instead of guessing', async () => {
+  const card = cardRow({ status: 'ready' });
+  const failing = harness({ rpcs: { holiday_card_readiness: () => ({ data: null, error: { code: 'XX000', message: 'boom' } }) }, tables: getTables({ card }) });
+  assertEquals((await call({ op: 'get', cardId: CARD_ID }, failing.deps)).status, 500);
+  const weird = harness({ readiness: 'nonsense', tables: getTables({ card }) });
+  assertEquals((await call({ op: 'get', cardId: CARD_ID }, weird.deps)).status, 500);
+  const none = harness({ readiness: null, tables: getTables({ card }) });
+  assertEquals((await call({ op: 'get', cardId: CARD_ID }, none.deps)).status, 500);
 });
 
 Deno.test('get: viewers, strangers, deleted and unknown cards are refused', async () => {

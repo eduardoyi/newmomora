@@ -1253,6 +1253,24 @@ cards/orders and refuses (`55000`) while a card is `generating` with a heartbeat
   the expiry) and `claim_web_handoff(p_code_hash) → uuid` (one `update … where used_at
   is null and expires_at > now() returning user_id`; null when unknown, used or expired).
 
+**Card readiness** (owner decision 2026-10-06; migration `20261008120000_holiday_card_readiness.sql`,
+pgTAP `supabase/tests/holiday_card_readiness.sql`, rollback
+`supabase/rollbacks/20261008120000_holiday_card_readiness_down.sql`). A card is not
+editable/orderable until its film is done; meanwhile the app and shop show "Preparing
+(~20 min)" and the creator gets a push when it flips.
+
+- **`holiday_cards.ready_notified_at timestamptz`** — the push dedupe marker, claimed by
+  `sweep-holiday-card-orders` with a CAS before sending. Not in the column-level SELECT
+  grant (service role only). The migration backfills it for cards already past their film.
+- **`holiday_card_readiness(p_card_id) → text`** (service role; `security definer`, also
+  callable from other definers): `generating` (status generating) · `failed` (status
+  failed) · for a `ready` card: **`ready`** when it has no film, OR its film is published
+  (`video_key` and `ready_at` set, not blocked, status ≠ `ended`), OR the film is blocked,
+  OR the film's status is `failed | skipped | ended` (prints without QR), OR the card is
+  older than **75 minutes** (safety valve) — otherwise **`film`**. Null for an unknown card.
+- **`holiday_card_summary`** (dropped and recreated; same args, zero-row rules, fields and
+  grant) gains a trailing **`readiness text`** column (null when no card).
+
 ### 2.2 Indexes
 
 ```sql
@@ -3724,7 +3742,7 @@ errors `{ error, code }`. Full behaviour: [holiday-cards.md](./features/holiday-
 | Op | Request | Response / errors |
 |---|---|---|
 | `create` | `{ familyId, greeting: 'christmas' \| 'holidays' \| 'new-year', timezone? }` | 201 new / 200 existing `{ success, created, card, generation: { state, failureCode, attempts, dispatched }, regionWarning }`. `create_holiday_card` (one card per family per year); dispatches generation once (attempt 1 via `increment_holiday_card_generation_attempt`). `regionWarning: true` when the timezone isn't US/CA — never blocking (the address at quote is the gate). 409 `holiday_card_slot_used` (a soft-deleted card holds the year). |
-| `get` | `{ cardId }` | `{ card, film: { state: none\|rendering\|ready\|blocked\|failed, filmId, readyAt }, qrUrl, linkDisabled, frontCandidates[] (signed 1 h previews), frontImage, hasOpenCheckout, isOrdered, generation }`. Never returns the token, `editor_facts` or lease columns. |
+| `get` | `{ cardId }` | `{ card, readiness: generating\|film\|ready\|failed, film: { state: none\|rendering\|ready\|blocked\|failed, filmId, readyAt }, qrUrl, linkDisabled, frontCandidates[] (signed 1 h previews), frontImage, hasOpenCheckout, isOrdered, generation, editorView, … }`. `readiness` comes from `holiday_card_readiness` (500 if the RPC fails); **`editorView` is null while `readiness` is `film` or `generating`** (the shop shows "Preparing") — film state and the other fields are still returned. Never returns the token, `editor_facts` or lease columns. |
 | `picker_pool` | `{ cardId, cursor?, limit? ≤ 50 }` | `{ items: [{ memoryId, mediaId, previewKey, date, aspectRatio }], nextCursor }` — family photos Dec 1 (year − 1) → today, sensitive/reported excluded. |
 | `save_edits` | `{ cardId, expectedVersion, edits }` | `{ success, editsVersion, edits }` (normalized; `choices.greeting` stripped). Media ids must belong to the family (404 `MEDIA_NOT_FOUND`); a new front is measured by ranged GET (422 `front_unreadable` / `front_low_resolution`). 409 `edits_version_mismatch { currentVersion }`, 423 `holiday_card_checkout_open`. |
 | `delete` | `{ cardId }` | `{ success, deleted, filmEnded }`. 409 `card_ordered` (any order paid or later), 423 while a checkout is open. Soft delete → `end_holiday_card_film` → delete that film's R2 keys. The year's slot stays used. |
@@ -3769,7 +3787,15 @@ with a retryable code after 10 min (cap 3 via
 `increment_holiday_card_generation_attempt`; `NO_LETTERS` and
 `generation_attempts_exhausted` are terminal); hourly alert when an ordered
 card's film is failed/ended/lost its video (once, marker
-`ordered_film_unavailable`).
+`ordered_film_unavailable`). **Card ready push** (pass `ready` in the response): cards with
+`status = 'ready'`, a `film_id`, `ready_notified_at is null`, not deleted, created within 2
+days (batch 25, oldest first) whose `holiday_card_readiness` is `ready` → CAS-set
+`ready_notified_at` **before** sending (at-most-once) → Expo push to `created_by`'s
+`user_profiles.expo_push_token` (skipped without a token). Not gated on a notification
+preference (it reports the creator's own action, like the Memory Book ready push). Copy by
+`holiday_cards.language`: en "Your holiday card is ready" / "Open it to review and order.",
+es "Tu tarjeta de fiestas está lista" / "Ábrela para revisarla y pedirla."; data
+`{ route: 'holiday-card', cardId, familyId }` (`PushRouteData`). Cards without a film get no push.
 Fulfilment ignores `families.deleted_at` for paid orders.
 
 ### 4.33 Holiday card workers and render route (Holiday Cards P1)

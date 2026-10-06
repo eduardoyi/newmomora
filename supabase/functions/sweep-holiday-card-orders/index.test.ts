@@ -41,11 +41,15 @@ interface Rig {
   mails: { to: string; subject: string; body: string }[];
   dispatches: { cardId: string; attemptId: string }[];
   dispatchResult: { ok: boolean };
+  pushes: { token: string; title: string; body: string; data?: Row }[];
+  pushResult: { ok: boolean | 'throw' };
   run: (options?: { now?: number; secret?: string | null }) => Promise<Record<string, any>>;
 }
 
 function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?: 'draft' | 'order'; status?: string; tracking?: Row[]; refusal?: string } | null } = {}): Rig {
-  const db = new FakeDb({ holiday_card_orders: [], holiday_cards: [], year_films: [], families: [], ...seed });
+  // The database clock follows the tick's `now` (holiday_card_readiness's 75-minute valve reads it).
+  const clock = { now: NOW };
+  const db = new FakeDb({ holiday_card_orders: [], holiday_cards: [], year_films: [], families: [], user_profiles: [], ...seed }, { nowMs: () => clock.now });
   db.users.set(IDS.user, { email: 'buyer@example.com' });
   const gelato = makeGelatoFake();
   const spec = options.gelatoOrder === undefined ? { orderType: 'draft' as const, status: 'created' } : options.gelatoOrder;
@@ -62,6 +66,8 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
   const mails: Rig['mails'] = [];
   const dispatches: Rig['dispatches'] = [];
   const dispatchResult = { ok: true };
+  const pushes: Rig['pushes'] = [];
+  const pushResult: Rig['pushResult'] = { ok: true };
   const routed = (async (input: Request | URL | string, init?: RequestInit) => {
     const host = new URL(String(input)).hostname;
     if (host === 'api.stripe.com') return stripe.fetch(input, init);
@@ -69,8 +75,9 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
   }) as typeof fetch;
   db.rpcHandlers.set('increment_holiday_card_generation_attempt', () => 1);
   return {
-    db, gelato, stripe, r2, mails, dispatches, dispatchResult,
+    db, gelato, stripe, r2, mails, dispatches, dispatchResult, pushes, pushResult,
     run: async (opts = {}) => {
+      clock.now = opts.now ?? NOW;
       const previous = { cron: Deno.env.get('CRON_SECRET'), gelato: Deno.env.get('GELATO_API_KEY'), stripe: Deno.env.get('STRIPE_SECRET_KEY') };
       Deno.env.set('CRON_SECRET', 'cron-secret');
       Deno.env.set('GELATO_API_KEY', 'gelato-test-key');
@@ -86,6 +93,11 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
           listKeys: r2.listKeys,
           deleteKey: r2.deleteKey,
           dispatchGeneration: async (cardId, attemptId) => { dispatches.push({ cardId, attemptId }); return dispatchResult.ok; },
+          sendPush: async (token, title, body, data) => {
+            pushes.push({ token, title, body, data: data as Row | undefined });
+            if (pushResult.ok === 'throw') throw new Error('network');
+            return pushResult.ok;
+          },
         });
         return { status: response.status, ...(await response.json()) };
       } finally {
@@ -774,4 +786,154 @@ Deno.test('held canary: the sweep finishes the refund of a held order (draft del
   mismatch.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_ID}`, 400);
   await mismatch.run();
   assertEquals(row(mismatch).failure_reason, 'PAYMENT_MISMATCH_AMOUNT');
+});
+
+// ── 5c. "your card is ready" push ────────────────────────────────────────
+
+const CARD_FILM_ID = IDS.film;
+const READY_CARD = (overrides: Row = {}): Row => ({
+  id: IDS.card, family_id: IDS.family, created_by: IDS.user, language: 'en', status: 'ready', film_id: CARD_FILM_ID,
+  deleted_at: null, ready_notified_at: null, heartbeat_at: null, created_at: minutesAgo(30), updated_at: minutesAgo(5), generation_attempts: 1, last_failure_code: null, ...overrides,
+});
+const FILM = (overrides: Row = {}): Row => ({ id: CARD_FILM_ID, status: 'rendering', blocked: false, video_key: null, ready_at: null, ...overrides });
+const PUBLISHED = { status: 'ready', video_key: 'o/film.mp4', ready_at: minutesAgo(1) };
+const PROFILE = (overrides: Row = {}): Row => ({ id: IDS.user, expo_push_token: 'ExponentPushToken[fictional-token-1]', deleted_at: null, ...overrides });
+const readyCard = (r: Rig) => r.db.row('holiday_cards', IDS.card);
+
+Deno.test('card ready push: a card whose film is published notifies its creator once, with the route payload', async () => {
+  const r = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  const first = await r.run();
+  assertEquals(first.ready, { considered: 1, waiting: 0, claimed: 1, sent: 1, failed: 0 });
+  assertEquals(r.pushes.length, 1);
+  assertEquals(r.pushes[0], {
+    token: 'ExponentPushToken[fictional-token-1]',
+    title: 'Your holiday card is ready',
+    body: 'Open it to review and order.',
+    data: { route: 'holiday-card', cardId: IDS.card, familyId: IDS.family },
+  });
+  assertEquals(typeof readyCard(r).ready_notified_at, 'string');
+  // The next ticks find nothing to do.
+  await r.run();
+  await r.run({ now: NOW + 10 * 60_000 });
+  assertEquals(r.pushes.length, 1);
+});
+
+Deno.test('card ready push: Spanish cards get the Spanish copy; anything else English', async () => {
+  const es = rig({ holiday_cards: [READY_CARD({ language: 'es' })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  await es.run();
+  assertEquals([es.pushes[0].title, es.pushes[0].body], ['Tu tarjeta de fiestas está lista', 'Ábrela para revisarla y pedirla.']);
+  const other = rig({ holiday_cards: [READY_CARD({ language: 'fr' })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  await other.run();
+  assertEquals(other.pushes[0].title, 'Your holiday card is ready');
+});
+
+Deno.test('card ready push: cards without a film (ready in ~2 minutes while the parent watched) never push and are not marked', async () => {
+  const r = rig({ holiday_cards: [READY_CARD({ film_id: null })], user_profiles: [PROFILE()] });
+  const result = await r.run();
+  assertEquals(result.ready.considered, 0);
+  assertEquals(r.pushes.length, 0);
+  assertEquals(readyCard(r).ready_notified_at, null);
+});
+
+Deno.test('card ready push: waits while the film is still being made, then pushes once it is published', async () => {
+  const r = rig({ holiday_cards: [READY_CARD()], year_films: [FILM()], user_profiles: [PROFILE()] });
+  const waiting = await r.run();
+  assertEquals(waiting.ready, { considered: 1, waiting: 1, claimed: 0, sent: 0, failed: 0 });
+  assertEquals(r.pushes.length, 0);
+  assertEquals(readyCard(r).ready_notified_at, null);
+
+  Object.assign(r.db.row('year_films', CARD_FILM_ID), PUBLISHED);
+  const done = await r.run({ now: NOW + 10 * 60_000 });
+  assertEquals(done.ready.sent, 1);
+  assertEquals(r.pushes.length, 1);
+});
+
+Deno.test('card ready push: a film that failed, was skipped/ended or blocked, or the 75-minute valve, also counts as ready', async () => {
+  for (const film of [{ status: 'failed' }, { status: 'skipped' }, { status: 'ended' }, { blocked: true }]) {
+    const r = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(film)], user_profiles: [PROFILE()] });
+    await r.run();
+    assertEquals(r.pushes.length, 1, JSON.stringify(film));
+  }
+  // A film stuck rendering: held at 74 minutes, released by the valve after 75.
+  const stuck = rig({ holiday_cards: [READY_CARD({ created_at: minutesAgo(74) })], year_films: [FILM()], user_profiles: [PROFILE()] });
+  await stuck.run();
+  assertEquals(stuck.pushes.length, 0);
+  await stuck.run({ now: NOW + 2 * 60_000 });
+  assertEquals(stuck.pushes.length, 1);
+});
+
+Deno.test('card ready push: the CAS decides: a card already claimed by another tick is never pushed again', async () => {
+  const r = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  // Another tick wins the claim between this tick's read and its CAS.
+  const original = r.db.rpcHandlers.get('holiday_card_readiness');
+  r.db.rpcHandlers.set('holiday_card_readiness', (args) => {
+    readyCard(r).ready_notified_at = minutesAgo(0);
+    return original ? original(args) : 'ready';
+  });
+  const result = await r.run();
+  assertEquals(result.ready.claimed, 0);
+  assertEquals(r.pushes.length, 0);
+
+  // Two concurrent ticks over the same card: exactly one push.
+  const pair = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  await Promise.all([pair.run(), pair.run()]);
+  assertEquals(pair.pushes.length, 1);
+});
+
+Deno.test('card ready push: the claim is written BEFORE the send, a failed send is not retried, and the failure is logged by id only', async () => {
+  const r = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  r.pushResult.ok = 'throw';
+  const first = await r.run();
+  assertEquals([first.ready.claimed, first.ready.sent, first.ready.failed], [1, 0, 1]);
+  assertEquals(typeof readyCard(r).ready_notified_at, 'string');
+  r.pushResult.ok = true;
+  await r.run();
+  assertEquals(r.pushes.length, 1); // only the failed attempt
+  const rejected = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  rejected.pushResult.ok = false;
+  assertEquals((await rejected.run()).ready.failed, 1);
+});
+
+Deno.test('card ready push: no token, a deleted profile, a missing creator and old/deleted cards are skipped (the claim is still taken)', async () => {
+  const noToken = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE({ expo_push_token: null })] });
+  const a = await noToken.run();
+  assertEquals([a.ready.claimed, a.ready.sent, noToken.pushes.length], [1, 0, 0]);
+  assertEquals(typeof readyCard(noToken).ready_notified_at, 'string');
+
+  const deletedProfile = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE({ deleted_at: minutesAgo(5) })] });
+  await deletedProfile.run();
+  assertEquals(deletedProfile.pushes.length, 0);
+
+  const noCreator = rig({ holiday_cards: [READY_CARD({ created_by: null })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  await noCreator.run();
+  assertEquals(noCreator.pushes.length, 0);
+
+  const old = rig({ holiday_cards: [READY_CARD({ created_at: daysAgo(3) })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  assertEquals((await old.run()).ready.considered, 0);
+  const deleted = rig({ holiday_cards: [READY_CARD({ deleted_at: minutesAgo(5) })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  assertEquals((await deleted.run()).ready.considered, 0);
+  const alreadyNotified = rig({ holiday_cards: [READY_CARD({ ready_notified_at: minutesAgo(20) })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  assertEquals((await alreadyNotified.run()).ready.considered, 0);
+  const generating = rig({ holiday_cards: [READY_CARD({ status: 'generating' })], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  assertEquals((await generating.run()).ready.considered, 0);
+});
+
+Deno.test('card ready push: the batch is bounded and a readiness RPC failure leaves the card for the next tick', async () => {
+  const cards = Array.from({ length: 30 }, (_, i) => READY_CARD({
+    id: `30000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    film_id: `50000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    created_at: minutesAgo(30 - i / 100),
+  }));
+  const films = cards.map((c) => FILM({ ...PUBLISHED, id: c.film_id }));
+  const r = rig({ holiday_cards: cards, year_films: films, user_profiles: [PROFILE()] });
+  const result = await r.run();
+  assertEquals(result.ready.considered, 25);
+  assertEquals(r.pushes.length, 25);
+  assertEquals((await r.run()).ready.considered, 5);
+
+  const broken = rig({ holiday_cards: [READY_CARD()], year_films: [FILM(PUBLISHED)], user_profiles: [PROFILE()] });
+  broken.db.rpcFailures.set('holiday_card_readiness', { message: 'boom', code: 'XX000' });
+  const out = await broken.run();
+  assertEquals([out.ready.claimed, broken.pushes.length], [0, 0]);
+  assertEquals(readyCard(broken).ready_notified_at, null);
 });

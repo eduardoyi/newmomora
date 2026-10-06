@@ -39,6 +39,11 @@
  *   5b. card claims  a card-level checkout claim (`holiday_cards.checkout_order_id`)
  *                    older than 10 min whose order is not in `checkout` (and not
  *                    mid-`create_checkout`) is released.
+ *   5c. card ready   (owner decision 2026-10-06) a card that waited for its film
+ *                    (film_id set, `holiday_card_readiness` = 'ready', younger than 2
+ *                    days) pushes its creator ONCE: `ready_notified_at` is claimed with
+ *                    a CAS BEFORE the push (at-most-once). Cards without a film were
+ *                    ready in ~2 min while the parent watched: no push.
  *   6. ordered films hourly: an ordered card whose film failed or lost its
  *                    video -> owner alert (once: the card's `last_failure_code`
  *                    is the dedupe marker).
@@ -52,6 +57,7 @@ import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { validateCronSecret } from '../_shared/cron.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import { type PushRouteData, sendExpoPushNotification } from '../_shared/expo-push.ts';
 import { GelatoApiError, type GelatoOrder, getOrder } from '../_shared/gelato.ts';
 import {
   classifyGelatoError,
@@ -91,6 +97,8 @@ export const RETENTION_AFTER_SHIPPED_MS = 30 * 24 * 60 * 60_000;
 export const GENERATION_STALE_HEARTBEAT_MS = 20 * 60_000;
 export const GENERATION_NEVER_LEASED_MS = 10 * 60_000;
 export const GENERATION_ATTEMPT_CAP = 3;
+/** Cards older than this never get a "ready" push (a late sweep must not announce a stale card). */
+export const READY_PUSH_WINDOW_MS = 2 * 24 * 60 * 60_000;
 
 export const CONFIRM_BATCH = 25;
 export const TRACK_BATCH = 150;
@@ -98,6 +106,7 @@ export const TRACK_CONCURRENCY = 5;
 export const AGING_BATCH = 25;
 export const CLEANUP_BATCH = 25;
 export const GENERATION_BATCH = 25;
+export const READY_PUSH_BATCH = 25;
 export const FILM_CHECK_CARD_CAP = 1000;
 const IN_CHUNK = 100;
 
@@ -112,6 +121,8 @@ export interface SweepDependencies {
   deleteKey: (key: string) => Promise<void>;
   /** POST the year-film worker's `/holiday-cards/generate` (HMAC, `_shared/year-film-worker-dispatch.ts`). true = accepted. */
   dispatchGeneration: (cardId: string, attemptId: string) => Promise<boolean>;
+  /** Expo push (`_shared/expo-push.ts`); true = accepted by Expo. */
+  sendPush: (token: string, title: string, body: string, data?: PushRouteData) => Promise<boolean>;
 }
 
 export const DEFAULT_DEPENDENCIES: SweepDependencies = {
@@ -125,6 +136,7 @@ export const DEFAULT_DEPENDENCIES: SweepDependencies = {
   deleteKey: deleteObject,
   // Shared HMAC helper (same scheme as schedule-year-films' /dispatch).
   dispatchGeneration: (cardId, attemptId) => postSignedToYearFilmWorker('/holiday-cards/generate', { cardId, attemptId }),
+  sendPush: sendExpoPushNotification,
 };
 
 function fulfillmentDepsFor(dependencies: SweepDependencies): FulfillmentDeps {
@@ -737,6 +749,107 @@ async function recoverGeneration(
   return out;
 }
 
+// ── 5c. "your card is ready" push ────────────────────────────────────────
+
+/** Push copy in the card's language (`holiday_cards.language`: en | es). */
+export function cardReadyPushCopy(language: string | null | undefined): { title: string; body: string } {
+  return language === 'es'
+    ? { title: 'Tu tarjeta de fiestas está lista', body: 'Ábrela para revisarla y pedirla.' }
+    : { title: 'Your holiday card is ready', body: 'Open it to review and order.' };
+}
+
+interface ReadyCardRow {
+  id: string;
+  family_id: string;
+  created_by: string | null;
+  language: string | null;
+}
+
+/**
+ * Cards that WAITED for a film (film_id set) and are now ready push their creator once.
+ * Deliberately NOT gated on `notify_new_memories` / `notify_engagement`: like the Memory Book
+ * "your book is ready" push, this reports the outcome of the creator's own action (they made
+ * the card), not activity by someone else. A user with no push token (permission denied) is skipped.
+ * `ready_notified_at` is claimed BEFORE sending, so a crash or a duplicate tick can never double-send;
+ * a failed send is logged by card id and not retried (at-most-once, a push is best effort).
+ */
+async function notifyReadyCards(
+  dependencies: SweepDependencies,
+  supabase: SupabaseClient,
+): Promise<{ considered: number; waiting: number; claimed: number; sent: number; failed: number }> {
+  const now = dependencies.now();
+  const out = { considered: 0, waiting: 0, claimed: 0, sent: 0, failed: 0 };
+  const { data, error } = await supabase
+    .from('holiday_cards')
+    .select('id, family_id, created_by, language')
+    .eq('status', 'ready')
+    .not('film_id', 'is', null)
+    .is('ready_notified_at', null)
+    .is('deleted_at', null)
+    .gt('created_at', iso(now - READY_PUSH_WINDOW_MS))
+    .order('created_at', { ascending: true })
+    .limit(READY_PUSH_BATCH)
+    .returns<ReadyCardRow[]>();
+  if (error) {
+    console.error('sweep-holiday-card-orders ready lookup failed', error.message);
+    return out;
+  }
+  for (const card of data ?? []) {
+    out.considered += 1;
+    const { data: readiness, error: readinessError } = await supabase.rpc('holiday_card_readiness', { p_card_id: card.id });
+    if (readinessError) {
+      console.error('sweep-holiday-card-orders readiness failed', card.id, readinessError.code ?? 'unknown');
+      continue;
+    }
+    if (readiness !== 'ready') {
+      out.waiting += 1;
+      continue;
+    }
+    // The CAS: only the writer that flips null -> now() sends.
+    const { data: claimed } = await supabase
+      .from('holiday_cards')
+      .update({ ready_notified_at: iso(now) })
+      .eq('id', card.id)
+      .is('ready_notified_at', null)
+      .eq('status', 'ready')
+      .is('deleted_at', null)
+      .select('id')
+      .maybeSingle();
+    if (!claimed) continue;
+    out.claimed += 1;
+    if (!card.created_by) continue;
+
+    const { data: profile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('expo_push_token, deleted_at')
+      .eq('id', card.created_by)
+      .maybeSingle<{ expo_push_token: string | null; deleted_at: string | null }>();
+    if (profileError) {
+      console.error('sweep-holiday-card-orders profile lookup failed', card.id, profileError.code ?? 'unknown');
+      out.failed += 1;
+      continue;
+    }
+    if (!profile || profile.deleted_at || !profile.expo_push_token) continue;
+    const copy = cardReadyPushCopy(card.language);
+    try {
+      const accepted = await dependencies.sendPush(profile.expo_push_token, copy.title, copy.body, {
+        route: 'holiday-card',
+        cardId: card.id,
+        familyId: card.family_id,
+      });
+      if (accepted) out.sent += 1;
+      else {
+        out.failed += 1;
+        console.error('sweep-holiday-card-orders ready push rejected', card.id);
+      }
+    } catch (pushError) {
+      out.failed += 1;
+      console.error('sweep-holiday-card-orders ready push failed', card.id, pushError instanceof Error ? pushError.name : 'unknown');
+    }
+  }
+  return out;
+}
+
 // ── 6. ordered cards whose film is gone ──────────────────────────────────
 
 interface FilmRow {
@@ -833,12 +946,13 @@ export async function handleSweepHolidayCardOrders(
   const cleanup = await pass('cleanup', null, () => cleanUp(dependencies, supabase));
   const refunds = await pass('refunds', null, () => finishRefunds(dependencies, supabase));
   const generation = await pass('generation', null, () => recoverGeneration(dependencies, supabase));
+  const ready = await pass('card-ready', null, () => notifyReadyCards(dependencies, supabase));
   // Hourly: the first tick of each hour (the cron runs every 10 minutes).
   const films = new Date(dependencies.now()).getUTCMinutes() < 10
     ? await pass('ordered-films', null, () => checkOrderedFilms(dependencies, supabase))
     : null;
 
-  return jsonResponse({ success: true, confirm, track, aging, claims, cleanup, refunds, generation, films });
+  return jsonResponse({ success: true, confirm, track, aging, claims, cleanup, refunds, generation, ready, films });
 }
 
 if (import.meta.main) serveWithSentry('sweep-holiday-card-orders', (request) => handleSweepHolidayCardOrders(request));

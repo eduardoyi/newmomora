@@ -61,6 +61,13 @@ export function isCardApiError(value: unknown): value is CardApiError {
 // ── Response shapes ──────────────────────────────────────────────────────
 
 export type CardStatus = 'generating' | 'ready' | 'failed';
+/**
+ * What the card can do for the family (the server's call): 'generating'
+ * (artwork), 'film' (artwork done, the QR film still rendering: not editable
+ * or orderable yet, `editorView` is null), 'ready', 'failed'. Null when the
+ * server (an older backend) does not send it: callers fall back to `status`.
+ */
+export type CardReadiness = 'generating' | 'film' | 'ready' | 'failed';
 export type FilmState = 'none' | 'rendering' | 'ready' | 'blocked' | 'failed';
 export type QrState = 'on' | 'waiting_film' | 'off' | 'unavailable';
 
@@ -104,6 +111,8 @@ export interface MyOrderView {
 
 export interface HolidayCardView {
   card: CardRowView;
+  /** See `CardReadiness`; null from an older backend. */
+  readiness: CardReadiness | null;
   film: { state: FilmState; filmId: string | null; readyAt: string | null };
   qrUrl: string | null;
   /** The film link was revoked: the card prints without a QR. */
@@ -132,6 +141,7 @@ function bad(what: string): never {
 
 const QR_STATES: readonly QrState[] = ['on', 'waiting_film', 'off', 'unavailable'];
 const FILM_STATES: readonly FilmState[] = ['none', 'rendering', 'ready', 'blocked', 'failed'];
+const CARD_READINESS: readonly CardReadiness[] = ['generating', 'film', 'ready', 'failed'];
 const CARD_STATUSES: readonly CardStatus[] = ['generating', 'ready', 'failed'];
 
 function parseEditorView(raw: unknown): EditorView | null {
@@ -190,7 +200,12 @@ export function parseHolidayCard(raw: unknown): HolidayCardView {
     }
   }
 
+  // Top level of the response; tolerate it on `card` too.
+  const rawReadiness = raw.readiness ?? c.readiness;
+  const readiness = CARD_READINESS.includes(rawReadiness as CardReadiness) ? (rawReadiness as CardReadiness) : null;
+
   return {
+    readiness,
     card: {
       id,
       familyId: str(c.familyId) ?? '',
