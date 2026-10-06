@@ -7,6 +7,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   Modal,
   Platform,
   Pressable,
@@ -40,13 +41,29 @@ interface MemoryCommentsDrawerProps {
   onClose: () => void;
 }
 
-export function getCommentsKeyboardAvoidingBehavior(
-  platform: string,
-  isKeyboardVisible: boolean,
+// iOS: `padding` inside the Modal. Android: no KeyboardAvoidingView behavior
+// at all -- React Native's Modal dialog window sets SOFT_INPUT_ADJUST_RESIZE
+// itself, so the window (and this view with it) already shrinks for the
+// keyboard. Layering `behavior="height"` on top compensated twice and
+// collapsed the sheet behind the keyboard (device-observed 2026-10-06). The
+// residual case, a window that does NOT resize, is covered by
+// `getAndroidKeyboardInset`.
+export function getCommentsKeyboardAvoidingBehavior(platform: string) {
+  return platform === 'ios' ? ('padding' as const) : undefined;
+}
+
+// How much bottom padding the Android sheet still needs once the keyboard is
+// up: the keyboard height minus however much the window already shrank
+// (`baselineHeight` is the tallest root height seen with no keyboard).
+// Self-correcting -- 0 when the window resized, the full keyboard height
+// when it didn't.
+export function getAndroidKeyboardInset(
+  baselineHeight: number,
+  currentHeight: number,
+  keyboardHeight: number,
 ) {
-  if (platform === 'ios') return 'padding' as const;
-  if (platform === 'android' && isKeyboardVisible) return 'height' as const;
-  return undefined;
+  if (baselineHeight <= 0 || currentHeight <= 0 || keyboardHeight <= 0) return 0;
+  return Math.max(0, keyboardHeight - Math.max(0, baselineHeight - currentHeight));
 }
 
 // Thin re-exports so this file's public API (and every existing caller/test
@@ -69,6 +86,9 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   const [actionComment, setActionComment] = useState<MemoryComment | null>(null);
   const [reportComment, setReportComment] = useState<MemoryComment | null>(null);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [rootHeight, setRootHeight] = useState(0);
+  const baselineRootHeightRef = useRef(0);
   const listRef = useRef<FlatList<MemoryComment>>(null);
   const isClosingRef = useRef(false);
   const drawerTranslateY = useSharedValue(0);
@@ -76,11 +96,13 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   const currentName = profile?.name ?? 'You';
 
   useEffect(() => {
-    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
+    const showSubscription = Keyboard.addListener('keyboardDidShow', (event) => {
+      setKeyboardHeight(event?.endCoordinates?.height ?? 0);
       setIsKeyboardVisible(true);
     });
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
       setIsKeyboardVisible(false);
+      setKeyboardHeight(0);
     });
 
     return () => {
@@ -92,6 +114,7 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
   useEffect(() => {
     if (visible) {
       isClosingRef.current = false;
+      baselineRootHeightRef.current = 0;
     }
 
     drawerTranslateY.set(0);
@@ -105,6 +128,21 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
     setText('');
     onClose();
   };
+
+  // The baseline is the tallest height ever laid out since the sheet opened:
+  // the window can shrink for the keyboard before `keyboardDidShow` fires, so
+  // "height while the keyboard flag is off" is not a safe baseline.
+  const handleRootLayout = (event: LayoutChangeEvent) => {
+    const { height } = event.nativeEvent.layout;
+    baselineRootHeightRef.current = Math.max(baselineRootHeightRef.current, height);
+    setRootHeight(height);
+  };
+
+  const androidKeyboardInset =
+    Platform.OS === 'android' && isKeyboardVisible
+      // eslint-disable-next-line react-hooks/refs
+      ? getAndroidKeyboardInset(baselineRootHeightRef.current, rootHeight, keyboardHeight)
+      : 0;
 
   const handleDrawerDragStart = () => {
     Keyboard.dismiss();
@@ -191,8 +229,9 @@ export function MemoryCommentsDrawer({ memory, visible, onClose }: MemoryComment
           gesture root rather than relying on the app-level root. */}
       <GestureHandlerRootView style={styles.root}>
         <KeyboardAvoidingView
-          behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
-          style={styles.root}
+          behavior={getCommentsKeyboardAvoidingBehavior(Platform.OS)}
+          onLayout={handleRootLayout}
+          style={[styles.root, androidKeyboardInset > 0 && { paddingBottom: androidKeyboardInset }]}
           testID="comments-keyboard-avoiding-view"
         >
           <Pressable

@@ -165,12 +165,16 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 - Push failures are non-fatal because engagement has already committed.
 - Native haptics require a development-client/native rebuild after dependency
   installation; Expo Go is not supported by this SDK setup.
-- On Android, keep the sheet percentage-constrained and enable
-  `KeyboardAvoidingView`'s `height` behavior only while the keyboard is visible.
-  Disabling the behavior on `keyboardDidHide` prevents a stale reduced height
-  from leaving the drawer floating above the bottom of the screen. Do not
-  reintroduce a fixed pixel height from `useWindowDimensions`; that combination
-  causes top overflow and a delayed jump when the keyboard closes.
+- On Android, keep the sheet percentage-constrained and use **no**
+  `KeyboardAvoidingView` behavior. RN's Modal dialog window sets
+  `SOFT_INPUT_ADJUST_RESIZE` itself, so the window already shrinks for the
+  keyboard; adding `behavior="height"` on top compensated twice and collapsed
+  the sheet behind the keyboard (regression seen 2026-10-06). As a safety net
+  for a window that does not resize, `getAndroidKeyboardInset` pads the root by
+  `keyboardHeight - (baselineRootHeight - currentRootHeight)` (baseline = tallest
+  root height since the sheet opened). Do not reintroduce a fixed pixel height
+  from `useWindowDimensions`; that combination causes top overflow and a delayed
+  jump when the keyboard closes. iOS keeps `padding`.
 - React Native `Modal`s are separate Android windows, so the drawer's gesture
   region must remain inside its own `GestureHandlerRootView`. Keep the pan
   target to the handle/header; the `FlatList` must retain ownership of list
@@ -231,6 +235,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 | Date | Change |
 |------|--------|
 | 2026-08-21 | Likes are now household-visible: `memory_likes`' select policy was replaced with a household select policy mirroring comments (reversing the 2026-07-13 "liker identities are not exposed" decision). Scope is the read policy only — insert/delete stay self-only, and no liker-list UI was added to the engagement bar; the only place a liker's identity now surfaces is the new [Family activity](./family-activity.md) feed. |
+| 2026-10-06 | Android: dropped double keyboard compensation (`height` behavior) that hid the sheet behind the keyboard; measured-inset fallback |
 | 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |
 | 2026-07-15 | Keep the comment composer above the Android keyboard and restore bottom docking after keyboard close |
 | 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |
