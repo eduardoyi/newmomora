@@ -16,7 +16,7 @@ import { PRICE_NOTE } from './cardPricing';
 import { FREEZE_NOTICE, REORDER_NOTICE, shipByNoteFor } from './checkoutCopy';
 import { PACK_OPTIONS, formatMoney, type Packs } from './checkoutTypes';
 import { describeCheckoutError, interpretCancelOutcome, type ErrorView } from './errorCopy';
-import { buildThumbnailInput, qrSummaryLine } from './thumbnailInput';
+import { buildThumbnailInput } from './thumbnailInput';
 import { useCall } from './useCall';
 import './CardCheckout.css';
 
@@ -547,15 +547,12 @@ function SummaryStep({
     before = <CheckoutHint>Checking your latest changes…</CheckoutHint>;
   }
 
-  const backOfCard = buildThumbnailInput(view ?? null, ctx.edits.edits);
-
   return (
     <CheckoutQuote
       before={before}
       lines={[
         { label: 'Cards', value: `${quote.cards} cards` },
         { label: 'Price per card', value: formatMoney(Math.round(quote.priceCents / quote.cards), quote.currency) },
-        ...(backOfCard ? [{ label: 'Back of card', value: qrSummaryLine(backOfCard) }] : []),
       ]}
       total={formatMoney(quote.priceCents, quote.currency)}
       taxNote="Shipping is included. Tax, if applicable, is calculated at checkout."

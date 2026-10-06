@@ -4,7 +4,7 @@ import { emptyEdits, setChoices, setLetter } from '../../../../card/edits';
 import { cardInputFromData } from '../../../../card/fromData';
 import { ptToMm } from '../../../../card/geometry';
 import { fictionalView } from '../../__tests__/helpers';
-import { BLANK_IMAGE, PREVIEW_QR_URL, buildThumbnailInput, qrSummaryLine } from '../thumbnailInput';
+import { BLANK_IMAGE, PREVIEW_QR_URL, buildThumbnailInput } from '../thumbnailInput';
 
 /** A fixed-width fake: 0.5 em per character. */
 const measure = (text: string, _font: unknown, sizePt: number) => text.length * 0.5 * ptToMm(sizePt);
@@ -53,13 +53,5 @@ describe('buildThumbnailInput', () => {
     const data = view.editorView!.cardData;
     const noUrl = { ...view, editorView: { ...view.editorView!, cardData: { ...data, qr: { ...data.qr, url: '' } } } };
     expect(buildThumbnailInput(noUrl, emptyEdits())!.cardData.qr.url).toBe(PREVIEW_QR_URL);
-  });
-});
-
-describe('qrSummaryLine (the summary\'s "Back of card" row)', () => {
-  it('is a short value, not a sentence', () => {
-    expect(qrSummaryLine({ qrOn: true, qrState: 'on' })).toBe('QR code to your family film');
-    expect(qrSummaryLine({ qrOn: false, qrState: 'off' })).toBe('No QR code');
-    expect(qrSummaryLine({ qrOn: true, qrState: 'waiting_film' })).toMatch(/still being made/);
   });
 });
