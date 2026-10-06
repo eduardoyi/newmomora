@@ -1,6 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import { handleStripeWebhook, productRouteOf } from './index.ts';
-import { FakeDb, IDS, makeGelatoFake, makeR2Fake, makeStripeFake, US_ADDRESS } from '../_shared/holiday-card-orders.test-support.ts';
+import { defaultRenderResponse, FakeDb, fakePresign, FROZEN_HASH, IDS, makeGelatoFake, makeR2Fake, makeRenderFake, makeStripeFake, PAY_FIRST_COLUMNS, US_ADDRESS } from '../_shared/holiday-card-orders.test-support.ts';
 import { confirmPaidOrder, type FulfillmentDeps } from '../_shared/holiday-card-fulfillment.ts';
 
 const ORDER_ID = '44444444-4444-4444-8444-444444444444';
@@ -400,6 +400,7 @@ function cardSession(overrides: Record<string, unknown> = {}) {
 
 interface CardRig {
   db: FakeDb;
+  render: ReturnType<typeof makeRenderFake>;
   gelato: ReturnType<typeof makeGelatoFake>;
   stripe: ReturnType<typeof makeStripeFake>;
   r2: ReturnType<typeof makeR2Fake>;
@@ -415,13 +416,18 @@ function cardRig(seedOrder: Record<string, unknown> | null = cardOrder(), extra:
   const gelato = makeGelatoFake();
   gelato.state.orders.set(GELATO_DRAFT, { orderType: 'draft', fulfillmentStatus: 'created', tracking: [] });
   const stripe = makeStripeFake();
-  const routed = ((input: Request | URL | string, init?: RequestInit) =>
-    new URL(String(input)).hostname === 'api.stripe.com' ? stripe.fetch(input, init) : gelato.fetch(input, init)) as typeof fetch;
+  const render = makeRenderFake();
+  const routed = ((input: Request | URL | string, init?: RequestInit) => {
+    const host = new URL(String(input)).hostname;
+    if (host === 'api.stripe.com') return stripe.fetch(input, init);
+    if (host === 'render.test') return render.fetchRender(init);
+    return gelato.fetch(input, init);
+  }) as typeof fetch;
   const r2 = makeR2Fake([`print-orders/${IDS.order}/front.pdf`, `print-orders/${IDS.order}/back.pdf`]);
   const tasks: Promise<void>[] = [];
   const mails: { to: string; subject: string }[] = [];
   return {
-    db, gelato, stripe, r2, tasks, mails,
+    db, render, gelato, stripe, r2, tasks, mails,
     send: (event) => handleStripeWebhook(requestFor({}), {
       createServiceClient: db.client(),
       verifyStripeSignature: async () => event,
@@ -430,21 +436,24 @@ function cardRig(seedOrder: Record<string, unknown> | null = cardOrder(), extra:
       waitUntil: (task) => { tasks.push(task); },
       listKeys: r2.listKeys,
       deleteKey: r2.deleteKey,
+      createPresignedGetUrls: fakePresign(),
+      headObject: render.headObject,
     }),
     settle: async () => { await Promise.all(tasks); },
   };
 }
 
 async function withGelatoEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previous = Deno.env.get('GELATO_API_KEY');
-  const previousStripe = Deno.env.get('STRIPE_SECRET_KEY');
+  const names = ['GELATO_API_KEY', 'STRIPE_SECRET_KEY', 'MEMORY_BOOK_RENDER_WORKER_URL', 'MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET'];
+  const previous = new Map(names.map((n) => [n, Deno.env.get(n)]));
   Deno.env.set('GELATO_API_KEY', 'gelato-test-key');
   Deno.env.set('STRIPE_SECRET_KEY', 'sk_test_x');
+  Deno.env.set('MEMORY_BOOK_RENDER_WORKER_URL', 'https://render.test');
+  Deno.env.set('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET', 'render-secret');
   try {
     return await run();
   } finally {
-    if (previous === undefined) Deno.env.delete('GELATO_API_KEY'); else Deno.env.set('GELATO_API_KEY', previous);
-    if (previousStripe === undefined) Deno.env.delete('STRIPE_SECRET_KEY'); else Deno.env.set('STRIPE_SECRET_KEY', previousStripe);
+    for (const [name, value] of previous) if (value === undefined) Deno.env.delete(name); else Deno.env.set(name, value);
   }
 }
 
@@ -557,16 +566,17 @@ Deno.test('card confirm leaves the order paid for the sweep when Gelato is down'
   }));
 });
 
-Deno.test('card confirm marks the order failed and alerts when the Gelato draft is gone', async () => {
+Deno.test('card confirm: a recorded draft that Gelato lost is forgotten and the order retried (never failed): the pipeline rebuilds it', async () => {
   await withWebhookSecret(() => withGelatoEnv(async () => {
     const rig = cardRig();
     rig.gelato.state.orders.clear();
     await rig.send(fakeEvent('checkout.session.completed', cardSession()));
     await rig.settle();
     const row = rig.db.row('holiday_card_orders', IDS.order);
-    assertEquals(row.status, 'failed');
-    assertEquals(row.failure_reason, 'GELATO_DRAFT_MISSING');
-    assertEquals(rig.mails[0].subject.includes('GELATO_DRAFT_MISSING'), true);
+    assertEquals(row.status, 'paid');
+    assertEquals(row.failure_reason, null);
+    assertEquals(row.gelato_order_id, null);
+    assertEquals(rig.mails.length, 0);
   }));
 });
 
@@ -579,7 +589,7 @@ Deno.test('card checkout.session.expired cancels the order and deletes the Gelat
     const row = rig.db.row('holiday_card_orders', IDS.order);
     assertEquals(row.status, 'cancelled');
     assertEquals(row.gelato_order_id, null);
-    assertEquals(row.print_files, null);
+    assertEquals(typeof (row.print_files as { purgedAt?: string }).purgedAt, 'string'); // marker: purged again >= 1 h later
     assertEquals(rig.gelato.state.orders.size, 0);
     assertEquals(rig.r2.keys.size, 0);
   }));
@@ -964,5 +974,76 @@ Deno.test('held canary: a refunded held order whose draft Gelato will not delete
     other.gelato.state.forceStatus.set(`DELETE /orders/${GELATO_DRAFT}`, 400);
     await other.send(fakeEvent('charge.refunded', { payment_intent: 'pi_card_1', refunded: true }));
     assertEquals(other.db.row('holiday_card_orders', IDS.order).failure_reason, 'PAYMENT_MISMATCH_AMOUNT');
+  }));
+});
+
+
+// ── Pay first: the webhook kicks the whole print pipeline ────────────────
+
+const payFirstOrder = (overrides: Record<string, unknown> = {}) =>
+  cardOrder({ ...PAY_FIRST_COLUMNS, snapshot_hash: FROZEN_HASH, print_files: { snapshotHash: FROZEN_HASH }, ...overrides });
+const payFirstSession = () => cardSession({ metadata: { productType: 'holiday_card', orderId: IDS.order, snapshotHash: FROZEN_HASH } });
+const drafts = (rig: CardRig) => rig.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders');
+
+Deno.test('pay first: paid -> the webhook renders the print files, creates the draft, confirms and emails (nothing existed before payment)', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(payFirstOrder(), { holiday_cards: [{ ...CLAIMED_CARD }] });
+    assertEquals(rig.render.renderCalls.length, 0);
+    const response = await rig.send(fakeEvent('checkout.session.completed', payFirstSession()));
+    assertEquals((await response.json()).status, 'paid');
+    assertEquals(rig.db.row('holiday_card_orders', IDS.order).status, 'paid'); // recorded before the background work
+    await rig.settle();
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'submitted');
+    assertEquals(rig.render.renderCalls.length, 1);
+    assertEquals(drafts(rig).length, 1);
+    assertEquals(patches(rig).length, 1);
+    assertEquals(typeof row.gelato_order_id, 'string');
+    assertEquals(rig.mails.filter((m) => m.to === 'buyer@example.com').length, 1);
+    assertEquals(claimOf(rig), null);
+  }));
+});
+
+Deno.test('pay first: a render 422 after payment fails the order and alerts the owner (book policy: manual refund, no buyer email)', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(payFirstOrder());
+    rig.render.setRender(() => new Response(JSON.stringify({ ok: false, code: 'IMAGE_MISSING', message: 'gone' }), { status: 422 }));
+    await rig.send(fakeEvent('checkout.session.completed', payFirstSession()));
+    await rig.settle();
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'failed');
+    assertEquals(row.failure_reason, 'RENDER_REFUSED:IMAGE_MISSING');
+    assertEquals(drafts(rig).length, 0);
+    assertEquals(rig.mails.map((m) => m.to), ['hello@usemomora.com']);
+    assertEquals(rig.stripe.state.calls.length, 0); // no automatic refund
+  }));
+});
+
+Deno.test('pay first: a render outage leaves the order paid for the sweep to retry (no failure, no alert yet)', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(payFirstOrder());
+    rig.render.setRender(() => new Response('down', { status: 503 }));
+    await rig.send(fakeEvent('checkout.session.completed', payFirstSession()));
+    await rig.settle();
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'paid');
+    assertEquals(row.failure_reason, null);
+    assertEquals(rig.mails.length, 0);
+    assertEquals(drafts(rig).length, 0);
+    rig.render.setRender(defaultRenderResponse);
+  }));
+});
+
+Deno.test('pay first: a payment refunded while the print files were being made is never confirmed (draft deleted, cancelled)', async () => {
+  await withWebhookSecret(() => withGelatoEnv(async () => {
+    const rig = cardRig(payFirstOrder());
+    rig.stripe.state.paymentIntents.set('pi_card_1', { amount: 4980, amount_refunded: 4980 });
+    await rig.send(fakeEvent('checkout.session.completed', payFirstSession()));
+    await rig.settle();
+    const row = rig.db.row('holiday_card_orders', IDS.order);
+    assertEquals(row.status, 'cancelled');
+    assertEquals(patches(rig).length, 0);
+    assertEquals(drafts(rig).length, 1); // made for the render-time snapshot, then removed by the refund path
+    assertEquals(rig.gelato.state.orders.has(String(row.gelato_order_id)), false);
   }));
 });

@@ -67,10 +67,29 @@ flowchart LR
    atomic, mints the token; `claim_year_film_by_id`; zero rows = the cron got
    it), writes letters from the pool digest (v2 editor + writers, quote check
    for the line of the year), then `card_finish`.
-3. `create_checkout` freezes the card (`buildCardSnapshot` + `snapshotHash`),
-   renders the print files, creates the Gelato draft and the Stripe session.
-4. The webhook verifies amount/currency/address/hash and confirms the draft;
-   the sweep tracks Gelato until `shipped`.
+3. `create_checkout` (**pay first**, like the Memory Book) claims the card,
+   freezes it (`buildCardSnapshot` + `snapshotHash`, or the first paid order's
+   frozen snapshot for a reorder) and opens the Stripe session. No render, no
+   Gelato draft, no print files before payment: it answers in seconds.
+4. The webhook verifies amount/currency/address/hash and records `paid`; then
+   `confirmPaidOrder` (`_shared/holiday-card-fulfillment.ts`, run by the webhook
+   via `waitUntil` and by the sweep as fallback) does, each step idempotent and
+   resumable from the order row: (a) `/render-card` to
+   `print-orders/<orderId>/<hash16>/` (existing intact files for the hash and the
+   order's frozen layout are reused), (b) the Gelato **draft**, (c) the held-canary
+   check, (d) the PaymentIntent refund check, (e) a CAS re-check, then PATCH the
+   draft into an order → `submitted`. The sweep tracks Gelato until `shipped`.
+   The shop shows `paid` (no failure) as "Preparing your print files".
+5. **Failure policy after payment (same as the book: owner alert, no automatic
+   refund, no buyer email).** Transient problems (render 5xx/timeout, files not
+   in R2, Gelato 5xx, buyer email/hold list unreadable, our own exceptions) keep
+   the order `paid` and are retried by the sweep every tick (alert at 30 min,
+   `failed` / `CONFIRM_TIMEOUT` at 6 h, measured from `print_files.pipelineStartedAt`).
+   Content problems fail the order at once with one alert: render 422 →
+   `RENDER_REFUSED:<code>` (`IMAGE_MISSING` = a photo deleted after payment: refund
+   or restore/re-pick by hand), a non-retryable Gelato refusal →
+   `GELATO_DRAFT_REJECTED:<code>`, an unusable row → `PRINT_PREPARE_ORDER_INCOMPLETE`.
+   A recorded draft Gelato lost is forgotten and rebuilt (never failed).
 
 ## Data model
 
@@ -121,7 +140,8 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
   `update holiday_card_settings set ship_by_note = 'Order by Dec 10 for Christmas delivery in the US.';`
 - **Kill switches**: new cards — `mode = 'off'`; ordering —
   `orders_enabled = false` (existing checkouts can still be cancelled).
-- **Held canary** — a paid order of a listed family stops before Gelato:
+- **Held canary** — a paid order of a listed family stops before the Gelato
+  confirm, **after the print files and the draft exist** (so you can inspect them):
   `update holiday_card_settings set hold_confirm_family_ids = array['<family_id>']::uuid[];`
   Pay through the real flow → alert email "HELD_FOR_CANARY" → inspect
   (order row, Stripe payment, Gelato draft, print files). Then EITHER
@@ -133,6 +153,17 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
   6 h confirm clock), OR **abort**: refund the FULL amount in Stripe (before
   any family deletion) → the webhook deletes the draft and cancels.
   **Empty the hold list before launch.**
+- **Partial refund hold**: a partially refunded paid order is held
+  (`failure_reason = 'PARTIAL_REFUND_BEFORE_CONFIRM'`, alert). To print it anyway:
+  `update holiday_card_orders set failure_reason = 'PARTIAL_REFUND_OK' where id = '<order_id>' and status = 'paid';`
+  — the next run prints it (the marker is consumed and the acknowledgment kept in
+  `print_files.partialRefundAckAt`, so a transient failure does not re-hold it).
+  A FULL refund always wins: the order is cancelled and the draft deleted.
+- **Failed after payment** (`RENDER_REFUSED:*`, `GELATO_DRAFT_REJECTED:*`):
+  the buyer was charged and nothing prints. Refund in Stripe (the webhook
+  finishes the cancel) or fix the card and rebuild by hand. Released orders keep
+  a `{purgedAt}` marker in `print_files`; the sweep purges
+  `print-orders/<orderId>/` once more ≥ 1 h later (`repurgedAt`).
 - **Deploy order**: migration → Edge Functions → shop (rebuild `dist-web`
   from the release commit first — `memory-book-web` deploys whatever is in
   `book-renderer/dist-web`) → app OTA (1.4.3 + 1.4.2).
@@ -154,8 +185,14 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
 - The snapshot shape (`_shared/holiday-card-snapshot.ts`) mirrors
   `book-renderer/src/card/types.ts` / `edits.ts`; change both together.
 - Webhook routing: a session without `productType` must stay on the book path.
-- After payment nothing may render or create — only the idempotent
-  confirm-if-draft PATCH.
+- Nothing renders or is created before payment (`create_checkout` only freezes
+  the snapshot and opens Stripe). After payment the ONLY writer of print files
+  and the Gelato draft is `confirmPaidOrder`; keep every step idempotent and
+  resumable from the row, and keep the order of its steps: files → draft →
+  held canary → refund check → pre-PATCH CAS → PATCH. The pipeline reads the
+  ORDER's frozen `product_uid` / `file_layout` / `format` / `currency`, never the
+  catalogue. Only a non-retryable Gelato API error or a render 422 may fail a
+  paid order; any other exception is a retry.
 - Ordered cards can't be deleted; their film skips the floors on re-render.
 
 ## Constraints & gotchas

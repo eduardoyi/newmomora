@@ -45,9 +45,9 @@ export function buildThumbnailInput(view: HolidayCardView | null, pinnedEdits: C
   };
 }
 
-/** One line for the summary about the QR code. */
+/** The value of the summary's "Back of card" row. */
 export function qrSummaryLine(input: Pick<ThumbnailInput, 'qrOn' | 'qrState'>): string {
-  if (!input.qrOn) return 'No QR code on the back.';
-  if (input.qrState === 'waiting_film') return 'QR code to your film on the back. Your film is still being made.';
-  return 'QR code to your film on the back.';
+  if (!input.qrOn) return 'No QR code';
+  if (input.qrState === 'waiting_film') return 'QR code to your family film (still being made)';
+  return 'QR code to your family film';
 }

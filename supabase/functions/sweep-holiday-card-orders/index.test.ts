@@ -1,6 +1,7 @@
 import { assertEquals } from 'jsr:@std/assert@1';
-import { decideTrack, filmIsBroken, handleSweepHolidayCardOrders } from './index.ts';
-import { FakeDb, IDS, makeGelatoFake, makeR2Fake, makeStripeFake, QUOTED_ORDER, US_ADDRESS } from '../_shared/holiday-card-orders.test-support.ts';
+import { CONFIRM_DEADLINE_MS, decideTrack, filmIsBroken, handleSweepHolidayCardOrders, SWEEP_RENDER_TIMEOUT_MS } from './index.ts';
+import { printPipelineFromEnv } from '../_shared/holiday-card-fulfillment.ts';
+import { defaultRenderResponse, FakeDb, fakePresign, FROZEN_HASH, IDS, makeGelatoFake, makeR2Fake, makeRenderFake, makeStripeFake, PAY_FIRST_COLUMNS, QUOTED_ORDER, US_ADDRESS } from '../_shared/holiday-card-orders.test-support.ts';
 
 type Row = Record<string, unknown>;
 
@@ -37,19 +38,20 @@ interface Rig {
   db: FakeDb;
   gelato: ReturnType<typeof makeGelatoFake>;
   stripe: ReturnType<typeof makeStripeFake>;
+  render: ReturnType<typeof makeRenderFake>;
   r2: ReturnType<typeof makeR2Fake>;
   mails: { to: string; subject: string; body: string }[];
   dispatches: { cardId: string; attemptId: string }[];
   dispatchResult: { ok: boolean };
   pushes: { token: string; title: string; body: string; data?: Row }[];
   pushResult: { ok: boolean | 'throw' };
-  run: (options?: { now?: number; secret?: string | null }) => Promise<Record<string, any>>;
+  run: (options?: { now?: number; nowFn?: () => number; secret?: string | null }) => Promise<Record<string, any>>;
 }
 
 function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?: 'draft' | 'order'; status?: string; tracking?: Row[]; refusal?: string } | null } = {}): Rig {
   // The database clock follows the tick's `now` (holiday_card_readiness's 75-minute valve reads it).
   const clock = { now: NOW };
-  const db = new FakeDb({ holiday_card_orders: [], holiday_cards: [], year_films: [], families: [], user_profiles: [], ...seed }, { nowMs: () => clock.now });
+  const db = new FakeDb({ holiday_card_orders: [], holiday_cards: [], year_films: [], families: [], user_profiles: [], ...seed }, { nowMs: () => clock.now, clock: () => new Date(clock.now).toISOString() });
   db.users.set(IDS.user, { email: 'buyer@example.com' });
   const gelato = makeGelatoFake();
   const spec = options.gelatoOrder === undefined ? { orderType: 'draft' as const, status: 'created' } : options.gelatoOrder;
@@ -68,30 +70,39 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
   const dispatchResult = { ok: true };
   const pushes: Rig['pushes'] = [];
   const pushResult: Rig['pushResult'] = { ok: true };
+  const render = makeRenderFake();
   const routed = (async (input: Request | URL | string, init?: RequestInit) => {
     const host = new URL(String(input)).hostname;
     if (host === 'api.stripe.com') return stripe.fetch(input, init);
+    if (host === 'render.test') return render.fetchRender(init);
     return gelato.fetch(input, init);
   }) as typeof fetch;
   db.rpcHandlers.set('increment_holiday_card_generation_attempt', () => 1);
   return {
-    db, gelato, stripe, r2, mails, dispatches, dispatchResult, pushes, pushResult,
+    db, gelato, stripe, render, r2, mails, dispatches, dispatchResult, pushes, pushResult,
     run: async (opts = {}) => {
-      clock.now = opts.now ?? NOW;
-      const previous = { cron: Deno.env.get('CRON_SECRET'), gelato: Deno.env.get('GELATO_API_KEY'), stripe: Deno.env.get('STRIPE_SECRET_KEY') };
+      clock.now = opts.nowFn ? opts.nowFn() : opts.now ?? NOW;
+      const previous = {
+        cron: Deno.env.get('CRON_SECRET'), gelato: Deno.env.get('GELATO_API_KEY'), stripe: Deno.env.get('STRIPE_SECRET_KEY'),
+        renderUrl: Deno.env.get('MEMORY_BOOK_RENDER_WORKER_URL'), renderSecret: Deno.env.get('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET'),
+      };
       Deno.env.set('CRON_SECRET', 'cron-secret');
       Deno.env.set('GELATO_API_KEY', 'gelato-test-key');
       Deno.env.set('STRIPE_SECRET_KEY', 'sk_test_x');
+      Deno.env.set('MEMORY_BOOK_RENDER_WORKER_URL', 'https://render.test');
+      Deno.env.set('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET', 'render-secret');
       try {
         const headers: Record<string, string> = {};
         if (opts.secret !== null) headers['x-cron-secret'] = opts.secret ?? 'cron-secret';
         const response = await handleSweepHolidayCardOrders(new Request('http://localhost', { method: 'POST', headers }), {
           createServiceClient: db.client(),
           fetch: routed,
-          now: () => opts.now ?? NOW,
+          now: opts.nowFn ?? (() => opts.now ?? NOW),
           sendEmail: async (input) => { mails.push({ to: input.to, subject: input.subject, body: input.htmlBody }); return 'sent'; },
           listKeys: r2.listKeys,
           deleteKey: r2.deleteKey,
+          createPresignedGetUrls: fakePresign(),
+          headObject: render.headObject,
           dispatchGeneration: async (cardId, attemptId) => { dispatches.push({ cardId, attemptId }); return dispatchResult.ok; },
           sendPush: async (token, title, body, data) => {
             pushes.push({ token, title, body, data: data as Row | undefined });
@@ -101,7 +112,7 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
         });
         return { status: response.status, ...(await response.json()) };
       } finally {
-        for (const [key, name] of [['cron', 'CRON_SECRET'], ['gelato', 'GELATO_API_KEY'], ['stripe', 'STRIPE_SECRET_KEY']] as const) {
+        for (const [key, name] of [['cron', 'CRON_SECRET'], ['gelato', 'GELATO_API_KEY'], ['stripe', 'STRIPE_SECRET_KEY'], ['renderUrl', 'MEMORY_BOOK_RENDER_WORKER_URL'], ['renderSecret', 'MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET']] as const) {
           const value = previous[key];
           if (value === undefined) Deno.env.delete(name); else Deno.env.set(name, value);
         }
@@ -111,6 +122,8 @@ function rig(seed: Record<string, Row[]>, options: { gelatoOrder?: { orderType?:
 }
 
 const row = (r: Rig, id: string = IDS.order) => r.db.row('holiday_card_orders', id);
+/** The order's files were released: `print_files` is now the {purgedAt} marker (not null: the prefix is purged once more later). */
+const purged = (r: Rig, id: string = IDS.order) => typeof (row(r, id).print_files as { purgedAt?: string } | null)?.purgedAt === 'string';
 const patches = (r: Rig) => r.gelato.state.calls.filter((c) => c.method === 'PATCH');
 const alertsFor = (r: Rig, reason: string) => r.mails.filter((m) => m.to === 'hello@usemomora.com' && m.subject.includes(reason));
 
@@ -139,7 +152,9 @@ Deno.test('confirm: a Gelato order that is no longer a draft is not PATCHed agai
   const r = rig({ holiday_card_orders: [order()] }, { gelatoOrder: { orderType: 'order', status: 'passed' } });
   await r.run();
   assertEquals(patches(r).length, 0);
-  // Submitted by the confirm pass, then advanced by the track pass of the same tick (Gelato says `passed`).
+  // The confirm pass runs LAST: submitted this tick, advanced by the track pass of the next one (Gelato says `passed`).
+  assertEquals(row(r).status, 'submitted');
+  await r.run();
   assertEquals(row(r).status, 'in_production');
 });
 
@@ -182,7 +197,7 @@ Deno.test('confirm: Gelato down keeps the order paid; the 30-minute tick alerts 
   assertEquals(alertsFor(stuck, 'CONFIRM_TIMEOUT').length, 1);
 });
 
-Deno.test('confirm: a rejected PATCH or a missing draft marks the order failed with an alert', async () => {
+Deno.test('confirm: a rejected PATCH fails the order with an alert; a draft Gelato lost is forgotten and rebuilt, never failed', async () => {
   const rejected = rig({ holiday_card_orders: [order()] });
   rejected.gelato.state.forceStatus.set(`PATCH /orders/${GELATO_ID}`, 400);
   await rejected.run();
@@ -191,8 +206,10 @@ Deno.test('confirm: a rejected PATCH or a missing draft marks the order failed w
 
   const missing = rig({ holiday_card_orders: [order()] }, { gelatoOrder: null });
   await missing.run();
-  assertEquals(row(missing).failure_reason, 'GELATO_DRAFT_MISSING');
-  assertEquals(alertsFor(missing, 'GELATO_DRAFT_MISSING').length, 1);
+  assertEquals(row(missing).status, 'paid');
+  assertEquals(row(missing).failure_reason, null);
+  assertEquals(row(missing).gelato_order_id, null);
+  assertEquals(alertsFor(missing, 'GELATO_DRAFT_MISSING').length, 0);
 });
 
 // ── 2. track ─────────────────────────────────────────────────────────────
@@ -308,7 +325,7 @@ Deno.test('aging: a quoted order older than 48h is cancelled and its draft and f
   const aged = row(r);
   assertEquals(aged.status, 'cancelled');
   assertEquals(aged.gelato_order_id, null);
-  assertEquals(aged.print_files, null);
+  assertEquals(purged(r), true);
   assertEquals(r.gelato.state.orders.size, 0);
   assertEquals(r.r2.keys.size, 0);
   assertEquals(row(r, '10000000-0000-4000-8000-000000000009').status, 'quoted');
@@ -337,7 +354,7 @@ Deno.test('aging: an old checkout whose session is PAID is never cancelled; the 
 
 // ── 4. clean-up and retention ────────────────────────────────────────────
 
-Deno.test('retention: print files are deleted 30 days after shipped_at and print_files is nulled so it never repeats', async () => {
+Deno.test('retention: print files are deleted 30 days after shipped_at and print_files becomes a purge marker so it never repeats', async () => {
   const r = rig({
     holiday_card_orders: [
       order({ status: 'shipped', shipped_at: daysAgo(31), updated_at: daysAgo(31) }),
@@ -347,7 +364,7 @@ Deno.test('retention: print files are deleted 30 days after shipped_at and print
   r.r2.keys.add('print-orders/10000000-0000-4000-8000-000000000008/front.pdf');
   const result = await r.run();
   assertEquals(result.cleanup.filesDeleted, 1);
-  assertEquals(row(r).print_files, null);
+  assertEquals(purged(r), true);
   assertEquals(r.r2.keys.has(`print-orders/${IDS.order}/front.pdf`), false);
   assertEquals(r.r2.keys.has('print-orders/10000000-0000-4000-8000-000000000008/front.pdf'), true);
   assertEquals(row(r, '10000000-0000-4000-8000-000000000008').print_files === null, false);
@@ -367,8 +384,8 @@ Deno.test('retention: never-paid failed/cancelled and refunded orders lose their
   r.gelato.state.orders.set('gel-refunded1', { orderType: 'order', fulfillmentStatus: 'canceled', tracking: [] });
   r.r2.keys.add('print-orders/10000000-0000-4000-8000-000000000007/front.pdf');
   await r.run();
-  assertEquals(row(r).print_files, null);
-  assertEquals(row(r, '10000000-0000-4000-8000-000000000007').print_files, null);
+  assertEquals(purged(r), true);
+  assertEquals(purged(r, '10000000-0000-4000-8000-000000000007'), true);
   assertEquals(r.r2.keys.size, 0);
   assertEquals(r.gelato.state.calls.some((c) => c.method === 'DELETE'), false);
   assertEquals(row(r, '10000000-0000-4000-8000-000000000007').gelato_order_id, 'gel-refunded1');
@@ -382,12 +399,12 @@ Deno.test('retention: a PAID order that failed keeps its print files until refun
 
   const old = rig({ holiday_card_orders: [order({ status: 'failed', failure_reason: 'GELATO_ORDER_MISSING', updated_at: daysAgo(31) })] });
   await old.run();
-  assertEquals(row(old).print_files, null);
+  assertEquals(purged(old), true);
   assertEquals(old.r2.keys.size, 0);
 
   const refunded = rig({ holiday_card_orders: [order({ status: 'failed', failure_reason: 'CONFIRM_TIMEOUT', refunded_at: minutesAgo(3), updated_at: daysAgo(1) })] });
   await refunded.run();
-  assertEquals(row(refunded).print_files, null);
+  assertEquals(purged(refunded), true);
 });
 
 Deno.test('clean-up: a cancelled, never-paid order that still holds a draft is retried', async () => {
@@ -936,4 +953,248 @@ Deno.test('card ready push: the batch is bounded and a readiness RPC failure lea
   const out = await broken.run();
   assertEquals([out.ready.claimed, broken.pushes.length], [0, 0]);
   assertEquals(readyCard(broken).ready_notified_at, null);
+});
+
+
+// ── Pay first: the sweep resumes the whole print pipeline ────────────────
+
+const payFirst = (overrides: Row = {}): Row => order({ ...PAY_FIRST_COLUMNS, gelato_order_id: null, snapshot_hash: FROZEN_HASH, print_files: { snapshotHash: FROZEN_HASH }, ...overrides });
+const draftCalls = (r: Rig) => r.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders');
+
+Deno.test('pay first: the sweep renders, creates the draft and confirms a paid order the webhook never got to (one render, one draft, one PATCH)', async () => {
+  const r = rig({ holiday_card_orders: [payFirst()] }, { gelatoOrder: null });
+  const result = await r.run();
+  assertEquals(result.confirm.submitted, 1);
+  assertEquals(row(r).status, 'submitted');
+  assertEquals(r.render.renderCalls.length, 1);
+  assertEquals(draftCalls(r).length, 1);
+  assertEquals(patches(r).length, 1);
+  assertEquals(r.mails.filter((m) => m.to === 'buyer@example.com').length, 1);
+  await r.run();
+  assertEquals(r.render.renderCalls.length, 1);
+  assertEquals(draftCalls(r).length, 1);
+});
+
+Deno.test('pay first: a transient render failure is retried every tick (still paid), alerts once at ~30 minutes and fails the order at 6 hours', async () => {
+  const r = rig({ holiday_card_orders: [payFirst({ updated_at: minutesAgo(10) })] }, { gelatoOrder: null });
+  r.render.setRender(() => new Response('down', { status: 503 }));
+  const first = await r.run();
+  assertEquals(first.confirm.retry, 1);
+  assertEquals(row(r).status, 'paid');
+  assertEquals(alertsFor(r, 'PAID_NOT_SUBMITTED').length, 0);
+  await r.run({ now: NOW + 32 * 60_000 }); // the first pipeline run (the stable clock) was 32 minutes ago
+  assertEquals(alertsFor(r, 'PAID_NOT_SUBMITTED').length, 1);
+  await r.run({ now: NOW + 50 * 60_000 }); // outside the alert window: quiet
+  assertEquals(alertsFor(r, 'PAID_NOT_SUBMITTED').length, 1);
+  assertEquals(draftCalls(r).length, 0);
+  // The render recovers: the next tick completes it.
+  r.render.setRender(defaultRenderResponse);
+  await r.run({ now: NOW + 60 * 60_000 });
+  assertEquals(row(r).status, 'submitted');
+
+  const stuck = rig({ holiday_card_orders: [payFirst({ updated_at: minutesAgo(10) })] }, { gelatoOrder: null });
+  stuck.render.setRender(() => new Response('down', { status: 503 }));
+  await stuck.run({ now: NOW + 7 * 60 * 60_000 });
+  assertEquals(row(stuck).status, 'failed');
+  assertEquals(row(stuck).failure_reason, 'CONFIRM_TIMEOUT');
+  assertEquals(alertsFor(stuck, 'CONFIRM_TIMEOUT').length, 1);
+});
+
+Deno.test('pay first: a render content refusal fails the order at once with one owner alert (like the book: manual refund)', async () => {
+  const r = rig({ holiday_card_orders: [payFirst()] }, { gelatoOrder: null });
+  r.render.setRender(() => new Response(JSON.stringify({ ok: false, code: 'LETTER_OVERFLOW', message: 'x' }), { status: 422 }));
+  const result = await r.run();
+  assertEquals(result.confirm.failed, 1);
+  assertEquals(row(r).status, 'failed');
+  assertEquals(row(r).failure_reason, 'RENDER_REFUSED:LETTER_OVERFLOW');
+  assertEquals(alertsFor(r, 'RENDER_REFUSED').length, 1);
+  assertEquals(r.mails.some((m) => m.to === 'buyer@example.com'), false);
+  await r.run();
+  assertEquals(alertsFor(r, 'RENDER_REFUSED').length, 1);
+  assertEquals(r.stripe.state.calls.length, 0);
+});
+
+Deno.test('pay first: Gelato refusing the draft fails the order; the files stay for the owner; Gelato down is retried', async () => {
+  const refused = rig({ holiday_card_orders: [payFirst()] }, { gelatoOrder: null });
+  refused.gelato.state.forceStatus.set('POST /orders', 400);
+  await refused.run();
+  assertEquals(row(refused).status, 'failed');
+  assertEquals(String(row(refused).failure_reason).startsWith('GELATO_DRAFT_REJECTED'), true);
+  assertEquals(alertsFor(refused, 'GELATO_DRAFT_REJECTED').length, 1);
+
+  const down = rig({ holiday_card_orders: [payFirst()] }, { gelatoOrder: null });
+  down.gelato.state.forceStatus.set('POST /orders', 503);
+  const result = await down.run();
+  assertEquals(result.confirm.retry, 1);
+  assertEquals(row(down).status, 'paid');
+  // The files rendered once survive: the next tick reuses them.
+  down.gelato.state.forceStatus.clear();
+  await down.run({ now: NOW + 6 * 60_000 });
+  assertEquals(down.render.renderCalls.length, 1);
+  assertEquals(row(down).status, 'submitted');
+});
+
+Deno.test('pay first: the held canary stops after the files and the draft exist; later ticks never repeat the work', async () => {
+  const r = rig({ holiday_card_orders: [payFirst()], holiday_card_settings: [HOLD_SETTINGS] }, { gelatoOrder: null });
+  await r.run();
+  assertEquals(row(r).status, 'paid');
+  assertEquals(row(r).failure_reason, 'HELD_FOR_CANARY');
+  assertEquals(r.render.renderCalls.length, 1);
+  assertEquals(draftCalls(r).length, 1);
+  assertEquals(patches(r).length, 0);
+  assertEquals(alertsFor(r, 'HELD_FOR_CANARY').length, 1);
+  await r.run({ now: NOW + 20 * 60_000 });
+  assertEquals(r.render.renderCalls.length, 1);
+  assertEquals(draftCalls(r).length, 1);
+  assertEquals(alertsFor(r, 'HELD_FOR_CANARY').length, 1);
+});
+
+Deno.test('pay first: an order that is refunded before the sweep reaches it is cancelled without rendering anything', async () => {
+  const r = rig({ holiday_card_orders: [payFirst({ refunded_at: minutesAgo(5) })] }, { gelatoOrder: null });
+  const result = await r.run();
+  assertEquals(row(r).status, 'cancelled');
+  assertEquals(r.render.renderCalls.length, 0);
+  assertEquals(draftCalls(r).length, 0);
+  assertEquals(result.refunds.cancelled, 1);
+});
+
+Deno.test('pay first: a checkout that was never paid has nothing to clean up (no draft, no files) when aged', async () => {
+  const r = rig({
+    holiday_card_orders: [order({ status: 'checkout', stripe_payment_intent_id: null, gelato_order_id: null, updated_at: minutesAgo(30), print_files: { snapshotHash: FROZEN_HASH, sessionExpiresAt: minutesAgo(61) } })],
+  }, { gelatoOrder: null });
+  r.stripe.state.sessions.set('cs_test_000001', { status: 'expired', payment_status: 'unpaid', url: 'u', metadata: {}, payment_intent: null });
+  await r.run();
+  assertEquals(row(r).status, 'cancelled');
+  assertEquals(r.gelato.state.calls.length, 0);
+});
+
+// ═══ Pipeline hardening (review round) ═══
+
+const ORDER_X = (n: number) => `d0000000-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`;
+
+Deno.test('the confirm/print pass runs LAST under a deadline: one slow render defers the rest, and the cheap passes (refunds, aging, claims) were already done', async () => {
+  let jump = 0;
+  const r = rig({
+    holiday_card_orders: [
+      payFirst({ id: ORDER_X(1), updated_at: minutesAgo(30) }),
+      payFirst({ id: ORDER_X(2), updated_at: minutesAgo(29) }),
+      // The refund backstop and a stale quoted order: cheap passes that must not wait for the renders.
+      order({ id: ORDER_X(3), refunded_at: minutesAgo(20), updated_at: minutesAgo(30) }),
+      order({ id: ORDER_X(4), status: 'quoted', stripe_payment_intent_id: null, stripe_session_id: null, gelato_order_id: null, print_files: null, updated_at: minutesAgo(49 * 60) }),
+    ],
+  }, { gelatoOrder: { orderType: 'draft', status: 'created' } });
+  // The first render takes "100 seconds" of the invocation (the deadline is 75 s).
+  r.render.setRender((call) => { jump += 100_000; return defaultRenderResponse(call); });
+  const result = await r.run({ nowFn: () => NOW + jump });
+  assertEquals(result.refunds.cancelled, 1);
+  assertEquals(row(r, ORDER_X(3)).status, 'cancelled');
+  assertEquals(result.aging.cancelled, 1);
+  assertEquals(result.confirm.submitted, 1);
+  assertEquals(result.confirm.deferred, 1);
+  assertEquals(r.render.renderCalls.length, 1);
+  assertEquals(row(r, ORDER_X(2)).status, 'paid'); // not started, not harmed
+  // Next tick (the clock moved on, the first one is submitted): the deferred order is done.
+  jump = 0;
+  await r.run({ now: NOW + 15 * 60_000 });
+  assertEquals(row(r, ORDER_X(2)).status, 'submitted');
+});
+
+Deno.test('the confirm pass rotates by print_files.pipelineAttemptAt (never-tried first, then the oldest attempt), not by updated_at', async () => {
+  let jump = 0;
+  const attempted = (at: string | null) => ({ snapshotHash: FROZEN_HASH, ...(at ? { pipelineAttemptAt: at, pipelineStartedAt: at } : {}) });
+  const r = rig({
+    holiday_card_orders: [
+      // Oldest updated_at but attempted most recently.
+      payFirst({ id: ORDER_X(1), updated_at: minutesAgo(90), print_files: attempted(minutesAgo(10)) }),
+      payFirst({ id: ORDER_X(2), updated_at: minutesAgo(40), print_files: attempted(minutesAgo(35)) }),
+      payFirst({ id: ORDER_X(3), updated_at: minutesAgo(30), print_files: attempted(null) }),
+    ],
+  }, { gelatoOrder: null });
+  r.render.setRender(() => { jump += 100_000; return new Response('down', { status: 503 }); }); // one order per tick
+  const rendered = () => r.render.renderCalls.map((c) => String(c.body.orderId));
+  await r.run({ nowFn: () => NOW + jump });
+  assertEquals(rendered(), [ORDER_X(3)]); // never tried first
+  jump = 0;
+  await r.run({ nowFn: () => NOW + 12 * 60_000 + jump });
+  assertEquals(rendered(), [ORDER_X(3), ORDER_X(2)]); // then the oldest attempt (not the oldest updated_at)
+  jump = 0;
+  await r.run({ nowFn: () => NOW + 24 * 60_000 + jump });
+  assertEquals(rendered().slice(2), [ORDER_X(1)]);
+  assertEquals(typeof (row(r, ORDER_X(3)).print_files as { pipelineAttemptAt?: string }).pipelineAttemptAt, 'string');
+});
+
+Deno.test('the sweep renders with its own short timeout (<= 60 s), shorter than the webhook\'s', () => {
+  assertEquals(SWEEP_RENDER_TIMEOUT_MS <= 60_000, true);
+  assertEquals(CONFIRM_DEADLINE_MS <= 90_000 && CONFIRM_DEADLINE_MS >= 60_000, true);
+  Deno.env.set('MEMORY_BOOK_RENDER_WORKER_URL', 'https://render.test');
+  Deno.env.set('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET', 's');
+  try {
+    const pipeline = printPipelineFromEnv({ createPresignedGetUrls: fakePresign(), headObject: async () => null }, { renderTimeoutMs: SWEEP_RENDER_TIMEOUT_MS });
+    assertEquals(pipeline?.renderTimeoutMs, SWEEP_RENDER_TIMEOUT_MS);
+    assertEquals(printPipelineFromEnv({ createPresignedGetUrls: fakePresign(), headObject: async () => null })?.renderTimeoutMs, undefined);
+  } finally {
+    Deno.env.delete('MEMORY_BOOK_RENDER_WORKER_URL');
+    Deno.env.delete('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET');
+  }
+});
+
+Deno.test('the sweep leaves a paid order alone for 5 minutes (the webhook\'s own run gets first go)', async () => {
+  const young = rig({ holiday_card_orders: [payFirst({ updated_at: minutesAgo(4) })] }, { gelatoOrder: null });
+  await young.run();
+  assertEquals(row(young).status, 'paid');
+  assertEquals(young.render.renderCalls.length, 0);
+  const old = rig({ holiday_card_orders: [payFirst({ updated_at: minutesAgo(6) })] }, { gelatoOrder: null });
+  await old.run();
+  assertEquals(row(old).status, 'submitted');
+});
+
+Deno.test('the sweep picks up a held partial refund once the owner sets PARTIAL_REFUND_OK, and prints it', async () => {
+  const r = rig({ holiday_card_orders: [payFirst({ failure_reason: 'PARTIAL_REFUND_OK' })] }, { gelatoOrder: null });
+  r.stripe.state.paymentIntents.set('pi_test_1', { amount: 4980, amount_refunded: 500 });
+  const result = await r.run();
+  assertEquals(result.confirm.submitted, 1);
+  assertEquals(row(r).status, 'submitted');
+  assertEquals(row(r).failure_reason, null);
+  // A flagged order that is NOT acknowledged is still skipped.
+  const held = rig({ holiday_card_orders: [payFirst({ failure_reason: 'PARTIAL_REFUND_BEFORE_CONFIRM' })] }, { gelatoOrder: null });
+  await held.run();
+  assertEquals(row(held).status, 'paid');
+  assertEquals(held.render.renderCalls.length, 0);
+});
+
+Deno.test('orphaned print files: a cancelled/failed order is purged again >= 1 h after its first purge (a late render can write after it), once', async () => {
+  const cancelled = (id: string, purgedMinutesAgo: number | null, extra: Row = {}) => order({
+    id, status: 'cancelled', stripe_payment_intent_id: null, gelato_order_id: null, updated_at: minutesAgo(5),
+    print_files: purgedMinutesAgo === null ? { files: [] } : { purgedAt: minutesAgo(purgedMinutesAgo), ...extra }, ...(purgedMinutesAgo === null ? {} : {}),
+  });
+  const r = rig({ holiday_card_orders: [cancelled(ORDER_X(1), 61), cancelled(ORDER_X(2), 30), cancelled(ORDER_X(3), 120, { repurgedAt: minutesAgo(10) })] });
+  // A render that finished AFTER the first purge wrote its PDF under each prefix.
+  for (const n of [1, 2, 3]) r.r2.keys.add(`print-orders/${ORDER_X(n)}/late/card.pdf`);
+  const result = await r.run();
+  assertEquals(result.cleanup.repurged, 1);
+  assertEquals(r.r2.keys.has(`print-orders/${ORDER_X(1)}/late/card.pdf`), false); // purged again
+  assertEquals(r.r2.keys.has(`print-orders/${ORDER_X(2)}/late/card.pdf`), true); // not yet 1 h
+  assertEquals(r.r2.keys.has(`print-orders/${ORDER_X(3)}/late/card.pdf`), true); // already re-purged once: done
+  assertEquals(typeof (row(r, ORDER_X(1)).print_files as { repurgedAt?: string }).repurgedAt, 'string');
+  assertEquals(typeof (row(r, ORDER_X(1)).print_files as { purgedAt?: string }).purgedAt, 'string');
+  r.r2.keys.add(`print-orders/${ORDER_X(1)}/later/card.pdf`);
+  assertEquals((await r.run()).cleanup.repurged, 0);
+  assertEquals(r.r2.keys.has(`print-orders/${ORDER_X(1)}/later/card.pdf`), true); // once only
+  // 30 minutes later the second order is due.
+  const later = await r.run({ now: NOW + 35 * 60_000 });
+  assertEquals(later.cleanup.repurged, 1);
+  assertEquals(r.r2.keys.has(`print-orders/${ORDER_X(2)}/late/card.pdf`), false);
+});
+
+Deno.test('orphaned print files end to end: a refunded order is released, a late render writes afterwards, and the second purge removes it', async () => {
+  const r = rig({ holiday_card_orders: [order({ refunded_at: minutesAgo(20), print_files: { snapshotHash: FROZEN_HASH } })] });
+  await r.run(); // refund backstop: draft deleted, cancelled
+  assertEquals(row(r).status, 'cancelled');
+  await r.run({ now: NOW + 10 * 60_000 }); // retention: files released, marker set
+  assertEquals(purged(r), true);
+  r.r2.keys.add(`print-orders/${IDS.order}/late/card.pdf`); // the render that was still running
+  await r.run({ now: NOW + 30 * 60_000 });
+  assertEquals(r.r2.keys.has(`print-orders/${IDS.order}/late/card.pdf`), true);
+  await r.run({ now: NOW + 80 * 60_000 });
+  assertEquals(r.r2.keys.has(`print-orders/${IDS.order}/late/card.pdf`), false);
 });

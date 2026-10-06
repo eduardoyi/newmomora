@@ -26,7 +26,8 @@ import './CardCheckout.css';
  * (`order/CheckoutScreen.tsx`: same full-takeover frame, address step, quote
  * card and Stripe redirect, built from the same `CheckoutShell` pieces) plus
  * the card's own additions: a quantity step first, front/back thumbnails in the
- * summary, and the longer "preparing your print files" wait.
+ * summary. Like the book, the print files are made after payment, so the
+ * redirect to Stripe is quick.
  *
  * It reads the route's card and ONE save queue: nothing here saves edits except
  * the QR toggle offered by "turn the QR code off", and every review is of the
@@ -297,7 +298,7 @@ function OrderFlow({
     (e) => dispatch({ type: 'QUOTE_FAILED', error: toApiError(e) }),
   );
 
-  // 3. Checkout (prints files, ~30-60 s). A timeout / "still preparing" waits out a backoff and calls again.
+  // 3. Checkout (opens the Stripe session; the print files are made after payment). A timeout / "still preparing" waits out a backoff and calls again.
   const creatingNow = step.kind === 'creating' && !step.waiting;
   useCall(
     creatingNow,
@@ -546,12 +547,15 @@ function SummaryStep({
     before = <CheckoutHint>Checking your latest changes…</CheckoutHint>;
   }
 
+  const backOfCard = buildThumbnailInput(view ?? null, ctx.edits.edits);
+
   return (
     <CheckoutQuote
       before={before}
       lines={[
         { label: 'Cards', value: `${quote.cards} cards` },
         { label: 'Price per card', value: formatMoney(Math.round(quote.priceCents / quote.cards), quote.currency) },
+        ...(backOfCard ? [{ label: 'Back of card', value: qrSummaryLine(backOfCard) }] : []),
       ]}
       total={formatMoney(quote.priceCents, quote.currency)}
       taxNote="Shipping is included. Tax, if applicable, is calculated at checkout."
@@ -575,9 +579,8 @@ function SummaryStep({
               </span>
             )}
           </div>
-          {thumbInput && <CheckoutHint>{qrSummaryLine(thumbInput)}</CheckoutHint>}
           {shipBy && <CheckoutHint>{shipBy}</CheckoutHint>}
-          {busy && busy !== 'redirecting' && <CheckoutHint>{creatingCopy(busy).body}</CheckoutHint>}
+          {busy && busy !== 'redirecting' && creatingCopy(busy).body && <CheckoutHint>{creatingCopy(busy).body}</CheckoutHint>}
         </>
       }
       error={shown.error ? <ErrorNotice error={shown.error} orderId={shown.orderId} locked={isLocked(ctx)} onAction={onAction} /> : null}

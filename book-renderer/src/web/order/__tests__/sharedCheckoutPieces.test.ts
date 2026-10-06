@@ -57,15 +57,23 @@ describe('book rendering through the shared pieces is the original markup', () =
 });
 
 describe('the card stepper draws through the same component', () => {
-  it('four steps, current marked, shipped complete', () => {
-    const current = renderToStaticMarkup(createElement(OrderProgressStepper, { status: 'submitted', config: CARD_STEPPER }));
-    expect([...current.matchAll(/order-progress__label">([^<]+)</g)].map((m) => m[1])).toEqual(['Paid', 'Sent to print', 'Printing', 'Shipped']);
-    expect(current).toContain('order-progress__step--done');
-    expect(current).toContain('order-progress__step--current');
-    expect(current).toContain('aria-current="step"');
+  const labels = (html: string) => [...html.matchAll(/order-progress__label">([^<]+)</g)].map((m) => m[1]);
+
+  it('right after payment: Paid done, Preparing current (with its hint)', () => {
+    const html = renderToStaticMarkup(createElement(OrderProgressStepper, { status: 'paid', config: CARD_STEPPER }));
+    expect(labels(html)).toEqual(['Paid', 'Preparing', 'Sent to print', 'Printing', 'Shipped']);
+    expect(html.match(/order-progress__step--done/g)).toHaveLength(1);
+    expect(html.match(/order-progress__step--current/g)).toHaveLength(1);
+    expect(html).toContain('Preparing</span><span class="order-progress__hint">just a few minutes');
+    expect(html).toContain('aria-current="step"');
+  });
+
+  it('submitted is Sent to print; shipped is complete', () => {
+    const submitted = renderToStaticMarkup(createElement(OrderProgressStepper, { status: 'submitted', config: CARD_STEPPER }));
+    expect(submitted.match(/order-progress__step--done/g)).toHaveLength(2);
     const shipped = renderToStaticMarkup(createElement(OrderProgressStepper, { status: 'shipped', config: CARD_STEPPER }));
     expect(shipped).not.toContain('order-progress__step--current');
-    expect(shipped.match(/order-progress__step--done/g)).toHaveLength(4);
+    expect(shipped.match(/order-progress__step--done/g)).toHaveLength(5);
   });
 });
 

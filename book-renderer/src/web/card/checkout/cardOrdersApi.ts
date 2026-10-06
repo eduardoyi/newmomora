@@ -37,8 +37,8 @@ const FUNCTION = 'holiday-card-orders';
 export const ORDER_READ_TIMEOUT_MS = 30_000;
 /** `quote` asks the print partner for a price (its own timeout is 30 s). */
 export const QUOTE_TIMEOUT_MS = 45_000;
-/** `create_checkout` renders the print files: about 30 s cold, so the client waits longer than the server's usual work. */
-export const CREATE_CHECKOUT_TIMEOUT_MS = 90_000;
+/** `create_checkout` only opens the Stripe session (the print files are made after payment): the default cap, like the book's. */
+export const CREATE_CHECKOUT_TIMEOUT_MS = 45_000;
 
 export async function createCardDraft(cardId: string): Promise<{ orderId: string }> {
   if (import.meta.env.DEV && isCardFixture()) return parseDraft(await fixtureCreateDraft(cardId));

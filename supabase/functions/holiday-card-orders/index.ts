@@ -5,15 +5,17 @@
  *
  *   create_draft     { cardId }                       -> insert a bare draft order
  *   quote            { orderId, address, packs }      -> Gelato quote + our fixed price, CAS draft|quoted -> quoted
- *   create_checkout  { orderId, expectedEditsVersion } -> claim the card, freeze the snapshot, render print files, create
- *                                                        the Gelato DRAFT, create the Stripe Checkout Session, CAS quoted -> checkout
+ *   create_checkout  { orderId, expectedEditsVersion } -> claim the card, freeze the snapshot, create the Stripe Checkout
+ *                                                        Session, CAS quoted -> checkout (no render, no Gelato draft)
  *   cancel_checkout  { orderId }                      -> expire the open session, cancel, delete draft + files
  *   status           { orderId }                      -> the buyer's view of the order
  *
- * Money path, in order (nothing is rendered or created AFTER payment except one
- * idempotent PATCH, done by `stripe-webhook` / the sweep):
- *   quote -> checkout (render + Gelato draft + Stripe session) -> paid (webhook)
- *   -> Gelato PATCH draft -> submitted -> in_production -> shipped (sweep).
+ * Money path, PAY FIRST (like the Memory Book): nothing is rendered and no Gelato
+ * draft exists before the customer pays, so `create_checkout` answers in seconds.
+ *   quote -> checkout (card claim + frozen snapshot + Stripe session) -> paid (webhook)
+ *   -> [stripe-webhook / sweep: `confirmPaidOrder` in _shared/holiday-card-fulfillment.ts]
+ *   render print files -> Gelato draft -> (held canary) -> refund check -> PATCH draft
+ *   -> submitted -> in_production -> shipped (sweep).
  *
  * Ordering kill switch: create_draft, quote and create_checkout answer 403
  * HOLIDAY_CARD_ORDERS_PAUSED while `holiday_card_settings.orders_enabled` is false
@@ -26,9 +28,7 @@
  *     running twice; the CARD-level claim (`claim_holiday_card_checkout`) is the
  *     lock across orders (version pin, one open checkout per card, edit lock) and
  *     is held while the order is in `checkout`;
- *   - the frozen snapshot + hash and the rendered files are persisted before
- *     the Gelato draft is created; an existing draft id is verified and reused,
- *     never duplicated;
+ *   - the frozen snapshot + hash are persisted before the Stripe session is made;
  *   - Stripe customer and session are created with idempotency keys derived
  *     from (order, snapshot hash, price, packs, address, session expiry), so a
  *     retry of the same attempt sends an identical request and returns the same
@@ -47,12 +47,11 @@ import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { handleCors } from '../_shared/cors.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import { getCallerFamilyRole, isManagerRole } from '../_shared/family-access.ts';
-import { createDraft, deleteDraft, GelatoApiError, type GelatoAddress, getOrder, quoteOrder } from '../_shared/gelato.ts';
+import { deleteDraft, GelatoApiError, getOrder, quoteOrder } from '../_shared/gelato.ts';
 import {
   CARD_PRODUCTS,
   CARDS_PER_PACK,
   evaluateQuote,
-  gelatoFilesFor,
   HOLIDAY_CARD_PRODUCT_NAME,
   HOLIDAY_CARD_TAX_CODE,
   isValidPacks,
@@ -63,10 +62,11 @@ import {
 } from '../_shared/holiday-card-products.ts';
 import {
   deletePrintFiles,
+  filesMatchLayout,
   type FulfillmentDeps,
+  gelatoAddress,
   isFreshClaim,
   parsePrintFiles,
-  printFilesPrefix,
   type PrintFileRecord,
   type PrintFilesState,
   printOrderPrefix,
@@ -86,11 +86,6 @@ import {
   type SnapshotLoaderDeps,
 } from '../_shared/holiday-card-snapshot-loader.ts';
 import { createPresignedGetUrls, deleteObject, headObject, listObjectKeys } from '../_shared/r2.ts';
-import {
-  renderCard,
-  RenderCardContentError,
-  RenderCardUnavailableError,
-} from '../_shared/render-card-client.ts';
 import {
   createGenericCheckoutSession,
   createStripeCustomer,
@@ -178,11 +173,6 @@ interface OrderRow {
   updated_at: string;
 }
 
-/** 7 days: the longest an S3-style presigned URL can live. The Gelato draft's file URLs. */
-const PRINT_FILE_URL_TTL_SECONDS = 7 * 24 * 3600;
-/** The render service downloads the pictures right away. */
-const ASSET_URL_TTL_SECONDS = 15 * 60;
-
 // ── Validation ───────────────────────────────────────────────────────────
 
 const CONTROL_CHAR_PATTERN = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
@@ -249,27 +239,6 @@ export function validateCardShippingAddress(input: unknown): AddressValidation {
       postalCode,
       countryCode,
     },
-  };
-}
-
-function splitName(name: string): { firstName: string; lastName: string } {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return { firstName: parts[0], lastName: '.' };
-  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
-}
-
-function gelatoAddress(address: CardShippingAddress, email: string): GelatoAddress {
-  const { firstName, lastName } = splitName(address.name);
-  return {
-    firstName,
-    lastName,
-    addressLine1: address.line1,
-    addressLine2: address.line2 ?? null,
-    city: address.city,
-    state: address.state,
-    postCode: address.postalCode,
-    country: address.countryCode,
-    email,
   };
 }
 
@@ -670,12 +639,6 @@ async function checkFrozenQr(
   return gate.shareTokenActive ? null : 'QR_LINK_DISABLED';
 }
 
-/** Rendered sides that make a complete set for a layout (a P1 two_files order meets a one_pdf product). */
-function filesMatchLayout(files: PrintFileRecord[], layout: string): boolean {
-  const sides = files.map((f) => f.side).sort().join(',');
-  return layout === 'two_files' ? sides === 'back,front' : sides === 'both';
-}
-
 async function cardEditsVersion(supabase: SupabaseClient, cardId: string): Promise<number | null> {
   const { data, error } = await supabase.from('holiday_cards').select('id, edits_version').eq('id', cardId).maybeSingle<{ id: string; edits_version: number | null }>();
   if (error) throw new CardLoadError('LOAD_FAILED');
@@ -738,10 +701,9 @@ async function handleCreateCheckout(
 
   const stripeSecretKey = Deno.env.get('STRIPE_SECRET_KEY');
   const checkoutOrigin = Deno.env.get('HOLIDAY_CARD_CHECKOUT_ORIGIN') ?? Deno.env.get('MEMORY_BOOK_CHECKOUT_ORIGIN');
+  // Pay first: no render service and no Gelato here (a legacy leftover draft is cleaned best-effort when the key exists).
   const gelatoApiKey = Deno.env.get('GELATO_API_KEY');
-  const renderUrl = Deno.env.get('MEMORY_BOOK_RENDER_WORKER_URL');
-  const renderSecret = Deno.env.get('MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET');
-  if (!stripeSecretKey || !checkoutOrigin || !gelatoApiKey || !renderUrl || !renderSecret) {
+  if (!stripeSecretKey || !checkoutOrigin) {
     console.error('holiday-card-orders create_checkout missing configuration');
     return errorResponse('Checkout is not configured', 500, 'internal_error');
   }
@@ -864,82 +826,53 @@ async function handleCreateCheckout(
     printedToken = snapshot.qrUrl ? card.share_token : null;
   }
 
-  // 2. Print files: content-addressed by the snapshot hash. Reuse the ones already
-  //    rendered for this exact snapshot (if they are still in R2 at the size the
-  //    render service reported), else render a fresh set under this hash's prefix.
-  const filesIntact = async (candidate: PrintFileRecord[]): Promise<boolean> => {
-    try {
-      for (const file of candidate) {
-        const head = await dependencies.headObject(file.key);
-        if (!head || head.contentLength !== file.bytes) return false;
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  let files: PrintFileRecord[];
-  const sameSnapshot = prior.snapshotHash === hash && order.snapshot_hash === hash;
-  if (sameSnapshot && prior.files && prior.files.length > 0 && filesMatchLayout(prior.files, product.fileLayout) && await filesIntact(prior.files)) {
+  // 2. Freeze: persist the snapshot + hash (what the customer pays for and the webhook
+  //    verifies). NOTHING is rendered and no Gelato draft is made before payment: the
+  //    pipeline runs after the payment (`confirmPaidOrder`: stripe-webhook, sweep as fallback).
+  //    Leftovers of a pre-payment render (an order quoted before this flow) are kept only
+  //    if they are for this exact snapshot AND fit the product's layout; else they are purged.
+  let files: PrintFileRecord[] | undefined;
+  let gelatoOrderId: string | null = order.gelato_order_id;
+  const leftoversFit = prior.snapshotHash === hash && order.snapshot_hash === hash && Boolean(prior.files?.length) &&
+    filesMatchLayout(prior.files ?? [], product.fileLayout);
+  if (leftoversFit) {
     files = prior.files;
-  } else {
-    try {
-      const assetKeys = snapshot.assets.map((asset) => asset.key);
-      const urlsByKey = await dependencies.createPresignedGetUrls(assetKeys, ASSET_URL_TTL_SECONDS);
-      const assets: Record<string, string> = {};
-      for (const asset of snapshot.assets) {
-        const url = urlsByKey[asset.key];
-        if (!url) throw new Error('missing presigned url');
-        assets[asset.file] = url;
-      }
-      const result = await renderCard(dependencies.fetch, renderUrl, renderSecret, {
-        orderId: order.id,
-        mode: 'render',
-        format: product.format,
-        fileLayout: product.fileLayout,
-        card: snapshot.card,
-        edits: snapshot.edits,
-        assets,
-        outputPrefix: printFilesPrefix(order.id, hash),
-      });
-      const sides = new Set(result.files.map((f) => f.side));
-      const complete = product.fileLayout === 'two_files' ? sides.has('front') && sides.has('back') : sides.has('both');
-      if (!complete) throw new RenderCardUnavailableError(502, 'render service returned the wrong files');
-      // The objects must really be there, at the size the service reported, before a draft points at them.
-      if (!(await filesIntact(result.files))) throw new RenderCardUnavailableError(502, 'rendered print files are missing from storage');
-      files = result.files;
-    } catch (error) {
-      if (error instanceof RenderCardContentError) {
-        // The card itself is the problem (letter too long, photo too small...): the
-        // order stays `quoted`, nothing was charged, the parent edits the card and retries.
-        console.error('holiday-card-orders create_checkout render refused', order.id, error.code);
-        return fail(errorResponse(error.message, 422, error.code));
-      }
-      console.error('holiday-card-orders create_checkout render failed', order.id, error instanceof Error ? error.name : 'unknown');
-      return fail(errorResponse('Unable to prepare the print files right now', 502, 'RENDER_UNAVAILABLE'));
-    }
-    // A draft made for ANOTHER snapshot points at other files: never reuse it.
+    // A leftover draft is kept only if Gelato still has it AND it is still a draft (404 / confirmed / unreachable: drop the id;
+    // the pipeline makes a fresh one after payment).
     if (order.gelato_order_id) {
-      try {
-        await deleteDraft(dependencies.fetch, gelatoApiKey, order.gelato_order_id);
-      } catch {
-        console.error('holiday-card-orders create_checkout could not delete the draft of the previous snapshot', order.id);
+      let stillDraft = false;
+      if (gelatoApiKey) {
+        try {
+          stillDraft = (await getOrder(dependencies.fetch, gelatoApiKey, order.gelato_order_id)).isDraft;
+        } catch {
+          stillDraft = false;
+        }
       }
+      if (!stillDraft) gelatoOrderId = null;
     }
-    // Files of the previous snapshot are no longer referenced.
-    for (const old of prior.files ?? []) {
-      if (!files.some((f) => f.key === old.key)) await dependencies.deleteKey(old.key).catch(() => undefined);
+  } else {
+    if (order.gelato_order_id && gelatoApiKey) {
+      await deleteDraft(dependencies.fetch, gelatoApiKey, order.gelato_order_id).catch(() => undefined);
     }
-    // A new snapshot is a new attempt: the previous session expiry is not carried over.
-    const progress: PrintFilesState = { claim: { id: claimId, at: new Date(dependencies.now()).toISOString() }, files, snapshotHash: hash, renderedAt: new Date(dependencies.now()).toISOString() };
+    gelatoOrderId = null;
+    if (prior.files?.length) await deletePrintFiles(dependencies, order.id).catch(() => undefined);
+  }
+  {
+    const frozen: PrintFilesState = {
+      claim: dbState.claim,
+      snapshotHash: hash,
+      ...(files ? { files, renderedAt: prior.renderedAt } : {}),
+      // A new snapshot is a new attempt: the previous session expiry is not carried over.
+      ...(dbState.sessionExpiresAt && prior.snapshotHash === hash ? { sessionExpiresAt: dbState.sessionExpiresAt } : {}),
+    };
     const { data: saved, error: saveError } = await supabase
       .from('holiday_card_orders')
       .update({
         card_snapshot: { card: snapshot.card, edits: snapshot.edits, assets: snapshot.assets, qrUrl: snapshot.qrUrl, front: snapshot.front },
         snapshot_hash: hash,
-        print_files: progress,
-        gelato_order_id: null,
-        gelato_status: null,
+        print_files: frozen,
+        gelato_order_id: gelatoOrderId,
+        ...(gelatoOrderId ? {} : { gelato_status: null }),
       })
       .eq('id', order.id)
       .eq('status', 'quoted')
@@ -947,68 +880,9 @@ async function handleCreateCheckout(
       .maybeSingle();
     if (saveError || !saved) {
       console.error('holiday-card-orders create_checkout snapshot persist failed', order.id);
-      return fail(errorResponse('Failed to record the print files', saveError ? 500 : 409, saveError ? 'internal_error' : 'ORDER_NOT_QUOTED'));
+      return fail(errorResponse('Failed to record the card snapshot', saveError ? 500 : 409, saveError ? 'internal_error' : 'ORDER_NOT_QUOTED'));
     }
-    dbState = progress;
-    order.gelato_order_id = null;
-  }
-
-  // 3. The Gelato draft (free; not produced until confirmed after payment). Reuse
-  //    a draft a previous attempt of THIS snapshot already created.
-  let gelatoOrderId = order.gelato_order_id;
-  if (gelatoOrderId) {
-    try {
-      const existing = await getOrder(dependencies.fetch, gelatoApiKey, gelatoOrderId);
-      if (!existing.isDraft) {
-        console.error('holiday-card-orders create_checkout existing Gelato order is not a draft', order.id);
-        return fail(errorResponse('The print order is in an unexpected state', 409, 'ORDER_NOT_QUOTED'));
-      }
-    } catch (error) {
-      if (error instanceof GelatoApiError && error.status === 404) {
-        gelatoOrderId = null; // the draft is gone: make a new one below
-      } else {
-        console.error('holiday-card-orders create_checkout draft check failed', order.id);
-        return fail(errorResponse('Unable to reach the print provider', 502, 'GELATO_UNAVAILABLE'));
-      }
-    }
-  }
-  if (!gelatoOrderId) {
-    try {
-      const urls = await dependencies.createPresignedGetUrls(files.map((f) => f.key), PRINT_FILE_URL_TTL_SECONDS);
-      const urlFor = (side: PrintFileRecord['side']) => {
-        const file = files.find((f) => f.side === side);
-        return file ? urls[file.key] : undefined;
-      };
-      const gelatoFiles = gelatoFilesFor(product.fileLayout, { frontUrl: urlFor('front'), backUrl: urlFor('back'), pdfUrl: urlFor('both') });
-      const draft = await createDraft(dependencies.fetch, gelatoApiKey, {
-        orderReferenceId: order.id,
-        customerReferenceId: order.family_id,
-        currency: product.currency,
-        items: [{ itemReferenceId: 'cards', productUid: product.productUid, quantity: order.packs, files: gelatoFiles }],
-        shippingAddress: gelatoAddress(order.shipping_address, callerEmail),
-      });
-      gelatoOrderId = draft.id;
-      const { data: persisted, error: persistError } = await supabase
-        .from('holiday_card_orders')
-        .update({ gelato_order_id: draft.id, gelato_status: draft.rawFulfillmentStatus ?? 'draft' })
-        .eq('id', order.id)
-        .eq('status', 'quoted')
-        .select('id')
-        .maybeSingle();
-      if (persistError || !persisted) {
-        console.error('holiday-card-orders create_checkout draft id persist failed', order.id);
-        // The order moved on (aged/cancelled) or the write failed: do not leave an unreferenced draft behind.
-        if (!persisted && !persistError) await deleteDraft(dependencies.fetch, gelatoApiKey, draft.id).catch(() => undefined);
-        return fail(errorResponse('Failed to record the print order', persistError ? 500 : 409, persistError ? 'internal_error' : 'ORDER_NOT_QUOTED'));
-      }
-    } catch (error) {
-      if (error instanceof GelatoApiError && !error.retryable) {
-        console.error('holiday-card-orders create_checkout draft rejected', order.id, error.status, error.code ?? '');
-        return fail(errorResponse('The print provider rejected this order', 422, 'DRAFT_REJECTED'));
-      }
-      console.error('holiday-card-orders create_checkout draft failed', order.id, error instanceof Error ? error.name : 'unknown');
-      return fail(errorResponse('Unable to reach the print provider', 502, 'GELATO_UNAVAILABLE'));
-    }
+    dbState = frozen;
   }
 
   // 4. The Stripe Checkout Session. Its `expires_at` is fixed per ATTEMPT: chosen
@@ -1114,7 +988,7 @@ async function handleCreateCheckout(
   if (!unchanged) {
     console.error('holiday-card-orders create_checkout card changed while preparing', order.id);
     await expireCheckoutSession(dependencies.fetch, stripeSecretKey, session.sessionId).catch(() => undefined);
-    if (gelatoOrderId) await deleteDraft(dependencies.fetch, gelatoApiKey, gelatoOrderId).catch(() => undefined);
+    if (gelatoOrderId && gelatoApiKey) await deleteDraft(dependencies.fetch, gelatoApiKey, gelatoOrderId).catch(() => undefined);
     await deletePrintFiles(dependencies, order.id).catch(() => undefined);
     await supabase
       .from('holiday_card_orders')
@@ -1127,7 +1001,8 @@ async function handleCreateCheckout(
 
   // 6. quoted -> checkout (the snapshot, hash and draft id are already persisted).
   //    The card claim is KEPT from here: the order is now the card's open checkout.
-  const finalFiles: PrintFilesState = { files, snapshotHash: hash, renderedAt: new Date(dependencies.now()).toISOString(), sessionExpiresAt: expiry.iso };
+  const { claim: _claim, ...unclaimed } = dbState;
+  const finalFiles: PrintFilesState = { ...unclaimed, sessionExpiresAt: expiry.iso };
   const { data: advanced, error: advanceError } = await supabase
     .from('holiday_card_orders')
     .update({ status: 'checkout', stripe_session_id: session.sessionId, print_files: finalFiles })

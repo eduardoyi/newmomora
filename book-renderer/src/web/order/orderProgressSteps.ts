@@ -47,6 +47,12 @@ const STEP_STATUSES: ReadonlySet<string> = new Set(PROGRESS_STEPS.map((step) => 
 export interface StepperConfig {
   steps: readonly { key: string; label: string; hint?: string }[];
   terminalKey: string;
+  /**
+   * An order status that is shown on a different step than its own key (the
+   * holiday card has no `rendering` status: right after payment its `paid`
+   * status IS the "Preparing" step). Omitted = each status is its own step.
+   */
+  stepForStatus?: Readonly<Record<string, string>>;
 }
 
 /** The Memory Book's six-step bar (the default everywhere). */

@@ -82,13 +82,14 @@ export function parseCheckout(raw: unknown, origin?: string): CheckoutSession {
   return { orderId: raw.orderId as string, checkoutUrl: url, resumed: raw.resumed === true, expiresAt: str(raw.expiresAt) };
 }
 
-export type CardOrderStatusName = 'draft' | 'quoted' | 'checkout' | 'paid' | 'submitted' | 'in_production' | 'shipped' | 'failed' | 'cancelled';
+export type CardOrderStatusName = 'draft' | 'quoted' | 'checkout' | 'paid' | 'rendering' | 'submitted' | 'in_production' | 'shipped' | 'failed' | 'cancelled';
 
 export const CARD_ORDER_STATUS_NAMES: readonly CardOrderStatusName[] = [
   'draft',
   'quoted',
   'checkout',
   'paid',
+  'rendering',
   'submitted',
   'in_production',
   'shipped',

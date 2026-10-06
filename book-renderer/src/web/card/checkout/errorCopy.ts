@@ -53,7 +53,7 @@ export const ERROR_TABLE: Readonly<Record<string, ErrorCopy>> = {
   BAD_INPUT: { message: 'Something in your card could not be read for printing. Go back to your card, check the text and photo, and try again.', action: 'back_to_editor' },
 
   // ── checkout claim and session
-  CHECKOUT_IN_PROGRESS: { message: 'We are still preparing your print files. This can take a minute.', action: 'retry' },
+  CHECKOUT_IN_PROGRESS: { message: 'We are still setting up your checkout. This can take a moment.', action: 'retry' },
   CHECKOUT_OPEN_ELSEWHERE: {
     message: 'A checkout is already open for this card, maybe on another device or by someone else in your family. It expires within 35 minutes. Come back after it finishes or expires.',
     action: 'back_to_editor',

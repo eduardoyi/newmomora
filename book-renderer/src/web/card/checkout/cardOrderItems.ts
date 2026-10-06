@@ -16,7 +16,7 @@ export interface CardOrderListRow {
   created_at: string;
 }
 
-const KNOWN: readonly string[] = ['draft', 'quoted', 'checkout', 'paid', 'submitted', 'in_production', 'shipped', 'failed', 'cancelled'];
+const KNOWN: readonly string[] = ['draft', 'quoted', 'checkout', 'paid', 'rendering', 'submitted', 'in_production', 'shipped', 'failed', 'cancelled'];
 
 /** The holiday card adapter for the shared list row. */
 export function cardOrderItem(order: CardOrderListRow): OrderListItem {

@@ -1,8 +1,10 @@
 import { assertEquals, assertNotEquals } from 'jsr:@std/assert@1';
 import { CARD_PRODUCTS } from '../_shared/holiday-card-products.ts';
+import { confirmPaidOrder, failPaidOrder, type FulfillmentDeps, type PrintPipelineDeps } from '../_shared/holiday-card-fulfillment.ts';
 import { chooseSessionExpiry, handleHolidayCardOrders, SESSION_REUSE_MIN_LEFT_MS, STRIPE_SESSION_TTL_MS, validateCardShippingAddress } from './index.ts';
 import {
   cardWorldSeed,
+  defaultRenderResponse,
   FakeDb,
   type FakeDbOptions,
   fakeImageSize,
@@ -282,7 +284,47 @@ Deno.test('quote refuses to reset an order whose checkout claim is fresh', async
 
 // ── create_checkout ──────────────────────────────────────────────────────
 
-Deno.test('create_checkout: render, Gelato draft and Stripe session, then quoted -> checkout', async () => {
+// ── Pay first: create_checkout only freezes + opens Stripe; the pipeline runs after payment ──
+
+const noPrintWork = (h: Harness) => h.world.renderCalls.length + h.world.gelato.state.calls.length;
+
+interface Fulfilled {
+  outcome: Awaited<ReturnType<typeof confirmPaidOrder>>;
+  mails: { to: string; subject: string; body: string }[];
+}
+
+/** The webhook's part (paid CAS + card claim release) and then the post-payment pipeline (`confirmPaidOrder`), against the harness's fakes. */
+async function payAndFulfil(
+  h: Harness,
+  orderId: string = IDS.order,
+  options: { head?: (key: string) => Promise<{ contentLength: number | null } | null>; pipeline?: PrintPipelineDeps | null; skipPay?: boolean; fetch?: typeof fetch; presign?: PrintPipelineDeps['createPresignedGetUrls']; renderTimeoutMs?: number; now?: () => number } = {},
+): Promise<Fulfilled> {
+  if (!options.skipPay) {
+    const row = h.db.row('holiday_card_orders', orderId);
+    row.status = 'paid';
+    row.stripe_payment_intent_id = 'pi_test_1';
+    await h.db.build().rpc('release_holiday_card_checkout', { p_order_id: orderId });
+  }
+  h.db.users.set(IDS.user, { email: 'buyer@example.com' });
+  const mails: Fulfilled['mails'] = [];
+  const deps: FulfillmentDeps = {
+    fetch: options.fetch ?? h.world.fetch,
+    now: options.now,
+    sendEmail: async (input) => { mails.push({ to: input.to, subject: input.subject, body: input.htmlBody }); return 'sent'; },
+    listKeys: h.r2.listKeys,
+    deleteKey: h.r2.deleteKey,
+    gelatoApiKey: 'gelato-test-key',
+    stripeSecretKey: 'sk_test_x',
+    pipeline: options.pipeline === undefined
+      ? { renderUrl: 'https://render.test', renderSecret: 'render-secret', createPresignedGetUrls: options.presign ?? fakePresign(h.presigned), headObject: options.head ?? h.world.headObject, renderTimeoutMs: options.renderTimeoutMs }
+      : options.pipeline,
+  };
+  return { outcome: await confirmPaidOrder(deps, h.db.build(), orderId), mails };
+}
+const draftPosts = (h: Harness) => h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders');
+const patchesOf = (h: Harness) => h.world.gelato.state.calls.filter((c) => c.method === 'PATCH');
+
+Deno.test('create_checkout is PAY FIRST: it freezes the snapshot and opens the Stripe session, with no render, no Gelato draft and no print files', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
     const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
@@ -290,36 +332,11 @@ Deno.test('create_checkout: render, Gelato draft and Stripe session, then quoted
     const body = await response.json();
     assertEquals(body.status, 'checkout');
     assertEquals(body.checkoutUrl.startsWith('https://checkout.stripe.test/'), true);
+    assertEquals(typeof body.expiresAt, 'string');
 
-    // Render: the real format and layout, the front ORIGINAL key (never the preview), signed.
-    assertEquals(h.world.renderCalls.length, 1);
-    const render = h.world.renderCalls[0];
-    assertEquals(render.body.mode, 'render');
-    assertEquals(render.body.format, '5R');
-    assertEquals(render.body.fileLayout, 'one_pdf');
-    // Content-addressed: the snapshot hash (first 16 hex) is part of the prefix.
-    assertEquals(new RegExp(`^print-orders/${IDS.order}/[0-9a-f]{16}/$`).test(String(render.body.outputPrefix)), true);
-    assertEquals(typeof render.headers.get('x-render-signature'), 'string');
-    assertEquals(h.presigned.keys.includes('u1/photos/front-original.jpg'), true);
-    assertEquals(h.presigned.keys.includes('u1/photos/front-preview.jpg'), false);
-    const assets = render.body.assets as Record<string, string>;
-    assertEquals(Object.values(assets).some((url) => url.includes('front-original.jpg')), true);
-
-    // Letter tones are the renderer's (warm -> reflective).
-    const letters = (render.body.card as { letters: { tone: string }[] }).letters.map((l) => l.tone);
-    assertEquals(letters, ['classic', 'reflective']);
-
-    // Gelato: ONE draft, ONE file (the 2-page PDF as `default`), quantity = packs, reference = order id.
-    const posts = h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders');
-    assertEquals(posts.length, 1);
-    const draftBody = posts[0].body as Row;
-    assertEquals(draftBody.orderType, 'draft');
-    assertEquals(draftBody.orderReferenceId, IDS.order);
-    const item = (draftBody.items as Row[])[0];
-    assertEquals(item.quantity, 2);
-    assertEquals((item.files as Row[]).map((f) => f.type), ['default']);
-    assertEquals(String((item.files as Row[])[0].url).includes('card.pdf'), true);
-    assertEquals(h.presigned.ttl.includes(7 * 24 * 3600), true);
+    assertEquals(h.world.renderCalls.length, 0);
+    assertEquals(h.world.gelato.state.calls.length, 0);
+    assertEquals(h.r2.keys.size, 0);
 
     // Stripe: one line item, general tangible goods code, metadata on session AND payment intent.
     const sessionCall = h.world.stripe.state.calls.find((c) => c.path === '/checkout/sessions')!;
@@ -334,30 +351,83 @@ Deno.test('create_checkout: render, Gelato draft and Stripe session, then quoted
     assertEquals(params.get('payment_intent_data[metadata][snapshotHash]'), params.get('metadata[snapshotHash]'));
     assertEquals(sessionCall.idempotencyKey?.startsWith('hc-sess-'), true);
 
-    // Row: checkout, frozen snapshot + hash, draft id, session id, files without the claim.
+    // Row: checkout, frozen snapshot + hash (what the webhook verifies), session id; no draft, no files, no claim.
     const row = orderRow(h.db);
     assertEquals(row.status, 'checkout');
     assertEquals(row.stripe_session_id, body.sessionId);
     assertEquals(row.snapshot_hash, params.get('metadata[snapshotHash]'));
     assertEquals(typeof (row.card_snapshot as Row).card, 'object');
-    assertEquals(typeof row.gelato_order_id, 'string');
-    const printFiles = row.print_files as { claim?: unknown; files: Row[] };
+    assertEquals(row.gelato_order_id ?? null, null);
+    const printFiles = row.print_files as { claim?: unknown; files?: unknown; snapshotHash: string; sessionExpiresAt: string };
     assertEquals(printFiles.claim, undefined);
-    assertEquals(printFiles.files.map((f) => f.side), ['both']);
+    assertEquals(printFiles.files, undefined);
+    assertEquals(printFiles.snapshotHash, row.snapshot_hash);
+    // Letter tones in the frozen card are the renderer's (warm -> reflective); the front is the ORIGINAL key.
+    const snapshot = row.card_snapshot as { card: { letters: { tone: string }[] }; assets: { key: string }[] };
+    assertEquals(snapshot.card.letters.map((l) => l.tone), ['classic', 'reflective']);
+    assertEquals(snapshot.assets.some((a) => a.key === 'u1/photos/front-original.jpg'), true);
+    assertEquals(snapshot.assets.some((a) => a.key === 'u1/photos/front-preview.jpg'), false);
   });
 });
 
-Deno.test('create_checkout still supports a two_files product: front + back rendered, Gelato gets default + back', async () => {
+Deno.test('after payment the pipeline renders, creates the draft, and confirms: paid -> submitted (one render, one draft, one PATCH, one email)', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    const { outcome, mails } = await payAndFulfil(h);
+    assertEquals(outcome, 'submitted');
+
+    // Render: the real format and layout, the front ORIGINAL key (never the preview), signed.
+    assertEquals(h.world.renderCalls.length, 1);
+    const render = h.world.renderCalls[0];
+    assertEquals(render.body.mode, 'render');
+    assertEquals(render.body.orderId, IDS.order);
+    assertEquals(render.body.format, '5R');
+    assertEquals(render.body.fileLayout, 'one_pdf');
+    // Content-addressed: the snapshot hash (first 16 hex) is part of the prefix.
+    assertEquals(new RegExp(`^print-orders/${IDS.order}/[0-9a-f]{16}/$`).test(String(render.body.outputPrefix)), true);
+    assertEquals(String(render.body.outputPrefix).includes(String(orderOf(h).snapshot_hash).slice(0, 16)), true);
+    assertEquals(typeof render.headers.get('x-render-signature'), 'string');
+    assertEquals(h.presigned.keys.includes('u1/photos/front-original.jpg'), true);
+    assertEquals(h.presigned.keys.includes('u1/photos/front-preview.jpg'), false);
+    assertEquals(Object.values(render.body.assets as Record<string, string>).some((url) => url.includes('front-original.jpg')), true);
+    assertEquals((render.body.card as { letters: { tone: string }[] }).letters.map((l) => l.tone), ['classic', 'reflective']);
+
+    // Gelato: ONE draft, ONE file (the 2-page PDF as `default`), quantity = packs, reference = order id, 7-day URLs.
+    assertEquals(draftPosts(h).length, 1);
+    const draftBody = draftPosts(h)[0].body as Row;
+    assertEquals(draftBody.orderType, 'draft');
+    assertEquals(draftBody.orderReferenceId, IDS.order);
+    const item = (draftBody.items as Row[])[0];
+    assertEquals(item.quantity, 2);
+    assertEquals((item.files as Row[]).map((f) => f.type), ['default']);
+    assertEquals(String((item.files as Row[])[0].url).includes('card.pdf'), true);
+    assertEquals(h.presigned.ttl.includes(7 * 24 * 3600), true);
+    assertEquals(patchesOf(h).length, 1);
+
+    const row = orderOf(h);
+    assertEquals(row.status, 'submitted');
+    assertEquals(typeof row.gelato_order_id, 'string');
+    assertEquals((row.print_files as { files: { side: string }[] }).files.map((f) => f.side), ['both']);
+    assertEquals(mails.filter((m) => m.to === 'buyer@example.com').length, 1);
+    // Idempotent: running it again (the sweep after the webhook) changes nothing.
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'not_paid');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(draftPosts(h).length, 1);
+  });
+});
+
+Deno.test('the pipeline still supports a two_files product: front + back rendered, Gelato gets default + back', async () => {
   await withEnv(async () => {
     const product = CARD_PRODUCTS.us_ca;
     const original = product.fileLayout;
     (product as { fileLayout: string }).fileLayout = 'two_files';
     try {
       const h = harness(cardWorldSeed({ order: { ...QUOTED_ORDER, file_layout: 'two_files' } }));
-      assertEquals((await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
+      assertEquals((await h.call(body())).status, 200);
+      assertEquals((await payAndFulfil(h)).outcome, 'submitted');
       assertEquals(h.world.renderCalls[0].body.fileLayout, 'two_files');
-      const draft = h.world.gelato.state.calls.find((c) => c.method === 'POST' && c.path === '/orders')!.body as Row;
-      assertEquals(((draft.items as Row[])[0].files as Row[]).map((f) => f.type), ['default', 'back']);
+      assertEquals(((draftPosts(h)[0].body as Row).items as Row[]).map((i) => (i.files as Row[]).map((f) => f.type)), [['default', 'back']]);
       assertEquals((orderOf(h).print_files as { files: Row[] }).files.map((f) => f.side), ['front', 'back']);
     } finally {
       (product as { fileLayout: string }).fileLayout = original;
@@ -374,125 +444,235 @@ Deno.test('create_checkout is idempotent: a second call returns the open session
     const secondBody = await second.json();
     assertEquals(secondBody.checkoutUrl, first.checkoutUrl);
     assertEquals(secondBody.resumed, true);
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 1);
-    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(noPrintWork(h), 0);
     assertEquals(h.world.stripe.state.calls.filter((c) => c.path === '/checkout/sessions' && c.method === 'POST').length, 1);
   });
 });
 
-Deno.test('create_checkout resumes after a Stripe failure without a second render or a second Gelato draft', async () => {
+Deno.test('create_checkout after a Stripe failure just retries Stripe: nothing was rendered or created, the claim is released', async () => {
   await withEnv(async () => {
-    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
-    // Stripe is down for the first attempt (customers endpoint fails).
-    const realFetch = h.world.fetch;
     let stripeDown = true;
-    const flaky = (async (input: Request | URL | string, init?: RequestInit) => {
-      if (stripeDown && new URL(String(input)).hostname === 'api.stripe.com') return new Response('{}', { status: 500 });
-      return realFetch(input, init);
-    }) as typeof fetch;
-    const call = (body: unknown) => handleHolidayCardOrders(request(body), {
-      getAuthenticatedUser: async () => fakeUser(),
-      createServiceClient: h.db.client(),
-      getCallerFamilyRole: async () => 'owner',
-      checkBillingFamilyWrite: async () => null,
-      fetch: flaky,
-      now: () => Date.parse('2026-10-06T12:00:00.000Z'),
-      createPresignedGetUrls: fakePresign(),
-      imageSize: fakeImageSize,
-      listKeys: h.r2.listKeys,
-      deleteKey: h.r2.deleteKey,
-      headObject: h.world.headObject,
-      sendEmail: async () => 'sent',
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }), {
+      fetch: (real) => ((input: Request | URL | string, init?: RequestInit) =>
+        stripeDown && new URL(String(input)).hostname === 'api.stripe.com' ? Promise.resolve(new Response('{}', { status: 500 })) : real(input, init)) as typeof fetch,
     });
-    const failed = await call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
+    const failed = await h.call(body());
     assertEquals(failed.status, 502);
     assertEquals((await failed.json()).code, 'STRIPE_UNAVAILABLE');
-    const afterFailure = orderRow(h.db);
-    assertEquals(afterFailure.status, 'quoted');
-    assertEquals(typeof afterFailure.gelato_order_id, 'string');
-    assertEquals((afterFailure.print_files as { claim?: unknown }).claim, undefined); // claim released
-
+    assertEquals(orderOf(h).status, 'quoted');
+    assertEquals(orderOf(h).gelato_order_id ?? null, null);
+    assertEquals(hasOrderClaim(h), false);
+    assertEquals(typeof orderOf(h).snapshot_hash, 'string'); // frozen already
     stripeDown = false;
-    const retried = await call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(retried.status, 200);
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 1);
-    assertEquals(h.world.renderCalls.length, 1);
-    assertEquals(orderRow(h.db).status, 'checkout');
+    assertEquals((await h.call(body())).status, 200);
+    assertEquals(noPrintWork(h), 0);
+    assertEquals(orderOf(h).status, 'checkout');
   });
 });
 
-Deno.test('create_checkout re-creates a Gelato draft that vanished, never a second live one', async () => {
+Deno.test('create_checkout purges leftovers of an older pre-payment render (another snapshot, or a layout the product no longer uses) and keeps nothing stale', async () => {
   await withEnv(async () => {
-    const h = harness(cardWorldSeed({ order: { ...QUOTED_ORDER, gelato_order_id: 'gel-gone0001' } }));
-    const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(response.status, 200);
-    assertNotEquals(orderRow(h.db).gelato_order_id, 'gel-gone0001');
-    assertEquals(h.world.gelato.state.orders.size, 1);
+    const files = [{ side: 'front', key: `print-orders/${IDS.order}/oldhash000000000/front.pdf`, sha256: 'a'.repeat(64), bytes: 10 }, { side: 'back', key: `print-orders/${IDS.order}/oldhash000000000/back.pdf`, sha256: 'b'.repeat(64), bytes: 10 }];
+    const h = harness(cardWorldSeed({
+      order: { ...QUOTED_ORDER, file_layout: 'two_files', gelato_order_id: 'gel-old00001', snapshot_hash: 'a'.repeat(64), print_files: { files, snapshotHash: 'a'.repeat(64) } },
+    }));
+    h.world.gelato.state.orders.set('gel-old00001', { orderType: 'draft', fulfillmentStatus: 'created', tracking: [] });
+    for (const f of files) h.r2.keys.add(f.key);
+    assertEquals((await h.call(body())).status, 200);
+    const row = orderOf(h);
+    assertEquals(row.gelato_order_id ?? null, null);
+    assertEquals(h.world.gelato.state.orders.has('gel-old00001'), false);
+    assertEquals(h.r2.keys.size, 0);
+    assertEquals((row.print_files as { files?: unknown }).files, undefined);
+    assertEquals(row.file_layout, 'one_pdf');
+    assertEquals(h.world.renderCalls.length, 0);
   });
 });
 
-Deno.test('create_checkout re-rendering for a CHANGED snapshot deletes the old draft, renders to a new prefix and creates a fresh draft', async () => {
+// ── The post-payment pipeline: failures, retries, idempotent re-entry ────
+
+Deno.test('pipeline: print files missing from storage (or the wrong size) are a RETRY, never a draft pointing at nothing', async () => {
+  await withEnv(async () => {
+    for (const head of [async () => null, async () => ({ contentLength: 7 })]) {
+      const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+      assertEquals((await h.call(body())).status, 200);
+      const { outcome } = await payAndFulfil(h, IDS.order, { head });
+      assertEquals(outcome, 'retry');
+      assertEquals(draftPosts(h).length, 0);
+      assertEquals(orderOf(h).status, 'paid');
+      assertEquals(orderOf(h).failure_reason ?? null, null);
+    }
+  });
+});
+
+Deno.test('pipeline: a render 422 after payment FAILS the order with the code and alerts the owner (like the book: no buyer email, no automatic refund)', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
-    // First attempt: Stripe is down, so the order keeps a rendered snapshot + draft.
-    const real = h.world.fetch;
-    let stripeDown = true;
-    const flaky = ((input: Request | URL | string, init?: RequestInit) =>
-      stripeDown && new URL(String(input)).hostname === 'api.stripe.com' ? Promise.resolve(new Response('{}', { status: 500 })) : real(input, init)) as typeof fetch;
-    const call = (body: unknown) => handleHolidayCardOrders(request(body), {
-      getAuthenticatedUser: async () => fakeUser(),
-      createServiceClient: h.db.client(),
-      getCallerFamilyRole: async () => 'owner',
-      checkBillingFamilyWrite: async () => null,
-      fetch: flaky,
-      now: () => Date.parse('2026-10-06T12:00:00.000Z'),
-      createPresignedGetUrls: fakePresign(),
-      imageSize: fakeImageSize,
-      listKeys: h.r2.listKeys,
-      deleteKey: h.r2.deleteKey,
-      headObject: h.world.headObject,
-      sendEmail: async () => 'sent',
-    });
-    assertEquals((await call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 502);
-    const first = orderRow(h.db);
-    const firstDraft = first.gelato_order_id as string;
-    const firstPrefix = String(h.world.renderCalls[0].body.outputPrefix);
-    const firstKeys = (first.print_files as { files: { key: string }[] }).files.map((f) => f.key);
-    for (const key of firstKeys) h.r2.keys.add(key);
-
-    // The parent edits the letter, then retries.
-    h.db.row('holiday_cards', IDS.card).edits = { letters: { classic: 'A different letter' }, choices: { layout: 'bordered', tone: 'classic' } };
-    stripeDown = false;
-    const retried = await call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(retried.status, 200);
-    assertEquals(h.world.renderCalls.length, 2);
-    const secondPrefix = String(h.world.renderCalls[1].body.outputPrefix);
-    assertNotEquals(secondPrefix, firstPrefix);
-    const row = orderRow(h.db);
-    assertNotEquals(row.gelato_order_id, firstDraft);
-    assertEquals(h.world.gelato.state.orders.has(firstDraft), false); // the old draft is gone
-    assertEquals(h.world.gelato.state.orders.size, 1);
-    assertEquals((row.print_files as { files: { key: string }[] }).files.every((f) => f.key.startsWith(secondPrefix)), true);
-    for (const key of firstKeys) assertEquals(h.r2.deleted.includes(key), true); // old files released
-    // The new draft points at the NEW files.
-    const draftPosts = h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders');
-    assertEquals(draftPosts.length, 2);
-    assertEquals(JSON.stringify(draftPosts[1].body).includes(secondPrefix.slice(0, -1).split('/').pop()!), true);
+    assertEquals((await h.call(body())).status, 200);
+    h.world.setRender(() => new Response(JSON.stringify({ ok: false, code: 'LETTER_OVERFLOW', message: 'too long' }), { status: 422 }));
+    const { outcome, mails } = await payAndFulfil(h);
+    assertEquals(outcome, 'failed');
+    const row = orderOf(h);
+    assertEquals(row.status, 'failed');
+    assertEquals(row.failure_reason, 'RENDER_REFUSED:LETTER_OVERFLOW');
+    assertEquals(draftPosts(h).length, 0);
+    assertEquals(patchesOf(h).length, 0);
+    assertEquals(mails.length, 1);
+    assertEquals(mails[0].to, 'hello@usemomora.com');
+    assertEquals(mails[0].subject.includes('RENDER_REFUSED:LETTER_OVERFLOW'), true);
+    assertEquals(h.world.stripe.state.calls.filter((c) => c.path.includes('refund')).length, 0);
   });
 });
 
-Deno.test('create_checkout refuses to point a draft at print files that are not in storage at the size the renderer reported', async () => {
+Deno.test('pipeline: a render outage is retried (the order stays paid), and the next run completes it with exactly one draft', async () => {
   await withEnv(async () => {
-    const missing = harness(cardWorldSeed({ order: QUOTED_ORDER }), { head: async () => null });
-    const first = await missing.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(first.status, 502);
-    assertEquals((await first.json()).code, 'RENDER_UNAVAILABLE');
-    assertEquals(missing.world.gelato.state.calls.length, 0);
-    assertEquals(orderRow(missing.db).status, 'quoted');
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    h.world.setRender(() => new Response('boom', { status: 503 }));
+    assertEquals((await payAndFulfil(h)).outcome, 'retry');
+    assertEquals(orderOf(h).status, 'paid');
+    assertEquals(orderOf(h).failure_reason ?? null, null);
+    assertEquals(draftPosts(h).length, 0);
+    h.world.setRender((call) => defaultRenderResponse(call));
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'submitted');
+    assertEquals(draftPosts(h).length, 1);
+    assertEquals(orderOf(h).status, 'submitted');
+  });
+});
 
-    const wrongSize = harness(cardWorldSeed({ order: QUOTED_ORDER }), { head: async () => ({ contentLength: 7 }) });
-    assertEquals((await wrongSize.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 502);
-    assertEquals(wrongSize.world.gelato.state.orders.size, 0);
+Deno.test('pipeline: Gelato refusing the draft fails the order (files kept); Gelato being down is a retry', async () => {
+  await withEnv(async () => {
+    const refused = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await refused.call(body())).status, 200);
+    refused.world.gelato.state.forceStatus.set('POST /orders', 400);
+    const { outcome, mails } = await payAndFulfil(refused);
+    assertEquals(outcome, 'failed');
+    assertEquals(orderOf(refused).status, 'failed');
+    assertEquals(String(orderOf(refused).failure_reason).startsWith('GELATO_DRAFT_REJECTED'), true);
+    assertEquals(((orderOf(refused).print_files as { files?: unknown[] }).files ?? []).length, 1);
+    assertEquals(mails.length, 1);
+
+    const down = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await down.call(body())).status, 200);
+    down.world.gelato.state.forceStatus.set('POST /orders', 503);
+    assertEquals((await payAndFulfil(down)).outcome, 'retry');
+    assertEquals(orderOf(down).status, 'paid');
+    assertEquals(orderOf(down).failure_reason ?? null, null);
+  });
+});
+
+Deno.test('pipeline re-entry: files already rendered are reused (no second render) when only the draft step failed before', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    h.world.gelato.state.forceStatus.set('POST /orders', 503);
+    assertEquals((await payAndFulfil(h)).outcome, 'retry');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals((orderOf(h).print_files as { files: unknown[] }).files.length, 1); // persisted for the resume
+    h.world.gelato.state.forceStatus.clear();
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'submitted');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(draftPosts(h).length, 2); // the failed attempt + the one that worked
+    assertEquals(h.world.gelato.state.orders.size, 1);
+  });
+});
+
+Deno.test('pipeline re-entry: an existing draft is reused (no render, no second draft); one that is already confirmed is not PATCHed again', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    // A draft recorded by an earlier run that died before confirming.
+    h.world.gelato.state.orders.set('gel-prior001', { orderType: 'draft', fulfillmentStatus: 'created', tracking: [] });
+    orderOf(h).gelato_order_id = 'gel-prior001';
+    assertEquals((await payAndFulfil(h)).outcome, 'submitted');
+    assertEquals(h.world.renderCalls.length, 0);
+    assertEquals(draftPosts(h).length, 0);
+    assertEquals(patchesOf(h).length, 1);
+
+    const confirmed = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await confirmed.call(body())).status, 200);
+    confirmed.world.gelato.state.orders.set('gel-prior002', { orderType: 'order', fulfillmentStatus: 'passed', tracking: [] });
+    orderOf(confirmed).gelato_order_id = 'gel-prior002';
+    assertEquals((await payAndFulfil(confirmed)).outcome, 'submitted');
+    assertEquals(patchesOf(confirmed).length, 0);
+    assertEquals(confirmed.world.renderCalls.length, 0);
+  });
+});
+
+Deno.test('pipeline re-entry: two runs at once (webhook + sweep) leave exactly one live draft and one submission', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    const first = payAndFulfil(h);
+    const second = payAndFulfil(h, IDS.order, { skipPay: true });
+    const outcomes = (await Promise.all([first, second])).map((r) => r.outcome).sort();
+    assertEquals(outcomes.includes('submitted'), true);
+    assertEquals(h.world.gelato.state.orders.size, 1);
+    assertEquals(orderOf(h).status, 'submitted');
+    assertEquals(h.world.gelato.state.orders.has(orderOf(h).gelato_order_id as string), true);
+    assertEquals(patchesOf(h).length, 1);
+  });
+});
+
+Deno.test('pipeline: rendered files that do not fit the product layout (a P1 two_files order meets one_pdf) are re-rendered, never reused', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    const hash = orderOf(h).snapshot_hash as string;
+    const old = [{ side: 'front', key: `print-orders/${IDS.order}/${hash.slice(0, 16)}/front.pdf`, sha256: 'a'.repeat(64), bytes: 1000 }, { side: 'back', key: `print-orders/${IDS.order}/${hash.slice(0, 16)}/back.pdf`, sha256: 'b'.repeat(64), bytes: 1000 }];
+    for (const f of old) { h.world.objects.set(f.key, f.bytes); h.r2.keys.add(f.key); }
+    orderOf(h).print_files = { snapshotHash: hash, files: old, sessionExpiresAt: '2026-10-06T12:35:00.000Z' };
+    assertEquals((await payAndFulfil(h)).outcome, 'submitted');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(h.world.renderCalls[0].body.fileLayout, 'one_pdf');
+    assertEquals((orderOf(h).print_files as { files: { side: string }[] }).files.map((f) => f.side), ['both']);
+    for (const f of old) assertEquals(h.r2.deleted.includes(f.key), true);
+  });
+});
+
+Deno.test('pipeline: missing render configuration, or an unreadable buyer email, is a retry that creates nothing', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    assertEquals((await payAndFulfil(h, IDS.order, { pipeline: null })).outcome, 'retry');
+    assertEquals(noPrintWork(h), 0);
+    assertEquals(orderOf(h).status, 'paid');
+
+    const noEmail = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await noEmail.call(body())).status, 200);
+    noEmail.db.users.set(IDS.user, { email: null });
+    const row = noEmail.db.row('holiday_card_orders', IDS.order);
+    row.status = 'paid';
+    row.stripe_payment_intent_id = 'pi_test_1';
+    const deps: FulfillmentDeps = {
+      fetch: noEmail.world.fetch, sendEmail: async () => 'sent', listKeys: noEmail.r2.listKeys, deleteKey: noEmail.r2.deleteKey,
+      gelatoApiKey: 'k', stripeSecretKey: 'sk_test_x',
+      pipeline: { renderUrl: 'https://render.test', renderSecret: 's', createPresignedGetUrls: fakePresign(), headObject: noEmail.world.headObject },
+    };
+    assertEquals(await confirmPaidOrder(deps, noEmail.db.build(), IDS.order), 'retry');
+    assertEquals(draftPosts(noEmail).length, 0);
+  });
+});
+
+Deno.test('pipeline: the held canary stops AFTER the files and the draft exist (for inspection) and before any confirm', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER, settings: { hold_confirm_family_ids: [IDS.family] } }));
+    assertEquals((await h.call(body())).status, 200);
+    const { outcome, mails } = await payAndFulfil(h);
+    assertEquals(outcome, 'blocked');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(draftPosts(h).length, 1);
+    assertEquals(patchesOf(h).length, 0);
+    assertEquals(h.world.stripe.state.calls.filter((c) => c.path.startsWith('/payment_intents')).length, 0);
+    const row = orderOf(h);
+    assertEquals(row.status, 'paid');
+    assertEquals(row.failure_reason, 'HELD_FOR_CANARY');
+    assertEquals(typeof row.gelato_order_id, 'string');
+    assertEquals(mails.filter((m) => m.subject.includes('HELD_FOR_CANARY')).length, 1);
+    // A later run is quiet and creates nothing more.
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'blocked');
+    assertEquals(h.world.renderCalls.length, 1);
+    assertEquals(draftPosts(h).length, 1);
   });
 });
 
@@ -539,7 +719,7 @@ Deno.test('create_checkout: a link disabled while preparing (the QR was on) is C
   });
 });
 
-Deno.test('two simultaneous create_checkout calls: one wins, the other is told it is in progress, one draft exists', async () => {
+Deno.test('two simultaneous create_checkout calls: one wins, the other is told it is in progress, one Stripe session', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
     const [a, b] = await Promise.all([
@@ -549,50 +729,8 @@ Deno.test('two simultaneous create_checkout calls: one wins, the other is told i
     assertEquals([a.status, b.status].sort(), [200, 409]);
     const loser = a.status === 409 ? a : b;
     assertEquals((await loser.json()).code, 'CHECKOUT_IN_PROGRESS');
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 1);
-  });
-});
-
-Deno.test('create_checkout: a 422 from the render service is returned as its code and the order stays quoted with nothing created', async () => {
-  await withEnv(async () => {
-    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
-    h.world.setRender(() => new Response(JSON.stringify({ ok: false, code: 'LETTER_OVERFLOW', message: 'the letter is too long for this size' }), { status: 422 }));
-    const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(response.status, 422);
-    const body = await response.json();
-    assertEquals(body.code, 'LETTER_OVERFLOW');
-    const row = orderRow(h.db);
-    assertEquals(row.status, 'quoted');
-    assertEquals(row.gelato_order_id ?? null, null);
-    assertEquals(row.stripe_session_id ?? null, null);
-    assertEquals(row.print_files ?? null, null); // the claim was released
-    assertEquals(h.world.gelato.state.calls.length, 0);
-    assertEquals(h.world.stripe.state.calls.length, 0);
-  });
-});
-
-Deno.test('create_checkout: a render service outage is a retryable 502, not a content error', async () => {
-  await withEnv(async () => {
-    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
-    h.world.setRender(() => new Response('boom', { status: 503 }));
-    const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(response.status, 502);
-    assertEquals((await response.json()).code, 'RENDER_UNAVAILABLE');
-    assertEquals(orderRow(h.db).status, 'quoted');
-  });
-});
-
-Deno.test('create_checkout: a Gelato refusal of the draft is a 422 and leaves the order quoted with the files kept', async () => {
-  await withEnv(async () => {
-    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
-    h.world.gelato.state.forceStatus.set('POST /orders', 400);
-    const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    assertEquals(response.status, 422);
-    assertEquals((await response.json()).code, 'DRAFT_REJECTED');
-    const row = orderRow(h.db);
-    assertEquals(row.status, 'quoted');
-    assertEquals(h.world.stripe.state.calls.length, 0);
-    assertEquals(((row.print_files as { files?: unknown[] }).files ?? []).length, 1); // the one 2-page PDF
+    assertEquals(h.world.gelato.state.calls.length, 0); // pay first: no draft before payment
+    assertEquals(h.world.stripe.state.calls.filter((c) => c.path === '/checkout/sessions' && c.method === 'POST').length, 1);
   });
 });
 
@@ -607,7 +745,7 @@ Deno.test('create_checkout film gate: a still-rendering film blocks, a published
     // A film that can never publish (ended / gave up) prints WITHOUT a QR rather than blocking the order.
     const ended = harness(cardWorldSeed({ order: QUOTED_ORDER, film: { status: 'ended', video_key: null } }));
     assertEquals((await ended.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
-    assertEquals((ended.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(ended).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
 
     // Published and now re-rendering (or a failed re-render that left the video in place): the printed link still works.
     for (const status of ['rendering', 'queued', 'failed']) {
@@ -617,15 +755,15 @@ Deno.test('create_checkout film gate: a still-rendering film blocks, a published
 
     const filmBlocked = harness(cardWorldSeed({ order: QUOTED_ORDER, film: { blocked: true } }));
     assertEquals((await filmBlocked.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
-    assertEquals((filmBlocked.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(filmBlocked).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
 
     const qrOff = harness(cardWorldSeed({ order: QUOTED_ORDER, film: { status: 'ended', video_key: null }, card: { edits: { choices: { layout: 'bordered', tone: 'classic', qr: false } } } }));
     assertEquals((await qrOff.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
-    assertEquals((qrOff.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(qrOff).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
 
     const noFilm = harness(cardWorldSeed({ order: QUOTED_ORDER, film: null }));
     assertEquals((await noFilm.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
-    assertEquals((noFilm.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(noFilm).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
   });
 });
 
@@ -633,7 +771,7 @@ Deno.test('create_checkout prints the QR when the film is ready and drops it whe
   await withEnv(async () => {
     const live = harness(cardWorldSeed({ order: QUOTED_ORDER }));
     await live.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
-    const liveQr = (live.world.renderCalls[0].body.card as { qr: { enabled: boolean; url: string } }).qr;
+    const liveQr = ((orderOf(live).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean; url: string } }).qr;
     assertEquals(liveQr.enabled, true);
     assertEquals(liveQr.url, `https://m.usemomora.com/f/${SHARE_TOKEN}`);
 
@@ -641,7 +779,7 @@ Deno.test('create_checkout prints the QR when the film is ready and drops it whe
     // the film state no longer matters (a film that is not even ready still lets the order through).
     const revoked = harness(cardWorldSeed({ order: QUOTED_ORDER, token: { revoked_at: '2026-10-05T00:00:00Z' }, film: { status: 'failed', video_key: null } }));
     assertEquals((await revoked.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
-    assertEquals((revoked.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(revoked).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
   });
 });
 
@@ -694,7 +832,13 @@ Deno.test('create_checkout reports missing configuration as a server error and c
     const response = await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
     assertEquals(response.status, 500);
     assertEquals(h.world.renderCalls.length, 0);
-  }, { GELATO_API_KEY: null });
+  }, { STRIPE_SECRET_KEY: null });
+
+  // Pay first: no Gelato key or render service is needed to open a checkout.
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 })).status, 200);
+  }, { GELATO_API_KEY: null, MEMORY_BOOK_RENDER_WORKER_URL: null, MEMORY_BOOK_RENDER_WORKER_HMAC_SECRET: null });
 });
 
 // ── cancel_checkout and status ───────────────────────────────────────────
@@ -711,7 +855,7 @@ Deno.test('cancel_checkout expires the session, cancels the order and deletes th
     const row = orderRow(h.db);
     assertEquals(row.status, 'cancelled');
     assertEquals(row.gelato_order_id, null);
-    assertEquals(row.print_files, null);
+    assertEquals(typeof (row.print_files as { purgedAt?: string }).purgedAt, 'string');
     assertEquals(h.world.stripe.state.sessions.get(checkout.sessionId)?.status, 'expired');
     assertEquals(h.world.gelato.state.orders.has(gelatoId), false);
     assertEquals(h.r2.keys.size, 0);
@@ -888,7 +1032,7 @@ Deno.test('create_checkout takes the card claim FIRST, keeps it while the order 
     assertEquals(response.status, 200);
     const claimCalls = h.db.rpcCalls.filter((c) => c.name === 'claim_holiday_card_checkout');
     assertEquals(claimCalls, [{ name: 'claim_holiday_card_checkout', args: { p_order_id: IDS.order, p_expected_version: 0 } }]);
-    const rendered = h.world.renderCalls[0].body.edits as { letters: Record<string, string> };
+    const rendered = (orderOf(h).card_snapshot as { edits: { letters: Record<string, string> } }).edits;
     assertEquals(rendered.letters.classic, 'The letter as the claim re-read it');
     // Kept: the order is the card's open checkout; the order-level claim is gone.
     assertEquals(orderOf(h).status, 'checkout');
@@ -922,7 +1066,7 @@ Deno.test('CHECKOUT_OPEN_ELSEWHERE: another order in checkout, or another order\
   });
 });
 
-Deno.test('two different orders of one card racing: exactly one wins, one Gelato draft, the loser leaves the winner\'s claim alone', async () => {
+Deno.test('two different orders of one card racing: exactly one wins, one Stripe session, the loser leaves the winner\'s claim alone', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
     h.db.rows('holiday_card_orders').push(secondOrder());
@@ -936,7 +1080,7 @@ Deno.test('two different orders of one card racing: exactly one wins, one Gelato
     assertEquals(orderOf(h, loser).status, 'quoted');
     assertEquals(claimHolder(h), winner);
     assertEquals(hasOrderClaim(h, loser), false);
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 1);
+    assertEquals(h.world.gelato.state.calls.length, 0);
     assertEquals(sessionPosts(h).length, 1);
   });
 });
@@ -979,10 +1123,6 @@ Deno.test('an unexpected claim RPC error is a 500 (code only in the log) and lea
 // Every way create_checkout can fail after the claim gives BOTH claims back.
 type FailureCase = { name: string; seed: () => Record<string, Row[]>; setup?: (h: Harness) => void; hookFetch?: (db: () => FakeDb) => (real: typeof fetch) => typeof fetch; dbOptions?: FakeDbOptions; status: number };
 const FAILURE_CASES: FailureCase[] = [
-  { name: 'render content error', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), setup: (h) => h.world.setRender(() => new Response(JSON.stringify({ ok: false, code: 'LETTER_OVERFLOW', message: 'too long' }), { status: 422 })), status: 422 },
-  { name: 'render outage', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), setup: (h) => h.world.setRender(() => new Response('boom', { status: 503 })), status: 502 },
-  { name: 'draft rejected', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), setup: (h) => h.world.gelato.state.forceStatus.set('POST /orders', 400), status: 422 },
-  { name: 'Gelato unreachable', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), setup: (h) => h.world.gelato.state.forceStatus.set('POST /orders', 503), status: 502 },
   { name: 'Stripe down', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), hookFetch: () => (real) => ((input: Request | URL | string, init?: RequestInit) =>
     new URL(String(input)).hostname === 'api.stripe.com' ? Promise.resolve(new Response('{}', { status: 500 })) : real(input, init)) as typeof fetch, status: 502 },
   { name: 'film not ready', seed: () => cardWorldSeed({ order: QUOTED_ORDER, film: { status: 'rendering', video_key: null, ready_at: null } }), status: 409 },
@@ -990,7 +1130,6 @@ const FAILURE_CASES: FailureCase[] = [
   { name: 'card not ready', seed: () => cardWorldSeed({ order: QUOTED_ORDER, card: { status: 'generating' } }), status: 409 },
   { name: 'deleted family', seed: () => cardWorldSeed({ order: QUOTED_ORDER, family: { deleted_at: '2026-10-05T00:00:00Z' } }), status: 404 },
   { name: 'final CAS database error', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), dbOptions: { failWrite: (table, _op, patch) => table === 'holiday_card_orders' && patch.status === 'checkout' }, status: 500 },
-  { name: 'missing print files in storage', seed: () => cardWorldSeed({ order: QUOTED_ORDER }), status: 502 },
 ];
 for (const failure of FAILURE_CASES) {
   Deno.test(`release on every failure path: ${failure.name} leaves no card claim and no order claim`, async () => {
@@ -999,7 +1138,6 @@ for (const failure of FAILURE_CASES) {
       const h = harness(failure.seed(), {
         dbOptions: failure.dbOptions,
         fetch: failure.hookFetch?.(() => db!),
-        head: failure.name === 'missing print files in storage' ? async () => null : undefined,
       });
       db = h.db;
       failure.setup?.(h);
@@ -1182,8 +1320,7 @@ Deno.test('a retry of the SAME attempt sends an identical Stripe request (same b
     // Stripe handed back the one session it had made; no second render, no second draft.
     assertEquals(h.world.stripe.state.sessions.size, 1);
     assertEquals((await second.json()).sessionId, orderOf(h).stripe_session_id);
-    assertEquals(h.world.renderCalls.length, 1);
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 1);
+    assertEquals(noPrintWork(h), 0); // pay first: no render, no draft
     assertEquals(new URLSearchParams(sessions[0].body).get('expires_at'), String(Math.floor((START + 35 * 60_000) / 1000)));
   });
 });
@@ -1297,38 +1434,6 @@ Deno.test('closing a session we made (23505, or a failed re-check) forgets its e
   });
 });
 
-Deno.test('rendered files are reused only if they fit the product\'s layout: a P1 two_files order meets one_pdf, re-renders, and the row follows the product', async () => {
-  await withEnv(async () => {
-    const product = CARD_PRODUCTS.us_ca;
-    const h = harness(cardWorldSeed({ order: { ...QUOTED_ORDER, file_layout: 'two_files' } }), { dbOptions: failFinalCasOnce() });
-    (product as { fileLayout: string }).fileLayout = 'two_files';
-    try {
-      assertEquals((await h.call(body())).status, 500); // leaves front+back files and a draft behind
-    } finally {
-      (product as { fileLayout: string }).fileLayout = 'one_pdf';
-    }
-    const old = orderOf(h);
-    assertEquals((old.print_files as { files: { side: string }[] }).files.map((f) => f.side), ['front', 'back']);
-    const oldDraft = old.gelato_order_id as string;
-    const oldKeys = (old.print_files as { files: { key: string }[] }).files.map((f) => f.key);
-    for (const key of oldKeys) h.r2.keys.add(key);
-
-    h.clock.ms = START + 60_000;
-    const response = await h.call(body());
-    assertEquals(response.status, 200);
-    assertEquals(h.world.renderCalls.length, 2);
-    assertEquals(h.world.renderCalls[1].body.fileLayout, 'one_pdf');
-    const row = orderOf(h);
-    assertEquals(row.file_layout, 'one_pdf');
-    assertEquals((row.print_files as { files: { side: string }[] }).files.map((f) => f.side), ['both']);
-    assertNotEquals(row.gelato_order_id, oldDraft);
-    assertEquals(h.world.gelato.state.orders.has(oldDraft), false);
-    for (const key of oldKeys) assertEquals(h.r2.deleted.includes(key), true);
-    const draft = h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders')[1].body as Row;
-    assertEquals(((draft.items as Row[])[0].files as Row[]).map((f) => f.type), ['default']);
-  });
-});
-
 Deno.test('a re-render for a changed snapshot starts a new attempt too (the old expiry is not carried over)', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed({ order: QUOTED_ORDER }), { dbOptions: failFinalCasOnce() });
@@ -1351,13 +1456,21 @@ async function orderedCard(options: { seed?: Parameters<typeof cardWorldSeed>[0]
   const first = await h.call(body());
   assertEquals(first.status, 200);
   const a = orderOf(h);
-  a.status = options.firstStatus ?? 'shipped';
-  a.stripe_payment_intent_id = 'pi_test_first';
-  cardOf(h).checkout_order_id = null; // what stripe-webhook does when the order is paid
-  cardOf(h).checkout_claimed_at = null;
+  const firstOrder = { snapshot: JSON.stringify(a.card_snapshot), hash: a.snapshot_hash as string };
+  const firstStatus = options.firstStatus ?? 'shipped';
+  if (firstStatus === 'shipped') {
+    // Paid for real: the webhook's CAS + the pipeline (render, draft, confirm) print it.
+    assertEquals((await payAndFulfil(h)).outcome, 'submitted');
+  } else {
+    a.stripe_payment_intent_id = 'pi_test_first';
+    cardOf(h).checkout_order_id = null; // the claim is released when the order leaves checkout
+    cardOf(h).checkout_claimed_at = null;
+  }
+  a.status = firstStatus;
   h.db.rows('holiday_card_orders').push(secondOrder({ created_at: '2026-10-06T13:00:00.000Z' }));
-  return { h, firstRender: h.world.renderCalls[0].body, firstOrder: { snapshot: JSON.stringify(a.card_snapshot), hash: a.snapshot_hash as string } };
+  return { h, firstRender: h.world.renderCalls.find((c) => c.body.orderId === IDS.order)?.body as Row, firstOrder };
 }
+const renderFor = (h: Harness, orderId: string): Row => h.world.renderCalls.find((c) => c.body.orderId === orderId)!.body;
 
 Deno.test('a reorder prints exactly what the first paid order printed (frozen snapshot, same hash), whatever the live card says now', async () => {
   await withEnv(async () => {
@@ -1366,16 +1479,19 @@ Deno.test('a reorder prints exactly what the first paid order printed (frozen sn
     Object.assign(cardOf(h), { edits: { letters: { classic: 'Edited after the order' }, choices: { layout: 'bordered', tone: 'classic' } }, front_candidates: [], signature: 'Someone else' });
     const response = await h.call(body({}, ORDER_B));
     assertEquals(response.status, 200);
-    const second = h.world.renderCalls[1].body;
-    assertEquals(JSON.stringify(second.card), JSON.stringify(firstRender.card));
-    assertEquals(JSON.stringify(second.edits), JSON.stringify(firstRender.edits));
-    assertEquals(JSON.stringify(second.assets).replaceAll(ORDER_B, IDS.order), JSON.stringify(firstRender.assets));
     const b = orderOf(h, ORDER_B);
     assertEquals(b.snapshot_hash, firstOrder.hash);
     assertEquals(JSON.stringify(b.card_snapshot), firstOrder.snapshot);
     assertEquals(new URLSearchParams(sessionPosts(h)[1].body).get('metadata[snapshotHash]'), firstOrder.hash);
     assertEquals(b.status, 'checkout');
     assertEquals(claimHolder(h), ORDER_B);
+    assertEquals(h.world.renderCalls.length, 1); // still only the first order's render: pay first
+    // After payment the pipeline renders the SAME card, edits and assets as the first order did.
+    assertEquals((await payAndFulfil(h, ORDER_B)).outcome, 'submitted');
+    const second = renderFor(h, ORDER_B);
+    assertEquals(JSON.stringify(second.card), JSON.stringify(firstRender.card));
+    assertEquals(JSON.stringify(second.edits), JSON.stringify(firstRender.edits));
+    assertEquals(JSON.stringify(second.assets), JSON.stringify(firstRender.assets));
     // The front is signed from its ORIGINAL again.
     assertEquals(h.presigned.keys.filter((k) => k === 'u1/photos/front-original.jpg').length >= 2, true);
   });
@@ -1394,7 +1510,8 @@ Deno.test('a reorder still pins the version, and a first order that was cancelle
       const world = await orderedCard({ firstStatus: status });
       Object.assign(cardOf(world.h), { edits: { letters: { classic: 'The live letter' }, choices: { layout: 'bordered', tone: 'classic' } } });
       assertEquals((await world.h.call(body({}, ORDER_B))).status, 200, status);
-      const edits = world.h.world.renderCalls[1].body.edits as { letters: Record<string, string> };
+      assertEquals((await payAndFulfil(world.h, ORDER_B)).outcome, 'submitted');
+      const edits = renderFor(world.h, ORDER_B).edits as { letters: Record<string, string> };
       assertEquals(edits.letters.classic, 'The live letter');
     }
   });
@@ -1426,19 +1543,21 @@ Deno.test('a reorder never prints a QR that no longer works: a disabled link is 
     // Healthy: same QR, same token.
     const { h, firstRender } = await orderedCard();
     assertEquals((await h.call(body({}, ORDER_B))).status, 200);
-    assertEquals(JSON.stringify((h.world.renderCalls[1].body.card as { qr: unknown }).qr), JSON.stringify((firstRender.card as { qr: unknown }).qr));
-    assertEquals((h.world.renderCalls[1].body.card as { qr: { enabled: boolean } }).qr.enabled, true);
+    assertEquals((await payAndFulfil(h, ORDER_B)).outcome, 'submitted');
+    assertEquals(JSON.stringify((renderFor(h, ORDER_B).card as { qr: unknown }).qr), JSON.stringify((firstRender.card as { qr: unknown }).qr));
+    assertEquals((renderFor(h, ORDER_B).card as { qr: { enabled: boolean } }).qr.enabled, true);
   });
 });
 
 Deno.test('a reorder of a card that printed NO QR is not affected by the link or the film', async () => {
   await withEnv(async () => {
     const { h } = await orderedCard({ seed: { card: { edits: { choices: { layout: 'bordered', tone: 'classic', qr: false } } } } });
-    assertEquals((h.world.renderCalls[0].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals(((orderOf(h).card_snapshot as { card: unknown }).card as { qr: { enabled: boolean } }).qr.enabled, false);
     h.db.rows('film_share_tokens')[0].revoked_at = '2026-10-06T10:00:00Z';
     h.db.rows('year_films')[0].blocked = true;
     assertEquals((await h.call(body({}, ORDER_B))).status, 200);
-    assertEquals((h.world.renderCalls[1].body.card as { qr: { enabled: boolean } }).qr.enabled, false);
+    assertEquals((await payAndFulfil(h, ORDER_B)).outcome, 'submitted');
+    assertEquals((renderFor(h, ORDER_B).card as { qr: { enabled: boolean } }).qr.enabled, false);
   });
 });
 
@@ -1473,10 +1592,257 @@ Deno.test('a reorder keeps the whole money path: the order is quoted -> checkout
     assertEquals(response.status, 200);
     const b = orderOf(h, ORDER_B);
     assertEquals(b.status, 'checkout');
-    assertNotEquals(b.gelato_order_id, firstDraft);
-    assertEquals(h.world.gelato.state.calls.filter((c) => c.method === 'POST' && c.path === '/orders').length, 2);
-    assertEquals(orderOf(h).status, 'shipped');
+    assertEquals(b.gelato_order_id ?? null, null); // pay first: no draft yet
+    assertEquals(draftPosts(h).length, 1);
     assertEquals(new URLSearchParams(sessionPosts(h)[1].body).get('metadata[orderId]'), ORDER_B);
-    assertEquals(new RegExp(`^print-orders/${ORDER_B}/`).test(String(h.world.renderCalls[1].body.outputPrefix)), true);
+    assertEquals((await payAndFulfil(h, ORDER_B)).outcome, 'submitted');
+    assertNotEquals(orderOf(h, ORDER_B).gelato_order_id, firstDraft);
+    assertEquals(draftPosts(h).length, 2);
+    assertEquals(orderOf(h).status, 'shipped');
+    assertEquals(new RegExp(`^print-orders/${ORDER_B}/`).test(String(renderFor(h, ORDER_B).outputPrefix)), true);
+  });
+});
+
+
+// ═══ Post-payment pipeline hardening (review round) ═══
+
+/** A fetch that runs `hook(method, path)` before every Gelato call (to simulate another run / a refund landing mid-pipeline). */
+function withGelatoHook(h: Harness, hook: (method: string, path: string) => Response | void): typeof fetch {
+  return ((input: Request | URL | string, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'order.gelatoapis.com') {
+      const forced = hook(init?.method ?? 'GET', url.pathname.replace(/^\/v4/, ''));
+      if (forced) return Promise.resolve(forced);
+    }
+    return h.world.fetch(input, init);
+  }) as typeof fetch;
+}
+
+Deno.test('pre-confirm CAS: a refund or a flag that lands between the first read and the PATCH stops the confirm (nothing is PATCHed)', async () => {
+  await withEnv(async () => {
+    for (const change of [{ refunded_at: '2026-10-06T12:01:00.000Z' }, { failure_reason: 'PARTIAL_REFUND_BEFORE_CONFIRM' }]) {
+      const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+      assertEquals((await h.call(body())).status, 200);
+      // The draft is created, then (while Stripe and Gelato are still being asked) the order changes.
+      const fetch = withGelatoHook(h, (method, path) => {
+        if (method === 'POST' && path === '/orders') Object.assign(orderOf(h), change);
+      });
+      const { outcome } = await payAndFulfil(h, IDS.order, { fetch });
+      assertEquals(outcome, 'blocked', JSON.stringify(change));
+      assertEquals(patchesOf(h).length, 0);
+      assertEquals(orderOf(h).status, 'paid');
+    }
+  });
+});
+
+Deno.test('a draft refused by Gelato while another run already recorded one: the recorded draft is used, the order is not failed', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    h.world.gelato.state.orders.set('gel-other001', { orderType: 'draft', fulfillmentStatus: 'created', tracking: [] });
+    const fetch = withGelatoHook(h, (method, path) => {
+      if (method === 'POST' && path === '/orders') {
+        orderOf(h).gelato_order_id = 'gel-other001'; // the other run's draft lands
+        return new Response(JSON.stringify({ code: 'duplicate_reference' }), { status: 400 });
+      }
+    });
+    const { outcome } = await payAndFulfil(h, IDS.order, { fetch });
+    assertEquals(outcome, 'submitted');
+    assertEquals(orderOf(h).gelato_order_id, 'gel-other001');
+    assertEquals(patchesOf(h).map((c) => c.path), ['/orders/gel-other001']);
+  });
+});
+
+Deno.test('a failed draft-id write that actually LANDED keeps the draft the row references (only a draft the row does not hold is deleted)', async () => {
+  await withEnv(async () => {
+    const landed = harness(cardWorldSeed({ order: QUOTED_ORDER }), {
+      dbOptions: { failWrite: (table, _op, patch) => table === 'holiday_card_orders' && 'gelato_order_id' in patch && patch.gelato_status === 'draft' ? { code: '08006', applied: true } : false },
+    });
+    assertEquals((await landed.call(body())).status, 200);
+    const { outcome } = await payAndFulfil(landed);
+    assertEquals(outcome, 'submitted');
+    const draftId = orderOf(landed).gelato_order_id as string;
+    assertEquals(landed.world.gelato.state.calls.some((c) => c.method === 'DELETE'), false);
+    assertEquals(landed.world.gelato.state.orders.has(draftId), true);
+
+    // The write did NOT land: the orphan draft is deleted and the run is retried.
+    const lost = harness(cardWorldSeed({ order: QUOTED_ORDER }), {
+      dbOptions: { failWrite: (table, _op, patch) => table === 'holiday_card_orders' && 'gelato_order_id' in patch && patch.gelato_status === 'draft' ? { code: '08006' } : false },
+    });
+    assertEquals((await lost.call(body())).status, 200);
+    assertEquals((await payAndFulfil(lost)).outcome, 'retry');
+    assertEquals(lost.world.gelato.state.orders.size, 0);
+    assertEquals(orderOf(lost).gelato_order_id ?? null, null);
+  });
+});
+
+Deno.test('a recorded draft that Gelato lost is cleared and the pipeline rebuilds it on the next run (retry, never failed)', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    orderOf(h).gelato_order_id = 'gel-gone0001'; // not at Gelato
+    assertEquals((await payAndFulfil(h)).outcome, 'retry');
+    assertEquals(orderOf(h).status, 'paid');
+    assertEquals(orderOf(h).failure_reason ?? null, null);
+    assertEquals(orderOf(h).gelato_order_id ?? null, null);
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'submitted');
+    assertEquals(draftPosts(h).length, 1);
+    assertNotEquals(orderOf(h).gelato_order_id, 'gel-gone0001');
+  });
+});
+
+Deno.test('create_checkout keeps a legacy leftover draft only if Gelato still has it AND it is still a draft', async () => {
+  await withEnv(async () => {
+    const attempts: [string, (h: Harness) => void, boolean][] = [
+      ['draft still open', (h) => h.world.gelato.state.orders.set('gel-legacy01', { orderType: 'draft', fulfillmentStatus: 'created', tracking: [] }) && undefined, true],
+      ['draft gone (404)', () => undefined, false],
+      ['already confirmed', (h) => h.world.gelato.state.orders.set('gel-legacy01', { orderType: 'order', fulfillmentStatus: 'passed', tracking: [] }) && undefined, false],
+    ];
+    for (const [name, setup, kept] of attempts) {
+      const h = harness(cardWorldSeed({ order: QUOTED_ORDER }), { dbOptions: failFinalCasOnce() });
+      assertEquals((await h.call(body())).status, 500); // snapshot frozen, Stripe session made, final CAS failed
+      const hash = orderOf(h).snapshot_hash as string;
+      const files = [{ side: 'both', key: `print-orders/${IDS.order}/${hash.slice(0, 16)}/card.pdf`, sha256: 'c'.repeat(64), bytes: 2000 }];
+      Object.assign(orderOf(h), { gelato_order_id: 'gel-legacy01', print_files: { ...(orderOf(h).print_files as Row), files, snapshotHash: hash } });
+      setup(h);
+      h.clock.ms = START + 60_000;
+      assertEquals((await h.call(body())).status, 200, name);
+      assertEquals(orderOf(h).gelato_order_id === 'gel-legacy01', kept, name);
+    }
+  });
+});
+
+Deno.test('failPaidOrder never fails a refunded order (the refund path owns it)', async () => {
+  const db = new FakeDb({ holiday_card_orders: [{ id: IDS.order, status: 'paid', refunded_at: '2026-10-06T12:00:00.000Z', failure_reason: null }] });
+  const deps: FulfillmentDeps = { fetch, sendEmail: async () => 'sent', listKeys: async () => [], deleteKey: async () => undefined, gelatoApiKey: 'k', stripeSecretKey: 's' };
+  assertEquals(await failPaidOrder(deps, db.build(), IDS.order, 'X'), false);
+  assertEquals(db.row('holiday_card_orders', IDS.order).status, 'paid');
+  db.row('holiday_card_orders', IDS.order).refunded_at = null;
+  assertEquals(await failPaidOrder(deps, db.build(), IDS.order, 'X'), true);
+});
+
+Deno.test('a partial refund holds the order; the owner sets PARTIAL_REFUND_OK and the next run prints it (and keeps printing it after a transient failure)', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    h.world.stripe.state.paymentIntents.set('pi_test_1', { amount: 4980, amount_refunded: 500 });
+    const first = await payAndFulfil(h);
+    assertEquals(first.outcome, 'blocked');
+    assertEquals(orderOf(h).failure_reason, 'PARTIAL_REFUND_BEFORE_CONFIRM');
+    assertEquals(first.mails.some((m) => m.body.includes('PARTIAL_REFUND_OK')), true); // the alert says how to release it
+    assertEquals(patchesOf(h).length, 0);
+    // Still held on later runs.
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'blocked');
+
+    // The owner acknowledges: the next run proceeds; a transient Gelato failure afterwards does not re-hold it.
+    orderOf(h).failure_reason = 'PARTIAL_REFUND_OK';
+    h.world.gelato.state.forceStatus.set(`PATCH /orders/${orderOf(h).gelato_order_id}`, 503);
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'retry');
+    assertEquals(orderOf(h).failure_reason ?? null, null); // the marker was consumed by the confirm CAS
+    assertEquals(typeof (orderOf(h).print_files as { partialRefundAckAt?: string }).partialRefundAckAt, 'string');
+    h.world.gelato.state.forceStatus.clear();
+    assertEquals((await payAndFulfil(h, IDS.order, { skipPay: true })).outcome, 'submitted');
+    assertEquals(orderOf(h).status, 'submitted');
+  });
+});
+
+Deno.test('a FULL refund is never overridden by PARTIAL_REFUND_OK', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    orderOf(h).failure_reason = 'PARTIAL_REFUND_OK';
+    h.world.stripe.state.paymentIntents.set('pi_test_1', { amount: 4980, amount_refunded: 4980 });
+    assertEquals((await payAndFulfil(h)).outcome, 'blocked');
+    assertEquals(orderOf(h).status, 'cancelled');
+    assertEquals(patchesOf(h).length, 0);
+  });
+});
+
+Deno.test('only a NON-retryable Gelato refusal rejects the draft; our own exceptions (presign, bad input) are retried, never failing a paid order', async () => {
+  await withEnv(async () => {
+    // A presign that throws while building the draft URLs.
+    const presignFails = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await presignFails.call(body())).status, 200);
+    let calls = 0;
+    const flaky: PrintPipelineDeps['createPresignedGetUrls'] = (keys, ttl) => {
+      calls += 1;
+      if (calls === 2) throw new TypeError('presign broke'); // 1st call: assets for the render; 2nd: the draft's file urls
+      return fakePresign()(keys, ttl);
+    };
+    assertEquals((await payAndFulfil(presignFails, IDS.order, { presign: flaky })).outcome, 'retry');
+    assertEquals(orderOf(presignFails).status, 'paid');
+    assertEquals(orderOf(presignFails).failure_reason ?? null, null);
+
+    // An address our own validation refuses inside createDraft (a plain Error, not a Gelato answer).
+    const badInput = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await badInput.call(body())).status, 200);
+    orderOf(badInput).shipping_address = { ...US_ADDRESS, city: '' };
+    assertEquals((await payAndFulfil(badInput)).outcome, 'retry');
+    assertEquals(orderOf(badInput).status, 'paid');
+    assertEquals(orderOf(badInput).failure_reason ?? null, null);
+
+    // A Gelato 404 on create is not a refusal either; a 400 is.
+    const notFound = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await notFound.call(body())).status, 200);
+    notFound.world.gelato.state.forceStatus.set('POST /orders', 404);
+    assertEquals((await payAndFulfil(notFound)).outcome, 'retry');
+  });
+});
+
+Deno.test('the pipeline uses the ORDER\'s frozen product (uid, layout, format, currency), not today\'s catalogue', async () => {
+  await withEnv(async () => {
+    const product = CARD_PRODUCTS.us_ca;
+    const original = product.fileLayout;
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200); // freezes file_layout = one_pdf on the row
+    orderOf(h).product_uid = 'frozen_product_uid_from_the_quote';
+    (product as { fileLayout: string }).fileLayout = 'two_files'; // the catalogue changes after the quote
+    try {
+      assertEquals((await payAndFulfil(h)).outcome, 'submitted');
+    } finally {
+      (product as { fileLayout: string }).fileLayout = original;
+    }
+    assertEquals(h.world.renderCalls[0].body.fileLayout, 'one_pdf');
+    assertEquals(h.world.renderCalls[0].body.format, '5R');
+    const item = ((draftPosts(h)[0].body as Row).items as Row[])[0];
+    assertEquals(item.productUid, 'frozen_product_uid_from_the_quote');
+    assertEquals((item.files as Row[]).map((f) => f.type), ['default']);
+    // An order row without its frozen product is unusable: failed (not guessed from the catalogue).
+    const broken = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await broken.call(body())).status, 200);
+    orderOf(broken).product_uid = null;
+    assertEquals((await payAndFulfil(broken)).outcome, 'failed');
+    assertEquals(orderOf(broken).failure_reason, 'PRINT_PREPARE_ORDER_INCOMPLETE');
+  });
+});
+
+Deno.test('a photo deleted after payment (render IMAGE_MISSING) fails the order with a clear owner alert: refund or re-pick', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    h.world.setRender(() => new Response(JSON.stringify({ ok: false, code: 'IMAGE_MISSING', message: 'gone' }), { status: 422 }));
+    const { outcome, mails } = await payAndFulfil(h);
+    assertEquals(outcome, 'failed');
+    assertEquals(orderOf(h).failure_reason, 'RENDER_REFUSED:IMAGE_MISSING');
+    assertEquals(mails.length, 1);
+    assertEquals(mails[0].body.includes('deleted after payment'), true);
+    assertEquals(mails[0].body.includes('refund'), true);
+  });
+});
+
+Deno.test('the render timeout is the pipeline\'s (a hung render service is a retry after the sweep\'s short timeout, not a hang)', async () => {
+  await withEnv(async () => {
+    const h = harness(cardWorldSeed({ order: QUOTED_ORDER }));
+    assertEquals((await h.call(body())).status, 200);
+    const hanging = ((input: Request | URL | string, init?: RequestInit) => {
+      if (new URL(String(input)).hostname === 'render.test') {
+        return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+      }
+      return h.world.fetch(input, init);
+    }) as typeof fetch;
+    const started = Date.now();
+    assertEquals((await payAndFulfil(h, IDS.order, { fetch: hanging, renderTimeoutMs: 30 })).outcome, 'retry');
+    assertEquals(Date.now() - started < 5000, true);
+    assertEquals(orderOf(h).status, 'paid');
   });
 });

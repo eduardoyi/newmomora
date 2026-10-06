@@ -26,12 +26,14 @@ export function OrderProgressStepper({
   carrier?: string | null;
 }) {
   const { steps } = config;
-  const currentIndex = currentProgressStepIndex(status, steps);
+  // A status may be drawn on another step (the card's `paid` is its "Preparing" step).
+  const shownStatus = config.stepForStatus?.[status] ?? status;
+  const currentIndex = currentProgressStepIndex(shownStatus, steps);
 
   return (
     <ol className="order-progress" aria-label="Order progress">
       {steps.map((step, i) => {
-        const state = progressStepState(i, currentIndex, status, config.terminalKey);
+        const state = progressStepState(i, currentIndex, shownStatus, config.terminalKey);
         const isLast = i === steps.length - 1;
         const hint =
           state === 'current' ? (step.key === 'shipped' ? (carrier ? `Shipped via ${carrier}` : undefined) : step.hint) : undefined;

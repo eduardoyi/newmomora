@@ -11,8 +11,8 @@ import { describeCheckoutError, isStillPreparing, type DescribableError, type Er
  *
  *   starting -> quantity -> address -> quoting -> summary -> creating -> redirecting
  *
- * `creating` is where `create_checkout` runs (30-60 s: it renders the print
- * files). A client timeout, a dropped connection or the server's "still
+ * `creating` is where `create_checkout` runs (a second or two: the print files
+ * are rendered after payment). A client timeout, a dropped connection or the server's "still
  * preparing" (409 CHECKOUT_IN_PROGRESS) do not fail it: the screen waits
  * (5, 10, 20, 30 s, then 30 s again) and calls again, which resumes the order
  * already in `checkout`. After ~3 minutes it gives up back on the summary with
@@ -31,7 +31,7 @@ export function backoffDelayMs(attempt: number): number {
 
 export const GAVE_UP_ERROR: ErrorView = {
   code: 'timeout',
-  message: 'Preparing your print files is taking longer than expected. Nothing has been charged. Please try again.',
+  message: 'This is taking longer than expected. Nothing has been charged. Please try again.',
   action: 'retry',
 };
 
@@ -212,12 +212,14 @@ export function isBusy(step: CheckoutStep): boolean {
   return step.kind === 'starting' || step.kind === 'quoting' || step.kind === 'creating' || step.kind === 'redirecting';
 }
 
-/** Progress copy for the `creating` step. */
+/**
+ * Copy for the `creating` step. The print files are made after payment, so this
+ * call returns in a second or two and reads exactly like the book's checkout
+ * ("Redirecting to checkout…"); only a retry after a slow answer says more.
+ */
 export function creatingCopy(step: Extract<CheckoutStep, { kind: 'creating' }>): { title: string; body: string } {
-  if (step.attempt === 0) {
-    return { title: 'Preparing your print files…', body: 'This can take up to a minute. Please keep this page open.' };
-  }
-  return { title: 'Still preparing…', body: 'Your print files are taking a little longer. We are checking again, so please keep this page open.' };
+  if (step.attempt === 0) return { title: 'Redirecting to checkout…', body: '' };
+  return { title: 'Redirecting to checkout…', body: 'This is taking longer than expected. We are trying again, so please keep this page open.' };
 }
 
 // ── The edits version the buyer reviewed ─────────────────────────────────

@@ -152,7 +152,9 @@ Deno.test('releasePrintFiles only acts on shipped / failed / cancelled orders', 
   const done = new FakeDb({ holiday_card_orders: [{ id: IDS.order, status: 'shipped', print_files: { files: [] } }] });
   assertEquals(await releasePrintFiles(r2, done.client()(), IDS.order), true);
   assertEquals(r2.keys.size, 0);
-  assertEquals(done.row('holiday_card_orders', IDS.order).print_files, null);
+  // A purge marker, not null: the prefix is purged once more >= 1 h later.
+  assertEquals(typeof (done.row('holiday_card_orders', IDS.order).print_files as { purgedAt?: string }).purgedAt, 'string');
+  assertEquals(await releasePrintFiles(r2, done.client()(), IDS.order), true); // idempotent: the marker is kept as is
 });
 
 // ── snapshot loader ──────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ export interface FakeDbOptions {
    * Return true to make this write fail with a database error, or `{ code }` for a
    * database error with that SQLSTATE (e.g. '23505').
    */
-  failWrite?: (table: string, op: 'update' | 'insert', patch: Row) => boolean | { code: string };
+  failWrite?: (table: string, op: 'update' | 'insert', patch: Row) => boolean | { code: string; /** apply the write, THEN report the error (a lost response) */ applied?: boolean };
   /** Return true to make this SELECT (of these columns) fail with a database error. */
   failRead?: (table: string, columns: string | null) => boolean;
 }
@@ -174,7 +174,7 @@ export class FakeDb {
     let mode: 'select' | 'update' | 'insert' | 'delete' = 'select';
     let patch: Row = {};
     let columns: string | null = null;
-    const orderBy: { col: string; ascending: boolean }[] = [];
+    const orderBy: { col: string; ascending: boolean; nullsFirst: boolean }[] = [];
     let limitN: number | null = null;
     let wantsRows = false;
 
@@ -190,6 +190,12 @@ export class FakeDb {
       const failure = (op: 'update' | 'insert') => {
         const failed = db.options.failWrite?.(table, op, patch);
         if (!failed) return null;
+        if (typeof failed === 'object' && failed.applied && op === 'update') {
+          for (const row of all.filter((r) => filters.every((f) => f(r)))) {
+            Object.assign(row, patch);
+            if (!('updated_at' in patch)) row.updated_at = (db.options.clock ?? (() => new Date().toISOString()))();
+          }
+        }
         return { data: [] as Row[], error: { message: `${op} failed`, ...(typeof failed === 'object' ? { code: failed.code } : {}) } };
       };
       if (mode === 'insert') {
@@ -228,12 +234,12 @@ export class FakeDb {
       if (orderBy.length > 0) {
         // Every `.order()` call is a tie-breaker for the one before it, like PostgREST.
         matched = [...matched].sort((a, b) => {
-          for (const { col, ascending } of orderBy) {
-            const left = a[col] as string | number | null;
-            const right = b[col] as string | number | null;
+          for (const { col, ascending, nullsFirst } of orderBy) {
+            const left = valueAt(a, col) as string | number | null;
+            const right = valueAt(b, col) as string | number | null;
             if (left === right) continue;
-            if (left === null || left === undefined) return 1;
-            if (right === null || right === undefined) return -1;
+            if (left === null || left === undefined) return nullsFirst ? -1 : 1;
+            if (right === null || right === undefined) return nullsFirst ? 1 : -1;
             return (left < right ? -1 : 1) * (ascending ? 1 : -1);
           }
           return 0;
@@ -309,8 +315,9 @@ export class FakeDb {
         filters.push((r) => r[col] !== null && r[col] !== undefined && (r[col] as string | number) > val);
         return chain;
       },
-      order: (col: string, opts?: { ascending?: boolean }) => {
-        orderBy.push({ col, ascending: opts?.ascending !== false });
+      order: (col: string, opts?: { ascending?: boolean; nullsFirst?: boolean }) => {
+        // PostgREST default: nulls last when ascending, first when descending.
+        orderBy.push({ col, ascending: opts?.ascending !== false, nullsFirst: opts?.nullsFirst ?? opts?.ascending === false });
         return chain;
       },
       limit: (n: number) => {
@@ -594,26 +601,39 @@ export function defaultRenderResponse(call: RenderCall): Response {
   return new Response(JSON.stringify({ ok: true, mode: call.body.mode, files, checks: { pages: 2 } }), { status: 200 });
 }
 
-export function makeWorldFetch(): WorldFetch {
-  const gelato = makeGelatoFake();
-  const stripe = makeStripeFake();
+/** The render service (`https://render.test/render-card`): records calls, "uploads" the files it reports, answers by `setRender`. */
+export function makeRenderFake() {
   const renderCalls: RenderCall[] = [];
   const objects = new Map<string, number>();
   let renderHandler: (call: RenderCall) => Response = defaultRenderResponse;
+  const fetchRender = async (init?: RequestInit): Promise<Response> => {
+    const call = { headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) as Record<string, unknown> };
+    renderCalls.push(call);
+    const response = renderHandler(call);
+    if (response.status === 200) {
+      const parsed = await response.clone().json().catch(() => null) as { files?: { key: string; bytes: number }[] } | null;
+      for (const file of parsed?.files ?? []) objects.set(file.key, file.bytes);
+    }
+    return response;
+  };
+  return {
+    renderCalls,
+    objects,
+    fetchRender,
+    headObject: (key: string): Promise<{ contentLength: number | null } | null> => Promise.resolve(objects.has(key) ? { contentLength: objects.get(key) ?? null } : null),
+    setRender: (handler: (call: RenderCall) => Response) => { renderHandler = handler; },
+  };
+}
+
+export function makeWorldFetch(): WorldFetch {
+  const gelato = makeGelatoFake();
+  const stripe = makeStripeFake();
+  const render = makeRenderFake();
   const fakeFetch = (async (input: Request | URL | string, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.hostname === 'order.gelatoapis.com') return gelato.fetch(input, init);
     if (url.hostname === 'api.stripe.com') return stripe.fetch(input, init);
-    if (url.hostname === 'render.test') {
-      const call = { headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) as Record<string, unknown> };
-      renderCalls.push(call);
-      const response = renderHandler(call);
-      if (response.status === 200) {
-        const parsed = await response.clone().json().catch(() => null) as { files?: { key: string; bytes: number }[] } | null;
-        for (const file of parsed?.files ?? []) objects.set(file.key, file.bytes);
-      }
-      return response;
-    }
+    if (url.hostname === 'render.test') return render.fetchRender(init);
     if (url.hostname === 'r2.test') {
       const key = decodeURIComponent(url.pathname.slice(1));
       const dims = KEY_DIMS[key];
@@ -622,9 +642,9 @@ export function makeWorldFetch(): WorldFetch {
     return new Response('not found', { status: 404 });
   }) as typeof fetch;
   return {
-    fetch: fakeFetch, gelato, stripe, renderCalls, objects,
-    headObject: (key) => Promise.resolve(objects.has(key) ? { contentLength: objects.get(key) ?? null } : null),
-    setRender: (handler) => { renderHandler = handler; },
+    fetch: fakeFetch, gelato, stripe, renderCalls: render.renderCalls, objects: render.objects,
+    headObject: render.headObject,
+    setRender: render.setRender,
   };
 }
 
@@ -716,4 +736,48 @@ export const QUOTED_ORDER: Record<string, unknown> = {
   price_cents: 4980,
   gelato_cost_cents: 1871,
   shipping_address: US_ADDRESS,
+};
+
+
+/** A minimal valid frozen snapshot (what `create_checkout` stores in `card_snapshot`) for pipeline tests that start from a paid row. */
+export const FROZEN_SNAPSHOT = {
+  card: {
+    version: 1,
+    slug: 'hc-test',
+    year: 2026,
+    language: 'en',
+    locale: 'en-US',
+    greeting: 'holidays',
+    familyName: 'The Example Family',
+    signature: 'With love, the Example family',
+    qrCaption: null,
+    qr: { enabled: false, token: '', url: '' },
+    format: '5R',
+    letters: [{ tone: 'classic', text: 'Dear family,\n\nThis year Robin learned to ride a bike.' }],
+    photo: { mediaId: IDS.mediaFront, file: 'assets/photo.jpg', width: 4000, height: 3000 },
+    illustrations: [],
+    frontOptions: [],
+    portraits: [],
+  },
+  edits: {},
+  assets: [{ file: 'assets/photo.jpg', key: PHOTO_KEYS.frontOriginal }],
+  qrUrl: null,
+  front: { mediaId: IDS.mediaFront, originalKey: PHOTO_KEYS.frontOriginal, previewKey: PHOTO_KEYS.frontPreview, width: 4000, height: 3000 },
+};
+
+export const FROZEN_HASH = 'f'.repeat(64);
+
+/** Order columns of a PAY-FIRST order at the moment it is paid: snapshot frozen, nothing rendered, no draft. */
+export const PAY_FIRST_COLUMNS: Record<string, unknown> = {
+  region: 'us_ca',
+  product_uid: QUOTED_ORDER.product_uid,
+  currency: 'USD',
+  format: '5R',
+  file_layout: 'one_pdf',
+  packs: 2,
+  card_snapshot: FROZEN_SNAPSHOT,
+  snapshot_hash: FROZEN_HASH,
+  gelato_order_id: null,
+  gelato_status: null,
+  print_files: { snapshotHash: FROZEN_HASH, sessionExpiresAt: '2026-10-06T12:35:00.000Z' },
 };

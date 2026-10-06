@@ -56,10 +56,10 @@ describe('buildThumbnailInput', () => {
   });
 });
 
-describe('qrSummaryLine', () => {
-  it('says what the back will carry', () => {
-    expect(qrSummaryLine({ qrOn: true, qrState: 'on' })).toBe('QR code to your film on the back.');
-    expect(qrSummaryLine({ qrOn: false, qrState: 'off' })).toBe('No QR code on the back.');
+describe('qrSummaryLine (the summary\'s "Back of card" row)', () => {
+  it('is a short value, not a sentence', () => {
+    expect(qrSummaryLine({ qrOn: true, qrState: 'on' })).toBe('QR code to your family film');
+    expect(qrSummaryLine({ qrOn: false, qrState: 'off' })).toBe('No QR code');
     expect(qrSummaryLine({ qrOn: true, qrState: 'waiting_film' })).toMatch(/still being made/);
   });
 });

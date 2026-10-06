@@ -50,9 +50,16 @@ const COPY: Record<CardOrderStatusName, CardStatusCopy> = {
     message: "Checkout is open for this order — head back to your card to finish paying.",
     tone: 'neutral',
   },
+  // The print files are made AFTER payment (like the book's), so `paid` is the
+  // "preparing" stage; a `rendering` status, if ever reported, reads the same.
   paid: {
     label: 'Payment received',
-    message: 'Payment received — sending to the printer.',
+    message: "Payment received! We're preparing your print files.",
+    tone: 'positive',
+  },
+  rendering: {
+    label: 'Preparing your cards',
+    message: "We're preparing your cards' print files — this only takes a few minutes.",
     tone: 'positive',
   },
   submitted: {
@@ -114,7 +121,7 @@ export const STATUS_POLL_MS = 5_000;
 /** Statuses that are done changing on the buyer's time scale: the poll stops. */
 export const SETTLED_STATUSES: ReadonlySet<CardOrderStatusName | 'unknown'> = new Set(['submitted', 'in_production', 'shipped', 'failed', 'cancelled', 'unknown']);
 
-/** Keep polling while the order is still before the printer (draft, quoted, checkout, paid). */
+/** Keep polling while the order is still before the printer (draft, quoted, checkout, paid, rendering). */
 export function shouldPollStatus(status: CardOrderStatusName | 'unknown'): boolean {
   return !SETTLED_STATUSES.has(status);
 }
@@ -129,7 +136,7 @@ export function isConfirmingPayment(status: CardOrderStatusName | 'unknown', ret
  * list keeps polling for them. Everything else (shipped, failed, cancelled, and
  * any status this build does not know) is terminal for polling.
  */
-const LIST_POLLED_STATUSES: ReadonlySet<string> = new Set(['quoted', 'checkout', 'paid', 'submitted', 'in_production']);
+const LIST_POLLED_STATUSES: ReadonlySet<string> = new Set(['quoted', 'checkout', 'paid', 'rendering', 'submitted', 'in_production']);
 
 export function isCardOrderListTerminal(status: string): boolean {
   return !LIST_POLLED_STATUSES.has(status);
@@ -182,7 +189,7 @@ export function cardStatusLayoutModel(order: CardOrderStatus, options: { returne
       ? {
           ...address,
           countryName: formatCountryName(address.countryCode),
-          hint: ['paid', 'submitted', 'in_production'].includes(order.status) ? WRONG_ADDRESS_HINT : null,
+          hint: ['paid', 'rendering', 'submitted', 'in_production'].includes(order.status) ? WRONG_ADDRESS_HINT : null,
         }
       : null,
     showResume: order.status === 'draft' || order.status === 'quoted',

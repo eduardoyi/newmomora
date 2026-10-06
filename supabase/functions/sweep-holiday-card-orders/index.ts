@@ -7,9 +7,13 @@
  * cheap when idle; each pass is isolated (one failing pass never blocks the
  * others) and bounded by a batch size.
  *
- *   1. confirm       `paid` orders the webhook did not confirm (older than ~2
- *                    min): PATCH the Gelato draft only while it is a draft ->
- *                    `submitted`. Owner alert once at ~30 min; `failed` after 6 h.
+ *   1. confirm       `paid` orders the webhook did not finish (older than ~2 min):
+ *                    the whole pay-first pipeline, resumed from the row (render the
+ *                    print files -> Gelato draft -> held canary -> refund check ->
+ *                    PATCH the draft only while it is a draft -> `submitted`). A
+ *                    transient problem is retried every tick: owner alert once at
+ *                    ~30 min, `failed` after 6 h; a content refusal fails the order
+ *                    at once (owner alert, manual refund -- like the book).
  *   2. track         `submitted` / `in_production`: poll Gelato. passed /
  *                    printing -> `in_production`; shipped (+ tracking) ->
  *                    `shipped` + email; failed / canceled -> `failed` + owner
@@ -64,16 +68,20 @@ import {
   confirmPaidOrder,
   failPaidOrder,
   type FulfillmentDeps,
+  type PrintPipelineDeps,
   flagRefundNotCancelled,
   isFreshClaim,
   parsePrintFiles,
+  printPipelineFromEnv,
   processRefundedOrder,
   releaseCardClaim,
   releasePrintFiles,
   releaseUnpaidArtifacts,
+  repurgePrintFiles,
+  REPURGE_AFTER_MS,
 } from '../_shared/holiday-card-fulfillment.ts';
 import { alertCardOwner, sendCardShippedEmail } from '../_shared/holiday-card-order-notify.ts';
-import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
+import { createPresignedGetUrls, deleteObject, headObject, listObjectKeys } from '../_shared/r2.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 import { postSignedToYearFilmWorker } from '../_shared/year-film-worker-dispatch.ts';
 import { expireCheckoutSession, retrieveCheckoutSession } from '../_shared/stripe.ts';
@@ -81,7 +89,12 @@ import { createServiceClient } from '../_shared/supabase-admin.ts';
 
 // ── Tuning ───────────────────────────────────────────────────────────────
 
-export const PAID_CONFIRM_GRACE_MS = 2 * 60_000;
+/** The webhook's own pipeline run gets first go; the sweep only picks up what it has not finished after this. */
+export const PAID_CONFIRM_GRACE_MS = 5 * 60_000;
+/** The confirm/pipeline pass stops STARTING new orders this long after the invocation began (one order can take ~2 min). */
+export const CONFIRM_DEADLINE_MS = 75_000;
+/** The sweep renders with a shorter timeout than the webhook so a tick stays inside the function's wall clock. */
+export const SWEEP_RENDER_TIMEOUT_MS = 60_000;
 /** The tick that crosses this age alerts (stateless dedupe: the window below is wider than the 10 min cadence). */
 export const PAID_ALERT_AFTER_MS = 30 * 60_000;
 export const PAID_ALERT_WINDOW_MS = 15 * 60_000;
@@ -100,7 +113,8 @@ export const GENERATION_ATTEMPT_CAP = 3;
 /** Cards older than this never get a "ready" push (a late sweep must not announce a stale card). */
 export const READY_PUSH_WINDOW_MS = 2 * 24 * 60 * 60_000;
 
-export const CONFIRM_BATCH = 25;
+/** Each paid order can now render its print files (up to ~2 min): a small batch keeps one tick inside the function's time limit. */
+export const CONFIRM_BATCH = 6;
 export const TRACK_BATCH = 150;
 export const TRACK_CONCURRENCY = 5;
 export const AGING_BATCH = 25;
@@ -119,6 +133,9 @@ export interface SweepDependencies {
   sendEmail: typeof sendTransactionalEmailWithOutcome;
   listKeys: (prefix: string) => Promise<string[]>;
   deleteKey: (key: string) => Promise<void>;
+  /** Pay-first pipeline (render the print files, create the Gelato draft): R2 presign + HEAD. */
+  createPresignedGetUrls: PrintPipelineDeps['createPresignedGetUrls'];
+  headObject: PrintPipelineDeps['headObject'];
   /** POST the year-film worker's `/holiday-cards/generate` (HMAC, `_shared/year-film-worker-dispatch.ts`). true = accepted. */
   dispatchGeneration: (cardId: string, attemptId: string) => Promise<boolean>;
   /** Expo push (`_shared/expo-push.ts`); true = accepted by Expo. */
@@ -134,6 +151,8 @@ export const DEFAULT_DEPENDENCIES: SweepDependencies = {
   sendEmail: sendTransactionalEmailWithOutcome,
   listKeys: listObjectKeys,
   deleteKey: deleteObject,
+  createPresignedGetUrls,
+  headObject,
   // Shared HMAC helper (same scheme as schedule-year-films' /dispatch).
   dispatchGeneration: (cardId, attemptId) => postSignedToYearFilmWorker('/holiday-cards/generate', { cardId, attemptId }),
   sendPush: sendExpoPushNotification,
@@ -147,6 +166,8 @@ function fulfillmentDepsFor(dependencies: SweepDependencies): FulfillmentDeps {
     deleteKey: dependencies.deleteKey,
     gelatoApiKey: Deno.env.get('GELATO_API_KEY') ?? null,
     stripeSecretKey: Deno.env.get('STRIPE_SECRET_KEY') ?? null,
+    pipeline: printPipelineFromEnv(dependencies, { renderTimeoutMs: SWEEP_RENDER_TIMEOUT_MS }),
+    now: dependencies.now,
   };
 }
 
@@ -178,21 +199,27 @@ function chunk<T>(items: T[], size: number): T[][] {
 interface PaidRow {
   id: string;
   updated_at: string;
+  print_files: unknown;
 }
 
 async function confirmPaidOrders(
   dependencies: SweepDependencies,
   supabase: SupabaseClient,
-): Promise<{ submitted: number; retry: number; failed: number; alerted: number }> {
+  startedAt: number,
+): Promise<{ submitted: number; retry: number; failed: number; alerted: number; deferred: number }> {
   const now = dependencies.now();
-  const out = { submitted: 0, retry: 0, failed: 0, alerted: 0 };
+  const out = { submitted: 0, retry: 0, failed: 0, alerted: 0, deferred: 0 };
+  // Rotation: oldest ATTEMPT first, never-tried orders first (`print_files.pipelineAttemptAt`) -- not
+  // `updated_at`, which a retry does not move and which must not drive the order. `PARTIAL_REFUND_OK`
+  // is the owner's acknowledgment of a held partial refund: it is picked up like an unflagged order.
   const { data, error } = await supabase
     .from('holiday_card_orders')
-    .select('id, updated_at')
+    .select('id, updated_at, print_files')
     .eq('status', 'paid')
     .is('refunded_at', null)
-    .is('failure_reason', null)
+    .or('failure_reason.is.null,failure_reason.eq.PARTIAL_REFUND_OK')
     .lt('updated_at', iso(now - PAID_CONFIRM_GRACE_MS))
+    .order('print_files->>pipelineAttemptAt', { ascending: true, nullsFirst: true })
     .order('updated_at', { ascending: true })
     .limit(CONFIRM_BATCH)
     .returns<PaidRow[]>();
@@ -202,16 +229,24 @@ async function confirmPaidOrders(
   }
   const fulfillmentDeps = fulfillmentDepsFor(dependencies);
   for (const row of data ?? []) {
+    // A render can take ~2 minutes: stop STARTING orders once the invocation has used its share
+    // (the rest rotate to the front of the next tick).
+    if (dependencies.now() - startedAt > CONFIRM_DEADLINE_MS) {
+      out.deferred += 1;
+      continue;
+    }
     const outcome = await confirmPaidOrder(fulfillmentDeps, supabase, row.id);
     if (outcome === 'submitted') out.submitted += 1;
     else if (outcome === 'failed') out.failed += 1;
     else if (outcome === 'retry') {
       out.retry += 1;
-      const age = ageMs(now, row.updated_at);
+      // Stable clock: the first pipeline run (writes bump updated_at, so it cannot be the age).
+      const state = parsePrintFiles(row.print_files);
+      const age = ageMs(now, state.pipelineStartedAt ?? row.updated_at);
       if (age >= PAID_FAIL_AFTER_MS) {
         if (await failPaidOrder(fulfillmentDeps, supabase, row.id, 'CONFIRM_TIMEOUT')) out.failed += 1;
       } else if (age >= PAID_ALERT_AFTER_MS && age < PAID_ALERT_AFTER_MS + PAID_ALERT_WINDOW_MS) {
-        await alertCardOwner(dependencies.sendEmail, row.id, 'PAID_NOT_SUBMITTED', 'A paid order has not been confirmed at Gelato for 30 minutes (Gelato unreachable or not configured). The sweep keeps retrying.');
+        await alertCardOwner(dependencies.sendEmail, row.id, 'PAID_NOT_SUBMITTED', 'A paid order has not been sent to print for 30 minutes (render service or Gelato unreachable, or not configured). The sweep keeps retrying.');
         out.alerted += 1;
       }
     }
@@ -549,9 +584,9 @@ async function clearStaleCardClaims(
 async function cleanUp(
   dependencies: SweepDependencies,
   supabase: SupabaseClient,
-): Promise<{ unpaidReleased: number; filesDeleted: number }> {
+): Promise<{ unpaidReleased: number; filesDeleted: number; repurged: number }> {
   const now = dependencies.now();
-  const out = { unpaidReleased: 0, filesDeleted: 0 };
+  const out = { unpaidReleased: 0, filesDeleted: 0, repurged: 0 };
   const fulfillmentDeps = fulfillmentDepsFor(dependencies);
 
   // (a) cancelled, never paid, still holding a Gelato draft or files (an earlier clean-up failed).
@@ -563,6 +598,8 @@ async function cleanUp(
       .eq('status', 'cancelled')
       .is('stripe_payment_intent_id', null)
       .not(column, 'is', null)
+      // A released order keeps a {purgedAt} marker in print_files: it is done (the re-purge pass owns it).
+      .is('print_files->>purgedAt', null)
       .limit(CLEANUP_BATCH)
       .returns<{ id: string }[]>();
     if (error) console.error('sweep-holiday-card-orders unpaid clean-up lookup failed', error.message);
@@ -581,10 +618,10 @@ async function cleanUp(
   const finishedStatuses = ['failed', 'cancelled'];
   const add = (rows: { id: string }[] | null) => { for (const row of rows ?? []) retentionIds.add(row.id); };
   const lookups: [string, PromiseLike<{ data: { id: string }[] | null; error: { message: string } | null }>][] = [
-    ['never-paid', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).is('stripe_payment_intent_id', null).not('print_files', 'is', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
-    ['refunded', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).not('refunded_at', 'is', null).not('print_files', 'is', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
-    ['failed-30d', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).lt('updated_at', iso(now - RETENTION_AFTER_SHIPPED_MS)).not('print_files', 'is', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
-    ['shipped-30d', supabase.from('holiday_card_orders').select('id').eq('status', 'shipped').lt('shipped_at', iso(now - RETENTION_AFTER_SHIPPED_MS)).not('print_files', 'is', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
+    ['never-paid', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).is('stripe_payment_intent_id', null).not('print_files', 'is', null).is('print_files->>purgedAt', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
+    ['refunded', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).not('refunded_at', 'is', null).not('print_files', 'is', null).is('print_files->>purgedAt', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
+    ['failed-30d', supabase.from('holiday_card_orders').select('id').in('status', finishedStatuses).lt('updated_at', iso(now - RETENTION_AFTER_SHIPPED_MS)).not('print_files', 'is', null).is('print_files->>purgedAt', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
+    ['shipped-30d', supabase.from('holiday_card_orders').select('id').eq('status', 'shipped').lt('shipped_at', iso(now - RETENTION_AFTER_SHIPPED_MS)).not('print_files', 'is', null).is('print_files->>purgedAt', null).limit(CLEANUP_BATCH).returns<{ id: string }[]>()],
   ];
   for (const [name, lookup] of lookups) {
     const { data, error } = await lookup;
@@ -593,6 +630,22 @@ async function cleanUp(
   }
   for (const id of [...retentionIds].slice(0, CLEANUP_BATCH)) {
     if (await releasePrintFiles(fulfillmentDeps, supabase, id)) out.filesDeleted += 1;
+  }
+
+  // (c) second purge: a render that was still running when an order was released (cancelled / refunded /
+  //     failed) can write its PDFs afterwards. >= 1 h after `purgedAt`, list and delete the prefix again once.
+  const { data: repurge, error: repurgeError } = await supabase
+    .from('holiday_card_orders')
+    .select('id')
+    .in('status', finishedStatuses)
+    .not('print_files->>purgedAt', 'is', null)
+    .is('print_files->>repurgedAt', null)
+    .lt('print_files->>purgedAt', iso(now - REPURGE_AFTER_MS))
+    .limit(CLEANUP_BATCH)
+    .returns<{ id: string }[]>();
+  if (repurgeError) console.error('sweep-holiday-card-orders re-purge lookup failed', repurgeError.message);
+  for (const row of repurge ?? []) {
+    if (await repurgePrintFiles(fulfillmentDeps, supabase, row.id, now)) out.repurged += 1;
   }
   return out;
 }
@@ -939,18 +992,21 @@ export async function handleSweepHolidayCardOrders(
   if (!validateCronSecret(req)) return errorResponse('Unauthorized', 401, 'unauthorized');
 
   const supabase = dependencies.createServiceClient();
-  const confirm = await pass('confirm', null, () => confirmPaidOrders(dependencies, supabase));
+  const startedAt = dependencies.now();
+  // The cheap passes run FIRST; the confirm / print pipeline pass (renders, up to ~2 min each) runs LAST
+  // and under a deadline, so a slow render service can never starve refunds, aging or generation recovery.
   const track = await pass('track', null, () => trackOrders(dependencies, supabase));
   const aging = await pass('aging', null, () => ageOrders(dependencies, supabase));
   const claims = await pass('card-claims', null, () => clearStaleCardClaims(dependencies, supabase));
   const cleanup = await pass('cleanup', null, () => cleanUp(dependencies, supabase));
   const refunds = await pass('refunds', null, () => finishRefunds(dependencies, supabase));
   const generation = await pass('generation', null, () => recoverGeneration(dependencies, supabase));
-  const ready = await pass('card-ready', null, () => notifyReadyCards(dependencies, supabase));
+  const ready = await pass('ready', null, () => notifyReadyCards(dependencies, supabase));
   // Hourly: the first tick of each hour (the cron runs every 10 minutes).
   const films = new Date(dependencies.now()).getUTCMinutes() < 10
     ? await pass('ordered-films', null, () => checkOrderedFilms(dependencies, supabase))
     : null;
+  const confirm = await pass('confirm', null, () => confirmPaidOrders(dependencies, supabase, startedAt));
 
   return jsonResponse({ success: true, confirm, track, aging, claims, cleanup, refunds, generation, ready, films });
 }

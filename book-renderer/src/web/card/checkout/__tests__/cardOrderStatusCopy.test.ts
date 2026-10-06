@@ -52,8 +52,8 @@ describe('cardOrderStatusCopy (the book\'s voice)', () => {
     expect(cardOrderStatusCopy('unknown').label).toBe('In progress');
   });
 
-  it('paid says the payment arrived and the printer is next', () => {
-    expect(cardOrderStatusCopy('paid').message).toBe('Payment received — sending to the printer.');
+  it('paid says the payment arrived and the print files are being prepared (made after payment, like the book)', () => {
+    expect(cardOrderStatusCopy('paid').message).toBe("Payment received! We're preparing your print files.");
   });
 
   it('a late webhook after the success return is "confirming", not an open checkout', () => {
@@ -82,24 +82,36 @@ describe('polling', () => {
 });
 
 describe('the card stepper is the book\'s stepper with card waypoints', () => {
-  it('maps paid -> sent to print -> printing -> shipped', () => {
-    expect(CARD_STEPPER.steps.map((s) => s.key)).toEqual(['paid', 'submitted', 'in_production', 'shipped']);
+  it('mirrors the book\'s post-purchase steps: paid, preparing, sent to print, printing, shipped', () => {
+    expect(CARD_STEPPER.steps.map((s) => s.key)).toEqual(['paid', 'rendering', 'submitted', 'in_production', 'shipped']);
+    expect(CARD_STEPPER.steps.map((s) => s.label)).toEqual(['Paid', 'Preparing', 'Sent to print', 'Printing', 'Shipped']);
     for (const step of CARD_STEPPER.steps) expect(BOOK_STEPPER.steps.some((b) => b.key === step.key)).toBe(true);
   });
 
-  it('marks the current step and leaves the rest upcoming', () => {
-    const idx = currentProgressStepIndex('submitted', CARD_STEPPER.steps);
-    expect(idx).toBe(1);
-    expect(CARD_STEPPER.steps.map((_, i) => progressStepState(i, idx, 'submitted', CARD_STEPPER.terminalKey))).toEqual(['done', 'current', 'upcoming', 'upcoming']);
+  it('right after payment the current step is Preparing (paid is drawn on it)', () => {
+    const shown = CARD_STEPPER.stepForStatus?.paid ?? 'paid';
+    expect(shown).toBe('rendering');
+    const idx = currentProgressStepIndex(shown, CARD_STEPPER.steps);
+    expect(CARD_STEPPER.steps.map((_, i) => progressStepState(i, idx, shown, CARD_STEPPER.terminalKey))).toEqual(['done', 'current', 'upcoming', 'upcoming', 'upcoming']);
+  });
+
+  it('submitted -> Sent to print, in production -> Printing', () => {
+    const states = (status: string) => {
+      const shown = CARD_STEPPER.stepForStatus?.[status] ?? status;
+      const idx = currentProgressStepIndex(shown, CARD_STEPPER.steps);
+      return CARD_STEPPER.steps.map((_, i) => progressStepState(i, idx, shown, CARD_STEPPER.terminalKey));
+    };
+    expect(states('submitted')).toEqual(['done', 'done', 'current', 'upcoming', 'upcoming']);
+    expect(states('in_production')).toEqual(['done', 'done', 'done', 'current', 'upcoming']);
   });
 
   it('shipped is the last step: every step reads done', () => {
     const idx = currentProgressStepIndex('shipped', CARD_STEPPER.steps);
-    expect(CARD_STEPPER.steps.map((_, i) => progressStepState(i, idx, 'shipped', CARD_STEPPER.terminalKey))).toEqual(['done', 'done', 'done', 'done']);
+    expect(CARD_STEPPER.steps.map((_, i) => progressStepState(i, idx, 'shipped', CARD_STEPPER.terminalKey))).toEqual(['done', 'done', 'done', 'done', 'done']);
   });
 
   it('draws only for a paid, unrefunded order', () => {
-    for (const status of ['paid', 'submitted', 'in_production', 'shipped']) expect(cardShowsStepper(status, null), status).toBe(true);
+    for (const status of ['paid', 'rendering', 'submitted', 'in_production', 'shipped']) expect(cardShowsStepper(status, null), status).toBe(true);
     for (const status of ['draft', 'quoted', 'checkout', 'failed', 'cancelled']) expect(cardShowsStepper(status, null), status).toBe(false);
     expect(cardShowsStepper('in_production', '2026-10-03T12:00:00Z')).toBe(false);
   });

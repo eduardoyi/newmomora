@@ -47,14 +47,16 @@ import { errorResponse, jsonResponse } from '../_shared/errors.ts';
 import {
   confirmPaidOrder,
   type FulfillmentDeps,
+  type PrintPipelineDeps,
   flagRefundNotCancelled,
+  printPipelineFromEnv,
   processRefundedOrder,
   releaseCardClaim,
   releaseUnpaidArtifacts,
 } from '../_shared/holiday-card-fulfillment.ts';
 import { alertCardOwner } from '../_shared/holiday-card-order-notify.ts';
 import { backfillOriginalFilesForBook } from '../_shared/memory-book-backfill.ts';
-import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
+import { createPresignedGetUrls, deleteObject, headObject, listObjectKeys } from '../_shared/r2.ts';
 import { verifyStripeSignature, type StripeEvent } from '../_shared/stripe.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
@@ -387,6 +389,7 @@ function fulfillmentDepsFor(dependencies: StripeWebhookDependencies): Fulfillmen
     deleteKey: dependencies.deleteKey,
     gelatoApiKey: Deno.env.get('GELATO_API_KEY') ?? null,
     stripeSecretKey: Deno.env.get('STRIPE_SECRET_KEY') ?? null,
+    pipeline: printPipelineFromEnv(dependencies),
   };
 }
 
@@ -405,8 +408,9 @@ const CARD_ALREADY_PAID_STATUSES = new Set(['paid', 'submitted', 'in_production'
 /**
  * `checkout.session.completed` for a card order. Verify, record the payment
  * (CAS `checkout -> paid`), then -- and only if everything matched -- confirm the
- * Gelato draft in the background (`EdgeRuntime.waitUntil`; the sweep is the
- * fallback). A mismatch leaves the order `paid` with a `failure_reason` marker
+ * print pipeline in the background (`EdgeRuntime.waitUntil`; the sweep is the
+ * fallback): render the print files, create the Gelato draft, held-canary check,
+ * refund check, confirm (`confirmPaidOrder`; pay first, nothing exists before payment). A mismatch leaves the order `paid` with a `failure_reason` marker
  * (the sweep never confirms a flagged order) and alerts the owner.
  */
 async function handleCardCheckoutCompleted(
@@ -642,6 +646,9 @@ export interface StripeWebhookDependencies {
   /** Holiday cards: R2 prefix listing + delete for print-file clean-up. */
   listKeys: (prefix: string) => Promise<string[]>;
   deleteKey: (key: string) => Promise<void>;
+  /** Holiday cards, pay first: the post-payment pipeline renders the print files (R2 presign + HEAD). */
+  createPresignedGetUrls: PrintPipelineDeps['createPresignedGetUrls'];
+  headObject: PrintPipelineDeps['headObject'];
 }
 
 export const DEFAULT_DEPENDENCIES: StripeWebhookDependencies = {
@@ -656,6 +663,8 @@ export const DEFAULT_DEPENDENCIES: StripeWebhookDependencies = {
   },
   listKeys: listObjectKeys,
   deleteKey: deleteObject,
+  createPresignedGetUrls,
+  headObject,
 };
 
 type ProductRoute = 'book' | 'holiday_card' | 'unknown';

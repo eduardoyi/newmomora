@@ -3763,7 +3763,7 @@ in `_shared/holiday-card-products.ts`), packs 1/2/3/5/10.
 |---|---|---|
 | `create_draft` | `{ cardId }` | 201 `{ orderId, status: 'draft' }` (200 when an open draft exists). 409 `CARD_NOT_READY`. |
 | `quote` | `{ orderId, address: { name, line1, line2?, city, state, postalCode, countryCode }, packs }` | Gelato quote + deliverability + max-cost guard; CAS draft/quoted → `quoted` (clears earlier checkout progress, deletes an old draft/files). 422 `COUNTRY_NOT_SUPPORTED` / `NOT_DELIVERABLE` / `OVER_COST_GUARD`. Never returns costs. |
-| `create_checkout` | `{ orderId }` | QR gate (QR off when no token, token revoked or `choices.qr === false`; on → film must be ready, not blocked) → snapshot + hash → `/render-card` (render) → Gelato **draft** (`orderReferenceId = orderId`) → Stripe Checkout (metadata on session **and** payment intent: `{ productType: 'holiday_card', orderId, snapshotHash }`) → `checkout`. Resumable and idempotent (no second render/draft). 422 render/snapshot codes leave the order `quoted`. |
+| `create_checkout` | `{ orderId, expectedEditsVersion }` | **Pay first** (no render, no Gelato draft, no print files): order claim + card claim (`claim_holiday_card_checkout`, version pin) → QR gate (QR off when no token, token revoked or `choices.qr === false`; a blocked/given-up film prints without a QR; on → film must be ready; a reorder uses the first paid order's frozen snapshot and refuses with `FILM_BLOCKED` / `FILM_NOT_READY` / `QR_LINK_DISABLED`) → freeze `card_snapshot` + `snapshot_hash` → Stripe Checkout (`expires_at` = attempt + 35 min, in the idempotency key; metadata on session **and** payment intent: `{ productType: 'holiday_card', orderId, snapshotHash }`) → `checkout`. 400 `validation_error`, 403 `HOLIDAY_CARD_ORDERS_PAUSED`, 409 `CARD_CHANGED` / `CHECKOUT_OPEN_ELSEWHERE` / `REORDER_UNAVAILABLE`, 404 `CARD_NOT_FOUND`. Returns `expiresAt`. Render/draft errors (`LETTER_OVERFLOW`, `IMAGE_MISSING`, `GELATO_UNAVAILABLE`...) can no longer come from this op: they surface after payment (below). |
 | `cancel_checkout` | `{ orderId }` | Expires the session, `cancelled`, deletes draft + files (lets the parent edit again). |
 | `status` | `{ orderId }` | Status, packs, price, Gelato status, tracking, `shippedAt`, `failureReason`, `refunded`. |
 
@@ -3771,21 +3771,24 @@ in `_shared/holiday-card-products.ts`), packs 1/2/3/5/10.
 `metadata.productType` (absent → Memory Book, unchanged); `charge.refunded`
 looks the payment intent up in both order tables. Card `completed` verifies
 amount, currency, address, session and snapshot hash, CAS `checkout → paid`,
-then confirms the Gelato draft (PATCH only while it is still a draft) →
-`submitted` (webhook `waitUntil`, sweep as fallback).
+then runs the **post-payment pipeline** `confirmPaidOrder` (webhook `waitUntil`, sweep as fallback; every step idempotent/resumable from the row): render the print files (`/render-card`, content-addressed prefix, sizes verified in R2) → Gelato **draft** (the order's frozen `product_uid`/`file_layout`/`format`/`currency`) → held-canary check → PaymentIntent refund check → CAS re-check (still `paid`, not refunded, unflagged) → PATCH the draft only while it is a draft → `submitted` + email. Failures: transient → stays `paid`, retried by the sweep (alert at 30 min, `failed` at 6 h from `print_files.pipelineStartedAt`); render 422 / non-retryable Gelato refusal → `failed` (`RENDER_REFUSED:<code>`, `GELATO_DRAFT_REJECTED:<code>`) + owner alert, no automatic refund (as the book). `failure_reason = 'PARTIAL_REFUND_OK'` releases a held partial refund.
 
 ### 4.32 `sweep-holiday-card-orders` (Holiday Cards P1)
 
-`verify_jwt = false`, `x-cron-secret`, pg_cron every 10 min. Passes: confirm
-paid orders (reads the PaymentIntent first — refunded before confirm →
-cancelled; partial refund → held + alert; alert at 30 min, `failed` at 6 h);
-finish refunds (retry the Gelato delete/cancel for refunded orders still
+`verify_jwt = false`, `x-cron-secret`, pg_cron every 10 min. The cheap passes run
+first and the **confirm / print-pipeline pass runs last**, under a 75 s deadline
+(stops starting orders; renders use a 60 s timeout; orders rotate by
+`print_files.pipelineAttemptAt`, never-tried first; paid orders younger than 5 min
+are left to the webhook): confirm paid orders (the full pay-first pipeline;
+reads the PaymentIntent first — refunded before confirm → cancelled; partial
+refund → held + alert, released with `PARTIAL_REFUND_OK`; alert at 30 min,
+`failed` at 6 h); finish refunds (retry the Gelato delete/cancel for refunded orders still
 active); track submitted/in-production (passed/printed → `in_production`,
 shipped + tracking → `shipped` + email, failed/canceled → `failed` + owner
-alert; `on_hold` alerts once and keeps polling); age `quoted`/`checkout` after
-48 h; retention of `print-orders/<orderId>/` (30 days after `shipped_at`; at
+alert; `on_hold` alerts once and keeps polling); age `quoted` after 48 h and `checkout` 1 h after its Stripe session's
+`expires_at` (`print_files.sessionExpiresAt`); clear stale card claims; retention of `print-orders/<orderId>/` (30 days after `shipped_at`; at
 once for never-paid failed/cancelled; paid-then-failed kept until refunded or
-30 days); re-dispatch cards stuck in `generating` and retry `failed` cards
+30 days; released orders keep a `{purgedAt}` marker and the prefix is purged once more ≥ 1 h later); re-dispatch cards stuck in `generating` and retry `failed` cards
 with a retryable code after 10 min (cap 3 via
 `increment_holiday_card_generation_attempt`; `NO_LETTERS` and
 `generation_attempts_exhausted` are terminal); hourly alert when an ordered

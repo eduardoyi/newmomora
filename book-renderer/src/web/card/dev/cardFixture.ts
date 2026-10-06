@@ -338,7 +338,7 @@ export function fixtureCreateCheckout(orderId: string, expectedEditsVersion: num
   returnUrl.searchParams.set('order', orderId);
   returnUrl.searchParams.set('checkout', co === 'cancel' ? 'cancelled' : 'success');
   returnUrl.searchParams.delete('co');
-  return delay({ success: true, orderId, status: 'checkout', checkoutUrl: returnUrl.toString(), sessionId: 'cs_test_fx', resumed: createCalls > 1 }, 1500);
+  return delay({ success: true, orderId, status: 'checkout', checkoutUrl: returnUrl.toString(), sessionId: 'cs_test_fx', resumed: createCalls > 1 }, 700);
 }
 
 export function fixtureCancelCheckout(orderId: string): Promise<unknown> {
@@ -357,7 +357,7 @@ export function fixtureOrderStatus(orderId: string): Promise<unknown> {
   if (status === 'checkout' && orderId !== 'fx-order-open') {
     // The fake webhook and printer: a couple of polls in "checkout" (late webhook), then paid, then on.
     const end = param('state') === 'order-shipped' ? 'shipped' : param('state') === 'order-failed' ? 'failed' : 'in_production';
-    const path: FxOrderStatus[] = ['checkout', 'checkout', 'paid', 'submitted', end === 'failed' ? 'failed' : 'in_production'];
+    const path: FxOrderStatus[] = ['checkout', 'checkout', 'paid', 'paid', 'paid', 'submitted', end === 'failed' ? 'failed' : 'in_production'];
     if (end === 'shipped') path.push('shipped');
     status = path[Math.min(order.polls, path.length - 1)];
     writeOrder({ ...order, polls: order.polls + 1 });

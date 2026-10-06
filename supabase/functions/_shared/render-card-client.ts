@@ -1,7 +1,9 @@
 /**
  * HMAC client for the render service's `POST /render-card` (docs/plans/
- * holiday-cards-p1.md Step 5/6): ONE synchronous card render, called by the
- * holiday-card shop's `create_checkout` BEFORE payment.
+ * holiday-cards-p1.md Step 5/6): ONE synchronous card render, called AFTER
+ * payment (pay first, like the Memory Book) by the print pipeline in
+ * `holiday-card-fulfillment.ts` (`confirmPaidOrder`, run by stripe-webhook and
+ * the sweep). A 422 content refusal after payment fails the order (owner alert).
  *
  * Same signing scheme as `render-worker-client.ts` (`/fit`): headers
  * `x-render-timestamp` / `x-render-nonce` / `x-render-signature`, HMAC-SHA256
@@ -12,8 +14,8 @@
  *
  * Answers:
  *   200 { ok: true, mode, files: [{ side, key, sha256, bytes }], checks }
- *   422 { ok: false, code, message }   content the shop can show (a letter
- *                                      that does not fit, a low-res photo)
+ *   422 { ok: false, code, message }   content the card cannot print (a letter that
+ *                                      does not fit, a low-res or deleted photo)
  *   401 / 5xx                          infra: the caller treats it as "try again"
  *
  * Privacy: errors carry the status, the machine code and the service's own
