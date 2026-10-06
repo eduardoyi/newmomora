@@ -71,7 +71,7 @@ export function selectEditorCandidates(
   },
 ): EditorCandidate[] {
   const max = options.max ?? EDITOR_MAX_CANDIDATES;
-  // Read (almost) every written entry: "Enzo montando bici sin rueditas" has
+  // Read (almost) every written entry: "Tomás montando bici sin rueditas" has
   // no news word but IS the year's news (v11 review). News words and the
   // children's best-ranked moments only decide who stays when over the cap.
   const withText = pool.filter((m) => (m.text ?? '').trim().length >= 12);

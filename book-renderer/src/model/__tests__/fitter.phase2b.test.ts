@@ -100,7 +100,7 @@ describe('fix 2: a wide-first multi-asset memory keeps every asset', () => {
     expect(auditBookDocument(document, outline, manifest, { omittedMemoryIds: [] })).toEqual([]);
   });
 
-  it('Enzo p7 shape: a section that is ONE five-asset wide-first memory, arriving on odd parity, prints all five photos (no empty page, no blank)', () => {
+  it('Tomás p7 shape: a section that is ONE five-asset wide-first memory, arriving on odd parity, prints all five photos (no empty page, no blank)', () => {
     // Before the fix the panorama unit was the section's only unit, so the parity ladder fell to the
     // demote rung, which dumped all 5 assets on one anchor-media page (it draws 1-2) -> an empty page.
     // Now the memory's other four assets are a movable continuation the reorder pass uses to land the spread.
@@ -548,7 +548,7 @@ describe('fix 7: audit checks (media-memory-without-media / unrenderable-slots /
   });
   const outline = makeOutline([makeElement({ id: 'backbone:x', kind: 'backbone', memoryIds: ['m1', 'm2'] })]);
 
-  it('media-memory-without-media fires when a memory with assets prints only its caption (the Mara p79 shape)', () => {
+  it('media-memory-without-media fires when a memory with assets prints only its caption (the Lucía p79 shape)', () => {
     const doc = docWith([emptyPage({ id: 'p1', sourceElementId: 'backbone:x', templateId: 'text-page', slots: [textSlot('m1', 'Caption')] })]);
     const v = auditBookDocument(doc, outline, manifest).filter((x) => x.check === 'media-memory-without-media');
     expect(v.map((x) => x.message.includes('m1'))).toEqual([true]);
@@ -580,7 +580,7 @@ describe('fix 7: audit checks (media-memory-without-media / unrenderable-slots /
       title('t-blank'),
       emptyPage({ id: 'b1', sourceElementId: 'x', templateId: 'blank', blankReason: 'parity:full-bleed' }),
       title('t-undrawn'),
-      emptyPage({ id: 'u1', sourceElementId: 'x', templateId: 'anchor-media', slots: five }), // the Enzo p6 -> p7 shape
+      emptyPage({ id: 'u1', sourceElementId: 'x', templateId: 'anchor-media', slots: five }), // the Tomás p6 -> p7 shape
       title('t-ok'),
       emptyPage({ id: 'ok1', sourceElementId: 'x', templateId: 'anchor-media', slots: [photoSlot('m1', 'ok.jpg')] }),
       title('t-text'),

@@ -22,7 +22,7 @@ const DEFAULT_STYLE_DESCRIPTION = getStyleDescription(DEFAULT_ILLUSTRATION_STYLE
 
 Deno.test('buildPortraitPrompt uses child identity guidance for children', () => {
   const prompt = buildPortraitPrompt({
-    name: 'Enzo',
+    name: 'Tomás',
     ageDescription: '3 years and 7 months old',
     isAdult: false,
     gender: 'Male',
@@ -79,8 +79,8 @@ Deno.test('buildIllustrationPrompt maps each reference image to a tagged charact
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'Two children sit at the breakfast table refusing oatmeal.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
-      { referenceIndex: 2, description: 'Mara (1 year and 6 months old, Female)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
+      { referenceIndex: 2, description: 'Lucía (1 year and 6 months old, Female)' },
     ],
     colorPalette: 'playful violet, soft purple, whimsical lilac pops',
     memoryDate: '2026-05-26',
@@ -88,11 +88,11 @@ Deno.test('buildIllustrationPrompt maps each reference image to a tagged charact
   });
 
   assertEquals(
-    prompt.includes('Reference image 1: Enzo (3 years and 7 months old, Male)'),
+    prompt.includes('Reference image 1: Tomás (3 years and 7 months old, Male)'),
     true,
   );
   assertEquals(
-    prompt.includes('Reference image 2: Mara (1 year and 6 months old, Female)'),
+    prompt.includes('Reference image 2: Lucía (1 year and 6 months old, Female)'),
     true,
   );
   assertEquals(
@@ -122,7 +122,7 @@ Deno.test('buildIllustrationPrompt limits a single tagged human in the scene', (
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'A boy feeds a goat on a school trip to an educational farm.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'lilac, dawn pink, soft cyan',
     memoryDate: '2026-05-28',
@@ -139,7 +139,7 @@ Deno.test('buildIllustrationPrompt preserve/adapt split keeps identity cues but 
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'A child naps on the couch after a long day at the park.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'soft warm greys, dusty taupe, muted oatmeal',
     memoryDate: '2026-05-28',
@@ -159,7 +159,7 @@ Deno.test('buildIllustrationPrompt emits no-smile guidance for worry', () => {
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'A child feels unwell with a fever on the couch.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'soft slate blue, muted grey, pale overcast light',
     memoryDate: '2026-05-28',
@@ -180,7 +180,7 @@ Deno.test('buildIllustrationPrompt falls back to generic mood guidance when emot
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'A quiet afternoon at home.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'sage green, pale blue, warm sand',
     memoryDate: '2026-05-28',
@@ -194,7 +194,7 @@ Deno.test('buildIllustrationPrompt includes comedic exaggeration only for whitel
   const comedicPrompt = buildIllustrationPrompt({
     safeSceneDescription: 'A toddler dramatically refuses to eat broccoli.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'playful violet, soft purple, whimsical lilac pops',
     memoryDate: '2026-05-28',
@@ -208,7 +208,7 @@ Deno.test('buildIllustrationPrompt includes comedic exaggeration only for whitel
   const worryComedicPrompt = buildIllustrationPrompt({
     safeSceneDescription: 'A child feels unwell with a fever on the couch.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'soft slate blue, muted grey, pale overcast light',
     memoryDate: '2026-05-28',
@@ -222,7 +222,7 @@ Deno.test('buildIllustrationPrompt includes comedic exaggeration only for whitel
   const joyNeutralPrompt = buildIllustrationPrompt({
     safeSceneDescription: 'A birthday party in the backyard.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'warm golden yellows, soft peach, light sky blue accents',
     memoryDate: '2026-05-28',
@@ -247,7 +247,7 @@ Deno.test('buildIllustrationPrompt uses funny as a first-class emotion for comed
   const prompt = buildIllustrationPrompt({
     safeSceneDescription: 'Two kids grimace at their oatmeal bowls.',
     characterReferences: [
-      { referenceIndex: 1, description: 'Enzo (3 years and 7 months old, Male)' },
+      { referenceIndex: 1, description: 'Tomás (3 years and 7 months old, Male)' },
     ],
     colorPalette: 'bright tangerine, warm coral, sunny pops of turquoise',
     memoryDate: '2026-05-27',
@@ -276,11 +276,11 @@ Deno.test('buildSafetySystemPrompt forbids inventing cheerfulness the memory doe
 
 Deno.test('buildSafetySystemPrompt includes nickname-to-name mapping instructions when members provided', () => {
   const withMembers = buildSafetySystemPrompt([
-    { name: 'Mara', nicknames: ['cheeky monkey'] },
-    { name: 'Enzo', nicknames: null },
+    { name: 'Lucía', nicknames: ['cheeky monkey'] },
+    { name: 'Tomás', nicknames: null },
   ]);
 
-  assertEquals(withMembers.includes('Nickname mapping: cheeky monkey → Mara.'), true);
+  assertEquals(withMembers.includes('Nickname mapping: cheeky monkey → Lucía.'), true);
   assertEquals(withMembers.includes('canonical name'), true);
   assertEquals(withMembers.includes('never introduce an animal'), true);
   assertEquals(withMembers.includes('expressionStyle'), true);

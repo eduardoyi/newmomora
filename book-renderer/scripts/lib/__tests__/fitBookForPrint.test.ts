@@ -56,19 +56,19 @@ describe('fitBookForPrint — real books (skipped when book-data/ isn\'t present
   // verification): both produced 122 interior pages. If this ever changes,
   // it means either the fixture book or the fitter's own output changed —
   // not something this extraction should ever silently drift.
-  const enzoYearThreeManifestPath = resolve(BOOK_DATA_DIR, 'enzo-year-three', 'manifest.json');
-  const enzoYearThreeOutlinePath = resolve(BOOK_DATA_DIR, 'enzo-year-three', 'book.outline.json');
-  const enzoAvailable = existsSync(enzoYearThreeManifestPath) && existsSync(enzoYearThreeOutlinePath);
-  (enzoAvailable ? it : it.skip)('enzo-year-three: pageCount is 122 (pinned CLI-equivalence regression value)', () => {
-    const manifest = parseManifest(JSON.parse(readFileSync(enzoYearThreeManifestPath, 'utf8')));
-    const outline = parseOutline(JSON.parse(readFileSync(enzoYearThreeOutlinePath, 'utf8')));
+  const tomasYearThreeManifestPath = resolve(BOOK_DATA_DIR, 'enzo-year-three', 'manifest.json');
+  const tomasYearThreeOutlinePath = resolve(BOOK_DATA_DIR, 'enzo-year-three', 'book.outline.json');
+  const tomasAvailable = existsSync(tomasYearThreeManifestPath) && existsSync(tomasYearThreeOutlinePath);
+  (tomasAvailable ? it : it.skip)('enzo-year-three: pageCount is 122 (pinned CLI-equivalence regression value)', () => {
+    const manifest = parseManifest(JSON.parse(readFileSync(tomasYearThreeManifestPath, 'utf8')));
+    const outline = parseOutline(JSON.parse(readFileSync(tomasYearThreeOutlinePath, 'utf8')));
     const result = fitBookForPrint({ outline, manifest, spineMm: 28 });
     expect(result.pageCount).toBe(122);
   });
 
-  (enzoAvailable ? it : it.skip)('threads an image edit through applyPreFit into editedManifest (edits chain wiring, not edits.ts\'s own logic)', () => {
-    const manifest = parseManifest(JSON.parse(readFileSync(enzoYearThreeManifestPath, 'utf8')));
-    const outline = parseOutline(JSON.parse(readFileSync(enzoYearThreeOutlinePath, 'utf8')));
+  (tomasAvailable ? it : it.skip)('threads an image edit through applyPreFit into editedManifest (edits chain wiring, not edits.ts\'s own logic)', () => {
+    const manifest = parseManifest(JSON.parse(readFileSync(tomasYearThreeManifestPath, 'utf8')));
+    const outline = parseOutline(JSON.parse(readFileSync(tomasYearThreeOutlinePath, 'utf8')));
 
     // Find any real photo asset already in the manifest to target — ids/keys
     // only, never memory text (project-wide "no memory content in logs/tests" rule).

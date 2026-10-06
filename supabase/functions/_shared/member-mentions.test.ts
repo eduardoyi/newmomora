@@ -7,8 +7,8 @@ import {
 Deno.test('isNameMentionedInText matches whole names only', () => {
   assertEquals(isNameMentionedInText('Ann had oatmeal', 'Ann'), true);
   assertEquals(isNameMentionedInText('We were planning breakfast', 'Ann'), false);
-  assertEquals(isNameMentionedInText('Enzo and Mara did not want oatmeal', 'Enzo'), true);
-  assertEquals(isNameMentionedInText('Enzo and Mara did not want oatmeal', 'Mara'), true);
+  assertEquals(isNameMentionedInText('Tomás and Lucía did not want oatmeal', 'Tomás'), true);
+  assertEquals(isNameMentionedInText('Tomás and Lucía did not want oatmeal', 'Lucía'), true);
 });
 
 Deno.test('isNameMentionedInText is case-insensitive', () => {
@@ -16,19 +16,19 @@ Deno.test('isNameMentionedInText is case-insensitive', () => {
 });
 
 Deno.test('matchMemberIdsMentionedInText returns mentioned member ids', () => {
-  const ids = matchMemberIdsMentionedInText('Enzo and Mara played', [
-    { id: 'enzo-id', name: 'Enzo' },
-    { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+  const ids = matchMemberIdsMentionedInText('Tomás and Lucía played', [
+    { id: 'tomas-id', name: 'Tomás' },
+    { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
     { id: 'timmy-id', name: 'Timmy' },
   ]);
 
-  assertEquals(ids, ['enzo-id', 'mara-id']);
+  assertEquals(ids, ['tomas-id', 'lucia-id']);
 });
 
 Deno.test('matchMemberIdsMentionedInText matches nicknames with word boundaries', () => {
-  const ids = matchMemberIdsMentionedInText('Marita was sleepy', [
-    { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+  const ids = matchMemberIdsMentionedInText('Lucita was sleepy', [
+    { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
   ]);
 
-  assertEquals(ids, ['mara-id']);
+  assertEquals(ids, ['lucia-id']);
 });

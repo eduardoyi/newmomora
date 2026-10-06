@@ -69,7 +69,7 @@ export interface Furniture {
      */
     scanInstruction: string;
   };
-  /** "Enzo, 10 de agosto de 2025 — seis momentos" — canvas's spread-title attribution pattern. */
+  /** "Tomás, 10 de agosto de 2025 — seis momentos" — canvas's spread-title attribution pattern. */
   spreadTitleAttribution: (childName: string, dateStr: string, momentCount: number) => string;
   /**
    * Video credit-line microcopy ("escanea para verlo") that used to render

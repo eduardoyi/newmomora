@@ -61,8 +61,8 @@ import {
 /**
  * Automated content-integrity audit (owner review round 5, item 1) — run
  * AFTER every fit, on the finished `BookDocument`. Two real failures shipped
- * past every existing check before this existed (Enzo's Oct/Nov/Dec 2024
- * silently erased by the page-cap squeeze; Mara's "Retratos con Mirian"
+ * past every existing check before this existed (Tomás's Oct/Nov/Dec 2024
+ * silently erased by the page-cap squeeze; Lucía's "Retratos con Mirian"
  * spread-title rendering with zero member pages behind it) — this is the
  * safety net that catches that CLASS of bug going forward, not just those
  * two instances (both of which are also fixed at the root; see fitter.ts).
@@ -159,7 +159,7 @@ function auditMonthContinuity(document: BookDocument, outline: BookOutline, mani
     for (const id of slotMemoryIds(page)) pooledMemoryIds.add(id);
   }
 
-  // Erasure check (the diagnosed Enzo bug): a backbone element is a
+  // Erasure check (the diagnosed Tomás bug): a backbone element is a
   // calendar month by construction — if the outline gave it memories at
   // all, the printed book must show SOMETHING for it, however thin.
   for (const element of backboneElements) {
@@ -210,7 +210,7 @@ function auditMonthContinuity(document: BookDocument, outline: BookOutline, mani
 
 // ---------------------------------------------------------------------------
 // (b) No titled section (spread-title, via themed/firsts/birthday) with zero content
-// pages behind it before the next section (the diagnosed Mara "Retratos con
+// pages behind it before the next section (the diagnosed Lucía "Retratos con
 // Mirian" bug — fixed at the root in fitter.ts's dissolve-when-empty guard;
 // this is the permanent regression backstop).
 // ---------------------------------------------------------------------------
@@ -912,7 +912,7 @@ function slotMemoryIds(page: BookPage): string[] {
 
 /**
  * (j) A memory that carries photo/video assets must show at least one of
- * them as a photo slot somewhere in the book. Diagnosed from Mara p79: a
+ * them as a photo slot somewhere in the book. Diagnosed from Lucía p79: a
  * photo memory and a video memory merged onto a `text-page` whose slots are
  * text-only, so both kept their caption and lost their media. Two detections:
  *  - always: the memory prints something (any non-photo slot) yet has no
@@ -1106,7 +1106,7 @@ function drawnContentCount(page: BookPage): number {
 /**
  * (l) A title-only page (chapter / themed / firsts `spread-title`)
  * immediately followed by a page that draws no media and no text — a title
- * facing nothing (Enzo p6 -> p7, where the following page's 5 photo slots
+ * facing nothing (Tomás p6 -> p7, where the following page's 5 photo slots
  * were undrawable; also a title facing a parity blank).
  */
 function auditTitleThenEmpty(document: BookDocument): IntegrityViolation[] {

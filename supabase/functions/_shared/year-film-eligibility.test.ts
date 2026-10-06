@@ -85,7 +85,7 @@ Deno.test('isFilmChild: explicit role wins, teens stay out (family relationships
   // A niece under 13 marked as a cousin is not the family's own child.
   assertEquals(isFilmChild({ id: 'niece', dateOfBirth: '2020-05-01', relationship: 'cousin' }, today), false);
   // An own child marked explicitly counts; unsorted kids keep the DOB rule.
-  assertEquals(isFilmChild({ id: 'kid', dateOfBirth: '2022-10-23', relationship: 'child' }, today), true);
+  assertEquals(isFilmChild({ id: 'kid', dateOfBirth: '2022-10-17', relationship: 'child' }, today), true);
   assertEquals(isFilmChild({ id: 'newborn', dateOfBirth: '2026-08-01', relationship: null }, today), true);
   // An explicit 'child' aged 15 is still excluded (under-13 ceiling kept).
   assertEquals(isFilmChild({ id: 'teen', dateOfBirth: '2011-01-01', relationship: 'child' }, today), false);
@@ -282,7 +282,7 @@ Deno.test('film dates (owner 2026-09-29): birthday scope ends the day after, yea
   // Coupled to year_film_due / placement_date in SQL: the birthday film is due
   // birthday + 2 = its exclusive scope end.
   assertEquals(BIRTHDAY_FILM_DAYS_AFTER, 1);
-  assertEquals(birthdayFilmScope('2022-10-23', 4), { start: '2025-10-23', endExclusive: '2026-10-25' });
+  assertEquals(birthdayFilmScope('2022-10-17', 4), { start: '2025-10-17', endExclusive: '2026-10-19' });
   assertEquals(FAMILY_FILM_CUTOFF, '12-28');
   assertEquals(familyYearScope(2026), { start: '2026-01-01', endExclusive: '2026-12-28' });
 });

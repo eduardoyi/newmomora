@@ -22,12 +22,12 @@ function baseContext(): GenerationContextResponse {
       familyId: 'family-1',
       childId: CHILD_ID,
       scopeKind: 'age_year',
-      windowStart: '2024-10-23',
-      windowEndExclusive: '2025-10-23',
+      windowStart: '2024-10-17',
+      windowEndExclusive: '2025-10-17',
       scopeLabel: 'Year One',
       pageBudget: 60,
     },
-    child: { id: CHILD_ID, name: 'Enzo', dateOfBirth: '2024-10-23' },
+    child: { id: CHILD_ID, name: 'Tomás', dateOfBirth: '2024-10-17' },
     familyName: 'The Rivas Family',
     configuredLanguage: 'en',
     memories: [
@@ -45,7 +45,7 @@ function baseContext(): GenerationContextResponse {
       { memory_id: MEMORY_1, family_member_id: CHILD_ID, milestone_id: 'first-steps', detail: null, out_of_band: false },
     ],
     engagementCounts: { [MEMORY_1]: 1 },
-    familyMembers: [{ id: CHILD_ID, name: 'Enzo', date_of_birth: '2024-10-23', nicknames: [] }],
+    familyMembers: [{ id: CHILD_ID, name: 'Tomás', date_of_birth: '2024-10-17', nicknames: [] }],
     portraitVersions: [],
     languageEvidenceCaptions: [],
   };
@@ -209,7 +209,7 @@ describe('MemoryBookWorkflow', () => {
     expect(publishCall).toBeDefined();
     const document = publishCall!.body.bookDocument as { outline: Record<string, unknown>; manifest: Record<string, unknown> };
     expect(document.outline.runId).toBe(ATTEMPT_ID);
-    expect(document.outline.child).toEqual({ id: CHILD_ID, name: 'Enzo' });
+    expect(document.outline.child).toEqual({ id: CHILD_ID, name: 'Tomás' });
     expect((document.outline.elements as Array<{ kind: string }>).some((e) => e.kind === 'firsts')).toBe(true);
     // Cover-verify kept the sole candidate (verdict: not disqualified).
     expect(document.outline.coverCandidates).toEqual([MEMORY_2]);

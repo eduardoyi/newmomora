@@ -66,7 +66,7 @@ describe('sideLabel / relationshipSubtitle', () => {
     expect(sideLabel({ id: 'a', name: 'Ana', relationship: 'aunt_uncle', family_side: 'maternal' }, [])).toBe("Mom's side");
     expect(sideLabel({ id: 'a', name: 'Ana', relationship: 'cousin', family_side: 'both' }, [])).toBe('Both sides');
     expect(sideLabel({ id: 'f', name: 'Jo', relationship: 'caregiver', family_side: 'both' }, [])).toBeNull();
-    expect(relationshipSubtitle({ id: 'k', name: 'Enzo', relationship: 'child' }, [])).toBe('Our child');
+    expect(relationshipSubtitle({ id: 'k', name: 'Tomás', relationship: 'child' }, [])).toBe('Our child');
     expect(relationshipSubtitle({ id: 'u', name: 'Unsorted', relationship: null }, [])).toBeNull();
   });
 });
@@ -100,9 +100,9 @@ describe('sideChoices', () => {
 describe('isLinkableMember', () => {
   const ref = new Date('2026-09-28T12:00:00');
   it('excludes kids, pets and unsorted under-13s', () => {
-    expect(isLinkableMember({ id: '1', name: 'Enzo', relationship: 'child' }, ref)).toBe(false);
+    expect(isLinkableMember({ id: '1', name: 'Tomás', relationship: 'child' }, ref)).toBe(false);
     expect(isLinkableMember({ id: '2', name: 'Rex', relationship: 'pet' }, ref)).toBe(false);
-    expect(isLinkableMember({ id: '3', name: 'Mara', date_of_birth: '2024-11-08' }, ref)).toBe(false);
+    expect(isLinkableMember({ id: '3', name: 'Lucía', date_of_birth: '2024-11-14' }, ref)).toBe(false);
   });
 
   it('allows adults, unsorted adults and unknown ages', () => {
@@ -154,7 +154,7 @@ describe('isInviteTargetEligible (invite picker, person detail, Approvals)', () 
   });
 
   it('rejects children and pets', () => {
-    expect(isInviteTargetEligible({ id: 'k', name: 'Enzo', relationship: 'child' }, [], false, ref)).toBe(false);
+    expect(isInviteTargetEligible({ id: 'k', name: 'Tomás', relationship: 'child' }, [], false, ref)).toBe(false);
     expect(isInviteTargetEligible({ id: 'p', name: 'Rex', relationship: 'pet' }, [], false, ref)).toBe(false);
   });
 

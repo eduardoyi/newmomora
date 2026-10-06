@@ -114,7 +114,7 @@ export function possessiveHeadline(names: string[]): string {
 }
 
 /**
- * Possessive fragment ("Enzo's" | "their") for a set of kid names, without
+ * Possessive fragment ("Tomás's" | "their") for a set of kid names, without
  * composing a full sentence around it -- the same single-vs-several split
  * `possessiveHeadline`/`firstPageCaption` already encode, exposed here as a
  * bare fragment for call sites that build their own copy around it (S8
@@ -135,7 +135,7 @@ export function kidsPossessive(names: string[]): string {
 
 /**
  * Journal-flavored possessive: converts a resolved possessive fragment
- * ("Enzo's" | "their"/"Their") into the flavor used specifically where a
+ * ("Tomás's" | "their"/"Their") into the flavor used specifically where a
  * screen builds the phrase "{X} journal" -- second-person "your" for
  * several kids, instead of the neutral third-person "their" this module
  * uses everywhere else multi-kid copy neutralizes (`possessiveHeadline`'s

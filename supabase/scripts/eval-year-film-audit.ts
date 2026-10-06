@@ -23,8 +23,8 @@
  * counts-only.
  *
  * Examples:
- *   npm run eval:year-film-audit -- --children Enzo,Mara
- *   npm run eval:year-film-audit -- --children Enzo,Mara --today 2026-12-27
+ *   npm run eval:year-film-audit -- --children Tomás,Lucía
+ *   npm run eval:year-film-audit -- --children Tomás,Lucía --today 2026-12-27
  *
  * `--children` lists the family's own children by first name (plan §4.2:
  * nieces/cousins with profiles don't get films or chapters). Without it,

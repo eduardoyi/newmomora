@@ -2,7 +2,7 @@
  * Everything-scope (multi-year) outline + manifest behaviour --
  * docs/plans/memory-book-everything-phase2.md §0, 2.2, 2.4-2.7 (worker side).
  * Drives `runOutlineStage` + `buildBookManifest` for a seeded synthetic
- * 4-year context (synthetic text only; DOB 2022-10-23, 600 eligible memories,
+ * 4-year context (synthetic text only; DOB 2022-10-17, 600 eligible memories,
  * 17 portraits, 23 milestones incl. birthday ones) with the OpenAI call
  * mocked, like outline.golden.test.ts does. The age_year / calendar_year
  * "unchanged" proof is outline.golden.test.ts itself (its snapshots must stay
@@ -66,8 +66,8 @@ function lorem(rng: Rng, chars: number): string {
 }
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
-const DOB = '2022-10-23';
-const WINDOW_START = '2022-10-23';
+const DOB = '2022-10-17';
+const WINDOW_START = '2022-10-17';
 const WINDOW_END_EXCLUSIVE = '2026-10-01';
 const CHILD_ID = 'family-member-child-0001';
 const OTHER_MEMBER_ID = 'family-member-other-0002';

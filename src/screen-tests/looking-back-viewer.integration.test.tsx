@@ -589,14 +589,14 @@ describe('LookingBackViewerScreen route integration', () => {
 
   it('preserves a member name in the package-name completion copy', async () => {
     configurePlayback({ phase: 'complete' });
-    const memberPackage = { ...item, packageType: 'member_at_age', title: 'Enzo at 1' };
+    const memberPackage = { ...item, packageType: 'member_at_age', title: 'Tomás at 1' };
     packagesValue = { ...packagesValue, viewerPackages: [memberPackage], packages: [memberPackage] };
     sessionValue = {
       ...sessionValue,
       packageSnapshot: { ...sessionValue.packageSnapshot, value: memberPackage },
     };
     const screen = await renderViewer();
-    expect(screen.getByText('That was 4 memories from Enzo at 1.')).toBeTruthy();
+    expect(screen.getByText('That was 4 memories from Tomás at 1.')).toBeTruthy();
   });
 
   it('preserves a birthday member name in the package-name completion copy', async () => {
@@ -629,14 +629,14 @@ describe('LookingBackViewerScreen route integration', () => {
 
   it('keeps leading From titles grammatical in completion copy', async () => {
     configurePlayback({ phase: 'complete' });
-    const firstYearPackage = { ...item, packageType: 'member_at_age', title: "From Mara's first year" };
+    const firstYearPackage = { ...item, packageType: 'member_at_age', title: "From Lucía's first year" };
     packagesValue = { ...packagesValue, viewerPackages: [firstYearPackage], packages: [firstYearPackage] };
     sessionValue = {
       ...sessionValue,
       packageSnapshot: { ...sessionValue.packageSnapshot, value: firstYearPackage },
     };
     const screen = await renderViewer();
-    expect(screen.getByText("That was 4 memories from Mara's first year.")).toBeTruthy();
+    expect(screen.getByText("That was 4 memories from Lucía's first year.")).toBeTruthy();
   });
 
   it('keeps month titles capitalized in completion copy', async () => {

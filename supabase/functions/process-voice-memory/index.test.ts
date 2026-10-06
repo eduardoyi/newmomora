@@ -501,6 +501,6 @@ Deno.test('voiceFailureDetail logs status or code, never provider text', () => {
   assertEquals(voiceFailureDetail(chat, chat.message), 'status_500');
   const db = Object.assign(new Error('JWT issued at future'), { code: 'PGRST303' });
   assertEquals(voiceFailureDetail(db, db.message), 'code_PGRST303');
-  assertEquals(voiceFailureDetail({ code: 'not a safe code: Enzo' }, 'unknown'), 'object');
+  assertEquals(voiceFailureDetail({ code: 'not a safe code: Tomás' }, 'unknown'), 'object');
   assertEquals(voiceFailureDetail(new TypeError('boom'), 'boom'), 'TypeError');
 });

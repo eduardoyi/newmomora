@@ -308,7 +308,7 @@ Deno.test('computeMilestoneRows: deterministic birthday fires when topics includ
     milestoneClaim: null,
     topics: [{ id: 'birthday', detail: null }],
     taggedMembersWithAge: [],
-    taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    taggedMembersForBirthday: [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     memoryDate: '2026-06-16',
   });
   assertEquals(rows, [{ milestoneId: 'birthday', detail: '4', outOfBand: false, familyMemberId: 'a' }]);
@@ -320,7 +320,7 @@ Deno.test('computeMilestoneRows: deterministic birthday does NOT fire outside th
     milestoneClaim: null,
     topics: [{ id: 'birthday', detail: null }],
     taggedMembersWithAge: [],
-    taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    taggedMembersForBirthday: [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     memoryDate: '2026-07-01',
   });
   assertEquals(rows, []);
@@ -332,7 +332,7 @@ Deno.test('computeMilestoneRows: deterministic birthday fires from explicit text
     milestoneClaim: { claim: 'turned four today', catalogId: 'birthday', detail: null, evidence: null },
     topics: [],
     taggedMembersWithAge: [],
-    taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    taggedMembersForBirthday: [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     memoryDate: '2026-06-15',
   });
   assertEquals(rows, [{ milestoneId: 'birthday', detail: '4', outOfBand: false, familyMemberId: 'a' }]);
@@ -346,7 +346,7 @@ Deno.test('computeMilestoneRows: deterministic birthday overrides a claim-based 
     milestoneClaim: { claim: 'turned three', catalogId: 'birthday', detail: 'wrong age from model', evidence: null },
     topics: [],
     taggedMembersWithAge: [],
-    taggedMembersForBirthday: [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    taggedMembersForBirthday: [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     memoryDate: '2026-06-15',
   });
   assertEquals(rows.length, 1);
@@ -359,7 +359,7 @@ Deno.test('computeMilestoneRows: a newborn-week memory (ageTurned 0) never produ
     milestoneClaim: null,
     topics: [{ id: 'birthday', detail: null }],
     taggedMembersWithAge: [],
-    taggedMembersForBirthday: [{ id: 'a', name: 'Mara', dateOfBirth: '2026-06-15' }],
+    taggedMembersForBirthday: [{ id: 'a', name: 'Lucía', dateOfBirth: '2026-06-15' }],
     memoryDate: '2026-06-16',
   });
   assertEquals(rows, []);
@@ -427,7 +427,7 @@ Deno.test('runMemoryAnalysis: a text-only memory produces a full analysis with d
         memoryDate: '2026-06-15',
         audioTranscript: null,
       },
-      taggedMembers: [{ id: 'a', name: 'Enzo', dateOfBirth: '2025-06-15' }], // 12 months old
+      taggedMembers: [{ id: 'a', name: 'Tomás', dateOfBirth: '2025-06-15' }], // 12 months old
       media: [],
     });
 
@@ -508,9 +508,9 @@ Deno.test('parseMilestoneClaim reads the verbatim evidence quote (and aliases), 
 
 Deno.test('gateMilestoneClaim drops the owner over-tag cases (haircut, question, balance bike)', () => {
   const cases: Array<[string, string, string]> = [
-    ['first-haircut', 'Enzo en la barbería con su corte de pelo nuevo', 'Enzo en la barbería con su corte de pelo nuevo'],
-    ['first-question', 'Enzo me preguntó por qué el cielo es azul', 'Enzo me preguntó por qué el cielo es azul'],
-    ['balance-bike', 'Enzo riding his balance bike at the park', 'Enzo riding his balance bike at the park'],
+    ['first-haircut', 'Tomás en la barbería con su corte de pelo nuevo', 'Tomás en la barbería con su corte de pelo nuevo'],
+    ['first-question', 'Tomás me preguntó por qué el cielo es azul', 'Tomás me preguntó por qué el cielo es azul'],
+    ['balance-bike', 'Tomás riding his balance bike at the park', 'Tomás riding his balance bike at the park'],
   ];
   for (const [id, text, quote] of cases) {
     const gated = gateMilestoneClaim(claim(id, quote), text);
@@ -540,7 +540,7 @@ Deno.test('gateMilestoneClaim keeps genuinely explicit claims', () => {
 Deno.test('gateMilestoneClaim drops a quote that is not verbatim in the memory text', () => {
   const gated = gateMilestoneClaim(
     claim('first-haircut', 'se cortó el pelo por primera vez'),
-    'Fuimos a la peluquería y Enzo se portó muy bien.',
+    'Fuimos a la peluquería y Tomás se portó muy bien.',
   );
   assertEquals(gated.claim, null);
   assertEquals(gated.rejected, 'quote_not_in_text');
@@ -610,7 +610,7 @@ Deno.test('runMemoryAnalysis: a model milestone claim that fails the evidence ga
                   claim: 'first haircut',
                   catalog_id: 'first-haircut',
                   detail: null,
-                  evidence: 'Enzo en la barbería con su corte de pelo',
+                  evidence: 'Tomás en la barbería con su corte de pelo',
                 },
               }),
             },
@@ -624,12 +624,12 @@ Deno.test('runMemoryAnalysis: a model milestone claim that fails the evidence ga
     const result = await runMemoryAnalysis({
       memory: {
         id: 'm3',
-        content: 'Enzo en la barbería con su corte de pelo nuevo',
+        content: 'Tomás en la barbería con su corte de pelo nuevo',
         memoryType: 'text_only',
         memoryDate: '2026-06-15',
         audioTranscript: null,
       },
-      taggedMembers: [{ id: 'a', name: 'Enzo', dateOfBirth: '2024-06-15' }],
+      taggedMembers: [{ id: 'a', name: 'Tomás', dateOfBirth: '2024-06-15' }],
       media: [],
     });
     if (result.skipped) throw new Error('expected a completed analysis');

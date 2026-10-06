@@ -4,8 +4,8 @@ import { buildDigestFromPool, buildDigestFromScript, DIGEST_EXCERPT_MAX, excerpt
 import { holidayFilmScope } from './year-film-eligibility.ts';
 import { buildHolidayScript, type FilmMemorySource, type FilmPerson } from './year-film-script.ts';
 
-const ENZO = 'enzo';
-const MARA = 'mara';
+const TOMAS = 'tomas';
+const LUCIA = 'lucia';
 const EDU = 'edu';
 const ADRI = 'adri';
 const ABU = 'abu';
@@ -27,12 +27,12 @@ function person(id: string, name: string, dob: string | null, relationship: stri
   return { id, name, dateOfBirth: dob, relationship, createdAt, portraits: [portrait(`p-${id}`, id)] };
 }
 
-const enzo = person(ENZO, 'Enzo Rivera Soto', '2022-10-23', 'child', '2024-01-02');
-const mara = person(MARA, 'Mara Rivera Soto', '2024-11-08', 'child', '2024-11-10');
+const tomas = person(TOMAS, 'Tomás Rivera Soto', '2022-10-17', 'child', '2024-01-02');
+const lucia = person(LUCIA, 'Lucía Rivera Soto', '2024-11-14', 'child', '2024-11-10');
 const edu = person(EDU, 'Eduardo Rivera', '1985-05-05', 'parent', '2024-01-01');
 const adri = person(ADRI, 'Adriana Soto', '1987-03-14', 'parent', '2024-01-02');
 const abu = person(ABU, 'Rosa Soto', '1955-01-01', 'grandparent', '2024-01-03');
-const members = [edu, adri, enzo, mara, abu];
+const members = [edu, adri, tomas, lucia, abu];
 
 let counter = 0;
 function memory(overrides: Partial<FilmMemorySource>): FilmMemorySource {
@@ -45,7 +45,7 @@ function memory(overrides: Partial<FilmMemorySource>): FilmMemorySource {
     text: `Un día en el parque con la familia, memoria número ${counter}`,
     emotion: 'joy',
     topics: ['park-playground'],
-    taggedMemberIds: [ENZO],
+    taggedMemberIds: [TOMAS],
     illustrationReady: false,
     illustrationKey: null,
     media: [{ kind: 'image', durationMs: null, hasPreview: true }],
@@ -58,10 +58,10 @@ function memory(overrides: Partial<FilmMemorySource>): FilmMemorySource {
 function year(): FilmMemorySource[] {
   const out: FilmMemorySource[] = [];
   ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09'].forEach((month, i) => {
-    out.push(memory({ date: `${month}-03`, topics: ['park-playground'], taggedMemberIds: [ENZO, MARA] }));
-    out.push(memory({ date: `${month}-09`, topics: ['beach'], taggedMemberIds: [ENZO, ABU, MARA, EDU] }));
-    out.push(memory({ date: `${month}-14`, topics: ['pretend-play'], taggedMemberIds: [ENZO] }));
-    out.push(memory({ date: `${month}-20`, topics: ['christmas'], emotion: i % 2 ? 'funny' : 'joy', taggedMemberIds: [MARA] }));
+    out.push(memory({ date: `${month}-03`, topics: ['park-playground'], taggedMemberIds: [TOMAS, LUCIA] }));
+    out.push(memory({ date: `${month}-09`, topics: ['beach'], taggedMemberIds: [TOMAS, ABU, LUCIA, EDU] }));
+    out.push(memory({ date: `${month}-14`, topics: ['pretend-play'], taggedMemberIds: [TOMAS] }));
+    out.push(memory({ date: `${month}-20`, topics: ['christmas'], emotion: i % 2 ? 'funny' : 'joy', taggedMemberIds: [LUCIA] }));
   });
   return out;
 }
@@ -79,35 +79,35 @@ Deno.test('excerptOf: one line, no links, cut within the cap on a word boundary'
 Deno.test('digest v2 from the pool: people, per-child profiles, themes and places, a few optional highlights', () => {
   const memories = [
     ...year(),
-    memory({ id: 'bath', date: '2026-04-04', topics: ['bath'], text: 'Bañándose con los patitos de goma', taggedMemberIds: [ENZO] }),
-    memory({ id: 'potty', date: '2026-05-04', text: 'Hoy hizo pipí en el baño por primera vez', taggedMemberIds: [ENZO] }),
-    memory({ id: 'sad', date: '2026-06-04', emotion: 'sad', text: 'Un día difícil para todos en casa', taggedMemberIds: [ENZO] }),
-    memory({ id: 'reported', date: '2026-07-04', reported: true, text: 'Memoria reportada por alguien más', taggedMemberIds: [ENZO] }),
-    memory({ id: 'after', date: '2026-10-05', text: 'Una memoria posterior al día de la tarjeta', taggedMemberIds: [ENZO] }),
+    memory({ id: 'bath', date: '2026-04-04', topics: ['bath'], text: 'Bañándose con los patitos de goma', taggedMemberIds: [TOMAS] }),
+    memory({ id: 'potty', date: '2026-05-04', text: 'Hoy hizo pipí en el baño por primera vez', taggedMemberIds: [TOMAS] }),
+    memory({ id: 'sad', date: '2026-06-04', emotion: 'sad', text: 'Un día difícil para todos en casa', taggedMemberIds: [TOMAS] }),
+    memory({ id: 'reported', date: '2026-07-04', reported: true, text: 'Memoria reportada por alguien más', taggedMemberIds: [TOMAS] }),
+    memory({ id: 'after', date: '2026-10-05', text: 'Una memoria posterior al día de la tarjeta', taggedMemberIds: [TOMAS] }),
   ];
   const digest = buildDigestFromPool(memories, [], members, SCOPE, 'es', context);
   assertEquals(digest.filmPresent, false);
   assertEquals(digest.familyName, 'Rivera Soto');
   assertEquals(digest.language, 'es');
   assertEquals(digest.people, [
-    { name: 'Enzo', role: 'child', ageYears: 3 },
-    { name: 'Mara', role: 'child', ageYears: 1 },
+    { name: 'Tomás', role: 'child', ageYears: 3 },
+    { name: 'Lucía', role: 'child', ageYears: 1 },
     { name: 'Eduardo', role: 'parent', ageYears: null },
     { name: 'Adriana', role: 'parent', ageYears: null },
   ]);
   // Profiles, oldest first, with the age the letter states (December) and the birthday inside the year.
-  const [enzoP, maraP] = digest.children;
-  assertEquals([enzoP.name, enzoP.ageYears, enzoP.ageThisYear, enzoP.birthdayThisYear], ['Enzo', 3, 4, '2026-10-23']);
-  assertEquals([maraP.name, maraP.ageYears, maraP.ageThisYear, maraP.birthdayThisYear], ['Mara', 1, 2, '2026-11-08']);
-  assertEquals(enzoP.memories, 27); // park, beach and pretend-play, 9 each; the sensitive/sad/reported ones never count
-  assert(enzoP.recurring.length > 0 && enzoP.recurring.length <= 4);
-  const pretend = enzoP.recurring.find((t) => t.topicId === 'pretend-play');
+  const [tomasP, luciaP] = digest.children;
+  assertEquals([tomasP.name, tomasP.ageYears, tomasP.ageThisYear, tomasP.birthdayThisYear], ['Tomás', 3, 4, '2026-10-17']);
+  assertEquals([luciaP.name, luciaP.ageYears, luciaP.ageThisYear, luciaP.birthdayThisYear], ['Lucía', 1, 2, '2026-11-14']);
+  assertEquals(tomasP.memories, 27); // park, beach and pretend-play, 9 each; the sensitive/sad/reported ones never count
+  assert(tomasP.recurring.length > 0 && tomasP.recurring.length <= 4);
+  const pretend = tomasP.recurring.find((t) => t.topicId === 'pretend-play');
   assertEquals(pretend?.phrase, 'disfrazarse y jugar a imaginar'); // third person, not "disfrazarte"/"disfrazarnos"
   assertEquals(pretend?.memories, 9);
-  assert(enzoP.recurring.every((t) => t.memories >= 3 && t.lift > 0));
-  assertEquals(enzoP.emotions.map((e) => e.emotion), ['joy']);
-  assert(enzoP.excerpts.length > 0 && enzoP.excerpts.length <= 3);
-  assert(!enzoP.recurring.some((t) => ['bath', 'tough-days', 'doctor-dentist'].includes(t.topicId)));
+  assert(tomasP.recurring.every((t) => t.memories >= 3 && t.lift > 0));
+  assertEquals(tomasP.emotions.map((e) => e.emotion), ['joy']);
+  assert(tomasP.excerpts.length > 0 && tomasP.excerpts.length <= 3);
+  assert(!tomasP.recurring.some((t) => ['bath', 'tough-days', 'doctor-dentist'].includes(t.topicId)));
   // Highlights are secondary: ≤ 6, never sensitive, sad, reported or after the card date.
   assert(digest.highlights.length > 0 && digest.highlights.length <= 6, `${digest.highlights.length}`);
   const ids = digest.highlights.map((h) => h.memoryId);
@@ -118,7 +118,7 @@ Deno.test('digest v2 from the pool: people, per-child profiles, themes and place
   // The grandparent is never named: only a role.
   const beach = buildDigestFromPool([year().find((m) => m.topics.includes('beach'))!], [], members, SCOPE, 'es', context).highlights[0];
   assertEquals(beach.withRoles, ['grandparent']);
-  assertEquals(beach.taggedPeople, ['Enzo', 'Mara', 'Eduardo']);
+  assertEquals(beach.taggedPeople, ['Tomás', 'Lucía', 'Eduardo']);
   // Family level.
   assert(digest.familyThemes.length > 0 && digest.familyThemes.length <= 5);
   assertEquals(digest.places.map((p) => [p.topicId, p.memories]), [['beach', 9], ['park-playground', 9]]);
@@ -146,23 +146,23 @@ Deno.test('digest: a thin year gives fewer highlights and profiles with no patte
 
 Deno.test('digest from the film script: same profiles as the pool path; the film adds filmPresent, marks and the line of the year', () => {
   const memories = year();
-  const quoteMemory = memories.find((m) => m.taggedMemberIds.length === 1 && m.taggedMemberIds[0] === ENZO)!;
+  const quoteMemory = memories.find((m) => m.taggedMemberIds.length === 1 && m.taggedMemberIds[0] === TOMAS)!;
   const script = buildHolidayScript({
     year: 2026,
     scope: SCOPE,
     familyName: 'Rivera Soto',
     memories,
-    children: [enzo, mara],
+    children: [tomas, lucia],
     members,
     milestones: [],
-    quotes: [{ memoryId: quoteMemory.id, quote: 'ay qué rico', speakerId: ENZO }],
+    quotes: [{ memoryId: quoteMemory.id, quote: 'ay qué rico', speakerId: TOMAS }],
     language: 'es',
   });
   const digest = buildDigestFromScript(script, memories, members, 'es', context);
   assertEquals(digest.filmPresent, true);
   assert(digest.highlights.some((h) => h.inFilm && h.sceneHint));
-  assertEquals(digest.children.find((n) => n.name === 'Enzo')!.line?.quote, 'ay qué rico');
-  assertEquals(digest.lineOfYear, { quote: 'ay qué rico', speaker: 'Enzo', memoryId: quoteMemory.id });
+  assertEquals(digest.children.find((n) => n.name === 'Tomás')!.line?.quote, 'ay qué rico');
+  assertEquals(digest.lineOfYear, { quote: 'ay qué rico', speaker: 'Tomás', memoryId: quoteMemory.id });
   const pooled = buildDigestFromPool(memories, [], members, SCOPE, 'es', context);
   assertEquals(pooled.lineOfYear, null);
   assertEquals(digest.counts, pooled.counts);
@@ -171,13 +171,13 @@ Deno.test('digest from the film script: same profiles as the pool path; the film
   assertEquals(digest.familyThemes, pooled.familyThemes);
   assertEquals(digest.places, pooled.places);
   // Quotes can also come from the caller on the pool path.
-  const quoted = buildDigestFromPool(memories, [], members, SCOPE, 'es', { ...context, quotes: [{ memoryId: quoteMemory.id, quote: 'ay qué rico', speakerId: ENZO }] });
-  assertEquals(quoted.lineOfYear?.speaker, 'Enzo');
+  const quoted = buildDigestFromPool(memories, [], members, SCOPE, 'es', { ...context, quotes: [{ memoryId: quoteMemory.id, quote: 'ay qué rico', speakerId: TOMAS }] });
+  assertEquals(quoted.lineOfYear?.speaker, 'Tomás');
 });
 
 Deno.test('digest: a milestone that makes a memory share-sensitive keeps it out', () => {
-  const memories = [...year(), memory({ id: 'ms', date: '2026-04-04', text: 'Gran día, ya no usa pañal ni nada', taggedMemberIds: [ENZO], emotion: 'pride' })];
-  const milestones = [{ memoryId: 'ms', familyMemberId: ENZO, milestoneId: 'potty-trained', status: 'confirmed' }];
+  const memories = [...year(), memory({ id: 'ms', date: '2026-04-04', text: 'Gran día, ya no usa pañal ni nada', taggedMemberIds: [TOMAS], emotion: 'pride' })];
+  const milestones = [{ memoryId: 'ms', familyMemberId: TOMAS, milestoneId: 'potty-trained', status: 'confirmed' }];
   const digest = buildDigestFromPool(memories, milestones, members, SCOPE, 'es', context);
   assert(!digest.highlights.some((h) => h.memoryId === 'ms'));
   assert(!digest.children[0].excerpts.some((e) => e.memoryId === 'ms'));
@@ -187,29 +187,29 @@ Deno.test('digest v3: concrete details per child and per theme, cleaned; certain
   const memories = year().map((m, i) => ({
     ...m,
     labels: m.topics.includes('pretend-play')
-      ? ['Superhero Costume', 'costume', 'photo', 'Rosa', 'park', 'enzo', 'a very long label that has too many words']
+      ? ['Superhero Costume', 'costume', 'photo', 'Rosa', 'park', 'tomás', 'a very long label that has too many words']
       : m.topics.includes('park-playground')
       ? ['red slide', 'family', `bench ${i}`]
       : [],
   }));
   const kids = [
-    { ...enzo, gender: 'male', nicknames: ['Enzito'] },
-    { ...mara, gender: 'female' },
+    { ...tomas, gender: 'male', nicknames: ['Tomasito'] },
+    { ...lucia, gender: 'female' },
   ];
-  const withFirst = [...memories, memory({ id: 'steps', date: '2026-01-17', taggedMemberIds: [MARA], text: 'Mara dio sus primeros pasos sola en la sala', labels: [] })];
-  const milestones = [{ memoryId: 'steps', familyMemberId: MARA, milestoneId: 'walking', status: 'confirmed' }];
+  const withFirst = [...memories, memory({ id: 'steps', date: '2026-01-17', taggedMemberIds: [LUCIA], text: 'Lucía dio sus primeros pasos sola en la sala', labels: [] })];
+  const milestones = [{ memoryId: 'steps', familyMemberId: LUCIA, milestoneId: 'walking', status: 'confirmed' }];
   const digest = buildDigestFromPool(withFirst, milestones, [edu, adri, ...kids, abu], SCOPE, 'es', context);
   const [e, m] = digest.children;
-  assertEquals([e.gender, e.nicknames, m.gender, m.nicknames], ['male', ['Enzito'], 'female', []]);
+  assertEquals([e.gender, e.nicknames, m.gender, m.nicknames], ['male', ['Tomasito'], 'female', []]);
   // Generic labels, topic words, people's names, long labels and labels with digits never make it.
   assertEquals(e.details, [{ label: 'superhero costume', memories: 9 }, { label: 'costume', memories: 9 }, { label: 'red slide', memories: 9 }, { label: 'park', memories: 9 }].sort((a, b) => b.memories - a.memories || a.label.localeCompare(b.label)).slice(0, 6));
   const pretend = e.recurring.find((t) => t.topicId === 'pretend-play')!;
   assertEquals(pretend.details?.map((d) => d.label), ['costume', 'park', 'superhero costume']);
   assertEquals(e.firsts, []);
   assertEquals(m.firsts.map((f) => [f.milestoneId, f.date, f.month, f.memoryId, f.confirmed]), [['walking', '2026-01-17', 1, 'steps', true]]);
-  assert(!digest.children.flatMap((c) => c.details).some((d) => /rosa|enzo/i.test(d.label)));
+  assert(!digest.children.flatMap((c) => c.details).some((d) => /rosa|tom[aá]s/i.test(d.label)));
   // A candidate is a first only when the memory's own words say so; otherwise it is not.
-  const quiet = withFirst.map((x) => (x.id === 'steps' ? { ...x, text: 'Mara camina por toda la sala sola ahora' } : x));
+  const quiet = withFirst.map((x) => (x.id === 'steps' ? { ...x, text: 'Lucía camina por toda la sala sola ahora' } : x));
   const candidate = buildDigestFromPool(quiet, [{ ...milestones[0], status: 'candidate' }], [edu, adri, ...kids, abu], SCOPE, 'es', context);
   assertEquals(candidate.children[1].firsts, []);
   const said = buildDigestFromPool(withFirst, [{ ...milestones[0], status: 'candidate' }], [edu, adri, ...kids, abu], SCOPE, 'es', context);

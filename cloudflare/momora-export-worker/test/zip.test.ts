@@ -16,7 +16,7 @@ describe('ZipWriter', () => {
   it('writes a stored ZIP a standard reader can walk, with correct CRCs and UTF-8 names', async () => {
     const chunks: Uint8Array[] = [];
     const writer = new ZipWriter(async (bytes) => { chunks.push(bytes.slice()); });
-    await writer.addEntry('Momora - Los Yi/2026/2026-09-09 - Enzo le puso el parche/memory.txt', utf8('¡Hola!'), new Date('2026-09-09T12:00:00Z'));
+    await writer.addEntry('Momora - Los Yi/2026/2026-09-09 - Tomás le puso el parche/memory.txt', utf8('¡Hola!'), new Date('2026-09-09T12:00:00Z'));
     await writer.addEntry('Momora - Los Yi/2026/video.mp4', streamOf('chunk-1', 'chunk-2'), new Date('2026-09-10T12:00:00Z'));
     await writer.finish();
 
@@ -25,7 +25,7 @@ describe('ZipWriter', () => {
     expect(writer.entryCount).toBe(2);
     const entries = readZip(bytes);
     expect(entries.map((entry) => entry.name)).toEqual([
-      'Momora - Los Yi/2026/2026-09-09 - Enzo le puso el parche/memory.txt',
+      'Momora - Los Yi/2026/2026-09-09 - Tomás le puso el parche/memory.txt',
       'Momora - Los Yi/2026/video.mp4',
     ]);
     expect(new TextDecoder().decode(entries[0].data)).toBe('¡Hola!');

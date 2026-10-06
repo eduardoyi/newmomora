@@ -25,11 +25,11 @@ Deno.test('labels resolve per language; English drops catalog notes', () => {
 
 Deno.test('detectJournalLanguage votes per memory and needs enough text', () => {
   const es = [
-    'Hoy Enzo cumplió tres años y la pasó muy bien con su hermana',
-    'Mara y Enzo comieron pasta en la feria de comida',
-    'Enzo le dijo a mami que el mundo es un lugar mágico',
+    'Hoy Tomás cumplió tres años y la pasó muy bien con su hermana',
+    'Lucía y Tomás comieron pasta en la feria de comida',
+    'Tomás le dijo a mami que el mundo es un lugar mágico',
     'Fuimos al parque con los abuelos por la tarde',
-    'Mara estaba muy feliz con su bici nueva',
+    'Lucía estaba muy feliz con su bici nueva',
   ];
   assertEquals(detectJournalLanguage(es), 'es');
   assertEquals(detectJournalLanguage([...es, 'We went to the park and she was so happy']), 'es');

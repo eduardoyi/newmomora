@@ -148,7 +148,7 @@ describe('buildBackboneSegments — quarter cap and chapter options (Everything)
       const m = ((9 + i) % 12) + 1;
       memories.push({ id: `m${i}`, date: `${y}-${String(m).padStart(2, '0')}-10`, printable: true });
     }
-    // Birthday-month-closed chapters for DOB 2022-10-23.
+    // Birthday-month-closed chapters for DOB 2022-10-17.
     const chapterOfMonth = (m: string) => Math.max(0, Math.floor((Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1 - (2022 * 12 + 9) - 1) / 12));
     const segments = buildBackboneSegments(memories, 3, { maxSpanMonths: 3, chapterOfMonth });
     for (const segment of segments) {
@@ -171,20 +171,20 @@ describe('formatMonthRangeLabel', () => {
 
 describe('computeAgeYearBirthdayMonths', () => {
   it('flags the window start (age N-1) and window end (age N) for an age-year scope', () => {
-    const map = computeAgeYearBirthdayMonths(true, 1, '2024-10-23', '2025-10-23');
+    const map = computeAgeYearBirthdayMonths(true, 1, '2024-10-17', '2025-10-17');
     // Age 0 (ageYear - 1 === 0) is omitted -- the birth flag covers it instead.
     expect(map.has('2024-10')).toBe(false);
     expect(map.get('2025-10')).toBe(1);
   });
 
   it('flags both boundaries for age-year 2', () => {
-    const map = computeAgeYearBirthdayMonths(true, 2, '2025-10-23', '2026-10-23');
+    const map = computeAgeYearBirthdayMonths(true, 2, '2025-10-17', '2026-10-17');
     expect(map.get('2025-10')).toBe(1);
     expect(map.get('2026-10')).toBe(2);
   });
 
   it('is empty for a non age-year scope', () => {
-    expect(computeAgeYearBirthdayMonths(false, 1, '2024-10-23', '2025-10-23').size).toBe(0);
+    expect(computeAgeYearBirthdayMonths(false, 1, '2024-10-17', '2025-10-17').size).toBe(0);
   });
 });
 
@@ -239,7 +239,7 @@ describe('buildQuarterBlockSegments (Everything, phase 2b fix A)', () => {
     }
     return out;
   };
-  // DOB 2022-10-23: chapter 1 = 2022-10..2023-10 (13 months), chapter 2 = 2023-11..2024-10.
+  // DOB 2022-10-17: chapter 1 = 2022-10..2023-10 (13 months), chapter 2 = 2023-11..2024-10.
   const chapters = [
     { startMonth: '2022-10', endMonth: '2023-10' },
     { startMonth: '2023-11', endMonth: '2024-10' },

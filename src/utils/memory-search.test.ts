@@ -34,22 +34,22 @@ describe('searchWords', () => {
 
 describe('highlightSearchMatches', () => {
   it('highlights word prefixes, ignoring accents and case', () => {
-    expect(highlightSearchMatches('Cumpleaños de Mara en el café', 'cumple cafe')).toEqual([
+    expect(highlightSearchMatches('Cumpleaños de Lucía en el café', 'cumple cafe')).toEqual([
       { text: 'Cumple', match: true },
-      { text: 'años de Mara en el ', match: false },
+      { text: 'años de Lucía en el ', match: false },
       { text: 'café', match: true },
     ]);
   });
 
   it('only matches at the start of words', () => {
-    expect(highlightSearchMatches('Enzo and Lorenzo', 'enzo')).toEqual([
-      { text: 'Enzo', match: true },
-      { text: ' and Lorenzo', match: false },
+    expect(highlightSearchMatches('Tomás and Fatomás', 'tomas')).toEqual([
+      { text: 'Tomás', match: true },
+      { text: ' and Fatomás', match: false },
     ]);
   });
 
   it('starts a long text shortly before a deep first match, with an ellipsis', () => {
-    const text = 'Today we went to the market and bought so many things for the week, and then at the very end Enzo found a frog';
+    const text = 'Today we went to the market and bought so many things for the week, and then at the very end Tomás found a frog';
     const segments = highlightSearchMatches(text, 'frog');
     expect(segments[0].text.startsWith('…')).toBe(true);
     expect(segments.find((segment) => segment.match)?.text).toBe('frog');

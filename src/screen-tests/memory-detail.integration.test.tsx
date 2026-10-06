@@ -98,7 +98,7 @@ const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 const taggedMember = {
   id: 'member-1',
-  name: 'Enzo',
+  name: 'Tomás',
   date_of_birth: '2022-11-10',
 };
 
@@ -209,8 +209,8 @@ describe('MemoryDetailScreen hierarchy', () => {
 
       const screen = renderScreen();
 
-      expect(screen.getByText('Enzo, 2y 8m')).toBeTruthy();
-      expect(screen.queryByText('Enzo, 3y 8m')).toBeNull();
+      expect(screen.getByText('Tomás, 2y 8m')).toBeTruthy();
+      expect(screen.queryByText('Tomás, 3y 8m')).toBeNull();
     } finally {
       jest.useRealTimers();
     }

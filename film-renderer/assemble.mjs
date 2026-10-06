@@ -638,7 +638,7 @@ function parseEbur128Summary(stderr) {
 }
 
 /** Loudness-normalized copy of the voice excerpt: phone recordings sit far
- * below the music (Enzo Y4: −33 LUFS vs the bed's −13). */
+ * below the music (Tomás Y4: −33 LUFS vs the bed's −13). */
 function normalizedVoice(file) {
   const src = path.join(OUT_ASSETS, path.basename(file));
   const out = path.join(OUT_ASSETS, `${path.basename(file, path.extname(file))}-voice.m4a`);
@@ -651,7 +651,7 @@ function normalizedVoice(file) {
 const SOUND_ON = { es: 'Sube el volumen', en: 'Sound on' };
 
 /** A ticket caption, not the memory's whole story: its first sentence, cut at
- * a word near 90 characters (Enzo Y3's clip carried a 7-line paragraph). */
+ * a word near 90 characters (Tomás Y3's clip carried a 7-line paragraph). */
 function ticketCaption(text) {
   if (!text) return '';
   const first = String(text).trim().split(/(?<=[.!?…])\s+/u)[0].trim();

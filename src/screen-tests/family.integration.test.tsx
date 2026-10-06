@@ -65,7 +65,7 @@ const incompleteKid: FamilyMember = {
   illustrated_profile_key: null,
   illustrated_profile_status: 'pending',
   is_user_profile: false,
-  name: 'Enzo',
+  name: 'Tomás',
   nicknames: [],
   profile_picture_key: null,
   updated_at: '2026-07-30T00:00:00.000Z',
@@ -75,7 +75,7 @@ const incompleteKid: FamilyMember = {
 const completeKid: FamilyMember = {
   ...incompleteKid,
   id: 'kid-2',
-  name: 'Mara',
+  name: 'Lucía',
   date_of_birth: '2022-01-01',
   profile_picture_key: 'user-1/family/kid-2/photo.jpg',
   illustrated_profile_key: 'user-1/family/kid-2/portrait.webp',
@@ -170,7 +170,7 @@ describe('FamilyScreen routing for incomplete profiles', () => {
     const { getByTestId } = renderScreen();
 
     expect(getByTestId('family-member-incomplete-kid-1').props.children).toBe(
-      "Tap to add Enzo's birthday & photo",
+      "Tap to add Tomás's birthday & photo",
     );
   });
 
@@ -181,7 +181,7 @@ describe('FamilyScreen routing for incomplete profiles', () => {
     const { getByTestId } = renderScreen();
 
     expect(getByTestId('family-member-incomplete-kid-1').props.children).toBe(
-      "Tap to add Enzo's birthday & photo",
+      "Tap to add Tomás's birthday & photo",
     );
   });
 

@@ -11,7 +11,7 @@ import {
 } from '../cardAddress';
 import type { ShippingAddressInput } from '../types';
 
-const US: ShippingAddressInput = { name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' };
+const US: ShippingAddressInput = { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' };
 const CA: ShippingAddressInput = { name: 'Diego Rivera', line1: '2 Sample Road', city: 'Toronto', state: 'ON', postalCode: 'm5v 3l9', countryCode: 'CA' };
 
 describe('validateCardAddress mirrors the server rule', () => {
@@ -86,7 +86,7 @@ describe('formatAddressLines', () => {
     const us = validateCardAddress(US);
     const ca = validateCardAddress(CA);
     if (!us.ok || !ca.ok) throw new Error('fixture invalid');
-    expect(formatAddressLines(us.address)).toEqual(['Mara Rivera', '1 Example Street', 'Springfield, IL 62701', 'United States']);
+    expect(formatAddressLines(us.address)).toEqual(['Lucía Rivera', '1 Example Street', 'Springfield, IL 62701', 'United States']);
     expect(formatAddressLines(ca.address).at(-1)).toBe('Canada');
   });
 });

@@ -169,7 +169,7 @@ function FamilyActivitySheetBody({
   const { familyId } = useFamily();
   const { profiles } = useFamilyMemberProfiles(familyId);
   // Children/people the family tracks (not app users) -- only used to title
-  // `film_ready` rows ("Enzo's Year Four").
+  // `film_ready` rows ("Tomás's Year Four").
   const { members } = useFamilyMembers();
   const { events, isLoading, isError, refetch } = useFamilyActivity(familyId);
   const markSeen = useMarkFamilyActivitySeen();

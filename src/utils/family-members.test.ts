@@ -88,21 +88,21 @@ describe('getMemberAvatarImageKey', () => {
   it('prefers illustrated portrait over profile photo when ready', () => {
     expect(
       getMemberAvatarImageKey({
-        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_key: 'user/family/lucia/portrait.webp',
         illustrated_profile_status: 'ready',
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
-    ).toBe('user/family/mara/portrait.webp');
+    ).toBe('user/family/lucia/portrait.webp');
   });
 
   it('uses profile photo while portrait is generating', () => {
     expect(
       getMemberAvatarImageKey({
-        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_key: 'user/family/lucia/portrait.webp',
         illustrated_profile_status: 'generating',
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
-    ).toBe('user/family/mara/photo.jpg');
+    ).toBe('user/family/lucia/photo.jpg');
   });
 
   it('falls back to profile photo when portrait is missing', () => {
@@ -110,9 +110,9 @@ describe('getMemberAvatarImageKey', () => {
       getMemberAvatarImageKey({
         illustrated_profile_key: null,
         illustrated_profile_status: 'ready',
-        profile_picture_key: 'user/family/enzo/photo.jpg',
+        profile_picture_key: 'user/family/tomas/photo.jpg',
       }),
-    ).toBe('user/family/enzo/photo.jpg');
+    ).toBe('user/family/tomas/photo.jpg');
   });
 
   it('returns null when no image keys exist', () => {
@@ -136,21 +136,21 @@ describe('portrait generation helpers', () => {
   it('uses profile photo as source while portrait is generating', () => {
     expect(
       getProfilePortraitPhotoKey({
-        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_key: 'user/family/lucia/portrait.webp',
         illustrated_profile_status: 'generating',
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
-    ).toBe('user/family/mara/photo.jpg');
+    ).toBe('user/family/lucia/photo.jpg');
   });
 
   it('uses illustrated portrait when ready', () => {
     expect(
       getProfilePortraitPhotoKey({
-        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_key: 'user/family/lucia/portrait.webp',
         illustrated_profile_status: 'ready',
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
-    ).toBe('user/family/mara/portrait.webp');
+    ).toBe('user/family/lucia/portrait.webp');
   });
 });
 
@@ -186,7 +186,7 @@ describe('isFamilyMemberProfileIncomplete', () => {
         illustrated_profile_key: null,
         illustrated_profile_status: 'ready',
         is_user_profile: false,
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
     ).toBe(true);
   });
@@ -195,10 +195,10 @@ describe('isFamilyMemberProfileIncomplete', () => {
     expect(
       isFamilyMemberProfileIncomplete({
         date_of_birth: '2022-01-01',
-        illustrated_profile_key: 'user/family/mara/portrait.webp',
+        illustrated_profile_key: 'user/family/lucia/portrait.webp',
         illustrated_profile_status: 'ready',
         is_user_profile: false,
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
     ).toBe(false);
   });
@@ -210,7 +210,7 @@ describe('isFamilyMemberProfileIncomplete', () => {
         illustrated_profile_key: null,
         illustrated_profile_status: 'generating',
         is_user_profile: false,
-        profile_picture_key: 'user/family/mara/photo.jpg',
+        profile_picture_key: 'user/family/lucia/photo.jpg',
       }),
     ).toBe(false);
   });

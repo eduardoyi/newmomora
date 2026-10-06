@@ -213,7 +213,7 @@ const GRID_ASPECT_CROP_TOLERANCE = 0.1;
 const FULL_BLEED_MIN_WIDTH_PX = 2551;
 /**
  * Full-bleed trusted path (owner review round 3, item 2; reworked round 7
- * item 2 — validated live case: Mara's Feb full-bleed was a hero at
+ * item 2 — validated live case: Lucía's Feb full-bleed was a hero at
  * original aspect 1.95, whose square crop lost 49% of its width, cropping
  * faces). A print-safe original width still bypasses the face gate, but
  * orientation is no longer a loose one-sided aspect floor — it's now a
@@ -267,7 +267,7 @@ const FULL_BLEED_BUDGET_PER_PAGES = 10;
 /** Audio notes never share a page with more than one sibling. */
 const AUDIO_NOTE_MAX_PER_PAGE = 2;
 /**
- * Month-preservation floor (round-5 item 2a — root cause of Enzo's Oct/Nov/
+ * Month-preservation floor (round-5 item 2a — root cause of Tomás's Oct/Nov/
  * Dec 2024 disappearing entirely): the page-cap demotion pass used to sort
  * EVERY photo-only memory book-wide by rank and cut from the bottom with no
  * regard for which month it came from — a run of consecutive low-engagement
@@ -809,7 +809,7 @@ export function reorderUnitsForParity(
       // the pair into two solo story pages — they lose the forced facing +
       // stagger, but two consecutive singles have no parity requirement at
       // all, which beats a blank page every time (all-illustrated sections
-      // like "Enzo y Mara" have no other units to trade with).
+      // like "Tomás y Lucía" have no other units to trade with).
       if (meta.isPairFirst) {
         const first = arr[i];
         const second = arr[i + 1];
@@ -1080,7 +1080,7 @@ function effectiveAspect(asset: ManifestAsset): number {
 }
 
 /**
- * Round-7 item 2a (validated live case: Mara's Feb full-bleed cropped
+ * Round-7 item 2a (validated live case: Lucía's Feb full-bleed cropped
  * faces — a hero at original aspect 1.95 lost 49% of its width to a
  * square crop): the fraction of the source image a square (1:1) full-bleed
  * page's crop would discard. A square/near-square source loses almost
@@ -1523,7 +1523,7 @@ function scoreFullBleed(
   // (see `buildContentUnits`'s wide-hero routing, budget-gated) or falls
   // through to anchor-media's own natural-aspect rendering. It never wins
   // full-bleed — a square crop on something this wide is exactly the
-  // "cropped faces" bug this rework fixes (the validated Mara Feb case).
+  // "cropped faces" bug this rework fixes (the validated Lucía Feb case).
   if (isHero && aspect >= PANORAMA_ASPECT_THRESHOLD) return null;
   if (budget.total >= fullBleedBudgetCap(contentPageCount)) return null;
   if (!fullBleedPacingAllows(budget, contentPageCount)) return null;
@@ -2309,7 +2309,7 @@ function countDistinctMemories(pages: readonly BookPage[]): number {
 /**
  * Bug fix (owner review round 3, item 16): this used to take `outline`
  * and print `outline.editorialNote` verbatim — the AI's own INTERNAL
- * planning note, never meant for the reader, which leaked onto Mara's
+ * planning note, never meant for the reader, which leaked onto Lucía's
  * printed closing page. It no longer even receives `outline`, so there is
  * nothing left in this function that could reprint it.
  */
@@ -2382,7 +2382,7 @@ function buildChapterTitlePage(element: OutlineElement, manifest: BookManifest):
 /**
  * Templates that can visually show a section header. `illustrated-story`
  * and `audio-note` joined this set as a diagnosed fix (owner review round
- * 3 — "month headers vanished after p34 in Enzo"): a segment made up
+ * 3 — "month headers vanished after p34 in Tomás"): a segment made up
  * ENTIRELY of illustrated or audio memories previously had no capable page
  * to attach its header to at all, since neither template ever rendered
  * `sectionHeader`. `photo-story` stays listed even though the fitter never
@@ -3583,7 +3583,7 @@ function buildParamsForTemplate(
   if (templateId === 'illustrated-story') {
     params.stagger = group.memories[0]?.id ? predictIllustratedStagger(group.memories[0].id) : false;
     // Diagnosed fix (owner review round 3 — "month headers vanished after
-    // p34 in Enzo"): illustrated-story never carried `sectionHeader` before,
+    // p34 in Tomás"): illustrated-story never carried `sectionHeader` before,
     // so a segment made entirely of illustrated memories silently dropped
     // its header (see IllustratedStory.tsx for the matching render fix).
     if (sectionHeader) params.sectionHeader = sectionHeader;
@@ -3743,7 +3743,7 @@ function numberPages(pages: BookPage[]): number {
 //
 // Round-13 owner decision: the demotion ladder used to be strictly
 // photo/video-first, reaching a digest-eligible illustrated memory only as
-// the very last resort ("text is sacred"). Measured on Enzo that produced
+// the very last resort ("text is sacred"). Measured on Tomás that produced
 // ~75% keep-rate for text/illustrated memories vs ~40% for photo/video — too
 // skewed. The new policy classifies every candidate into one of THREE kinds
 // — `photo`, `video`, `illustrated` (text + illustration) — and at each
@@ -3807,7 +3807,7 @@ interface DemotionCandidate {
    * applies per CALENDAR month, not per (possibly merged) backbone segment:
    * a merged "2024-10_2024-11" segment previously counted as ONE month
    * bucket, letting October be hollowed out while the shared floor read
-   * "still 2 left" off November's memories (owner round 6, Enzo's empty
+   * "still 2 left" off November's memories (owner round 6, Tomás's empty
    * October). */
   month: string;
   /** Ascending — lowest rank is demoted first WITHIN its kind. Engagement is the primary signal; a book highlight is protected as a tie-breaker, never outright immune. */
@@ -3859,7 +3859,7 @@ function gatherDemotionCandidates(outline: BookOutline, manifest: BookManifest):
       if (protectedIds.has(id)) continue;
       if (!isPhotoOnlyMemory(memory)) continue;
       // A memory carrying ANY milestone row is a book treasure (birthday
-      // rows included — Enzo's birthday photo was demoted in round 6) and
+      // rows included — Tomás's birthday photo was demoted in round 6) and
       // never enters the demotion pool.
       if ((memory.milestones ?? []).length > 0) continue;
       const highlighted = isHighlight(element, outline, id);
@@ -4542,7 +4542,7 @@ function runFit(
         continue;
       }
       case 'themed': {
-        // Round-5 item 2b (root cause of Mara's "Retratos con Mirian"
+        // Round-5 item 2b (root cause of Lucía's "Retratos con Mirian"
         // rendering with zero member pages): every member of a themed
         // section can end up omitted/reassigned (page-cap demotion,
         // outline-integrity reassignment) — the title page must never
@@ -4797,7 +4797,7 @@ export function fitBook(outline: BookOutline, manifest: BookManifest, options: F
   // "available" — `MIN_MEMORIES_PER_MONTH` protects a backbone
   // (calendar-month) element's remaining count while some OTHER month still
   // has more than its own floor to give (round-5 item 2a, the root cause of
-  // Enzo's Oct/Nov/Dec 2024 vanishing entirely); once every month is down to
+  // Tomás's Oct/Nov/Dec 2024 vanishing entirely); once every month is down to
   // the floor, it yields rather than leave an unprintable book (see
   // `auditBookDocument` check (a), a permanent regression backstop for
   // month continuity).

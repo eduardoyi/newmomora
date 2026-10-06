@@ -25,10 +25,10 @@ import type { FrameCheck } from './year-film-vision.ts';
 import { birthdayFilmScope, familyYearScope } from './year-film-eligibility.ts';
 import { HOLIDAY_FIRST_PHRASES, holidayFirstLabel, MILESTONE_NAMES_ES } from './year-film-i18n.ts';
 
-const ENZO = 'enzo';
-const MARA = 'mara';
+const TOMAS = 'tomas';
+const LUCIA = 'lucia';
 const GRAN = 'gran';
-const SCOPE = { start: '2025-10-23', endExclusive: '2026-10-23' };
+const SCOPE = { start: '2025-10-17', endExclusive: '2026-10-17' };
 
 function portrait(id: string, memberId: string, referenceDate: string | null): PortraitVersionCandidate {
   return {
@@ -43,11 +43,12 @@ function portrait(id: string, memberId: string, referenceDate: string | null): P
 }
 
 function person(id: string, dob: string | null, createdAt: string, portraits: PortraitVersionCandidate[] = []): FilmPerson {
-  return { id, name: `${id[0].toUpperCase()}${id.slice(1)} Lastname`, dateOfBirth: dob, createdAt, portraits };
+  const first = id === TOMAS ? 'Tomás' : id === LUCIA ? 'Lucía' : `${id[0].toUpperCase()}${id.slice(1)}`;
+  return { id, name: `${first} Lastname`, dateOfBirth: dob, createdAt, portraits };
 }
 
-const enzo = person(ENZO, '2022-10-23', '2024-01-02', [portrait('p-old', ENZO, '2025-06-01'), portrait('p-new', ENZO, '2026-07-01')]);
-const mara = person(MARA, '2024-11-08', '2024-11-10', [portrait('pm', MARA, '2026-03-01')]);
+const tomas = person(TOMAS, '2022-10-17', '2024-01-02', [portrait('p-old', TOMAS, '2025-06-01'), portrait('p-new', TOMAS, '2026-07-01')]);
+const lucia = person(LUCIA, '2024-11-14', '2024-11-10', [portrait('pm', LUCIA, '2026-03-01')]);
 const gran = person(GRAN, '1955-01-01', '2024-01-01', [portrait('pg', GRAN, null)]);
 
 let counter = 0;
@@ -61,7 +62,7 @@ function memory(overrides: Partial<FilmMemorySource>): FilmMemorySource {
     text: null,
     emotion: 'joy',
     topics: [],
-    taggedMemberIds: [ENZO],
+    taggedMemberIds: [TOMAS],
     illustrationReady: false,
     illustrationKey: null,
     media: [{ kind: 'image', durationMs: null, hasPreview: true }],
@@ -110,9 +111,9 @@ const MONTHS = ['2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04'
 function yearOfMemories(): FilmMemorySource[] {
   const out: FilmMemorySource[] = [];
   MONTHS.forEach((month, i) => {
-    out.push(memory({ date: `${month}-05`, topics: ['park-playground'], taggedMemberIds: [ENZO, GRAN] }));
+    out.push(memory({ date: `${month}-05`, topics: ['park-playground'], taggedMemberIds: [TOMAS, GRAN] }));
     out.push(memory({ date: `${month}-12`, emotion: i % 2 ? 'funny' : 'wonder', topics: ['beach'] }));
-    out.push(video({ date: `${month}-20`, text: 'Enzo cantando en el carro, muy feliz con su hermana', taggedMemberIds: [ENZO, MARA] }));
+    out.push(video({ date: `${month}-20`, text: 'Tomás cantando en el carro, muy feliz con su hermana', taggedMemberIds: [TOMAS, LUCIA] }));
     out.push(drawing({ date: `${month}-08` }));
     out.push(drawing({ date: `${month}-16` }));
     out.push(drawing({ date: `${month}-24` }));
@@ -122,12 +123,12 @@ function yearOfMemories(): FilmMemorySource[] {
 
 function birthday(memories: FilmMemorySource[], extra: Partial<Parameters<typeof buildBirthdayScript>[0]> = {}) {
   return buildBirthdayScript({
-    child: enzo,
+    child: tomas,
     ageYear: 4,
     scope: SCOPE,
     memories,
-    members: [gran, enzo, mara],
-    ownChildIds: [ENZO, MARA],
+    members: [gran, tomas, lucia],
+    ownChildIds: [TOMAS, LUCIA],
     milestones: [],
     quotes: [],
     language: 'en',
@@ -137,8 +138,8 @@ function birthday(memories: FilmMemorySource[], extra: Partial<Parameters<typeof
 
 function check(overrides: Partial<FrameCheck>): FrameCheck {
   return {
-    mainSubject: ENZO,
-    childrenVisible: [ENZO],
+    mainSubject: TOMAS,
+    childrenVisible: [TOMAS],
     faceVisible: true,
     expression: 'neutral',
     quality: 'good',
@@ -152,18 +153,18 @@ Deno.test('shareSensitiveIds: topics, milestones and es/en text, without false p
   const ms = [
     memory({ id: 'bath', topics: ['bath'] }),
     memory({ id: 'potty-ms' }),
-    memory({ id: 'es', text: 'Enzo hizo pipí en la poceta' }),
+    memory({ id: 'es', text: 'Tomás hizo pipí en la poceta' }),
     memory({ id: 'en', text: 'First time on the potty!' }),
     memory({ id: 'ok1', text: 'We had a pipeline of peeking peekaboo games' }),
     memory({ id: 'ok2', text: 'Pipa and Pepe came over' }),
   ];
-  const ids = shareSensitiveIds(ms, [{ memoryId: 'potty-ms', familyMemberId: ENZO, milestoneId: 'potty-trained', status: 'candidate' }]);
+  const ids = shareSensitiveIds(ms, [{ memoryId: 'potty-ms', familyMemberId: TOMAS, milestoneId: 'potty-trained', status: 'candidate' }]);
   assertEquals([...ids].sort(), ['bath', 'en', 'es', 'potty-ms']);
 });
 
 Deno.test('birthday: cold open pairs each portrait illustration with its source photo', () => {
   const open = scene(birthday(yearOfMemories()), 'cold_open')!;
-  assertEquals(open.title, 'Memories of your fourth year, Enzo');
+  assertEquals(open.title, 'Memories of your fourth year, Tomás');
   assertEquals([open.from?.key, open.from?.pairKey], ['p-old-ill.png', 'p-old.jpg']);
   assertEquals([open.to.key, open.to.pairKey], ['p-new-ill.png', 'p-new.jpg']);
 });
@@ -177,8 +178,8 @@ Deno.test('birthday: focus beats alternate with bursts that never repeat a memor
   const ids = scenes(script, 'burst').flatMap((b) => b.frames.map((f) => f.memoryId));
   assertEquals(new Set(ids).size, ids.length);
   const [first, second] = scenes(script, 'burst');
-  assert(first.frames.every((f) => f.date! < '2026-04-23'));
-  assert(second.frames.every((f) => f.date! >= '2026-04-23'));
+  assert(first.frames.every((f) => f.date! < '2026-04-17'));
+  assert(second.frames.every((f) => f.date! >= '2026-04-17'));
 });
 
 Deno.test('a half burst stays inside its half even when the journal gets dense later', () => {
@@ -193,8 +194,8 @@ Deno.test('a half burst stays inside its half even when the journal gets dense l
   const script = birthday([...early, ...late]);
   const [first, second, ...rest] = scenes(script, 'burst').filter((b) => b.role !== 'emotion');
   assertEquals(first.role, 'first_half');
-  assert(first.frames.every((f) => f.date! < '2026-04-23'), first.frames.map((f) => f.date).join());
-  assert(second.frames.every((f) => f.date! >= '2026-04-23'));
+  assert(first.frames.every((f) => f.date! < '2026-04-17'), first.frames.map((f) => f.date).join());
+  assert(second.frames.every((f) => f.date! >= '2026-04-17'));
   assert(rest[0].frames.length > 0);
 });
 
@@ -242,7 +243,7 @@ Deno.test('birthday: without vision, then/now and voice clips need solo tags', (
   assert(close.frames[0].date! < close.frames[1].date!);
   // The only videos are tagged with both kids → no voice fallback.
   assertEquals(scene(script, 'sound'), undefined);
-  const solo = video({ id: 'solo-clip', date: '2026-05-20', taggedMemberIds: [ENZO] });
+  const solo = video({ id: 'solo-clip', date: '2026-05-20', taggedMemberIds: [TOMAS] });
   const sound = scene(birthday([...yearOfMemories(), solo]), 'sound')!;
   assertEquals([sound.source, sound.needsVoiceCheck, sound.frame.memoryId], ['video', true, 'solo-clip']);
 });
@@ -262,7 +263,7 @@ Deno.test('birthday: with vision, only frames verified to show the child back a 
   assertEquals(script.verification, 'vision');
   const close = scene(script, 'close')!;
   assertEquals(close.frames.map((f) => f.memoryId), [early.id, late.id]);
-  assert(close.frames[1].why.includes('vision: Enzo · laughing'));
+  assert(close.frames[1].why.includes('vision: Tomás · laughing'));
 });
 
 Deno.test('birthday: an upset face never closes the film; smiles win then/now', () => {
@@ -278,15 +279,15 @@ Deno.test('birthday: an upset face never closes the film; smiles win then/now', 
 });
 
 Deno.test('birthday: sensitive memories never appear, and potty/birthday are not firsts', () => {
-  const potty = drawing({ id: 'potty', date: '2026-02-02', emotion: 'pride', text: 'Enzo hizo pipí solito' });
+  const potty = drawing({ id: 'potty', date: '2026-02-02', emotion: 'pride', text: 'Tomás hizo pipí solito' });
   const steps = memory({ id: 'bike', date: '2026-08-20', text: 'Estrenando bicicletas sin rueditas' });
   const script = birthday([...yearOfMemories(), potty, steps], {
     milestones: [
-      { memoryId: 'potty', familyMemberId: ENZO, milestoneId: 'potty-trained', status: 'confirmed' },
-      { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'candidate' },
-      { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'birthday', status: 'candidate' },
+      { memoryId: 'potty', familyMemberId: TOMAS, milestoneId: 'potty-trained', status: 'confirmed' },
+      { memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'bike-no-training-wheels', status: 'candidate' },
+      { memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'birthday', status: 'candidate' },
     ],
-    quotes: [{ memoryId: 'potty', quote: 'hice pipí solito', speakerId: ENZO }],
+    quotes: [{ memoryId: 'potty', quote: 'hice pipí solito', speakerId: TOMAS }],
   });
   assert(!JSON.stringify(script.scenes).includes('"potty"'), 'potty memory leaked into a scene');
   // "Estrenando" (using for the first time) is an explicit first; birthday never is.
@@ -295,10 +296,10 @@ Deno.test('birthday: sensitive memories never appear, and potty/birthday are not
 });
 
 Deno.test('isCertainFirst: confirmed, or explicit "first" in the text within the age band', () => {
-  const row = { memoryId: 'm', familyMemberId: ENZO, milestoneId: 'first-haircut', status: 'candidate' };
+  const row = { memoryId: 'm', familyMemberId: TOMAS, milestoneId: 'first-haircut', status: 'candidate' };
   assert(!isCertainFirst(row, 'Corte de pelo en la barbería'));
   assert(isCertainFirst(row, 'Primer corte de pelo en la barbería'));
-  assert(isCertainFirst(row, 'Hoy Enzo estrenó su bici'));
+  assert(isCertainFirst(row, 'Hoy Tomás estrenó su bici'));
   assert(isCertainFirst(row, "Leo's first haircut!"));
   assert(!isCertainFirst({ ...row, outOfBand: true }, 'Primer corte de pelo'));
   assert(isCertainFirst({ ...row, status: 'confirmed', outOfBand: true }, null));
@@ -307,25 +308,25 @@ Deno.test('isCertainFirst: confirmed, or explicit "first" in the text within the
 });
 
 Deno.test('birthday: the close shows the party of the birthday the film celebrates', () => {
-  const scope = birthdayFilmScope('2022-10-23', 4); // 2025-10-23 → 2026-10-25
-  const party = memory({ id: 'party', date: '2026-10-23', taggedMemberIds: [ENZO, GRAN] });
-  const nextDay = memory({ id: 'cake', date: '2026-10-24', taggedMemberIds: [ENZO] });
-  const unrelated = memory({ id: 'later', date: '2026-10-25', taggedMemberIds: [ENZO] });
-  const lastYear = memory({ id: 'third', date: '2025-10-23', taggedMemberIds: [ENZO] });
+  const scope = birthdayFilmScope('2022-10-17', 4); // 2025-10-17 → 2026-10-19
+  const party = memory({ id: 'party', date: '2026-10-17', taggedMemberIds: [TOMAS, GRAN] });
+  const nextDay = memory({ id: 'cake', date: '2026-10-18', taggedMemberIds: [TOMAS] });
+  const unrelated = memory({ id: 'later', date: '2026-10-19', taggedMemberIds: [TOMAS] });
+  const lastYear = memory({ id: 'third', date: '2025-10-17', taggedMemberIds: [TOMAS] });
   const script = birthday([...yearOfMemories(), lastYear, party, nextDay, unrelated], {
     scope,
-    milestones: [{ memoryId: 'cake', familyMemberId: ENZO, milestoneId: 'birthday', status: 'candidate' }],
+    milestones: [{ memoryId: 'cake', familyMemberId: TOMAS, milestoneId: 'birthday', status: 'candidate' }],
   });
   const close = scene(script, 'close')!;
-  assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-23']);
+  assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-17']);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake', 'party']);
-  assertEquals(birthdayCelebration([unrelated], [], enzo, scope), null);
+  assertEquals(birthdayCelebration([unrelated], [], tomas, scope), null);
 });
 
 Deno.test("birthday: last year's party never closes this year's film", () => {
   // Only the birthday the window starts on is logged (this year's party hasn't happened yet).
-  const scope = birthdayFilmScope('2022-10-23', 4);
-  const lastYear = memory({ id: 'third', date: '2025-10-23', taggedMemberIds: [ENZO] });
+  const scope = birthdayFilmScope('2022-10-17', 4);
+  const lastYear = memory({ id: 'third', date: '2025-10-17', taggedMemberIds: [TOMAS] });
   const close = scene(birthday([...yearOfMemories(), lastYear], { scope }), 'close')!;
   // Falls back to then → now (the year's first photo may be that party, as "then"), never a party claim.
   assert(close.source !== 'celebration', close.source);
@@ -352,7 +353,7 @@ Deno.test('films stay within the 60s cap however rich the year', () => {
 
 Deno.test('birthday: starring lists people by creation order, with photo/illustration pairs', () => {
   const starring = scene(birthday(yearOfMemories()), 'starring')!;
-  assertEquals(starring.people.map((p) => p.name), ['Gran', 'Mara']);
+  assertEquals(starring.people.map((p) => p.name), ['Gran', 'Lucía']);
   assertEquals(starring.people[0].portrait.pairKey, 'pg.jpg');
 });
 
@@ -372,37 +373,37 @@ Deno.test('birthday: reveals go to the most present people, not the oldest profi
   const relatives = Array.from({ length: 8 }, (_, i) => person(`rel${i}`, '1960-01-01', `2023-0${i + 1}-01`, [portrait(`pr${i}`, `rel${i}`, null)]));
   const dad = person('dad', '1985-01-01', '2026-05-28', [portrait('pd', 'dad', null)]);
   const extra = [
-    ...relatives.flatMap((r, i) => [0, 1].map((k) => memory({ date: `${MONTHS[i]}-1${k}`, taggedMemberIds: [ENZO, r.id] }))),
-    ...MONTHS.flatMap((month) => [3, 4].map((d) => memory({ date: `${month}-0${d}`, taggedMemberIds: [ENZO, 'dad'] }))),
+    ...relatives.flatMap((r, i) => [0, 1].map((k) => memory({ date: `${MONTHS[i]}-1${k}`, taggedMemberIds: [TOMAS, r.id] }))),
+    ...MONTHS.flatMap((month) => [3, 4].map((d) => memory({ date: `${month}-0${d}`, taggedMemberIds: [TOMAS, 'dad'] }))),
   ];
-  const starring = scene(birthday([...yearOfMemories(), ...extra], { members: [...relatives, gran, enzo, mara, dad] }), 'starring')!;
+  const starring = scene(birthday([...yearOfMemories(), ...extra], { members: [...relatives, gran, tomas, lucia, dad] }), 'starring')!;
   const shown = starring.people.map((p) => p.memberId);
   assertEquals(shown.length, 6);
-  assert(shown.includes('dad') && shown.includes(MARA) && shown.includes(GRAN), shown.join());
+  assert(shown.includes('dad') && shown.includes(LUCIA) && shown.includes(GRAN), shown.join());
   assertEquals(shown.at(-1), 'dad'); // displayed in creation order, never by count
   assertEquals(starring.together!.length, 9);
 });
 
 Deno.test('birthday: people get their own moments before sharing one', () => {
-  // Each month has a memory with Gran and Mara together, plus one with each alone.
+  // Each month has a memory with Gran and Lucía together, plus one with each alone.
   const year = MONTHS.flatMap((month) => [
-    memory({ date: `${month}-02`, taggedMemberIds: [ENZO, GRAN, MARA] }),
-    memory({ date: `${month}-09`, taggedMemberIds: [ENZO, GRAN] }),
-    memory({ date: `${month}-18`, taggedMemberIds: [ENZO, MARA] }),
+    memory({ date: `${month}-02`, taggedMemberIds: [TOMAS, GRAN, LUCIA] }),
+    memory({ date: `${month}-09`, taggedMemberIds: [TOMAS, GRAN] }),
+    memory({ date: `${month}-18`, taggedMemberIds: [TOMAS, LUCIA] }),
   ]);
-  const [granCards, maraCards] = scene(birthday([...yearOfMemories(), ...year]), 'starring')!.people.map((p) => p.moments.map((m) => m.memoryId));
-  assertEquals(granCards.filter((id) => maraCards.includes(id)), []);
+  const [granCards, luciaCards] = scene(birthday([...yearOfMemories(), ...year]), 'starring')!.people.map((p) => p.moments.map((m) => m.memoryId));
+  assertEquals(granCards.filter((id) => luciaCards.includes(id)), []);
 });
 
 Deno.test('birthday: Spanish titles and catalog labels', () => {
   const steps = memory({ id: 'bike', date: '2026-08-20', text: 'Primera vez en bici sin rueditas' });
   const script = birthday([...yearOfMemories(), steps], {
     language: 'es',
-    milestones: [{ memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' }],
+    milestones: [{ memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'bike-no-training-wheels', status: 'confirmed' }],
   });
-  assertEquals(script.title, 'Recuerdos de tu cuarto año, Enzo');
+  assertEquals(script.title, 'Recuerdos de tu cuarto año, Tomás');
   assertEquals(scene(script, 'firsts')!.kicker, 'Tus logros');
-  assertEquals(scene(script, 'close')!.line, '¡Feliz cumpleaños, Enzo!');
+  assertEquals(scene(script, 'close')!.line, '¡Feliz cumpleaños, Tomás!');
   assertEquals(scene(script, 'firsts')!.items[0].label, 'Bici sin rueditas');
   assertEquals(scene(script, 'firsts')!.items[0].frame?.memoryId, 'bike'); // the milestone's own card
   assertEquals(scenes(script, 'burst').find((b) => b.role === 'emotion')?.titles, ['Tus momentos más graciosos']);
@@ -434,10 +435,10 @@ Deno.test('themes in a voice read as things loved, and skip topics that are not'
 
 function august(): FilmMemorySource[] {
   return [
-    video({ id: 'enzo-laugh', date: '2026-08-02', taggedMemberIds: [ENZO] }),
-    video({ id: 'group', date: '2026-08-03', taggedMemberIds: [ENZO, MARA, GRAN] }),
-    memory({ id: 'mara-smile', date: '2026-08-04', taggedMemberIds: [MARA] }),
-    ...Array.from({ length: 10 }, (_, i) => memory({ date: `2026-08-1${i}`, emotion: 'calm', taggedMemberIds: [ENZO, MARA] })),
+    video({ id: 'tomas-laugh', date: '2026-08-02', taggedMemberIds: [TOMAS] }),
+    video({ id: 'group', date: '2026-08-03', taggedMemberIds: [TOMAS, LUCIA, GRAN] }),
+    memory({ id: 'lucia-smile', date: '2026-08-04', taggedMemberIds: [LUCIA] }),
+    ...Array.from({ length: 10 }, (_, i) => memory({ date: `2026-08-1${i}`, emotion: 'calm', taggedMemberIds: [TOMAS, LUCIA] })),
   ];
 }
 
@@ -445,7 +446,7 @@ function monthly(memories: FilmMemorySource[], extra: Partial<Parameters<typeof 
   return buildMonthlyScript({
     yearMonth: '2026-08',
     memories,
-    children: [mara, enzo, person('baby', '2027-01-01', '2026-12-01')],
+    children: [lucia, tomas, person('baby', '2027-01-01', '2026-12-01')],
     milestones: [],
     quotes: [],
     language: 'en',
@@ -457,27 +458,27 @@ Deno.test('monthly: awards come from vision-verified expressions, never from gro
   const memories = august();
   const checks: FrameChecks = new Map();
   const key = (id: string) => checkKey({ ...memories.find((m) => m.id === id)!.assets[0], memoryId: id, date: null, kind: 'photo', emotion: null, why: '' });
-  // The group clip "shows Enzo laughing" but he isn't the main subject.
+  // The group clip "shows Tomás laughing" but he isn't the main subject.
   checks.set(key('group'), check({ mainSubject: 'group', expression: 'laughing' }));
-  checks.set(key('enzo-laugh'), check({ expression: 'laughing' }));
-  checks.set(key('mara-smile'), check({ mainSubject: MARA, childrenVisible: [MARA], expression: 'big_smile' }));
+  checks.set(key('tomas-laugh'), check({ expression: 'laughing' }));
+  checks.set(key('lucia-smile'), check({ mainSubject: LUCIA, childrenVisible: [LUCIA], expression: 'big_smile' }));
   const awards = scenes(monthly(memories, { checks }), 'award');
   assertEquals(awards.map((a) => [a.childName, a.award, a.evidence, a.frame.memoryId]), [
-    ['Enzo', 'biggest laugh', 'laughing', 'enzo-laugh'],
-    ['Mara', 'biggest smile', 'smiling', 'mara-smile'],
+    ['Tomás', 'biggest laugh', 'laughing', 'tomas-laugh'],
+    ['Lucía', 'biggest smile', 'smiling', 'lucia-smile'],
   ]);
   assertEquals(awards[0].intro, 'and the biggest laugh award goes to');
   assertEquals(awards[1].intro, 'and the biggest smile award goes to'); // each award announces itself
 });
 
 Deno.test('monthly: without vision only "star of the month" from solo frames; else a portrait', () => {
-  const memories = august().filter((m) => m.id !== 'mara-smile');
+  const memories = august().filter((m) => m.id !== 'lucia-smile');
   const awards = scenes(monthly(memories), 'award');
   assertEquals(awards.map((a) => [a.childName, a.award, a.evidence]), [
-    ['Enzo', 'star of the month', 'subject'],
-    ['Mara', 'star of the month', 'portrait'],
+    ['Tomás', 'star of the month', 'subject'],
+    ['Lucía', 'star of the month', 'portrait'],
   ]);
-  assertEquals(awards[0].frame.memoryId, 'enzo-laugh');
+  assertEquals(awards[0].frame.memoryId, 'tomas-laugh');
 });
 
 Deno.test('monthly: title, a fast finale burst, and Spanish contraction', () => {
@@ -487,17 +488,17 @@ Deno.test('monthly: title, a fast finale burst, and Spanish contraction', () => 
   assert(finale.frames.length >= 8);
   const es = monthly(august(), {
     language: 'es',
-    checks: new Map([[`enzo-laugh-poster.jpg`, check({ expression: 'laughing' })]]),
+    checks: new Map([[`tomas-laugh-poster.jpg`, check({ expression: 'laughing' })]]),
   });
   assertEquals(scenes(es, 'award')[0].intro, 'y el premio a la risa más grande es para');
 });
 
 Deno.test('firstNamedChild finds whose voice a clip is', () => {
-  const kids = [{ id: ENZO, name: 'Enzo X' }, { id: MARA, name: 'Mara X' }];
-  assertEquals(firstNamedChild('Enzo contándole un cuento a Mara', kids), ENZO);
-  assertEquals(firstNamedChild('Mara cantando con Enzo', kids), MARA);
+  const kids = [{ id: TOMAS, name: 'Tomás X' }, { id: LUCIA, name: 'Lucía X' }];
+  assertEquals(firstNamedChild('Tomás contándole un cuento a Lucía', kids), TOMAS);
+  assertEquals(firstNamedChild('Lucía cantando con Tomás', kids), LUCIA);
   assertEquals(firstNamedChild('Cantando en el carro', kids), null);
-  assertEquals(firstNamedChild('Enzoberto', kids), null);
+  assertEquals(firstNamedChild('Tomásberto', kids), null);
 });
 
 Deno.test('birthday: a sibling\'s voice is never the child\'s sound', () => {
@@ -505,18 +506,18 @@ Deno.test('birthday: a sibling\'s voice is never the child\'s sound', () => {
     id: 'story',
     type: 'audio',
     date: '2026-09-26',
-    text: 'Enzo contándole un cuento a Mara',
-    taggedMemberIds: [ENZO, MARA],
+    text: 'Tomás contándole un cuento a Lucía',
+    taggedMemberIds: [TOMAS, LUCIA],
     media: [{ kind: 'audio', durationMs: 30000, hasPreview: false }],
     assets: [{ kind: 'audio', key: 'story.m4a', previewKey: null, durationMs: 30000, aspectRatio: null }],
   });
   const script = buildBirthdayScript({
-    child: mara,
+    child: lucia,
     ageYear: 2,
-    scope: { start: '2025-11-08', endExclusive: '2026-11-08' },
-    memories: [...yearOfMemories().map((m) => ({ ...m, taggedMemberIds: [...m.taggedMemberIds, MARA] })), siblingVoice],
-    members: [gran, enzo, mara],
-    ownChildIds: [ENZO, MARA],
+    scope: { start: '2025-11-14', endExclusive: '2026-11-14' },
+    memories: [...yearOfMemories().map((m) => ({ ...m, taggedMemberIds: [...m.taggedMemberIds, LUCIA] })), siblingVoice],
+    members: [gran, tomas, lucia],
+    ownChildIds: [TOMAS, LUCIA],
     milestones: [],
     quotes: [],
     language: 'en',
@@ -525,17 +526,17 @@ Deno.test('birthday: a sibling\'s voice is never the child\'s sound', () => {
 });
 
 Deno.test('birthday film window runs through the birthday, so this year\'s party closes it', () => {
-  const scope = birthdayFilmScope('2022-10-23', 4);
-  assertEquals(scope, { start: '2025-10-23', endExclusive: '2026-10-25' });
-  const lastYear = memory({ id: 'party-3', date: '2025-10-23', taggedMemberIds: [ENZO] });
-  const thisYear = memory({ id: 'party-4', date: '2026-10-23', taggedMemberIds: [ENZO] });
-  const dayAfter = memory({ id: 'cake-4', date: '2026-10-24', taggedMemberIds: [ENZO] });
+  const scope = birthdayFilmScope('2022-10-17', 4);
+  assertEquals(scope, { start: '2025-10-17', endExclusive: '2026-10-19' });
+  const lastYear = memory({ id: 'party-3', date: '2025-10-17', taggedMemberIds: [TOMAS] });
+  const thisYear = memory({ id: 'party-4', date: '2026-10-17', taggedMemberIds: [TOMAS] });
+  const dayAfter = memory({ id: 'cake-4', date: '2026-10-18', taggedMemberIds: [TOMAS] });
   const script = birthday([...yearOfMemories(), lastYear, thisYear, dayAfter], {
     scope,
-    milestones: [{ memoryId: 'cake-4', familyMemberId: ENZO, milestoneId: 'birthday', status: 'candidate' }],
+    milestones: [{ memoryId: 'cake-4', familyMemberId: TOMAS, milestoneId: 'birthday', status: 'candidate' }],
   });
   const close = scene(script, 'close')!;
-  assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-23']);
+  assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-17']);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake-4', 'party-4']);
 });
 
@@ -544,26 +545,26 @@ Deno.test('counters carry a backdrop mosaic; the film carries its timeline span'
   const counters = scene(script, 'counters')!;
   assertEquals(counters.kicker, 'Your year in');
   assert(counters.backdrop.length >= 24, `backdrop ${counters.backdrop.length}`);
-  assertEquals(script.span, { from: '2025-10-23', to: '2026-10-23' });
-  const august = buildMonthlyScript({ yearMonth: '2026-08', memories: yearOfMemories(), children: [enzo, mara], milestones: [], quotes: [], language: 'es' });
+  assertEquals(script.span, { from: '2025-10-17', to: '2026-10-17' });
+  const august = buildMonthlyScript({ yearMonth: '2026-08', memories: yearOfMemories(), children: [tomas, lucia], milestones: [], quotes: [], language: 'es' });
   assertEquals(august.span, { from: '2026-08-01', to: '2026-08-31' });
   assertEquals(scene(august, 'title')!.kicker, 'Nuestro');
 });
 
 // ── Year-end family film ─────────────────────────────────────────────────
 
-/** 2026 with Enzo everywhere and Mara (born Nov 2024) in only a few memories. */
+/** 2026 with Tomás everywhere and Lucía (born Nov 2024) in only a few memories. */
 function familyYear(): FilmMemorySource[] {
   const out: FilmMemorySource[] = [];
   ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11'].forEach((month, i) => {
-    out.push(memory({ date: `${month}-03`, topics: ['park-playground'], taggedMemberIds: [ENZO] }));
-    out.push(memory({ date: `${month}-09`, topics: ['beach'], taggedMemberIds: [ENZO, GRAN, MARA] }));
-    out.push(video({ date: `${month}-14`, taggedMemberIds: [ENZO] }));
-    out.push(drawing({ date: `${month}-20`, taggedMemberIds: [ENZO] }));
-    out.push(memory({ date: `${month}-25`, emotion: i % 2 ? 'funny' : 'joy', taggedMemberIds: [ENZO] }));
-    if (i % 4 === 0) out.push(memory({ date: `${month}-27`, taggedMemberIds: [MARA] }));
+    out.push(memory({ date: `${month}-03`, topics: ['park-playground'], taggedMemberIds: [TOMAS] }));
+    out.push(memory({ date: `${month}-09`, topics: ['beach'], taggedMemberIds: [TOMAS, GRAN, LUCIA] }));
+    out.push(video({ date: `${month}-14`, taggedMemberIds: [TOMAS] }));
+    out.push(drawing({ date: `${month}-20`, taggedMemberIds: [TOMAS] }));
+    out.push(memory({ date: `${month}-25`, emotion: i % 2 ? 'funny' : 'joy', taggedMemberIds: [TOMAS] }));
+    if (i % 4 === 0) out.push(memory({ date: `${month}-27`, taggedMemberIds: [LUCIA] }));
   });
-  out.push(memory({ id: 'after-cutoff', date: '2026-12-28', taggedMemberIds: [ENZO, MARA, GRAN] }));
+  out.push(memory({ id: 'after-cutoff', date: '2026-12-28', taggedMemberIds: [TOMAS, LUCIA, GRAN] }));
   return out;
 }
 
@@ -571,8 +572,8 @@ function family(memories: FilmMemorySource[], extra: Partial<Parameters<typeof b
   return buildFamilyYearScript({
     year: 2026,
     memories,
-    children: [enzo, mara],
-    members: [gran, enzo, mara],
+    children: [tomas, lucia],
+    members: [gran, tomas, lucia],
     milestones: [],
     quotes: [],
     language: 'es',
@@ -586,7 +587,7 @@ Deno.test('family year: Jan 1 → Dec 27, one chapter per child whatever the dat
   assertEquals(script.kind, 'family_year');
   assertEquals(script.title, 'Nuestro 2026');
   const chapters = scenes(script, 'chapter');
-  assertEquals(chapters.map((c) => c.name), ['Enzo', 'Mara']); // oldest first, the thin one included
+  assertEquals(chapters.map((c) => c.name), ['Tomás', 'Lucía']); // oldest first, the thin one included
   assert(chapters.every((c) => c.portrait !== null));
   const all = script.scenes.flatMap((sc) => ('frames' in sc ? sc.frames : []) as { memoryId: string | null }[]);
   assert(!all.some((f) => f.memoryId === 'after-cutoff'), 'nothing after the Dec 27 cut-off');
@@ -599,18 +600,18 @@ Deno.test('family year: Jan 1 → Dec 27, one chapter per child whatever the dat
 
 Deno.test('family year: firsts take turns across children and carry their name', () => {
   const memories = familyYear();
-  const enzoFirsts = ['bike', 'scooter', 'swim'].map((id, i) => memory({ id, date: `2026-0${i + 2}-11`, taggedMemberIds: [ENZO] }));
-  const maraFirst = memory({ id: 'steps', date: '2026-06-11', taggedMemberIds: [MARA] });
+  const tomasFirsts = ['bike', 'scooter', 'swim'].map((id, i) => memory({ id, date: `2026-0${i + 2}-11`, taggedMemberIds: [TOMAS] }));
+  const luciaFirst = memory({ id: 'steps', date: '2026-06-11', taggedMemberIds: [LUCIA] });
   const milestones = [
-    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
-    { memoryId: 'scooter', familyMemberId: ENZO, milestoneId: 'rides-scooter', status: 'confirmed' as const },
-    { memoryId: 'swim', familyMemberId: ENZO, milestoneId: 'first-swim', status: 'confirmed' as const },
-    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'first-steps', status: 'confirmed' as const },
+    { memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+    { memoryId: 'scooter', familyMemberId: TOMAS, milestoneId: 'rides-scooter', status: 'confirmed' as const },
+    { memoryId: 'swim', familyMemberId: TOMAS, milestoneId: 'first-swim', status: 'confirmed' as const },
+    { memoryId: 'steps', familyMemberId: LUCIA, milestoneId: 'first-steps', status: 'confirmed' as const },
   ];
-  const firsts = scenes(family([...memories, ...enzoFirsts, maraFirst], { milestones }), 'firsts')[0];
-  assert(firsts.items.some((f) => f.childName === 'Mara'), firsts.items.map((f) => f.childName).join());
+  const firsts = scenes(family([...memories, ...tomasFirsts, luciaFirst], { milestones }), 'firsts')[0];
+  assert(firsts.items.some((f) => f.childName === 'Lucía'), firsts.items.map((f) => f.childName).join());
   assert(firsts.items.length <= 4);
-  assert(firsts.items.every((f) => f.childName === 'Enzo' || f.childName === 'Mara'));
+  assert(firsts.items.every((f) => f.childName === 'Tomás' || f.childName === 'Lucía'));
 });
 
 // ── Holiday card film ────────────────────────────────────────────────────
@@ -619,7 +620,7 @@ const EDU = 'edu';
 const ADRI = 'adri';
 const edu = { ...person(EDU, '1985-05-05', '2024-01-01', [portrait('pe', EDU, '2026-01-01')]), relationship: 'parent' };
 const adri = { ...person(ADRI, '1987-03-14', '2024-01-02', [portrait('pa', ADRI, '2026-01-01')]), relationship: 'parent' };
-const CORE = [ENZO, MARA, EDU, ADRI];
+const CORE = [TOMAS, LUCIA, EDU, ADRI];
 
 function holiday(memories: FilmMemorySource[], extra: Partial<Parameters<typeof buildHolidayScript>[0]> = {}) {
   return buildHolidayScript({
@@ -627,8 +628,8 @@ function holiday(memories: FilmMemorySource[], extra: Partial<Parameters<typeof 
     scope: { start: '2026-01-01', endExclusive: '2026-10-05' },
     familyName: 'Rivera Soto',
     memories,
-    children: [enzo, mara],
-    members: [gran, enzo, mara, edu, adri],
+    children: [tomas, lucia],
+    members: [gran, tomas, lucia, edu, adri],
     milestones: [],
     quotes: [],
     language: 'es',
@@ -651,7 +652,7 @@ Deno.test('holiday film: Jan 1 → the day it is made, ≤ 60 s, slower bursts, 
   assertEquals(script.scope, { start: '2026-01-01', endExclusive: '2026-10-05' });
   const all = script.scenes.flatMap((sc) => ('frames' in sc ? sc.frames : []) as { date: string | null }[]);
   assert(all.every((f) => (f.date ?? '') < '2026-10-05'), 'nothing after the day the card is made');
-  assertEquals(scenes(script, 'chapter').map((c) => c.name), ['Enzo', 'Mara']);
+  assertEquals(scenes(script, 'chapter').map((c) => c.name), ['Tomás', 'Lucía']);
   assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
   assert(script.estimatedSeconds > 45, `a bit longer than before: ${script.estimatedSeconds}s`);
   // No counters, emotion or "together" bursts.
@@ -692,25 +693,25 @@ Deno.test('holiday film: sensitive and worried/sad/weary memories never appear, 
   assertEquals(script.stats.pool, familyYear().filter((m) => m.date < '2026-10-05').length);
   const ranked = rankMemories(
     [memory({ id: 'xmas', date: '2026-01-02', topics: ['christmas'] }), memory({ id: 'plain', date: '2026-01-03' })],
-    { scope: { start: '2026-01-01', endExclusive: '2026-10-05' }, milestones: [], ownChildIds: [ENZO, MARA], n: 1, holiday: true },
+    { scope: { start: '2026-01-01', endExclusive: '2026-10-05' }, milestones: [], ownChildIds: [TOMAS, LUCIA], n: 1, holiday: true },
   );
   assertEquals(ranked[0].memory.id, 'xmas');
 });
 
 Deno.test('sound scene: every alternate keeps its OWN memory\'s caption, parallel to its frame (a fallback never shows the primary\'s)', () => {
   const audio = (id: string, date: string, text: string) => memory({
-    id, type: 'audio', date, text, taggedMemberIds: [ENZO],
+    id, type: 'audio', date, text, taggedMemberIds: [TOMAS],
     media: [{ kind: 'audio', durationMs: 20000, hasPreview: false }],
     assets: [{ kind: 'audio', key: `${id}.m4a`, previewKey: null, durationMs: 20000, aspectRatio: null }],
   });
-  const script = holiday([...familyYear(), audio('a1', '2026-05-05', 'Enzo leyéndole un libro a Mara'), audio('a2', '2026-06-06', 'Enzo cantando en el carro'), audio('a3', '2026-07-07', 'Cantando en el carro')]);
+  const script = holiday([...familyYear(), audio('a1', '2026-05-05', 'Tomás leyéndole un libro a Lucía'), audio('a2', '2026-06-06', 'Tomás cantando en el carro'), audio('a3', '2026-07-07', 'Cantando en el carro')]);
   const sound = scenes(script, 'sound')[0];
   assertEquals(sound.alternates.length, 2);
-  const texts: Record<string, string> = { a1: 'Enzo leyéndole un libro a Mara', a2: 'Enzo cantando en el carro', a3: 'Cantando en el carro' };
+  const texts: Record<string, string> = { a1: 'Tomás leyéndole un libro a Lucía', a2: 'Tomás cantando en el carro', a3: 'Cantando en el carro' };
   assertEquals(sound.caption, texts[sound.frame.memoryId!]);
   assertEquals(sound.alternateCaptions, sound.alternates.map((f) => texts[f.memoryId!]));
   // The video-fallback variant (no audio memories) keeps them aligned too.
-  const clips = ['c1', 'c2'].map((id, i) => video({ id, date: `2026-0${i + 4}-20`, text: `Clip ${id}`, taggedMemberIds: [ENZO], media: [{ kind: 'video', durationMs: 9000, hasPreview: true }] }));
+  const clips = ['c1', 'c2'].map((id, i) => video({ id, date: `2026-0${i + 4}-20`, text: `Clip ${id}`, taggedMemberIds: [TOMAS], media: [{ kind: 'video', durationMs: 9000, hasPreview: true }] }));
   const withClips = holiday([...familyYear(), ...clips], { checks: new Map(clips.map((c) => [c.assets[0].previewKey!, check({ underdressed: false })])) });
   const vs = scenes(withClips, 'sound')[0];
   if (vs) assertEquals(vs.alternateCaptions, vs.alternates.map((f) => `Clip ${f.memoryId}`));
@@ -721,7 +722,7 @@ Deno.test('holiday film: the sound is dropped before a chapter would be, to stay
     id: 'audio1',
     type: 'audio',
     date: '2026-05-05',
-    taggedMemberIds: [ENZO],
+    taggedMemberIds: [TOMAS],
     media: [{ kind: 'audio', durationMs: 20000, hasPreview: false }],
     assets: [{ kind: 'audio', key: 'a.m4a', previewKey: null, durationMs: 20000, aspectRatio: null }],
   });
@@ -751,9 +752,9 @@ Deno.test('holiday film close: the whole core family and nobody else — never a
   const script = holiday(withClose([
     together('old-all', '2026-04-01', CORE),
     together('new-all', '2026-09-01', CORE),
-    together('no-dad', '2026-09-20', [ENZO, MARA, ADRI]), // newer, but Eduardo is missing
+    together('no-dad', '2026-09-20', [TOMAS, LUCIA, ADRI]), // newer, but Eduardo is missing
     together('uncle', '2026-09-25', [...CORE, GRAN]), // newer, but a non-core member is in it
-    together('kids-only', '2026-09-28', [ENZO, MARA]),
+    together('kids-only', '2026-09-28', [TOMAS, LUCIA]),
   ]));
   assertEquals(closeIds(script), ['new-all', 'old-all']);
   const close = scenes(script, 'close')[0];
@@ -774,14 +775,14 @@ Deno.test('holiday film close: the card front\'s top picks go first, then vision
     mainSubject: 'group', childrenVisible: children, faceVisible: true, expression: 'smiling' as const, quality, unsafe: false, screenCapture: false,
     underdressed: false, // the holiday film's checks come from the strict public prompt
   });
-  const checks: FrameChecks = new Map([['a-p.jpg', check([ENZO])], ['b-p.jpg', check([ENZO, MARA])], ['c-p.jpg', check([ENZO, MARA], 'blurry')]]);
+  const checks: FrameChecks = new Map([['a-p.jpg', check([TOMAS])], ['b-p.jpg', check([TOMAS, LUCIA])], ['c-p.jpg', check([TOMAS, LUCIA], 'blurry')]]);
   assertEquals(closeIds(holiday(memories, { checks })), ['b', 'a']);
 });
 
 Deno.test('holiday film close: a frame the strict check flagged never closes the film — everyone\'s portraits do', () => {
   const memories = withClose([together('a', '2026-09-01', CORE), together('b', '2026-06-01', CORE)]);
   const check = (underdressed: boolean) => ({
-    mainSubject: 'group', childrenVisible: [ENZO, MARA], faceVisible: true, expression: 'smiling' as const, quality: 'good' as const,
+    mainSubject: 'group', childrenVisible: [TOMAS, LUCIA], faceVisible: true, expression: 'smiling' as const, quality: 'good' as const,
     unsafe: false, screenCapture: false, underdressed,
   });
   // One flagged (newest): the other carries the close, alone.
@@ -821,13 +822,13 @@ Deno.test('holiday film: public-audience text/topic screen (bath, undressed, dia
     memory({ id: 'en-bath', text: 'Bath time with the ducks' }),
     memory({ id: 'shower', text: 'Su primera ducha sola' }),
     memory({ id: 'undies', text: 'Running around in his underwear' }),
-    memory({ id: 'nursing', text: 'Nursing Mara before bed' }),
+    memory({ id: 'nursing', text: 'Nursing Lucía before bed' }),
     memory({ id: 'care', topics: ['baby-care'] }),
   ];
   const fine = [
     memory({ id: 'beach', text: 'Se bañó en el mar, qué felicidad', topics: ['beach'] }), // swimming is the vision check's call
     memory({ id: 'swimsuit', text: 'Nadando con su bañador nuevo' }),
-    memory({ id: 'shirtless', text: 'Enzo sin camiseta en la playa, shirtless all day' }), // beach shirtless is fine (the vision check decides)
+    memory({ id: 'shirtless', text: 'Tomás sin camiseta en la playa, shirtless all day' }), // beach shirtless is fine (the vision check decides)
     memory({ id: 'pool', text: 'Bathing suit shopping' }),
     memory({ id: 'park', text: 'Un día en el parque', topics: ['park-playground'] }),
   ];
@@ -867,12 +868,12 @@ Deno.test('holiday film: a chapter moment never rests on a frame the strict chec
 
 Deno.test('holiday film: the firsts card says it the way a parent does; the year film keeps the catalog label', () => {
   const memories = withClose([
-    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [MARA] }),
-    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [ENZO] }),
+    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [LUCIA] }),
+    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [TOMAS] }),
   ]);
   const milestones = [
-    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'walking', status: 'confirmed' as const },
-    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+    { memoryId: 'steps', familyMemberId: LUCIA, milestoneId: 'walking', status: 'confirmed' as const },
+    { memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
   ];
   assertEquals(scenes(holiday(memories, { milestones }), 'firsts')[0].items.map((f) => f.label), ['Dio sus primeros pasos', 'Aprendió a ir en bici sin rueditas']);
   assertEquals(scenes(holiday(memories, { milestones, language: 'en' }), 'firsts')[0].items.map((f) => f.label), ['Took their first steps', 'Learned to ride without training wheels']);
@@ -895,11 +896,11 @@ Deno.test('holidayFirstLabel: the plain phrase, else the catalog label, else nul
 });
 
 Deno.test('holiday film close: falls back to the core plus others (recorded), then to everyone\'s portraits', () => {
-  const withOthers = holiday(withClose([together('uncle', '2026-09-25', [...CORE, GRAN]), together('no-dad', '2026-09-26', [ENZO, MARA, ADRI])]));
+  const withOthers = holiday(withClose([together('uncle', '2026-09-25', [...CORE, GRAN]), together('no-dad', '2026-09-26', [TOMAS, LUCIA, ADRI])]));
   assertEquals(closeIds(withOthers), ['uncle']);
   assert(scenes(withOthers, 'close')[0].frames[0].why.includes('fallback'));
   assert(withOthers.dropped.some((d) => d.scene === 'close' && d.reason.includes('plus other people')));
-  const none = holiday(withClose([together('no-dad', '2026-09-26', [ENZO, MARA, ADRI])]));
+  const none = holiday(withClose([together('no-dad', '2026-09-26', [TOMAS, LUCIA, ADRI])]));
   const close = scenes(none, 'close')[0];
   assertEquals(close.source, 'portraits');
   assertEquals(close.frames.length, 4); // both children and both parents
@@ -908,27 +909,27 @@ Deno.test('holiday film close: falls back to the core plus others (recorded), th
 
 Deno.test('holiday film: certain firsts are in the film, by date, within the budget', () => {
   const memories = withClose([
-    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [ENZO] }),
-    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [MARA] }),
-    memory({ id: 'unsure', date: '2026-05-11', taggedMemberIds: [ENZO], text: 'Hoy andó en bici otra vez, qué contento' }),
+    memory({ id: 'bike', date: '2026-06-11', taggedMemberIds: [TOMAS] }),
+    memory({ id: 'steps', date: '2026-04-11', taggedMemberIds: [LUCIA] }),
+    memory({ id: 'unsure', date: '2026-05-11', taggedMemberIds: [TOMAS], text: 'Hoy andó en bici otra vez, qué contento' }),
   ]);
   const milestones = [
-    { memoryId: 'bike', familyMemberId: ENZO, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
-    { memoryId: 'steps', familyMemberId: MARA, milestoneId: 'first-steps', status: 'confirmed' as const },
-    { memoryId: 'unsure', familyMemberId: ENZO, milestoneId: 'balance-bike', status: 'candidate' as const },
+    { memoryId: 'bike', familyMemberId: TOMAS, milestoneId: 'bike-no-training-wheels', status: 'confirmed' as const },
+    { memoryId: 'steps', familyMemberId: LUCIA, milestoneId: 'first-steps', status: 'confirmed' as const },
+    { memoryId: 'unsure', familyMemberId: TOMAS, milestoneId: 'balance-bike', status: 'candidate' as const },
   ];
   const script = holiday(memories, { milestones });
   const firsts = scenes(script, 'firsts')[0];
   assertEquals(firsts.items.map((f) => f.memoryId), ['steps', 'bike']);
-  assertEquals(firsts.items.map((f) => f.childName), ['Mara', 'Enzo']);
+  assertEquals(firsts.items.map((f) => f.childName), ['Lucía', 'Tomás']);
   assert(script.estimatedSeconds <= 60, `${script.estimatedSeconds}s`);
   assertEquals(scenes(holiday(memories), 'firsts').length, 0);
   // The unconfirmed list: the candidate, with why the gate says no.
-  const list = unconfirmedFirsts(memories, milestones, [enzo, mara], 'es');
-  assertEquals(list.map((f) => [f.memoryId, f.childName, f.gatePasses]), [['unsure', 'Enzo', false]]);
+  const list = unconfirmedFirsts(memories, milestones, [tomas, lucia], 'es');
+  assertEquals(list.map((f) => [f.memoryId, f.childName, f.gatePasses]), [['unsure', 'Tomás', false]]);
   assert(list[0].reason.includes('"first"'));
   const said = [{ ...memories.at(-1)!, id: 'said', text: 'Primera vez que anda en bici sin ayuda' }];
-  const gate = unconfirmedFirsts(said, [{ memoryId: 'said', familyMemberId: ENZO, milestoneId: 'balance-bike', status: 'candidate' }], [enzo], 'en');
+  const gate = unconfirmedFirsts(said, [{ memoryId: 'said', familyMemberId: TOMAS, milestoneId: 'balance-bike', status: 'candidate' }], [tomas], 'en');
   assertEquals(gate.map((f) => f.gatePasses), [true]);
 });
 

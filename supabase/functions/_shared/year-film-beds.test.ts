@@ -48,9 +48,9 @@ function assemblePick(kind: string, slug: string, spanFrom: string): string {
 
 Deno.test('defaultBed matches assemble.mjs for the same slugs', () => {
   const cases: [('birthday' | 'family_month' | 'family_year' | 'family_holiday'), string, string][] = [
-    ['birthday', 'birthday-enzo-y4', '2025-10-23'],
-    ['birthday', 'birthday-mara-y2', '2025-11-08'],
-    ['birthday', '7f0c2b3e-1f11-4a2c-9a3e-3f0b1c2d4e5f', '2025-10-23'],
+    ['birthday', 'birthday-tomas-y4', '2025-10-17'],
+    ['birthday', 'birthday-lucia-y2', '2025-11-14'],
+    ['birthday', '7f0c2b3e-1f11-4a2c-9a3e-3f0b1c2d4e5f', '2025-10-17'],
     ['family_month', 'month-2026-08', '2026-08-01'],
     ['family_month', 'month-2026-09', '2026-09-01'],
     ['family_year', 'family-2026', '2026-01-01'],

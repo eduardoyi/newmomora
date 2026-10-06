@@ -7,8 +7,8 @@ describe('member-mentions', () => {
   it('matches whole names only', () => {
     expect(isNameMentionedInText('Ann had oatmeal', 'Ann')).toBe(true);
     expect(isNameMentionedInText('We were planning breakfast', 'Ann')).toBe(false);
-    expect(isNameMentionedInText('Enzo and Mara did not want oatmeal', 'Enzo')).toBe(true);
-    expect(isNameMentionedInText('Enzo and Mara did not want oatmeal', 'Mara')).toBe(true);
+    expect(isNameMentionedInText('Tomás and Lucía did not want oatmeal', 'Tomás')).toBe(true);
+    expect(isNameMentionedInText('Tomás and Lucía did not want oatmeal', 'Lucía')).toBe(true);
   });
 
   it('is case-insensitive', () => {
@@ -16,20 +16,20 @@ describe('member-mentions', () => {
   });
 
   it('returns mentioned member ids', () => {
-    const ids = matchMemberIdsMentionedInText('Enzo and Mara played', [
-      { id: 'enzo-id', name: 'Enzo' },
-      { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+    const ids = matchMemberIdsMentionedInText('Tomás and Lucía played', [
+      { id: 'tomas-id', name: 'Tomás' },
+      { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
       { id: 'timmy-id', name: 'Timmy' },
     ]);
 
-    expect(ids).toEqual(['enzo-id', 'mara-id']);
+    expect(ids).toEqual(['tomas-id', 'lucia-id']);
   });
 
   it('matches nicknames with word boundaries', () => {
-    const ids = matchMemberIdsMentionedInText('Marita was sleepy', [
-      { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+    const ids = matchMemberIdsMentionedInText('Lucita was sleepy', [
+      { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
     ]);
 
-    expect(ids).toEqual(['mara-id']);
+    expect(ids).toEqual(['lucia-id']);
   });
 });

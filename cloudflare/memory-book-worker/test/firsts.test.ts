@@ -112,7 +112,7 @@ describe('selectMultiYearFirsts', () => {
 
   it('excludes birthday milestones; a birthday-only memory is never a first', () => {
     const memories = [
-      mem('bday', '2023-10-23', [ms('birthday', { status: 'confirmed' })], { photoCount: 2 }),
+      mem('bday', '2023-10-17', [ms('birthday', { status: 'confirmed' })], { photoCount: 2 }),
       mem('steps', '2023-11-01', [ms('first-steps'), ms('birthday')]),
     ];
     expect(selectMultiYearFirsts(memories)).toEqual(['steps']);

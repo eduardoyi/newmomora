@@ -2569,7 +2569,7 @@ describe('memories service integration', () => {
     it('surfaces RPC errors', async () => {
       (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: { message: 'Not authorized', code: '42501' } });
 
-      const { data, error } = await searchMemories({ familyId: 'family-1', query: 'mara' });
+      const { data, error } = await searchMemories({ familyId: 'family-1', query: 'lucia' });
 
       expect(data).toBeNull();
       expect(error).toEqual({ message: 'Not authorized', code: '42501' });

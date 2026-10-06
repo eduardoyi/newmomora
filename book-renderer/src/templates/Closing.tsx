@@ -16,7 +16,7 @@ import './Closing.css';
  *
  * Bug fix (owner review round 3 item 16): this used to also print
  * `outline.editorialNote` verbatim — the AI's own INTERNAL planning/
- * reasoning note (never meant for the reader), which leaked onto Mara's
+ * reasoning note (never meant for the reader), which leaked onto Lucía's
  * printed closing page. The fitter no longer even passes `editorialNote`
  * into this template's params (see fitter.ts `buildClosingPage`); this
  * component has nothing left that could print it. `memoryCount` (not the

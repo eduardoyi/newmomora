@@ -486,10 +486,10 @@ describe('buildFamilyActivityCopy', () => {
 
     it('renders "{title} is ready" with the film title bold', () => {
       const copy = buildFamilyActivityCopy(group('film_ready', [filmEvent()]), {
-        members: [{ id: 'kid-1', name: 'Enzo' }],
+        members: [{ id: 'kid-1', name: 'Tomás' }],
       });
-      expect(familyActivityCopyPlainText(copy)).toBe("Enzo's Year Four is ready");
-      expect(copy.segments[0]).toEqual({ text: "Enzo's Year Four", bold: true });
+      expect(familyActivityCopyPlainText(copy)).toBe("Tomás' Year Four is ready");
+      expect(copy.segments[0]).toEqual({ text: "Tomás' Year Four", bold: true });
     });
 
     it('titles monthly and year-end films without needing members', () => {

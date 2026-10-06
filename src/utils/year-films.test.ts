@@ -17,7 +17,7 @@ function film(overrides: Partial<YearFilm> = {}): YearFilm {
     id: 'film-1',
     family_id: 'family-1',
     kind: 'birthday',
-    family_member_id: 'enzo',
+    family_member_id: 'tomas',
     age_year: 4,
     scope_start_date: '2025-10-14',
     scope_end_exclusive: '2026-10-16',
@@ -58,15 +58,15 @@ const yearFilm = (id: string, year: number, overrides: Partial<YearFilm> = {}) =
   });
 
 const members = [
-  { id: 'enzo', name: 'Enzo' },
+  { id: 'tomas', name: 'Tomás' },
   { id: 'jesus', name: 'Jesus' },
 ];
 
 describe('filmTitle', () => {
   it('titles a birthday film with the ordinal word', () => {
-    expect(filmTitle(film(), members)).toBe("Enzo's Year Four");
-    expect(filmTitle(film({ age_year: 1 }), members)).toBe("Enzo's Year One");
-    expect(filmTitle(film({ age_year: 12 }), members)).toBe("Enzo's Year Twelve");
+    expect(filmTitle(film(), members)).toBe("Tomás' Year Four");
+    expect(filmTitle(film({ age_year: 1 }), members)).toBe("Tomás' Year One");
+    expect(filmTitle(film({ age_year: 12 }), members)).toBe("Tomás' Year Twelve");
   });
 
   it('uses a bare apostrophe for names ending in s', () => {
@@ -74,11 +74,11 @@ describe('filmTitle', () => {
   });
 
   it('falls back to a numeral past the ordinal words', () => {
-    expect(filmTitle(film({ age_year: 25 }), members)).toBe("Enzo's Year 25");
+    expect(filmTitle(film({ age_year: 25 }), members)).toBe("Tomás' Year 25");
   });
 
   it('handles a missing age year', () => {
-    expect(filmTitle(film({ age_year: null }), members)).toBe("Enzo's birthday film");
+    expect(filmTitle(film({ age_year: null }), members)).toBe("Tomás' birthday film");
   });
 
   it('falls back when the member is gone', () => {
@@ -249,7 +249,7 @@ function book(overrides: Partial<MemoryBookListRow> = {}): MemoryBookListRow {
   return {
     id: 'book-1',
     family_id: 'family-1',
-    child_id: 'enzo',
+    child_id: 'tomas',
     status: 'ready',
     scope_kind: 'age_year',
     scope_start_date: '2025-06-01',
@@ -265,7 +265,7 @@ function book(overrides: Partial<MemoryBookListRow> = {}): MemoryBookListRow {
 
 describe('buildKeepsakeYears', () => {
   const kids = [
-    { id: 'enzo', name: 'Enzo', relationship: 'child', date_of_birth: '2022-10-14' },
+    { id: 'tomas', name: 'Tomás', relationship: 'child', date_of_birth: '2022-10-14' },
     { id: 'mia', name: 'Mia', relationship: 'child', date_of_birth: '2024-02-02' },
     { id: 'mom', name: 'Mom', relationship: 'parent', date_of_birth: '1990-01-01' },
   ];
@@ -276,7 +276,7 @@ describe('buildKeepsakeYears', () => {
     expect(years).toHaveLength(1);
     expect(years[0].year).toBe(2026);
     expect(years[0].familyFilms).toEqual({ yearEnd: null, recaps: [] });
-    expect(years[0].children.map((c) => c.member.id)).toEqual(['enzo', 'mia']);
+    expect(years[0].children.map((c) => c.member.id)).toEqual(['tomas', 'mia']);
   });
 
   it('files films under the year of their placement date, newest year first', () => {
@@ -292,7 +292,7 @@ describe('buildKeepsakeYears', () => {
     const y26 = years[0];
     expect(y26.familyFilms.yearEnd).toBeNull();
     expect(y26.familyFilms.recaps.map((f) => f.id)).toEqual(['m-sep', 'm-aug']);
-    expect(y26.children.find((c) => c.member.id === 'enzo')!.films.map((f) => f.id)).toEqual(['b26']);
+    expect(y26.children.find((c) => c.member.id === 'tomas')!.films.map((f) => f.id)).toEqual(['b26']);
     const y25 = years[1];
     expect(y25.familyFilms.yearEnd?.id).toBe('y25');
     expect(y25.familyFilms.recaps.map((f) => f.id)).toEqual(['m-dec25']);
@@ -308,7 +308,7 @@ describe('buildKeepsakeYears', () => {
     ];
     const [y26] = buildKeepsakeYears(films, [], kids, today);
     expect(y26.familyFilms.recaps.map((f) => f.id)).toEqual(['mar', 'feb', 'jan']);
-    expect(y26.children.find((c) => c.member.id === 'enzo')!.films.map((f) => f.id)).toEqual(['b-late', 'b-early']);
+    expect(y26.children.find((c) => c.member.id === 'tomas')!.films.map((f) => f.id)).toEqual(['b-late', 'b-early']);
   });
 
   it('files a book under the year its scope ends, else its creation year', () => {
@@ -319,7 +319,7 @@ describe('buildKeepsakeYears', () => {
     ];
     const years = buildKeepsakeYears([], books, kids, today);
     expect(years.map((y) => y.year)).toEqual([2026, 2025, 2024]);
-    expect(years[0].children.find((c) => c.member.id === 'enzo')!.books.map((b) => b.id)).toEqual(['ends-2026']);
+    expect(years[0].children.find((c) => c.member.id === 'tomas')!.books.map((b) => b.id)).toEqual(['ends-2026']);
     expect(years[1].children.map((c) => c.books.map((b) => b.id))).toEqual([['ends-2025']]);
     expect(years[2].children.map((c) => c.books.map((b) => b.id))).toEqual([['everything']]);
   });
@@ -328,13 +328,13 @@ describe('buildKeepsakeYears', () => {
     const films = [film({ id: 'b25', placement_date: '2025-10-14' })];
     const years = buildKeepsakeYears(films, [], kids, today);
     const y25 = years.find((y) => y.year === 2025)!;
-    expect(y25.children.map((c) => c.member.id)).toEqual(['enzo']);
+    expect(y25.children.map((c) => c.member.id)).toEqual(['tomas']);
   });
 
   it('applies the shelf rule: own children or anyone with a book', () => {
     const books = [book({ child_id: 'mom', scope_end_date: '2026-05-31' })];
     const [y26] = buildKeepsakeYears([], books, kids, today);
-    expect(y26.children.map((c) => c.member.id)).toEqual(['enzo', 'mia', 'mom']);
+    expect(y26.children.map((c) => c.member.id)).toEqual(['tomas', 'mia', 'mom']);
     expect(y26.children.find((c) => c.member.id === 'mom')!.books).toHaveLength(1);
   });
 
@@ -359,7 +359,7 @@ describe('buildKeepsakeYears', () => {
       book({ id: 'new', created_at: '2026-06-02T00:00:00.000Z' }),
     ];
     const [y26] = buildKeepsakeYears([], books, kids, today);
-    expect(y26.children.find((c) => c.member.id === 'enzo')!.books.map((b) => b.id)).toEqual(['new', 'old']);
+    expect(y26.children.find((c) => c.member.id === 'tomas')!.books.map((b) => b.id)).toEqual(['new', 'old']);
   });
 });
 

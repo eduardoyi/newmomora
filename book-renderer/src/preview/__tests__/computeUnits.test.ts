@@ -99,7 +99,7 @@ describe('computeUnits — closing page synthetic right-hand partner (item 2b)',
   });
 });
 
-describe('computeUnits — real book-data fixture (the "fitted enzo fixture")', () => {
+describe('computeUnits — real book-data fixture (the "fitted tomas fixture")', () => {
   const BOOK_DATA_DIR = resolve(process.cwd(), 'book-data');
   const manifestPath = resolve(BOOK_DATA_DIR, 'enzo-year-one', 'manifest.json');
   const outlinePath = resolve(BOOK_DATA_DIR, 'enzo-year-one', 'book.outline.json');

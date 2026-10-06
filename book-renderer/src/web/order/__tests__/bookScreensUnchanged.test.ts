@@ -37,7 +37,7 @@ function bookOrder(overrides: Partial<MemoryBookOrderRow> = {}): MemoryBookOrder
     prodigi_order_id: null,
     failure_reason: null,
     refunded_at: null,
-    shipping_address: { name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
+    shipping_address: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
     tracking_number: null,
     tracking_url: null,
     carrier: null,

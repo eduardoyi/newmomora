@@ -123,12 +123,12 @@ function baseContext(overrides: Partial<GenerationContextResponse> = {}): Genera
       familyId: 'family-1',
       childId: 'child-1',
       scopeKind: 'age_year',
-      windowStart: '2024-10-23',
-      windowEndExclusive: '2025-10-23',
+      windowStart: '2024-10-17',
+      windowEndExclusive: '2025-10-17',
       scopeLabel: 'Year One',
       pageBudget: 60,
     },
-    child: { id: 'child-1', name: 'Enzo', dateOfBirth: '2024-10-23' },
+    child: { id: 'child-1', name: 'Tomás', dateOfBirth: '2024-10-17' },
     familyName: 'The Rivas Family',
     configuredLanguage: 'en',
     memories: [],
@@ -173,7 +173,7 @@ describe('buildBookManifest', () => {
       tags: [{ memory_id: 'mem-1', family_member_id: 'child-1' }],
       milestones: [{ memory_id: 'mem-1', family_member_id: 'child-1', milestone_id: 'first-steps', detail: null, out_of_band: false }],
       engagementCounts: { 'mem-1': 2 },
-      familyMembers: [{ id: 'child-1', name: 'Enzo', date_of_birth: '2024-10-23', nicknames: ['Enzito'] }],
+      familyMembers: [{ id: 'child-1', name: 'Tomás', date_of_birth: '2024-10-17', nicknames: ['Tomasito'] }],
     });
 
     const manifest = buildBookManifest({
@@ -191,13 +191,13 @@ describe('buildBookManifest', () => {
     expect(memory.assets).toHaveLength(1);
     expect(memory.assets[0].file).toBe('preview.jpg');
     expect(memory.milestones).toEqual([{ id: 'first-steps', name: expect.any(String), detail: null }]); // no status key when the row has none
-    expect(memory.taggedMembers).toEqual([{ name: 'Enzo', isChild: true }]);
+    expect(memory.taggedMembers).toEqual([{ name: 'Tomás', isChild: true }]);
     expect(memory.shareToken).toBeNull();
     // Print-polish round (owner decision 2026-09-14, item F): `dateOfBirth`
     // now threads through from `context.child` (the same value already used
     // for the portraits' own age-label math above) so book-renderer can
     // compute a month-section age eyebrow.
-    expect(manifest.child).toEqual({ id: 'child-1', name: 'Enzo', dateOfBirth: '2024-10-23' });
+    expect(manifest.child).toEqual({ id: 'child-1', name: 'Tomás', dateOfBirth: '2024-10-17' });
     expect(manifest.scope.kind).toBe('age-year');
     expect(manifest.outlineRun).toBe('run-1');
   });
@@ -301,8 +301,8 @@ describe('buildBookManifest', () => {
   });
 
   it('carries dateOfBirth as null when context.child has none (print-polish round, item F)', () => {
-    const context = baseContext({ child: { id: 'child-1', name: 'Enzo', dateOfBirth: null } });
+    const context = baseContext({ child: { id: 'child-1', name: 'Tomás', dateOfBirth: null } });
     const manifest = buildBookManifest({ context, memoryIds: [], outlineRunId: 'run-1', language: 'en', shareTokensByMemoryId: new Map() });
-    expect(manifest.child).toEqual({ id: 'child-1', name: 'Enzo', dateOfBirth: null });
+    expect(manifest.child).toEqual({ id: 'child-1', name: 'Tomás', dateOfBirth: null });
   });
 });

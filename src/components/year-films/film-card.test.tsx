@@ -22,7 +22,7 @@ const FILM = {
   ready_at: '2026-10-07T08:00:00.000Z',
 } as unknown as YearFilm;
 
-const MEMBERS = [{ id: 'member-1', name: 'Enzo' }];
+const MEMBERS = [{ id: 'member-1', name: 'Tomás' }];
 
 const queryClient = new QueryClient();
 afterEach(() => queryClient.clear());
@@ -46,7 +46,7 @@ describe('FilmCard', () => {
     const { getByTestId, queryByTestId, onPress } = renderCard();
     const card = getByTestId('timeline-film-film-1');
     expect(card.props.accessibilityRole).toBe('button');
-    expect(card.props.accessibilityLabel).toBe("Play Enzo's Year Four");
+    expect(card.props.accessibilityLabel).toBe("Play Tomás' Year Four");
     expect(queryByTestId('timeline-film-film-1-title')).toBeNull();
     expect(queryByTestId('timeline-film-film-1-subtitle')).toBeNull();
     fireEvent.press(card);
@@ -88,7 +88,7 @@ describe('FilmCard', () => {
       const card = getByTestId('timeline-film-film-1-remaking');
       expect(card).toBeTruthy();
       expect(card.props.accessibilityRole).not.toBe('button');
-      expect(card.props.accessibilityLabel).toBe("Enzo's Year Four, remaking. This takes a few minutes");
+      expect(card.props.accessibilityLabel).toBe("Tomás' Year Four, remaking. This takes a few minutes");
       expect(getByText('Remaking your film…')).toBeTruthy();
       expect(getByText('This takes a few minutes')).toBeTruthy();
       expect(queryByTestId('timeline-film-film-1')).toBeNull();
@@ -130,7 +130,7 @@ describe('FilmCard', () => {
       const { getByTestId, onPress } = renderCard({ film: UPDATING });
       const card = getByTestId('timeline-film-film-1');
       expect(card.props.accessibilityRole).toBe('button');
-      expect(card.props.accessibilityLabel).toBe("Play Enzo's Year Four, updating");
+      expect(card.props.accessibilityLabel).toBe("Play Tomás' Year Four, updating");
       expect(getByTestId('timeline-film-film-1-play')).toBeTruthy();
       expect(getByTestId('timeline-film-film-1-updating')).toHaveTextContent('Updating…');
       fireEvent.press(card);

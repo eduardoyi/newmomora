@@ -20,21 +20,21 @@ function member(overrides: Partial<SignalMember> & { id: string; first_name: str
   };
 }
 
-// P1 Eduardo (parent, linked), P2 Enzo (child), P3 Mirian (unsorted), P4 Elena (unsorted niece), P5 Rosa (unsorted)
+// P1 Eduardo (parent, linked), P2 Tomás (child), P3 Mirian (unsorted), P4 Elena (unsorted niece), P5 Rosa (unsorted)
 function signals(overrides: Partial<FamilySignals> = {}): FamilySignals {
   return {
     members: [
       member({ id: 'dad', first_name: 'Eduardo', relationship: 'parent', age_years: 38 }),
-      member({ id: 'enzo', first_name: 'Enzo', relationship: 'child', age_years: 3, is_own_child: true }),
+      member({ id: 'tomas', first_name: 'Tomás', relationship: 'child', age_years: 3, is_own_child: true }),
       member({ id: 'mirian', first_name: 'Mirian', age_years: 66 }),
       member({ id: 'elena', first_name: 'Elena', age_years: 6, is_own_child: true }),
       member({ id: 'rosa', first_name: 'Rosa', age_years: 64, nicknames: ['Nana'] }),
     ],
     accounts: [{ family_member_id: 'dad', display_name: 'Eduardo', role: 'owner' }],
-    co_tags: [{ member_id: 'mirian', child_id: 'enzo', memories: 12 }],
+    co_tags: [{ member_id: 'mirian', child_id: 'tomas', memories: 12 }],
     snippets: [
-      { text: 'Abuela Mirian llevó a Enzo al parque', memory_date: '2026-08-01', author_member_id: 'dad', member_ids: ['mirian', 'enzo'] },
-      { text: 'Mi sobrina Elena vino a jugar, la prima de Enzo', memory_date: '2026-07-01', author_member_id: 'dad', member_ids: ['elena', 'enzo'] },
+      { text: 'Abuela Mirian llevó a Tomás al parque', memory_date: '2026-08-01', author_member_id: 'dad', member_ids: ['mirian', 'tomas'] },
+      { text: 'Mi sobrina Elena vino a jugar, la prima de Tomás', memory_date: '2026-07-01', author_member_id: 'dad', member_ids: ['elena', 'tomas'] },
     ],
     ...overrides,
   };
@@ -84,7 +84,7 @@ Deno.test('validateSuggestions: side only for side roles and only at a parent', 
   const rows = validateSuggestions(signals(), {
     people: [
       { ref: 'P3', relationship: 'family_friend', side: 'P1', confidence: 0.9 }, // not a side role
-      { ref: 'P5', relationship: 'grandparent', side: 'P2', confidence: 0.9 }, // Enzo is not a parent
+      { ref: 'P5', relationship: 'grandparent', side: 'P2', confidence: 0.9 }, // Tomás is not a parent
     ],
   });
   assertEquals(rows, [
@@ -110,15 +110,15 @@ Deno.test('validateSuggestions: a parent proposed in the same run can anchor a s
 Deno.test('validateSuggestions: nickname rules (grounding, collisions, shape, cap)', () => {
   const s = signals({
     snippets: [
-      { text: 'Abuela y Nana con Enzo; Abuelita, Yaya, Abu, Mimi', memory_date: null, author_member_id: null, member_ids: ['mirian'] },
+      { text: 'Abuela y Nana con Tomás; Abuelita, Yaya, Abu, Mimi', memory_date: null, author_member_id: null, member_ids: ['mirian'] },
       { text: 'Abuela Rosa trajo pastel', memory_date: null, author_member_id: null, member_ids: ['rosa'] },
     ],
   });
   const rows = validateSuggestions(s, {
     people: [
-      // Nana is Rosa's nickname; Enzo is a name; "Grandma" isn't in the snippets;
+      // Nana is Rosa's nickname; Tomás is a name; "Grandma" isn't in the snippets;
       // "<script>" fails the shape; Abuela collides with Rosa's proposal below.
-      { ref: 'P3', relationship: null, nicknames: ['Nana', 'Enzo', 'Grandma', '<script>', 'Abuela', 'Abuelita', 'Yaya', 'Mimi'] },
+      { ref: 'P3', relationship: null, nicknames: ['Nana', 'Tomás', 'Grandma', '<script>', 'Abuela', 'Abuelita', 'Yaya', 'Mimi'] },
       { ref: 'P5', nicknames: ['Abuela'] },
     ],
   });

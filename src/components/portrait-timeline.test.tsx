@@ -55,13 +55,13 @@ const member = {
 
 const ready: PortraitTimelineVersion = {
   id: 'ready-1',
-  referenceDate: '2025-11-08',
+  referenceDate: '2025-11-12',
   dateSource: 'exif',
   status: 'ready',
   sourcePhotoKey: 'user/family/member/portraits/ready-1/photo.jpg',
   portraitKey: 'user/family/member/portraits/ready-1/portrait/attempt.webp',
-  createdAt: '2025-11-08T00:00:00Z',
-  updatedAt: '2025-11-08T00:00:00Z',
+  createdAt: '2025-11-12T00:00:00Z',
+  updatedAt: '2025-11-12T00:00:00Z',
 };
 
 const failed: PortraitTimelineVersion = {
@@ -99,11 +99,11 @@ const baseProps = {
 
 describe('formatPortraitAge', () => {
   it('formats a child age at the portrait reference date', () => {
-    expect(formatPortraitAge('2022-03-14', '2025-11-08')).toBe('3 years, 7 months');
+    expect(formatPortraitAge('2022-03-14', '2025-11-12')).toBe('3 years, 7 months');
   });
 
   it('returns null when either date is unavailable', () => {
-    expect(formatPortraitAge(null, '2025-11-08')).toBeNull();
+    expect(formatPortraitAge(null, '2025-11-12')).toBeNull();
     expect(formatPortraitAge('2022-03-14', null)).toBeNull();
   });
 });

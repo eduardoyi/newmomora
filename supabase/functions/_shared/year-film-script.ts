@@ -761,7 +761,7 @@ function verifiedFor(
   }
   return candidates.flatMap((c) => {
     const check = ctx.checks!.get(checkKey(c.frame));
-    // A child crying or frowning never backs a claim (F1: Enzo's "now" shot).
+    // A child crying or frowning never backs a claim (F1: Tomás's "now" shot).
     if (!isVerifiedSubject(check, childId, { publicAudience: ctx.holiday }) || check!.expression === 'upset') return [];
     return [{ ...c, check, frame: { ...c.frame, why: `${c.frame.why} · ${describeCheck(check, ctx.names)}` } }];
   });
@@ -859,7 +859,7 @@ export function distinctiveThemes(
 }
 
 /** Whose voice a clip most likely is: the first of the family's children
- * named in its description ("Enzo contándole un cuento a Mara" → Enzo). */
+ * named in its description ("Tomás contándole un cuento a Lucía" → Tomás). */
 export function firstNamedChild(text: string | null, children: { id: string; name: string }[]): string | null {
   if (!text) return null;
   const lower = text.toLowerCase();

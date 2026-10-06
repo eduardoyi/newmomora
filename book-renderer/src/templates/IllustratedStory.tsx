@@ -39,7 +39,7 @@ import './IllustratedStory.css';
  * reads symmetrical; longer entries push the illustration to the facing
  * page, bleeding through the outer trim and foot (`mode: 'illustration-only'`).
  *
- * Bug fix (owner review round 3 item 13, "Enzo p41 class"): the text and
+ * Bug fix (owner review round 3 item 13, "Tomás p41 class"): the text and
  * illustration used to be two INDEPENDENTLY absolutely-positioned boxes,
  * the illustration's `top` a fixed canvas-derived constant. Since the
  * text's actual rendered height varies with its (data-dependent) length,
@@ -70,7 +70,7 @@ export function IllustratedStory({ page, manifest, bookSlug, showGuides }: Templ
   const isEvenPage = page.isEvenPage ?? true;
   // A month segment made up ENTIRELY of illustrated-story pages otherwise
   // has nowhere to show its month header (owner review round 3 — "headers
-  // vanished after p34 in Enzo" diagnosis: illustrated-story/audio-note
+  // vanished after p34 in Tomás" diagnosis: illustrated-story/audio-note
   // never rendered `sectionHeader` at all, so the fitter's own header-
   // pending logic had no capable page to attach it to for a photo-thin
   // section). Never shown in `illustration-only` mode — there's no text

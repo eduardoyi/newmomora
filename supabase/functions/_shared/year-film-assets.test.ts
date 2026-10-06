@@ -44,9 +44,9 @@ function film(soundSource: 'audio' | 'video' = 'audio'): FilmScript {
     kind: 'birthday',
     language: 'en',
     title: 'Year Four',
-    scope: { start: '2025-10-23', endExclusive: '2026-10-26' },
-    subjects: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }],
-    references: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }, { id: 'c2', name: 'Mara', referenceKey: 'ref/c2.jpg' }],
+    scope: { start: '2025-10-17', endExclusive: '2026-10-20' },
+    subjects: [{ id: 'c1', name: 'Tomás', referenceKey: 'ref/c1.jpg' }],
+    references: [{ id: 'c1', name: 'Tomás', referenceKey: 'ref/c1.jpg' }, { id: 'c2', name: 'Lucía', referenceKey: 'ref/c2.jpg' }],
     scenes: [
       { type: 'title', title: 'Year Four', subtitle: '', cards: [frame('photo/t1.jpg', 'photo'), frame('draw/t2.webp', 'illustration')] },
       { type: 'sound', source: soundSource, frame: frame('audio/a1.m4a', 'audio'), alternates: [frame('video/v9.mp4', 'video')] },
@@ -283,11 +283,11 @@ function holidayFilm(): FilmScript {
     language: 'es',
     title: 'Un año en familia',
     scope: { start: '2026-01-01', endExclusive: '2026-10-06' },
-    subjects: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }],
-    references: [{ id: 'c1', name: 'Enzo', referenceKey: 'ref/c1.jpg' }],
+    subjects: [{ id: 'c1', name: 'Tomás', referenceKey: 'ref/c1.jpg' }],
+    references: [{ id: 'c1', name: 'Tomás', referenceKey: 'ref/c1.jpg' }],
     scenes: [
       { type: 'title', title: '2026', subtitle: '', cards: [frame('photo/t1.jpg', 'photo')] },
-      { type: 'chapter', childId: 'c1', name: 'Enzo', portrait, frames: [frame('photo/ch1.jpg', 'photo'), frame('draw/ch2.webp', 'illustration')], line: null },
+      { type: 'chapter', childId: 'c1', name: 'Tomás', portrait, frames: [frame('photo/ch1.jpg', 'photo'), frame('draw/ch2.webp', 'illustration')], line: null },
       { type: 'sound', source: 'video', frame: frame('video/s1.mp4', 'video'), alternates: [frame('video/s2.mp4', 'video')], caption: null, needsVoiceCheck: true },
       { type: 'firsts', items: [{ milestoneId: 'first-steps', label: 'Dio sus primeros pasos', date: '2026-04-01', memoryId: 'm1', frame: frame('photo/f1.jpg', 'photo') }] },
       { type: 'close', line: '', source: 'family', celebrationDate: null, frames: [frame('photo/cl1.jpg', 'photo')] },
@@ -422,7 +422,7 @@ Deno.test('applyPrepared: a fallback sound candidate carries ITS OWN caption and
   const withCaptions = (): FilmScript => {
     const script = film('video');
     const sound = script.scenes[1] as Extract<FilmScript['scenes'][number], { type: 'sound' }>;
-    Object.assign(sound, { caption: 'Enzo leyéndole un libro a Mara', alternateCaptions: ['Enzo cantando en el carro'] });
+    Object.assign(sound, { caption: 'Tomás leyéndole un libro a Lucía', alternateCaptions: ['Tomás cantando en el carro'] });
     sound.alternates[0].date = '2026-08-22';
     return script;
   };
@@ -436,12 +436,12 @@ Deno.test('applyPrepared: a fallback sound candidate carries ITS OWN caption and
   // The primary fails the voice check (both windows faint) → the alternate plays, with its caption and date.
   const fallback = pick(withCaptions(), { [voiceRef(a1, 0)]: faint, [voiceRef(a1, 1)]: faint, [voiceRef(v9, 0)]: clear });
   assertEquals(fallback.frame.key, 'video/v9.mp4');
-  assertEquals(fallback.caption, 'Enzo cantando en el carro');
+  assertEquals(fallback.caption, 'Tomás cantando en el carro');
   assertEquals(fallback.frame.date, '2026-08-22');
   // The primary passing keeps its own caption.
   const primary = pick(withCaptions(), { [voiceRef(a1, 0)]: clear });
   assertEquals(primary.frame.key, 'audio/a1.m4a');
-  assertEquals(primary.caption, 'Enzo leyéndole un libro a Mara');
+  assertEquals(primary.caption, 'Tomás leyéndole un libro a Lucía');
   // A script stored before `alternateCaptions` existed: no caption beats the primary's wrong one.
   const old = withCaptions();
   delete (old.scenes[1] as { alternateCaptions?: unknown }).alternateCaptions;

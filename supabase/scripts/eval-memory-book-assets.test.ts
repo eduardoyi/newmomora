@@ -226,7 +226,7 @@ Deno.test('excludePortraitVersionIds drops exactly the excluded ids', () => {
   assertEquals(excludePortraitVersionIds(versions, ['v2']), [{ id: 'v1' }, { id: 'v3' }]);
 });
 
-Deno.test('excludePortraitVersionIds matches the owner\'s motivating case (Mara\'s redundant 2025-01-25 pair)', () => {
+Deno.test('excludePortraitVersionIds matches the owner\'s motivating case (Lucía\'s redundant 2025-01-25 pair)', () => {
   const REDUNDANT_ID = '1dbc29b2-43d0-42e0-811c-26d58959dfbd';
   const versions = [
     { id: REDUNDANT_ID, reference_date: '2025-01-25' },
@@ -844,15 +844,15 @@ Deno.test('slugify lowercases and hyphenates', () => {
 });
 
 Deno.test('defaultOutDir combines first name + scope label', () => {
-  assertEquals(defaultOutDir('Enzo Rivera', 'Year One'), 'book-renderer/book-data/enzo-year-one/');
-  assertEquals(defaultOutDir('Mara', '2024'), 'book-renderer/book-data/mara-2024/');
+  assertEquals(defaultOutDir('Tomas Rivera', 'Year One'), 'book-renderer/book-data/tomas-year-one/');
+  assertEquals(defaultOutDir('Lucia', '2024'), 'book-renderer/book-data/lucia-2024/');
 });
 
 // --- buildTaggedMember / buildManifestMilestone / buildManifestAsset -------
 
 Deno.test('buildTaggedMember classifies a young child as isChild', () => {
-  const result = buildTaggedMember({ name: 'Enzo', dateOfBirth: '2023-01-01', memoryDate: '2024-01-01' });
-  assertEquals(result, { name: 'Enzo', isChild: true });
+  const result = buildTaggedMember({ name: 'Tomás', dateOfBirth: '2023-01-01', memoryDate: '2024-01-01' });
+  assertEquals(result, { name: 'Tomás', isChild: true });
 });
 
 Deno.test('buildTaggedMember classifies an adult as not isChild', () => {
@@ -991,7 +991,7 @@ Deno.test('buildManifestMemory assembles the full per-memory shape, including an
     },
     assets: [{ file: 'assets/m1-0.jpg', width: 800, height: 600, aspectRatio: 800 / 600, kind: 'photo', durationMs: null }],
     milestones: [{ id: 'first-steps', name: 'First steps', detail: 'in the backyard' }],
-    taggedMembers: [{ name: 'Enzo', isChild: true }],
+    taggedMembers: [{ name: 'Tomás', isChild: true }],
     engagement: 3,
     illustration: { file: 'assets/m1-illustration.jpg', width: 1024, height: 1024, aspectRatio: 1 },
     shareToken: null,
@@ -1005,7 +1005,7 @@ Deno.test('buildManifestMemory assembles the full per-memory shape, including an
     topics: ['first-steps', 'backyard'],
     milestones: [{ id: 'first-steps', name: 'First steps', detail: 'in the backyard' }],
     engagement: 3,
-    taggedMembers: [{ name: 'Enzo', isChild: true }],
+    taggedMembers: [{ name: 'Tomás', isChild: true }],
     assets: [{ file: 'assets/m1-0.jpg', width: 800, height: 600, aspectRatio: 800 / 600, kind: 'photo', durationMs: null }],
     illustration: { file: 'assets/m1-illustration.jpg', width: 1024, height: 1024, aspectRatio: 1 },
     shareToken: null,
@@ -1051,7 +1051,7 @@ Deno.test('buildManifestMemory normalizes blank content to null text and default
 Deno.test('buildManifest assembles the full BookManifest shape, including language + downloadFailures', () => {
   const now = new Date('2026-08-26T12:00:00.000Z');
   const result = buildManifest({
-    child: { id: 'child-1', name: 'Enzo' },
+    child: { id: 'child-1', name: 'Tomás' },
     scope: { kind: 'age-year', label: 'Year One', start: '2023-06-01', end: '2024-05-31' },
     outlineRun: 'child-1-2026-08-26T10-00-00-000Z',
     memories: {},
@@ -1062,7 +1062,7 @@ Deno.test('buildManifest assembles the full BookManifest shape, including langua
   });
 
   assertEquals(result, {
-    child: { id: 'child-1', name: 'Enzo' },
+    child: { id: 'child-1', name: 'Tomás' },
     scope: { kind: 'age-year', label: 'Year One', start: '2023-06-01', end: '2024-05-31' },
     generatedAt: '2026-08-26T12:00:00.000Z',
     outlineRun: 'child-1-2026-08-26T10-00-00-000Z',
@@ -1076,7 +1076,7 @@ Deno.test('buildManifest assembles the full BookManifest shape, including langua
 
 Deno.test('buildManifest records assetMode "print" when explicitly given (round-20, --print-assets)', () => {
   const result = buildManifest({
-    child: { id: 'child-1', name: 'Enzo' },
+    child: { id: 'child-1', name: 'Tomás' },
     scope: { kind: 'age-year', label: 'Year One', start: '2023-06-01', end: '2024-05-31' },
     outlineRun: 'child-1-2026-08-26T10-00-00-000Z',
     memories: {},
@@ -1235,7 +1235,7 @@ Deno.test('parseArgs throws on a stray positional token that matches no flag', (
 
 const VALID_OUTLINE = {
   runId: 'run-1',
-  child: { id: 'child-1', name: 'Enzo' },
+  child: { id: 'child-1', name: 'Tomás' },
   scope: { type: 'age-year', ageYear: 1 },
   window: { start: '2023-06-01', endExclusive: '2024-06-01', label: 'Year One' },
   elements: [
@@ -1247,7 +1247,7 @@ const VALID_OUTLINE = {
 Deno.test('parseOutlineJson accepts a well-formed outline', () => {
   const result = parseOutlineJson(VALID_OUTLINE);
   assertEquals(result.runId, 'run-1');
-  assertEquals(result.child, { id: 'child-1', name: 'Enzo' });
+  assertEquals(result.child, { id: 'child-1', name: 'Tomás' });
   assertEquals(result.scope, { type: 'age-year' });
   assertEquals(result.window, { start: '2023-06-01', endExclusive: '2024-06-01', label: 'Year One' });
   assertEquals(result.elements.length, 2);

@@ -15,7 +15,7 @@ function deps(overrides: Partial<SchedulerDeps> & { rpcData?: Record<string, unk
     listKeys: async () => [],
     deleteKey: async (key) => void deleted.push(key),
     recipients: async () => ['tok-1', 'tok-2'],
-    memberName: async () => 'Enzo Yi',
+    memberName: async () => 'Tomás Rivera',
     sendPush: async (token, _title, body, data) => {
       pushes.push({ token, body, data });
       return true;
@@ -60,19 +60,19 @@ Deno.test('surfaced films are announced to each recipient with the year-film rou
   const { d, pushes } = deps({
     rpcData: {
       year_film_notifications_due: [{
-        film_id: 'f1', family_id: 'fam', kind: 'birthday', family_member_id: 'kid', age_year: 4, language: 'es', scope_start_date: '2025-10-23',
+        film_id: 'f1', family_id: 'fam', kind: 'birthday', family_member_id: 'kid', age_year: 4, language: 'es', scope_start_date: '2025-03-14',
       }],
     },
   });
   const summary = await runScheduler(d);
   assertEquals(summary.notified, 2);
-  assertEquals(pushes[0].body, 'El cuarto año de Enzo, en una pequeña película 🎂');
+  assertEquals(pushes[0].body, 'El cuarto año de Tomás, en una pequeña película 🎂');
   assertEquals(pushes[0].data, { route: 'year-film', familyId: 'fam', filmId: 'f1' });
 });
 
 Deno.test('push copy per kind and language', () => {
-  assertEquals(filmPushCopy({ kind: 'birthday', language: 'en', ageYear: 2, scopeStart: '2024-11-08', childName: 'Mara' }).body,
-    "Mara's second year, in one little film 🎂");
+  assertEquals(filmPushCopy({ kind: 'birthday', language: 'en', ageYear: 2, scopeStart: '2024-11-14', childName: 'Lucía' }).body,
+    "Lucía's second year, in one little film 🎂");
   assertEquals(filmPushCopy({ kind: 'family_month', language: 'en', ageYear: null, scopeStart: '2026-09-01', childName: null }).body,
     'Your September, in one little film');
   assertEquals(filmPushCopy({ kind: 'family_month', language: 'es', ageYear: null, scopeStart: '2026-09-01', childName: null }).body,

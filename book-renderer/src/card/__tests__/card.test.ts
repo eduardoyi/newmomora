@@ -420,7 +420,7 @@ describe('card data', () => {
 
   it('typographic quotes, and no period right after a closing quote that ended the sentence', () => {
     expect(typographic('dijo "hola" y l\'amie')).toBe('dijo \u201Chola\u201D y l\u2019amie');
-    expect(typographic('Dijo: "es un lugar mágico!". Mara')).toBe('Dijo: \u201Ces un lugar mágico!\u201D Mara');
+    expect(typographic('Dijo: "es un lugar mágico!". Lucía')).toBe('Dijo: \u201Ces un lugar mágico!\u201D Lucía');
     expect(typographic('Dijo "sí?". Y "no."." ok')).toContain('\u201Csí?\u201D Y');
     expect(typographic('Dijo "sí". Fin.')).toBe('Dijo \u201Csí\u201D. Fin.');
   });

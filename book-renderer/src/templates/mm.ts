@@ -529,7 +529,7 @@ export const SECTION_HEADER_WIDTH_FRACTION = 0.8;
  * month-title string actually contains — a SPACE (much narrower than a
  * letter, ~0.25-0.3em) and digits (near-monospaced, ~0.5-0.6em) — while
  * still erring wide. Calibrated against the real books: at this value,
- * Mara's "julio 2025"/"octubre 2025" headers (short titles) grow the tall-
+ * Lucía's "julio 2025"/"octubre 2025" headers (short titles) grow the tall-
  * solo column from the old flat 94mm toward the 123.5mm (65%) ceiling, and
  * a themed spread's own long title stays close to the 95mm (50%) floor —
  * see anchorMediaLayout.ts's `tallSoloHeaderWidthCapMm`. Owner-tunable.

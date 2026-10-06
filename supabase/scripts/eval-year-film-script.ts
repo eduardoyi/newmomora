@@ -16,9 +16,9 @@
  * account, owner review). stdout stays counts-only.
  *
  * Examples:
- *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:4 --film month:2026-08
- *   npm run eval:year-film-script -- --children Enzo,Mara --film birthday:Enzo:3 --subsample 60 --seed 1
- *   npm run eval:year-film-script -- --children Enzo,Mara --film holiday:2026 [--today 2026-11-10] [--subsample 30 --seed 1] [--greeting christmas|holidays|new-year]
+ *   npm run eval:year-film-script -- --children Tomás,Lucía --film birthday:Tomás:4 --film month:2026-08
+ *   npm run eval:year-film-script -- --children Tomás,Lucía --film birthday:Tomás:3 --subsample 60 --seed 1
+ *   npm run eval:year-film-script -- --children Tomás,Lucía --film holiday:2026 [--today 2026-11-10] [--subsample 30 --seed 1] [--greeting christmas|holidays|new-year]
  *
  * `holiday:YYYY` is the Holiday Card film (docs/plans/holiday-cards.md §6 C2):
  * Jan 1 → `--today` inclusive, share-safe pool only, floors 20 moments / 12

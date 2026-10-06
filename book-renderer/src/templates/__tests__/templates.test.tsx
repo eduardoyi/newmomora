@@ -81,7 +81,7 @@ describe('template snapshots', () => {
       'mem-0': makeMemory({ assets: [makeAsset()] }),
       'mem-1': makeMemory({
         type: 'text_illustration',
-        text: 'Enzo built a very tall tower.',
+        text: 'Tomás built a very tall tower.',
         assets: [],
         illustration: { file: 'assets/illo.webp', width: 1024, height: 1024, aspectRatio: 1 },
       }),
@@ -116,7 +116,7 @@ describe('template snapshots', () => {
       'mem-0': makeMemory({ assets: [makeAsset()] }),
       'mem-1': makeMemory({
         type: 'text_illustration',
-        text: 'Enzo built a very tall tower.',
+        text: 'Tomás built a very tall tower.',
         assets: [],
         illustration: { file: 'assets/illo.webp', width: 1024, height: 1024, aspectRatio: 1 },
       }),
@@ -148,9 +148,9 @@ describe('template snapshots', () => {
     // previously-undetected instance of the very "folio stamped on the
     // illustration" bug round-9 fixes. The rendered width now matches the
     // FITTED size, not the nominal one.
-    const expectedIlloHeightMm = illustratedIlloFitHeightMm('Enzo built a very tall tower.'.length, false, false, 1);
+    const expectedIlloHeightMm = illustratedIlloFitHeightMm('Tomás built a very tall tower.'.length, false, false, 1);
     const expectedIlloWidthMm = expectedIlloHeightMm * 1; // aspect 1 -> width === height
-    expect(expectedIlloWidthMm).toBeLessThan(illustratedIlloWidthMm('Enzo built a very tall tower.'.length, false));
+    expect(expectedIlloWidthMm).toBeLessThan(illustratedIlloWidthMm('Tomás built a very tall tower.'.length, false));
     expect(renderedIlloWidthMm).toBeCloseTo(expectedIlloWidthMm, 3);
     // Sanity: the stack's own width should be exactly the documented 640
     // canvas-px constant (160mm), confirming the % decode above is sound.
@@ -499,7 +499,7 @@ describe('template snapshots', () => {
       'mem-0': makeMemory({ assets: [makeAsset()] }),
       'mem-1': makeMemory({
         type: 'text_illustration',
-        text: 'Enzo built a very tall tower with many many many blocks stacked precariously high, one on top of the other, for what felt like ages.',
+        text: 'Tomás built a very tall tower with many many many blocks stacked precariously high, one on top of the other, for what felt like ages.',
         assets: [],
         illustration: { file: 'assets/illo.webp', width: 1024, height: 1024, aspectRatio: 1 },
       }),
@@ -853,7 +853,7 @@ describe('multi-year (everything scope) Closing + ThroughTheYears furniture', ()
       ),
     };
   };
-  const scope = (kind: string, label = 'Everything') => ({ kind, label, start: '2022-10-23', end: '2026-09-30' });
+  const scope = (kind: string, label = 'Everything') => ({ kind, label, start: '2022-10-17', end: '2026-09-30' });
 
   it('Closing, everything scope: es headline + years from scope.start/end (no English label leak)', () => {
     const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) }, { language: 'es', scope: scope('everything') });
@@ -951,7 +951,7 @@ describe('multi-year (everything scope) Closing + ThroughTheYears furniture', ()
   });
   it('QuoteCollection: 1-3 entries on a single (non-spread) page carry the furniture title; a quotesTitle param overrides it; verbatim text; es/en defaults', () => {
     const manifest = makeManifest({
-      'mem-1': makeMemory({ date: '2025-03-01', text: 'Uno, verbatim "quoted" - Enzo', assets: [] }),
+      'mem-1': makeMemory({ date: '2025-03-01', text: 'Uno, verbatim "quoted" - Tomás', assets: [] }),
       'mem-2': makeMemory({ date: '2025-03-02', text: 'Dos.', assets: [] }),
       'mem-3': makeMemory({ date: '2025-03-03', text: 'Tres.', assets: [] }),
     });
@@ -972,7 +972,7 @@ describe('multi-year (everything scope) Closing + ThroughTheYears furniture', ()
     const single = render({});
     expect(single).toContain('Cosas que dijiste');
     expect(single).toContain('data-spread="false"');
-    expect(single).toContain('Uno, verbatim &quot;quoted&quot; - Enzo');
+    expect(single).toContain('Uno, verbatim &quot;quoted&quot; - Tomás');
     expect((single.match(/quote-collection__mark/g) ?? []).length).toBe(3);
     expect(render({ quotesTitle: 'Lo que decias' })).toContain('Lo que decias');
     expect(render({ sectionHeader: { kicker: 'Marzo 2025', title: 'Marzo', special: false } })).not.toContain('Cosas que dijiste');

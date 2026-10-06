@@ -4,8 +4,8 @@ import { resolveMemberIdsForIllustration } from './illustration-members.ts';
 Deno.test('resolveMemberIdsForIllustration keeps explicit tags', () => {
   const ids = resolveMemberIdsForIllustration(
     ['11111111-1111-4111-8111-111111111111'],
-    'Enzo ate oatmeal',
-    [{ id: '22222222-2222-4222-8222-222222222222', name: 'Mara' }],
+    'Tomás ate oatmeal',
+    [{ id: '22222222-2222-4222-8222-222222222222', name: 'Lucía' }],
   );
 
   assertEquals(ids, ['11111111-1111-4111-8111-111111111111']);
@@ -14,15 +14,15 @@ Deno.test('resolveMemberIdsForIllustration keeps explicit tags', () => {
 Deno.test('resolveMemberIdsForIllustration infers members mentioned in content', () => {
   const ids = resolveMemberIdsForIllustration(
     [],
-    'Enzo and Mara did not want oatmeal',
+    'Tomás and Lucía did not want oatmeal',
     [
-      { id: 'enzo-id', name: 'Enzo' },
-      { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+      { id: 'tomas-id', name: 'Tomás' },
+      { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
       { id: 'timmy-id', name: 'Timmy' },
     ],
   );
 
-  assertEquals(ids, ['enzo-id', 'mara-id']);
+  assertEquals(ids, ['tomas-id', 'lucia-id']);
 });
 
 Deno.test('resolveMemberIdsForIllustration ignores substring false positives', () => {

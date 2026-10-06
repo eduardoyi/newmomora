@@ -14,7 +14,7 @@ Deno.test('isOwnChild: any other explicit role is not a child', () => {
 });
 
 Deno.test('isOwnChild: unsorted falls back to the DOB < 13 rule', () => {
-  assertEquals(isOwnChild({ relationship: null, dateOfBirth: '2022-10-23' }, TODAY), true);
+  assertEquals(isOwnChild({ relationship: null, dateOfBirth: '2022-10-17' }, TODAY), true);
   assertEquals(isOwnChild({ dateOfBirth: '2013-09-28' }, TODAY), false); // turns 13 today
   assertEquals(isOwnChild({ dateOfBirth: '2013-09-29' }, TODAY), true);
   assertEquals(isOwnChild({ relationship: null, dateOfBirth: null }, TODAY), false);

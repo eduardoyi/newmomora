@@ -5,8 +5,8 @@ import {
 } from '@/utils/auto-memory-tags';
 
 const members = [
-  { id: 'enzo-id', name: 'Enzo' },
-  { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
+  { id: 'tomas-id', name: 'Tomás' },
+  { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
   { id: 'leo-id', name: 'Leo' },
   { id: 'mia-id', name: 'Mia' },
   { id: 'ava-id', name: 'Ava' },
@@ -15,21 +15,21 @@ const members = [
 describe('auto-memory-tags', () => {
   it('auto-adds mentioned members', () => {
     const next = applyAutoMemoryTags({
-      content: 'Marita refused oatmeal',
+      content: 'Lucita refused oatmeal',
       members,
       selectedMemberIds: [],
       suppressedMemberIds: [],
     });
 
-    expect(next).toEqual(['mara-id']);
+    expect(next).toEqual(['lucia-id']);
   });
 
   it('does not re-add suppressed members', () => {
     const next = applyAutoMemoryTags({
-      content: 'Marita refused oatmeal',
+      content: 'Lucita refused oatmeal',
       members,
       selectedMemberIds: [],
-      suppressedMemberIds: ['mara-id'],
+      suppressedMemberIds: ['lucia-id'],
     });
 
     expect(next).toEqual([]);
@@ -39,26 +39,26 @@ describe('auto-memory-tags', () => {
     const next = applyAutoMemoryTags({
       content: 'plain breakfast',
       members,
-      selectedMemberIds: ['mara-id'],
+      selectedMemberIds: ['lucia-id'],
       suppressedMemberIds: [],
     });
 
-    expect(next).toEqual(['mara-id']);
+    expect(next).toEqual(['lucia-id']);
   });
 
   it('auto-adds every mentioned member', () => {
     const next = applyAutoMemoryTags({
-      content: 'Enzo Mara Leo Mia Ava',
+      content: 'Tomás Lucía Leo Mia Ava',
       members,
       selectedMemberIds: [],
       suppressedMemberIds: [],
     });
 
-    expect(next).toEqual(['enzo-id', 'mara-id', 'leo-id', 'mia-id', 'ava-id']);
+    expect(next).toEqual(['tomas-id', 'lucia-id', 'leo-id', 'mia-id', 'ava-id']);
   });
 
   it('returns same reference when unchanged', () => {
-    const selected = ['mara-id'];
+    const selected = ['lucia-id'];
     const next = applyAutoMemoryTags({
       content: 'quiet morning',
       members,
@@ -71,42 +71,42 @@ describe('auto-memory-tags', () => {
 
   it('toggle off removes selection and suppresses', () => {
     const result = toggleMemoryTag({
-      memberId: 'mara-id',
-      selectedMemberIds: ['mara-id', 'enzo-id'],
+      memberId: 'lucia-id',
+      selectedMemberIds: ['lucia-id', 'tomas-id'],
       suppressedMemberIds: [],
       selecting: false,
     });
 
-    expect(result.selectedMemberIds).toEqual(['enzo-id']);
-    expect(result.suppressedMemberIds).toEqual(['mara-id']);
+    expect(result.selectedMemberIds).toEqual(['tomas-id']);
+    expect(result.suppressedMemberIds).toEqual(['lucia-id']);
   });
 
   it('toggle off when unselected still suppresses', () => {
     const result = toggleMemoryTag({
-      memberId: 'mara-id',
+      memberId: 'lucia-id',
       selectedMemberIds: [],
       suppressedMemberIds: [],
       selecting: false,
     });
 
     expect(result.selectedMemberIds).toEqual([]);
-    expect(result.suppressedMemberIds).toEqual(['mara-id']);
+    expect(result.suppressedMemberIds).toEqual(['lucia-id']);
   });
 
   it('toggle on clears suppression and adds the member', () => {
     const result = toggleMemoryTag({
-      memberId: 'mara-id',
-      selectedMemberIds: ['enzo-id'],
-      suppressedMemberIds: ['mara-id'],
+      memberId: 'lucia-id',
+      selectedMemberIds: ['tomas-id'],
+      suppressedMemberIds: ['lucia-id'],
       selecting: true,
     });
 
-    expect(result.selectedMemberIds).toEqual(['enzo-id', 'mara-id']);
+    expect(result.selectedMemberIds).toEqual(['tomas-id', 'lucia-id']);
     expect(result.suppressedMemberIds).toEqual([]);
   });
 
   it('toggle on has no global tag cap', () => {
-    const selected = ['enzo-id', 'mara-id', 'leo-id', 'mia-id'];
+    const selected = ['tomas-id', 'lucia-id', 'leo-id', 'mia-id'];
     const result = toggleMemoryTag({
       memberId: 'ava-id',
       selectedMemberIds: selected,

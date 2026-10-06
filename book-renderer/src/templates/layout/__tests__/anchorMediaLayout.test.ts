@@ -440,7 +440,7 @@ describe('tallSoloHeaderWidthCapMm (owner review round 9, item 3 — title-aware
     expect(specialCap).toBeLessThanOrEqual(ordinaryCap);
   });
 
-  it('real-book calibration: julio/octubre 2025-style titles clear 110mm — the Mara octubre portrait DOM spot-check floor', () => {
+  it('real-book calibration: julio/octubre 2025-style titles clear 110mm — the Lucía octubre portrait DOM spot-check floor', () => {
     // Mirrors AnchorMedia.tsx's real call shape for a 3:4 portrait (0.75)
     // beside a short month header.
     const availableHeightMm = SAFE_BOX_MM - 22; // FOOTER_RESERVE_MM
@@ -528,7 +528,7 @@ describe('tallSoloCanSitBesideHeader (round-16 follow-up: wrapping titles force 
 });
 
 describe('tallSoloCanSitBesideHeader with the image aspect (Phase 2d: non-wrapping but WIDE titles)', () => {
-  // The real Enzo pages: "julio–septiembre 2023" style 3-month titles model 113-146mm wide
+  // The real Tomás pages: "julio–septiembre 2023" style 3-month titles model 113-146mm wide
   // (< the 152mm wrap limit) yet the 50% floor column starts at x = 95mm, under the title.
   it('refuses beside-header placement when the column the image would get intersects the modeled title box', () => {
     for (const title of ['julio–septiembre 2023', 'noviembre 2025–enero 2026']) {

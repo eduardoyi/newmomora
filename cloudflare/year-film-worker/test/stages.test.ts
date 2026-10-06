@@ -119,8 +119,8 @@ const frame = (key: string, kind: string) => ({ memoryId: `m-${key}`, date: '202
 const script = {
   version: 1, kind: 'family_month', language: 'en', title: 'September', scope: { start: '2026-09-01', endExclusive: '2026-10-01' },
   span: { from: '2026-09-01', to: '2026-09-30' },
-  subjects: [{ id: 'kid', name: 'Enzo', referenceKey: 'ref.jpg' }],
-  references: [{ id: 'kid', name: 'Enzo', referenceKey: 'ref.jpg' }],
+  subjects: [{ id: 'kid', name: 'Tomás', referenceKey: 'ref.jpg' }],
+  references: [{ id: 'kid', name: 'Tomás', referenceKey: 'ref.jpg' }],
   scenes: [
     { type: 'sound', source: 'audio', frame: frame('a.m4a', 'audio'), caption: null, needsVoiceCheck: false, alternates: [] },
     { type: 'burst', role: 'month', titles: [], frames: [frame('v.mp4', 'video')], secondsPerFrame: 0.5 },
@@ -172,7 +172,7 @@ describe('frame checks', () => {
     let chats = 0;
     const chat: ChatFn = async () => {
       chats += 1;
-      return { content: JSON.stringify({ frames: [{ index: 0, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smile', quality: 'good', unsafe: false, screen_capture: false }] }), usage: null, ok: true };
+      return { content: JSON.stringify({ frames: [{ index: 0, main_subject: 'Tomás', children_visible: ['Tomás'], face_visible: true, expression: 'smile', quality: 'good', unsafe: false, screen_capture: false }] }), usage: null, ok: true };
     };
     expect(await runFrameChecks(deps({ bridge, chat, storage: prepared() }), PREFIX)).toEqual({ done: true });
     expect(chats).toBe(1);
@@ -208,7 +208,7 @@ describe('public film (holiday card)', () => {
     [`${PREFIX}prep/w1.jpg`]: 1, [`${PREFIX}prep/ref.jpg`]: 1, [`${PREFIX}prep/w10.jpg`]: 1, [`${PREFIX}prep/w20.jpg`]: 1,
     [`${PREFIX}prep/w10.wav`]: 1, [`${PREFIX}prep/w20.wav`]: 1,
   });
-  const strictAnswer = (underdressed: boolean) => JSON.stringify({ frames: [{ index: 0, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed, screen_capture: false }] });
+  const strictAnswer = (underdressed: boolean) => JSON.stringify({ frames: [{ index: 0, main_subject: 'Tomás', children_visible: ['Tomás'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed, screen_capture: false }] });
   const clearVoice = JSON.stringify({ child_voice: 'clear', adult_dominant: false, starts_cleanly: true, heard: '' });
 
   it('asks the strict prompt and caches under the public key, never reusing a normal verdict', async () => {
@@ -258,7 +258,7 @@ describe('public film (holiday card)', () => {
       const candidates = (text.match(/CANDIDATE index/g) ?? []).length;
       calls.push(`frames:${candidates}`);
       // s1's window is underdressed, s2's is fine.
-      return { content: JSON.stringify({ frames: [0, 1].slice(0, candidates).map((index) => ({ index, main_subject: 'Enzo', children_visible: ['Enzo'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed: index === 0, screen_capture: false })) }), usage: null, ok: true };
+      return { content: JSON.stringify({ frames: [0, 1].slice(0, candidates).map((index) => ({ index, main_subject: 'Tomás', children_visible: ['Tomás'], face_visible: true, expression: 'smiling', quality: 'good', unsafe: false, underdressed: index === 0, screen_capture: false })) }), usage: null, ok: true };
     };
     expect(await runVoiceChecks(deps({ bridge, chat, storage: holidayStorage() }), PREFIX)).toEqual({ done: true });
     expect(calls).toEqual(['frames:2', 'voice']); // one batched frame check, then a single voice check (s2 only)

@@ -72,7 +72,7 @@ const editable: Extract<YearFilmEditOptions, { editable: true }> = {
     { memoryId: 'm-4', date: '2026-09-07', kind: 'photo' },
   ],
   quoteCandidates: [
-    { memoryId: 'q-1', textHash: 'h1', text: 'I love the moon', speakerName: 'Enzo', isCurrent: true },
+    { memoryId: 'q-1', textHash: 'h1', text: 'I love the moon', speakerName: 'Tomás', isCurrent: true },
     { memoryId: 'q-2', textHash: 'h2', text: 'More cheese please', speakerName: null, isCurrent: false },
   ],
 };

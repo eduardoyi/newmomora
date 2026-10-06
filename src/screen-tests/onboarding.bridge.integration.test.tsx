@@ -4,7 +4,7 @@
 //
 // S8 had zero test coverage before this fix. Device-reported bug
 // (2026-07-31): the body used to read only `draft.kidNames[0]`, so a
-// two-kid family's body always named the first-entered kid ("Enzo's
+// two-kid family's body always named the first-entered kid ("Tomás's
 // journal...") regardless of how many kids existed. This suite is the
 // regression coverage for the fix: single-kid families keep the named
 // possessive, and 2+ kid families get the journal-flavored "Your" instead

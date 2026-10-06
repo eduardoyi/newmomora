@@ -70,7 +70,7 @@ const NO_PHOTO_MEMBER = {
   id: 'member-1',
   user_id: 'user-1',
   family_id: 'family-1',
-  name: 'Mara',
+  name: 'Lucía',
   nicknames: [] as string[],
   date_of_birth: null as string | null,
   gender: null,
@@ -130,7 +130,7 @@ describe('edit family member -- photo field', () => {
     mockMembers([NO_PHOTO_MEMBER]);
     mockedPickFromLibrary.mockResolvedValue({
       selection: {
-        uri: 'file:///mara.jpg',
+        uri: 'file:///lucia.jpg',
         contentType: 'image/jpeg',
         captureDate: null,
         referenceDate: '2026-07-01',
@@ -161,8 +161,8 @@ describe('edit family member -- photo field', () => {
     const savedInput = mockUpdateMember.mock.calls[0][0];
     expect(savedInput).toMatchObject({
       memberId: 'member-1',
-      name: 'Mara',
-      photoUri: 'file:///mara.jpg',
+      name: 'Lucía',
+      photoUri: 'file:///lucia.jpg',
       photoContentType: 'image/jpeg',
       photoReferenceDate: '2026-07-01',
       photoDateSource: 'default_today',
@@ -192,7 +192,7 @@ describe('edit family member -- photo field', () => {
     mockMembers([{ ...NO_PHOTO_MEMBER, date_of_birth: '2022-06-15' }]);
     mockedPickFromLibrary.mockResolvedValue({
       selection: {
-        uri: 'file:///mara.jpg',
+        uri: 'file:///lucia.jpg',
         contentType: 'image/jpeg',
         captureDate: '2020-01-01',
         referenceDate: '2020-01-01', // before the 2022-06-15 date of birth

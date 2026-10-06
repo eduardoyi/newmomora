@@ -36,12 +36,12 @@ Deno.test('parseArgs reads --apply, --rollback, repeatable --family-id, --batch-
 });
 
 Deno.test('decideRow dismisses the owner over-tag cases', () => {
-  assertEquals(decideRow(row('first-haircut'), memory('Enzo en la barbería, corte de pelo')), {
+  assertEquals(decideRow(row('first-haircut'), memory('Tomás en la barbería, corte de pelo')), {
     action: 'dismiss',
     reason: 'no_explicit_language',
   });
-  assertEquals(decideRow(row('first-question'), memory('Enzo me preguntó por qué el cielo es azul')).action, 'dismiss');
-  assertEquals(decideRow(row('balance-bike'), memory('Enzo en su bici de equilibrio')).action, 'dismiss');
+  assertEquals(decideRow(row('first-question'), memory('Tomás me preguntó por qué el cielo es azul')).action, 'dismiss');
+  assertEquals(decideRow(row('balance-bike'), memory('Tomás en su bici de equilibrio')).action, 'dismiss');
 });
 
 Deno.test('decideRow keeps explicit memories', () => {

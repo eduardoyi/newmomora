@@ -79,11 +79,11 @@ describe('parsers', () => {
     const row = parseOrderRow({
       id: 'o', card_id: 'c', status: 'cancelled', packs: 3, price_cents: 7470, currency: 'USD', region: 'US', gelato_status: null,
       tracking_number: null, tracking_url: null, carrier: null, shipped_at: null, failure_reason: null, refunded_at: '2026-10-03T12:00:00Z',
-      shipping_address: { name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
+      shipping_address: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
       created_at: '2026-10-01T10:00:00Z',
     });
     expect(row).toMatchObject({ orderId: 'o', cardId: 'c', status: 'cancelled', cards: 30, priceCents: 7470, refunded: true, refundedAt: '2026-10-03T12:00:00Z', createdAt: '2026-10-01T10:00:00Z' });
-    expect(row.shippingAddress).toEqual({ name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' });
+    expect(row.shippingAddress).toEqual({ name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' });
     expect(parseOrderRow({ id: 'o', status: 'paid', shipping_address: { name: 'x' } }).shippingAddress).toBeNull();
     expect(() => parseOrderRow(null)).toThrow(CardApiError);
   });

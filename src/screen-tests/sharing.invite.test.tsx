@@ -57,7 +57,7 @@ const mockedUseFamilyRelationships = useFamilyRelationships as jest.Mock;
 
 const ANA = { id: 'm-ana', name: 'Grandma Ana', relationship: 'grandparent' };
 const LUCA = { id: 'm-luca', name: '  Luca  ', relationship: 'parent' };
-const ENZO = { id: 'm-enzo', name: 'Enzo', relationship: 'child' };
+const TOMAS = { id: 'm-tomas', name: 'Tomás', relationship: 'child' };
 const TAKEN = { id: 'm-taken', name: 'Tia Rosa', relationship: 'aunt_uncle' };
 const HIDDEN = { id: 'm-hidden', name: 'Hidden Person', relationship: 'cousin' };
 const LONG_NAME = 'A'.repeat(80);
@@ -65,7 +65,7 @@ const LONG = { id: 'm-long', name: LONG_NAME, relationship: 'cousin' };
 
 function setPeople(links: { familyMemberId: string | null }[] = [{ familyMemberId: 'm-taken' }]) {
   mockedUseFamilyMembers.mockReturnValue({
-    members: [ANA, LUCA, ENZO, TAKEN, HIDDEN, LONG],
+    members: [ANA, LUCA, TOMAS, TAKEN, HIDDEN, LONG],
     isLoading: false,
   });
   mockedUseFamilyRelationships.mockReturnValue({ links, isLoadingLinks: false });
@@ -161,17 +161,17 @@ describe('InviteFamilyMemberScreen -- who is this for', () => {
 
     expect(queryByTestId('sharing-invite-person-m-ana')).toBeTruthy();
     expect(queryByTestId('sharing-invite-person-m-luca')).toBeTruthy();
-    expect(queryByTestId('sharing-invite-person-m-enzo')).toBeNull();
+    expect(queryByTestId('sharing-invite-person-m-tomas')).toBeNull();
     expect(queryByTestId('sharing-invite-person-m-taken')).toBeNull();
     expect(queryByTestId('sharing-invite-person-m-hidden')).toBeNull();
   });
 
   it('hides the chip row when nobody is eligible', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [ENZO], isLoading: false });
+    mockedUseFamilyMembers.mockReturnValue({ members: [TOMAS], isLoading: false });
     const { queryByTestId } = renderScreen();
 
     expect(queryByTestId('sharing-invite-name-input')).toBeTruthy();
-    expect(queryByTestId('sharing-invite-person-m-enzo')).toBeNull();
+    expect(queryByTestId('sharing-invite-person-m-tomas')).toBeNull();
   });
 
   it('caps the input at 60 characters and capitalizes words', () => {
@@ -271,7 +271,7 @@ describe('InviteFamilyMemberScreen -- who is this for', () => {
     });
   });
 
-  it.each(['m-taken', 'm-enzo', 'm-hidden', 'm-missing'])(
+  it.each(['m-taken', 'm-tomas', 'm-hidden', 'm-missing'])(
     'ignores an ineligible memberId param (%s) silently',
     async (memberId) => {
       mockedUseParams.mockReturnValue({ memberId });

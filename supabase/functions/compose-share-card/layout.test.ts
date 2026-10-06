@@ -558,7 +558,7 @@ Deno.test('layout: quote card accent strip uses the emotion color, not a fixed g
   const data: ShareCardData = {
     variant: 'quote',
     dateLabel: formatShareCardDateLabel('2026-06-08'),
-    caption: 'Hoy Enzo por fin hizo pupu.',
+    caption: 'Hoy Tomás por fin hizo pupu.',
     imageDataUri: null,
     imageAspectRatio: null,
     members: [],

@@ -23,7 +23,7 @@ const checks = (v: Array<{ check: string }>, check: string) => v.filter((x) => x
 // ---------------------------------------------------------------------------
 
 describe('3a: a tall solo photo never overlaps a wide section-header title', () => {
-  // The real Enzo pages: a 3-month backbone ("julio–septiembre 2023", ~21+
+  // The real Tomás pages: a 3-month backbone ("julio–septiembre 2023", ~21+
   // chars) whose title is NON-wrapping yet wider than the 50% column the tall
   // image claims beside it.
   const tallBook = (title: string, aspect: number) => {

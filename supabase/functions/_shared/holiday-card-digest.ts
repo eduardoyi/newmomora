@@ -74,7 +74,7 @@ export interface DigestHighlight {
   /** Whether the holiday film shows this memory (information for the review
    * page only: the letter does not prefer film moments). */
   inFilm: boolean;
-  /** Where the film shows it (film path only), e.g. "Enzo's chapter". */
+  /** Where the film shows it (film path only), e.g. "Tomás's chapter". */
   sceneHint?: string;
 }
 

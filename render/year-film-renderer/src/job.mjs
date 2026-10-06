@@ -88,14 +88,14 @@ export function scenesFromTimeline(timeline) {
 }
 
 /** H.264 CRF for the film. HyperFrames' default ("looks", CRF 16) made a 60s
- * film 81 MB (~10.6 Mbps) — heavy to stream on cellular and to share. On Enzo's
+ * film 81 MB (~10.6 Mbps) — heavy to stream on cellular and to share. On Tomás's
  * Year Three (Sep 2026): CRF 22 → 27.5 MB (VMAF 96.8), 24 → 21.6 MB (VMAF 95.8),
  * no visible difference side by side; 23 sits in the 20–30 MB/min target. */
 export const FILM_CRF = 23;
 
 /** The cover: the FIRST scene, settled (owner, 2026-09-29): the title card /
  * cold open the film opens on ("Nuestro 2026" + the photo pile, "Recuerdos de
- * tu tercer año, Enzo" + portraits), after its entrance animations and before
+ * tu tercer año, Tomás" + portraits), after its entrance animations and before
  * the seam transition into the next scene. The `max` guards very short first
  * scenes (below ~0.7s the 0.85 point would sit inside the transition, so fall
  * back to the midpoint). */

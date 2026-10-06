@@ -25,7 +25,7 @@ Deno.test('only a clear child voice without a dominant adult carries the sound s
 });
 
 Deno.test('request carries the audio as wav input with text-only output', () => {
-  const body = buildVoiceCheckRequestBody('UklGRg==', 'Mara') as { modalities: string[]; messages: { content: { type: string }[] }[] };
+  const body = buildVoiceCheckRequestBody('UklGRg==', 'Lucía') as { modalities: string[]; messages: { content: { type: string }[] }[] };
   assertEquals(body.modalities, ['text']);
   assertEquals(body.messages[0].content.map((c) => c.type), ['text', 'input_audio']);
 });

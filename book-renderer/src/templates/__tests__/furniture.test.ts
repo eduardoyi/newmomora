@@ -32,7 +32,7 @@ describe('furniture — table completeness', () => {
       expect(f.throughTheYears.kicker.length).toBeGreaterThan(0);
       expect(f.throughTheYears.titleLines[0].length).toBeGreaterThan(0);
       expect(f.throughTheYears.titleLines[1].length).toBeGreaterThan(0);
-      expect(f.dedication.greeting('Enzo').length).toBeGreaterThan(0);
+      expect(f.dedication.greeting('Tomás').length).toBeGreaterThan(0);
       expect(f.dedication.signature.length).toBeGreaterThan(0);
       expect(f.dedication.scanInstruction.length).toBeGreaterThan(0);
       expect(f.scanToWatch.length).toBeGreaterThan(0);
@@ -59,7 +59,7 @@ describe('furniture — Spanish strings match the design canvas verbatim', () =>
 
   it('dedication', () => {
     const es = getFurniture('es');
-    expect(es.dedication.greeting('Enzo')).toBe('Para Enzo,');
+    expect(es.dedication.greeting('Tomás')).toBe('Para Tomás,');
     // Generic, not "mami y papi" (owner review round 3 — the household
     // writing it isn't always that shape).
     expect(es.dedication.signature).toBe('Escrito con amor, día a día');
@@ -105,23 +105,23 @@ describe('furniture — Spanish strings match the design canvas verbatim', () =>
 });
 
 describe('furniture — spread-title attribution pattern', () => {
-  it('spells the moment count in words (es): "Enzo, 10 de agosto de 2025 — seis momentos"', () => {
+  it('spells the moment count in words (es): "Tomás, 10 de agosto de 2025 — seis momentos"', () => {
     const es = getFurniture('es');
     const dateStr = formatLongDate('2025-08-10', 'es');
     expect(dateStr).toBe('10 de agosto de 2025');
-    expect(es.spreadTitleAttribution('Enzo', dateStr, 6)).toBe('Enzo, 10 de agosto de 2025 — seis momentos');
+    expect(es.spreadTitleAttribution('Tomás', dateStr, 6)).toBe('Tomás, 10 de agosto de 2025 — seis momentos');
   });
 
   it('spells the moment count in words (en)', () => {
     const en = getFurniture('en');
     const dateStr = formatLongDate('2025-08-10', 'en');
     expect(dateStr).toBe('August 10, 2025');
-    expect(en.spreadTitleAttribution('Enzo', dateStr, 6)).toBe('Enzo, August 10, 2025 — six moments');
+    expect(en.spreadTitleAttribution('Tomás', dateStr, 6)).toBe('Tomás, August 10, 2025 — six moments');
   });
 
   it('omits the moment count entirely at 1 (no "un momento" invented)', () => {
-    expect(getFurniture('es').spreadTitleAttribution('Enzo', '10 de agosto de 2025', 1)).toBe('Enzo, 10 de agosto de 2025');
-    expect(getFurniture('en').spreadTitleAttribution('Enzo', 'August 10, 2025', 1)).toBe('Enzo, August 10, 2025');
+    expect(getFurniture('es').spreadTitleAttribution('Tomás', '10 de agosto de 2025', 1)).toBe('Tomás, 10 de agosto de 2025');
+    expect(getFurniture('en').spreadTitleAttribution('Tomás', 'August 10, 2025', 1)).toBe('Tomás, August 10, 2025');
   });
 
   it('falls back to digits past the spelled-out range (0-10)', () => {
@@ -135,9 +135,9 @@ describe('furniture — spread-title attribution pattern', () => {
 describe('date formatting per role and language', () => {
   const ISO = '2024-12-12';
 
-  it('formatIndexDate: "23 oct" (es, no year) / "Oct 23" (en, no year)', () => {
-    expect(formatIndexDate('2024-10-23', 'es')).toBe('23 oct');
-    expect(formatIndexDate('2024-10-23', 'en')).toBe('Oct 23');
+  it('formatIndexDate: "17 oct" (es, no year) / "Oct 17" (en, no year)', () => {
+    expect(formatIndexDate('2024-10-17', 'es')).toBe('17 oct');
+    expect(formatIndexDate('2024-10-17', 'en')).toBe('Oct 17');
   });
 
   it('formatLongDate: "10 de agosto de 2025" (es) / "August 10, 2025" (en)', () => {

@@ -31,7 +31,7 @@
  *
  * Examples:
  *   npm run eval:year-film-assets -- --from 2026-09-27T15-45-00-086Z
- *   npm run eval:year-film-assets -- --from 2026-09-27T15-45-00-086Z --film birthday-enzo-y4
+ *   npm run eval:year-film-assets -- --from 2026-09-27T15-45-00-086Z --film birthday-tomas-y4
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import type { FilmScene, FilmScript, FrameRef } from '../functions/_shared/year-film-script.ts';

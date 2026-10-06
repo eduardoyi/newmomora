@@ -137,7 +137,7 @@ describe('FamilyActivitySheet', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockedUseFamilyMembers.mockReturnValue({ members: [{ id: 'kid-1', name: 'Enzo' }] } as never);
+    mockedUseFamilyMembers.mockReturnValue({ members: [{ id: 'kid-1', name: 'Tomás' }] } as never);
     mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'owner' } as never);
     mockedUseProfiles.mockReturnValue({
       profiles: [
@@ -565,7 +565,7 @@ describe('FamilyActivitySheet', () => {
     it('renders the titled row with a film cover instead of memory thumbnails', () => {
       const { getByTestId, getByLabelText } = renderSheet();
 
-      expect(getByLabelText("Enzo's Year Four is ready")).toBeTruthy();
+      expect(getByLabelText("Tomás' Year Four is ready")).toBeTruthy();
       expect(getByTestId('family-activity-film-cover-group-film-event-1')).toBeTruthy();
     });
 

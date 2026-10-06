@@ -498,11 +498,11 @@ Deno.test('load_generation_context assembles the full scope for an active, match
         createServiceClient: createStubClient({
           memory_books: [{
             id: BOOK_ID, family_id: 'family-1', child_id: childId, scope_kind: 'age_year',
-            scope_start_date: '2024-10-23', scope_end_date: '2025-10-22', scope_label: 'Year One',
+            scope_start_date: '2024-10-17', scope_end_date: '2025-10-16', scope_label: 'Year One',
             page_budget: 60, status: 'generating', generation_attempt_id: ATTEMPT_ID,
           }],
           families: [{ name: 'The Rivas Family', gallery_caption_language: 'en' }],
-          family_members: [{ id: childId, name: 'Enzo', date_of_birth: '2024-10-23', nicknames: [] }],
+          family_members: [{ id: childId, name: 'Tomás', date_of_birth: '2024-10-17', nicknames: [] }],
           memories: [{ id: memoryId, content: 'hello', memory_date: '2025-01-01', memory_type: 'text', emotion: null, topics: [], topic_details: {}, illustration_key: null }],
         }),
       },
@@ -510,11 +510,11 @@ Deno.test('load_generation_context assembles the full scope for an active, match
     assertEquals(response.status, 200);
     const body = await response.json();
     assertEquals(body.book.id, BOOK_ID);
-    assertEquals(body.book.windowStart, '2024-10-23');
+    assertEquals(body.book.windowStart, '2024-10-17');
     // scope_end_date is inclusive in the DB -- the bridge converts to a
     // half-open [start, endExclusive) window by adding one day.
-    assertEquals(body.book.windowEndExclusive, '2025-10-23');
-    assertEquals(body.child, { id: childId, name: 'Enzo', dateOfBirth: '2024-10-23' });
+    assertEquals(body.book.windowEndExclusive, '2025-10-17');
+    assertEquals(body.child, { id: childId, name: 'Tomás', dateOfBirth: '2024-10-17' });
     assertEquals(body.familyName, 'The Rivas Family');
     assertEquals(body.memories.length, 1);
   });
@@ -530,7 +530,7 @@ const CHILD_ID = '66666666-6666-4666-8666-666666666666';
 function bookRow(overrides: Record<string, unknown> = {}) {
   return {
     id: BOOK_ID, family_id: 'family-1', child_id: CHILD_ID, scope_kind: 'age_year',
-    scope_start_date: '2024-10-23', scope_end_date: '2025-10-22', scope_label: 'Year One',
+    scope_start_date: '2024-10-17', scope_end_date: '2025-10-16', scope_label: 'Year One',
     page_budget: 60, status: 'generating', generation_attempt_id: ATTEMPT_ID,
     ...overrides,
   };
@@ -559,7 +559,7 @@ function loadTables(memoryCount: number, overrides: { book?: Record<string, unkn
   return {
     memory_books: [bookRow(overrides.book)],
     families: [{ name: 'The Rivas Family', gallery_caption_language: 'en' }],
-    family_members: overrides.omitChild ? [] : [{ id: CHILD_ID, name: 'Enzo', date_of_birth: '2024-10-23', nicknames: [] }],
+    family_members: overrides.omitChild ? [] : [{ id: CHILD_ID, name: 'Tomás', date_of_birth: '2024-10-17', nicknames: [] }],
     memories,
     family_member_portrait_versions: [],
     ...childRows(memories),
@@ -670,7 +670,7 @@ const WINDOW_MEMORIES: FakeMemory[] = [
 
 function everythingChildTables() {
   const tables = loadTables(3, { book: { scope_kind: 'everything', child_id: CHILD_ID, scope_start_date: null, scope_end_date: null } });
-  // DOB 2024-10-23 (loadTables' child) floors the scan; m1 is tagged only to a sibling.
+  // DOB 2024-10-17 (loadTables' child) floors the scan; m1 is tagged only to a sibling.
   return tables;
 }
 

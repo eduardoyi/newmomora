@@ -35,7 +35,7 @@ const NEGATIVE = [
   'primavera en el parque',
   'Primo Luis vino a verlo',
   'primero fue el helado, luego el parque',
-  'Mara aprendió a lanzar besitos.',
+  'Lucía aprendió a lanzar besitos.',
 ];
 
 describe('explicit-first rule parity (renderer copy vs worker helper)', () => {

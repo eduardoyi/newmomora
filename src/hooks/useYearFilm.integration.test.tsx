@@ -60,7 +60,7 @@ describe('useYearFilm', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedMembers.mockResolvedValue({
-      data: [{ id: 'kid-1', name: 'Enzo' }] as never,
+      data: [{ id: 'kid-1', name: 'Tomás' }] as never,
       error: null,
     });
   });
@@ -75,7 +75,7 @@ describe('useYearFilm', () => {
 
     const { result } = renderHook(() => useYearFilm('film-1'), { wrapper });
 
-    await waitFor(() => expect(result.current.title).toBe("Enzo's Year Four"));
+    await waitFor(() => expect(result.current.title).toBe("Tomás' Year Four"));
     expect(mockEq).toHaveBeenCalledWith('id', 'film-1');
     expect(mockedMembers).toHaveBeenCalledWith('family-B');
     expect(result.current.film?.family_id).toBe('family-B');
@@ -93,8 +93,8 @@ describe('useYearFilm', () => {
     await waitFor(() => expect(result.current.film).not.toBeNull());
     expect(result.current.title).toBeNull();
 
-    resolveMembers({ data: [{ id: 'kid-1', name: 'Enzo' }] as never, error: null });
-    await waitFor(() => expect(result.current.title).toBe("Enzo's Year Four"));
+    resolveMembers({ data: [{ id: 'kid-1', name: 'Tomás' }] as never, error: null });
+    await waitFor(() => expect(result.current.title).toBe("Tomás' Year Four"));
   });
 
   it('titles a monthly recap without waiting for members', async () => {

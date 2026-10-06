@@ -91,8 +91,8 @@ describe('sentry', () => {
   it('keeps only navigation and network breadcrumbs, without query strings or bodies', () => {
     const { scrubBreadcrumb } = loadFresh();
 
-    expect(scrubBreadcrumb({ category: 'console', message: 'Mara said hi' })).toBeNull();
-    expect(scrubBreadcrumb({ category: 'touch', message: "Open Mara's memory" })).toBeNull();
+    expect(scrubBreadcrumb({ category: 'console', message: 'Lucía said hi' })).toBeNull();
+    expect(scrubBreadcrumb({ category: 'touch', message: "Open Lucía's memory" })).toBeNull();
     expect(scrubBreadcrumb({ message: 'no category' })).toBeNull();
     expect(
       scrubBreadcrumb({

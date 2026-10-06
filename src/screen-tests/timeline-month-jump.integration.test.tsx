@@ -54,7 +54,7 @@ jest.mock('@/hooks/useMemoryMonthCounts', () => ({
   useMemoryMonthCounts: () => ({ counts: mockMonthCounts(), isLoaded: true, refreshIfStale: mockRefreshIfStale }),
 }));
 jest.mock('@/hooks/useFamilyMembers', () => ({
-  useFamilyMembers: () => ({ members: [{ id: 'member-1', name: 'Enzo' }], isLoading: false }),
+  useFamilyMembers: () => ({ members: [{ id: 'member-1', name: 'Tomás' }], isLoading: false }),
   useOnboardingStatus: () => ({ isLoading: false, needsFamilyMember: false }),
 }));
 jest.mock('@/hooks/useContentSafety', () => ({

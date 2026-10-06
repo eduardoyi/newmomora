@@ -101,8 +101,8 @@ describe('Timeline search screen', () => {
       (selector ? selector({ isVisible: false }) : { isVisible: false }));
     mockedUseFamilyMembers.mockReturnValue({
       members: [
-        { id: 'member-enzo', name: 'Enzo' },
-        { id: 'member-mara', name: 'Mara' },
+        { id: 'member-tomas', name: 'Tomás' },
+        { id: 'member-lucia', name: 'Lucía' },
       ],
     } as never);
     mockedUseMemorySearch.mockReturnValue(searchState());
@@ -113,9 +113,9 @@ describe('Timeline search screen', () => {
     const { getByTestId, getByText } = renderScreen();
 
     expect(getByTestId('memory-search-input').props.autoFocus).toBe(true);
-    expect(getByTestId('memory-search-person-member-enzo')).toBeTruthy();
+    expect(getByTestId('memory-search-person-member-tomas')).toBeTruthy();
     expect(getByTestId('memory-search-feeling-joy')).toBeTruthy();
-    expect(getByText('Mara')).toBeTruthy();
+    expect(getByText('Lucía')).toBeTruthy();
     expect(getByTestId('memory-search-hint')).toBeTruthy();
     expect(trackEvent).toHaveBeenCalledWith('memory_search_opened', { source: 'timeline' });
   });
@@ -138,25 +138,25 @@ describe('Timeline search screen', () => {
   it('lets several people be chosen, plus one feeling', () => {
     const { getByTestId } = renderScreen();
 
-    fireEvent.press(getByTestId('memory-search-person-member-mara'));
-    fireEvent.press(getByTestId('memory-search-person-member-enzo'));
+    fireEvent.press(getByTestId('memory-search-person-member-lucia'));
+    fireEvent.press(getByTestId('memory-search-person-member-tomas'));
     fireEvent.press(getByTestId('memory-search-feeling-joy'));
-    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-mara', 'member-enzo'], emotion: 'joy' });
-    expect(mockedUseMemorySearchFacets).toHaveBeenLastCalledWith({ query: '', memberIds: ['member-mara', 'member-enzo'], emotion: 'joy' });
-    expect(getByTestId('memory-search-person-member-mara').props.accessibilityState).toEqual({ selected: true, disabled: false });
+    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-lucia', 'member-tomas'], emotion: 'joy' });
+    expect(mockedUseMemorySearchFacets).toHaveBeenLastCalledWith({ query: '', memberIds: ['member-lucia', 'member-tomas'], emotion: 'joy' });
+    expect(getByTestId('memory-search-person-member-lucia').props.accessibilityState).toEqual({ selected: true, disabled: false });
 
     fireEvent.press(getByTestId('memory-search-feeling-calm'));
     expect(lastSearchArgs()?.emotion).toBe('calm');
 
-    fireEvent.press(getByTestId('memory-search-person-member-mara'));
+    fireEvent.press(getByTestId('memory-search-person-member-lucia'));
     fireEvent.press(getByTestId('memory-search-feeling-calm'));
-    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-enzo'], emotion: null });
+    expect(lastSearchArgs()).toEqual({ query: '', memberIds: ['member-tomas'], emotion: null });
   });
 
   it('hides chips with no memories, dims chips that would match nothing, and shows counts', () => {
     mockedUseMemorySearchFacets.mockReturnValue({
       facets: {
-        members: { 'member-mara': { total: 4, matching: 2 }, 'member-enzo': { total: 3, matching: 0 } },
+        members: { 'member-lucia': { total: 4, matching: 2 }, 'member-tomas': { total: 3, matching: 0 } },
         emotions: { joy: { total: 5, matching: 2 }, sad: { total: 1, matching: 0 } },
       },
     });
@@ -165,13 +165,13 @@ describe('Timeline search screen', () => {
     // No memories at all: hidden.
     expect(queryByTestId('memory-search-feeling-calm')).toBeNull();
     // Would match nothing right now: shown, dimmed, not tappable.
-    const enzo = getByTestId('memory-search-person-member-enzo');
-    expect(enzo.props.accessibilityState).toEqual({ selected: false, disabled: true });
-    fireEvent.press(enzo);
+    const tomas = getByTestId('memory-search-person-member-tomas');
+    expect(tomas.props.accessibilityState).toEqual({ selected: false, disabled: true });
+    fireEvent.press(tomas);
     expect(lastSearchArgs()?.memberIds).toEqual([]);
     expect(getByTestId('memory-search-feeling-sad').props.accessibilityState.disabled).toBe(true);
     // Counts.
-    expect(within(getByTestId('memory-search-person-member-mara')).getByText('2')).toBeTruthy();
+    expect(within(getByTestId('memory-search-person-member-lucia')).getByText('2')).toBeTruthy();
     expect(within(getByTestId('memory-search-feeling-joy')).getByText('2')).toBeTruthy();
   });
 
@@ -182,7 +182,7 @@ describe('Timeline search screen', () => {
 
   it('shows compact rows with highlights, why it matched, and the right thumbnail', () => {
     const hits: MemorySearchHit[] = [
-      { memory: memory({ id: 'text-1', content: 'Cumpleaños de Mara', emotion: 'joy' }), matchedIn: 'text' },
+      { memory: memory({ id: 'text-1', content: 'Cumpleaños de Lucía', emotion: 'joy' }), matchedIn: 'text' },
       { memory: memory({ id: 'voice-1', memory_type: 'audio', content: 'Bedtime', media_content_type: 'audio/mp4' }), matchedIn: 'voice' },
       {
         memory: memory({ id: 'photo-1', memory_type: 'media', media_content_type: 'image/jpeg', mediaAssets: [{ id: 'a', object_key: 'u/p.jpg', content_type: 'image/jpeg', preview_object_key: 'u/p-preview.jpg' } as never] }),
@@ -272,7 +272,7 @@ describe('Timeline search screen', () => {
 
   it('clears the text and closes with Cancel', () => {
     const { getByTestId, queryByTestId } = renderScreen();
-    fireEvent.changeText(getByTestId('memory-search-input'), 'mara');
+    fireEvent.changeText(getByTestId('memory-search-input'), 'lucia');
     fireEvent.press(getByTestId('memory-search-clear'));
     expect(getByTestId('memory-search-input').props.value).toBe('');
     expect(queryByTestId('memory-search-clear')).toBeNull();

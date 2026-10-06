@@ -71,24 +71,24 @@ Deno.test('classifyChildOrAdult classifies by the <13 threshold and unknown DOB'
 
 Deno.test('computeBirthdayMatch matches a tagged member within the default 7-day window, with a signed offset', () => {
   const result = computeBirthdayMatch(
-    [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     '2026-06-18',
   );
-  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Enzo', ageTurned: 4, daysOffset: 3 });
+  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Tomás', ageTurned: 4, daysOffset: 3 });
   assertEquals(result.birthMatch, null);
 });
 
 Deno.test('computeBirthdayMatch reports a negative daysOffset when the memory precedes the anniversary', () => {
   const result = computeBirthdayMatch(
-    [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     '2026-06-12',
   );
-  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Enzo', ageTurned: 4, daysOffset: -3 });
+  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Tomás', ageTurned: 4, daysOffset: -3 });
 });
 
 Deno.test('computeBirthdayMatch returns nulls outside the window', () => {
   const result = computeBirthdayMatch(
-    [{ id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }],
+    [{ id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }],
     '2026-06-30',
   );
   assertEquals(result.birthdayMatch, null);
@@ -104,33 +104,33 @@ Deno.test('computeBirthdayMatch ignores members with no date_of_birth', () => {
 Deno.test('computeBirthdayMatch picks the closer of two matching members, tie-breaking on id', () => {
   const result = computeBirthdayMatch(
     [
-      { id: 'b', name: 'Mara', dateOfBirth: '2024-06-12' }, // 3 days away
-      { id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }, // 0 days away
+      { id: 'b', name: 'Lucía', dateOfBirth: '2024-06-12' }, // 3 days away
+      { id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }, // 0 days away
     ],
     '2026-06-15',
   );
-  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Enzo', ageTurned: 4, daysOffset: 0 });
+  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Tomás', ageTurned: 4, daysOffset: 0 });
 });
 
 Deno.test('computeBirthdayMatch reports the birth itself (ageTurned 0) as birthMatch, not birthdayMatch', () => {
   const result = computeBirthdayMatch(
-    [{ id: 'a', name: 'Mara', dateOfBirth: '2026-06-15' }],
+    [{ id: 'a', name: 'Lucía', dateOfBirth: '2026-06-15' }],
     '2026-06-18',
   );
   assertEquals(result.birthdayMatch, null);
-  assertEquals(result.birthMatch, { memberId: 'a', memberName: 'Mara', daysFromBirth: 3 });
+  assertEquals(result.birthMatch, { memberId: 'a', memberName: 'Lucía', daysFromBirth: 3 });
 });
 
 Deno.test('computeBirthdayMatch tracks birthdayMatch and birthMatch independently for different members', () => {
   const result = computeBirthdayMatch(
     [
-      { id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' }, // turns 4 -- a real birthday
-      { id: 'b', name: 'Mara', dateOfBirth: '2026-06-16' }, // born the day before -- a birth, not a birthday
+      { id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' }, // turns 4 -- a real birthday
+      { id: 'b', name: 'Lucía', dateOfBirth: '2026-06-16' }, // born the day before -- a birth, not a birthday
     ],
     '2026-06-15',
   );
-  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Enzo', ageTurned: 4, daysOffset: 0 });
-  assertEquals(result.birthMatch, { memberId: 'b', memberName: 'Mara', daysFromBirth: -1 });
+  assertEquals(result.birthdayMatch, { memberId: 'a', memberName: 'Tomás', ageTurned: 4, daysOffset: 0 });
+  assertEquals(result.birthMatch, { memberId: 'b', memberName: 'Lucía', daysFromBirth: -1 });
 });
 
 // --- nearbyHolidays ----------------------------------------------------------
@@ -230,12 +230,12 @@ Deno.test('gateTopicsByDate: an unknown topic id is treated as ungated (passes t
 
 Deno.test('buildMemoryContext computes age/personType/daysToBirthday per tagged member', () => {
   const context = buildMemoryContext('2026-06-18', [
-    { id: 'a', name: 'Enzo Garcia', dateOfBirth: '2022-06-15' },
+    { id: 'a', name: 'Tomás Garcia', dateOfBirth: '2022-06-15' },
     { id: 'b', name: 'Grandma', dateOfBirth: null },
   ]);
 
   assertEquals(context.memoryDate, '2026-06-18');
-  assertEquals(context.members[0].firstName, 'Enzo');
+  assertEquals(context.members[0].firstName, 'Tomás');
   assertEquals(context.members[0].ageYears, 4);
   assertEquals(context.members[0].personType, 'child');
   assertEquals(context.members[0].daysToBirthday, -3);
@@ -253,7 +253,7 @@ Deno.test('formatMemoryContextForPrompt renders a readable block with no tagged 
 
 Deno.test('formatMemoryContextForPrompt includes a birthday-proximity line for a tagged child', () => {
   const context = buildMemoryContext('2026-06-12', [
-    { id: 'a', name: 'Enzo', dateOfBirth: '2022-06-15' },
+    { id: 'a', name: 'Tomás', dateOfBirth: '2022-06-15' },
   ]);
   const text = formatMemoryContextForPrompt(context);
   assertEquals(text.includes('birthday in 3d'), true);

@@ -24,7 +24,7 @@ function order(overrides: Record<string, unknown> = {}): CardOrderStatus {
     priceCents: 7470,
     currency: 'USD',
     region: 'US',
-    shippingAddress: { name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
+    shippingAddress: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
     ...overrides,
   });
 }
@@ -136,7 +136,7 @@ describe('cardStatusLayoutModel (card order -> the shared status page)', () => {
   });
 
   it('ships-to names the country and only hints at a fix while it can still be fixed', () => {
-    expect(cardStatusLayoutModel(order({ status: 'paid' }), opts).shipTo).toMatchObject({ name: 'Mara Rivera', countryName: 'United States', hint: expect.stringContaining('Wrong address?') });
+    expect(cardStatusLayoutModel(order({ status: 'paid' }), opts).shipTo).toMatchObject({ name: 'Lucía Rivera', countryName: 'United States', hint: expect.stringContaining('Wrong address?') });
     expect(cardStatusLayoutModel(order({ status: 'shipped' }), opts).shipTo?.hint).toBeNull();
     expect(cardStatusLayoutModel(order({ shippingAddress: null }), opts).shipTo).toBeNull();
   });

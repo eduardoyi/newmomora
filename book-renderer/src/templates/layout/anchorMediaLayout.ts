@@ -479,7 +479,7 @@ export function tallSoloCanSitBesideHeader(
   title: string | null,
   special: boolean,
   /**
-   * Phase 2d fix (real Enzo "Everything" book, pages for 3-month sections such
+   * Phase 2d fix (real Tomás "Everything" book, pages for 3-month sections such
    * as "julio–septiembre 2023"): a title can be NON-wrapping yet wider than
    * the column the image claims — the modeled title box then reaches under the
    * image's left edge (the 50% floor column starts at `safe - 0.5*safe`, but a

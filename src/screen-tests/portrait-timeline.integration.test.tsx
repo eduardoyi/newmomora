@@ -70,7 +70,7 @@ const version = {
   family_id: 'family-1',
   family_member_id: 'member-1',
   user_id: 'user-1',
-  reference_date: '2025-11-08',
+  reference_date: '2025-11-12',
   date_source: 'exif' as const,
   profile_picture_key: 'user-1/member-1/portrait-1/photo.jpg',
   illustrated_profile_key: 'user-1/member-1/portrait-1/output.webp',
@@ -80,8 +80,8 @@ const version = {
   generation_output_key: null,
   deletion_token: null,
   deletion_started_at: null,
-  created_at: '2025-11-08T00:00:00.000Z',
-  updated_at: '2025-11-08T00:00:00.000Z',
+  created_at: '2025-11-12T00:00:00.000Z',
+  updated_at: '2025-11-12T00:00:00.000Z',
 };
 
 describe('PortraitTimelineScreen', () => {

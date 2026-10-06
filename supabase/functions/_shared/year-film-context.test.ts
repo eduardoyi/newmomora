@@ -6,7 +6,7 @@ function rows(): FamilyRows {
   return {
     family: { id: 'f', name: 'Fam', gallery_caption_language: 'es' },
     members: [
-      { id: 'kid', name: 'Enzo Yi', date_of_birth: '2022-10-23', relationship: 'child', created_at: '2024-01-01' },
+      { id: 'kid', name: 'Tomás Rivera', date_of_birth: '2022-03-14', relationship: 'child', created_at: '2024-01-01' },
       { id: 'niece', name: 'Elena', date_of_birth: '2020-05-01', relationship: 'cousin', created_at: '2024-01-01' },
     ],
     memories: [
@@ -42,7 +42,7 @@ Deno.test('planFilm: skip reasons before any paid call', () => {
   const data = mapFamilyRows(rows());
   assertEquals(planFilm(data, { kind: 'birthday', familyMemberId: 'niece', ageYear: 6, scopeStart: '2025-05-01', scopeEndExclusive: '2026-05-04' }),
     { ok: false, reason: 'NOT_OWN_CHILD' });
-  assertEquals(planFilm(data, { kind: 'birthday', familyMemberId: 'kid', ageYear: 4, scopeStart: '2025-10-23', scopeEndExclusive: '2026-10-26' }),
+  assertEquals(planFilm(data, { kind: 'birthday', familyMemberId: 'kid', ageYear: 4, scopeStart: '2025-03-14', scopeEndExclusive: '2026-03-17' }),
     { ok: false, reason: 'BELOW_FLOORS' });
   assertEquals(planFilm(data, { kind: 'family_month', familyMemberId: null, ageYear: null, scopeStart: '2026-01-01', scopeEndExclusive: '2026-02-01' }),
     { ok: false, reason: 'BELOW_FLOORS' });
@@ -174,7 +174,7 @@ Deno.test('planFilm: birthday / month / year films ignore the card-film fields (
   const extras = { edits: { greeting: 'christmas', preferredCloseMedia: ['x'] }, hasPublished: true };
   const month = { ...base, kind: 'family_month' as const, scopeStart: '2026-01-01', scopeEndExclusive: '2026-02-01' };
   const year = { ...base, kind: 'family_year' as const, scopeStart: '2026-01-01', scopeEndExclusive: '2027-01-01' };
-  const birthday = { kind: 'birthday' as const, familyMemberId: 'kid', ageYear: 4, scopeStart: '2025-10-23', scopeEndExclusive: '2026-10-26' };
+  const birthday = { kind: 'birthday' as const, familyMemberId: 'kid', ageYear: 4, scopeStart: '2025-03-14', scopeEndExclusive: '2026-03-17' };
   for (const film of [month, year, birthday]) {
     assertEquals(planFilm(data, { ...film, ...extras }), planFilm(data, film));
     assertEquals(planFilm(data, { ...film, ...extras }), { ok: false, reason: 'BELOW_FLOORS' });

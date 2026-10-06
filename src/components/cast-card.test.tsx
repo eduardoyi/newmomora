@@ -10,7 +10,7 @@ const member = {
   id: 'member-1',
   user_id: 'user-1',
   family_id: 'family-1',
-  name: 'Mara',
+  name: 'Lucía',
   nicknames: [],
   date_of_birth: '2022-01-01',
   gender: null,
@@ -26,7 +26,7 @@ const member = {
 const incompleteMember = {
   ...member,
   id: 'member-2',
-  name: 'Enzo',
+  name: 'Tomás',
   date_of_birth: null,
   profile_picture_key: null,
   illustrated_profile_key: null,
@@ -68,7 +68,7 @@ describe('CastCard', () => {
     );
 
     expect(getByTestId('family-member-incomplete-member-2').props.children).toBe(
-      "Tap to add Enzo's birthday & photo",
+      "Tap to add Tomás's birthday & photo",
     );
     expect(queryByText('2022-01-01')).toBeNull();
   });
@@ -106,7 +106,7 @@ describe('CastCard', () => {
     );
 
     expect(getByTestId('family-member-incomplete-member-2').props.children).toBe(
-      "Tap to add Enzo's photo",
+      "Tap to add Tomás's photo",
     );
   });
 

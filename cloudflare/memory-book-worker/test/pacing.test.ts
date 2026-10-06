@@ -227,7 +227,7 @@ describe('admitThemedSpreads', () => {
     expect(new Set(allGaps).size).toBe(allGaps.length);
   });
 
-  it('real Enzo shape: 12 candidates over 9 segments, budget 8 -> survivors within the spill bound, none adjacent-sharing', () => {
+  it('real Tomás shape: 12 candidates over 9 segments, budget 8 -> survivors within the spill bound, none adjacent-sharing', () => {
     const spreads = [
       admissionSpread('bikes-scooters', 0, 4),
       admissionSpread('funny', 1, 6),

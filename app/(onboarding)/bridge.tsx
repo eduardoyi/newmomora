@@ -7,7 +7,7 @@
 //
 // Device-reported bug (2026-07-31): this used to read only
 // `draft.kidNames[0]`, so a two-kid family's body always named the
-// first-entered kid ("Enzo's journal...") regardless of how many kids
+// first-entered kid ("Tomás's journal...") regardless of how many kids
 // existed -- exactly the "picking a favorite" disparity naming this feature
 // exists to avoid (docs/features/onboarding.md decision 8). S8 runs before
 // S9's capture/tagging exists, so this resolves off the full kid list, not

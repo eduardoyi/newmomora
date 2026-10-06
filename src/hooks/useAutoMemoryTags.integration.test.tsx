@@ -3,8 +3,8 @@ import { act, renderHook } from '@testing-library/react-native';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 
 const members = [
-  { id: 'mara-id', name: 'Mara', nicknames: ['Marita'] },
-  { id: 'enzo-id', name: 'Enzo' },
+  { id: 'lucia-id', name: 'Lucía', nicknames: ['Lucita'] },
+  { id: 'tomas-id', name: 'Tomás' },
 ];
 
 describe('useAutoMemoryTags integration', () => {
@@ -12,10 +12,10 @@ describe('useAutoMemoryTags integration', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: true }));
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
+      result.current.applyForContent('Lucita refused oatmeal');
     });
 
-    expect(result.current.selectedMemberIds).toEqual(['mara-id']);
+    expect(result.current.selectedMemberIds).toEqual(['lucia-id']);
   });
 
   it('reports the full selection when auto-tagging crosses the illustration limit', () => {
@@ -46,7 +46,7 @@ describe('useAutoMemoryTags integration', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: false }));
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
+      result.current.applyForContent('Lucita refused oatmeal');
     });
 
     expect(result.current.selectedMemberIds).toEqual([]);
@@ -56,37 +56,37 @@ describe('useAutoMemoryTags integration', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: true }));
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
+      result.current.applyForContent('Lucita refused oatmeal');
     });
 
     act(() => {
-      result.current.toggleMember('mara-id');
+      result.current.toggleMember('lucia-id');
     });
 
     act(() => {
-      result.current.applyForContent('Marita still refused oatmeal');
+      result.current.applyForContent('Lucita still refused oatmeal');
     });
 
     expect(result.current.selectedMemberIds).toEqual([]);
-    expect(result.current.suppressedMemberIds).toEqual(['mara-id']);
+    expect(result.current.suppressedMemberIds).toEqual(['lucia-id']);
   });
 
   it('applyVoiceResult resets suppression and sets voice mentions', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: true }));
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
-      result.current.toggleMember('mara-id');
+      result.current.applyForContent('Lucita refused oatmeal');
+      result.current.toggleMember('lucia-id');
     });
 
     act(() => {
       result.current.applyVoiceResult({
-        cleanedText: 'Enzo spilled oatmeal',
-        mentionedMemberIds: ['enzo-id'],
+        cleanedText: 'Tomás spilled oatmeal',
+        mentionedMemberIds: ['tomas-id'],
       });
     });
 
-    expect(result.current.selectedMemberIds).toEqual(['enzo-id']);
+    expect(result.current.selectedMemberIds).toEqual(['tomas-id']);
     expect(result.current.suppressedMemberIds).toEqual([]);
   });
 
@@ -111,7 +111,7 @@ describe('useAutoMemoryTags integration', () => {
     );
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
+      result.current.applyForContent('Lucita refused oatmeal');
     });
 
     expect(result.current.selectedMemberIds).toEqual([]);
@@ -119,19 +119,19 @@ describe('useAutoMemoryTags integration', () => {
     rerender({ enabled: true });
 
     act(() => {
-      result.current.applyForContent('Marita refused oatmeal');
+      result.current.applyForContent('Lucita refused oatmeal');
     });
 
-    expect(result.current.selectedMemberIds).toEqual(['mara-id']);
+    expect(result.current.selectedMemberIds).toEqual(['lucia-id']);
   });
 
   it('initializeTags loads saved tags without auto-inference', () => {
     const { result } = renderHook(() => useAutoMemoryTags({ members, enabled: false }));
 
     act(() => {
-      result.current.initializeTags(['enzo-id']);
+      result.current.initializeTags(['tomas-id']);
     });
 
-    expect(result.current.selectedMemberIds).toEqual(['enzo-id']);
+    expect(result.current.selectedMemberIds).toEqual(['tomas-id']);
   });
 });

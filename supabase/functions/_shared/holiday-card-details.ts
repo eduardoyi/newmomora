@@ -1,5 +1,5 @@
 // Holiday card per-child SPECIFIC details (owner review, round 4: "thin kid
-// details — labels are generic ('cuentos', 'parque'); Enzo = likes stories").
+// details — labels are generic ('cuentos', 'parque'); Tomás = likes stories").
 // The open labels the analysis wrote are too generic to say who a child is, so
 // the letter's concrete detail comes from the memories' own TEXT:
 //   1. selectDetailExcerpts: up to 25 share-safe, high-scoring excerpts that
@@ -154,8 +154,8 @@ function escapeRegExp(text: string): string {
 const BOTH_TEXT = /(?<!\p{L})(los dos|las dos|ambos|ambas|los tres|both|the two of them|the kids|los niños)(?!\p{L})/iu;
 
 /** In a memory that tags several own children, does the sentence holding
- * `phrase` belong to `owner`? Owner review v8: one run gave Mara's imaginary
- * plane to Enzo, because both were tagged. */
+ * `phrase` belong to `owner`? Owner review v8: one run gave Lucía's imaginary
+ * plane to Tomás, because both were tagged. */
 export function ownsDetail(excerpt: DetailExcerpt, phrase: string, owner: { name: string; nicknames?: string[] } | undefined): boolean {
   if (!owner || !excerpt.sharedWith?.length) return true;
   const sentences = excerpt.text.split(/(?<=[.!?;])\s+/u);
@@ -164,7 +164,7 @@ export function ownsDetail(excerpt: DetailExcerpt, phrase: string, owner: { name
   const named = (sentence: string, who: string[]) =>
     who.filter((n) => n.trim().length >= 2).some((n) => new RegExp(`(?<!\\p{L})${escapeRegExp(n.trim())}(?!\\p{L})`, 'iu').test(sentence));
   // A sentence naming this child AND another tagged child is ambiguous
-  // ("Enzo y Mara jugaban con su avión imaginario"): skip it (owner, v9).
+  // ("Tomás y Lucía jugaban con su avión imaginario"): skip it (owner, v9).
   return holding.some((sentence) =>
     BOTH_TEXT.test(sentence) || (named(sentence, names) && !named(sentence, excerpt.sharedWith ?? []))
   );

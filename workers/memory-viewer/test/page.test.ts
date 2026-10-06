@@ -55,7 +55,7 @@ describe('renderViewerPage', () => {
   });
 
   it('escapes HTML-significant characters in the caption', () => {
-    const html = renderViewerPage({ ...baseMedia, caption: 'Enzo said "<hi>" & waved' }, '/media/mem-1');
+    const html = renderViewerPage({ ...baseMedia, caption: 'Tomás said "<hi>" & waved' }, '/media/mem-1');
     expect(html).toContain('&quot;&lt;hi&gt;&quot; &amp; waved');
     expect(html).not.toContain('<hi>');
   });

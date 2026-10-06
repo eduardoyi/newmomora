@@ -9,8 +9,8 @@ import {
 } from '../src/chapters';
 
 describe('computeAgeYearChapters', () => {
-  it('DOB 2022-10-23, window 2023-01 -> 2026-09: the birthday month ends each chapter', () => {
-    const chapters = computeAgeYearChapters('2022-10-23', '2023-01', '2026-09');
+  it('DOB 2022-10-17, window 2023-01 -> 2026-09: the birthday month ends each chapter', () => {
+    const chapters = computeAgeYearChapters('2022-10-17', '2023-01', '2026-09');
     expect(chapters).toEqual([
       { ageYear: 1, startMonth: '2022-10', endMonth: '2023-10' },
       { ageYear: 2, startMonth: '2023-11', endMonth: '2024-10' },
@@ -20,7 +20,7 @@ describe('computeAgeYearChapters', () => {
   });
 
   it('every month belongs to exactly one chapter (no overlap, no gap)', () => {
-    const chapters = computeAgeYearChapters('2022-10-23', '2022-10', '2026-09');
+    const chapters = computeAgeYearChapters('2022-10-17', '2022-10', '2026-09');
     for (let i = 1; i < chapters.length; i++) {
       const prevEnd = chapters[i - 1].endMonth;
       const [y, m] = prevEnd.split('-').map(Number);
@@ -30,7 +30,7 @@ describe('computeAgeYearChapters', () => {
   });
 
   it('skips chapters that end before the first month, keeping age-year numbering', () => {
-    const chapters = computeAgeYearChapters('2022-10-23', '2024-03', '2025-02');
+    const chapters = computeAgeYearChapters('2022-10-17', '2024-03', '2025-02');
     expect(chapters.map((c) => c.ageYear)).toEqual([2, 3]);
     expect(chapters[0].startMonth).toBe('2023-11'); // theoretical, not clipped
   });
@@ -64,13 +64,13 @@ describe('computeAgeYearChapters', () => {
     expect(computeAgeYearChapters(null, '2023-01', '2024-01')).toEqual([]);
     expect(computeAgeYearChapters(undefined, '2023-01', '2024-01')).toEqual([]);
     expect(computeAgeYearChapters('nope', '2023-01', '2024-01')).toEqual([]);
-    expect(computeAgeYearChapters('2022-10-23', '2023-1', '2024-01')).toEqual([]);
-    expect(computeAgeYearChapters('2022-10-23', '2024-01', '2023-01')).toEqual([]);
+    expect(computeAgeYearChapters('2022-10-17', '2023-1', '2024-01')).toEqual([]);
+    expect(computeAgeYearChapters('2022-10-17', '2024-01', '2023-01')).toEqual([]);
   });
 });
 
 describe('chapterIndexOfMonth', () => {
-  const chapters = computeAgeYearChapters('2022-10-23', '2023-01', '2026-09');
+  const chapters = computeAgeYearChapters('2022-10-17', '2023-01', '2026-09');
 
   it('maps boundary months to the right chapter (birthday month closes its chapter)', () => {
     expect(chapterIndexOfMonth(chapters, '2023-01')).toBe(0);
@@ -89,7 +89,7 @@ describe('chapterIndexOfMonth', () => {
 });
 
 describe('dropEmptyChapters / isChapterMode / resolveChapters', () => {
-  const chapters = computeAgeYearChapters('2022-10-23', '2023-01', '2026-09');
+  const chapters = computeAgeYearChapters('2022-10-17', '2023-01', '2026-09');
 
   it('drops a chapter with zero eligible months, keeping order and age-year numbers', () => {
     // No months in chapter 2 (2023-11..2024-10).
@@ -107,24 +107,24 @@ describe('dropEmptyChapters / isChapterMode / resolveChapters', () => {
     const kept = dropEmptyChapters(chapters, ['2024-01', '2024-05']);
     expect(kept.map((c) => c.ageYear)).toEqual([2]);
     expect(isChapterMode(kept)).toBe(false);
-    expect(resolveChapters('2022-10-23', ['2024-01', '2024-05'])).toEqual([]);
+    expect(resolveChapters('2022-10-17', ['2024-01', '2024-05'])).toEqual([]);
   });
 
   it('resolveChapters returns the non-empty chapters when >= 2 remain', () => {
-    const resolved = resolveChapters('2022-10-23', ['2023-03', '2025-01', '2026-02', '2025-01']);
+    const resolved = resolveChapters('2022-10-17', ['2023-03', '2025-01', '2026-02', '2025-01']);
     expect(resolved.map((c) => c.ageYear)).toEqual([1, 3, 4]);
   });
 
   it('no DOB or no months -> no chapters, chapter mode off', () => {
     expect(resolveChapters(null, ['2023-03', '2025-01'])).toEqual([]);
-    expect(resolveChapters('2022-10-23', [])).toEqual([]);
+    expect(resolveChapters('2022-10-17', [])).toEqual([]);
     expect(isChapterMode([])).toBe(false);
   });
 });
 
 describe('computeBirthdayMonthsFromDob', () => {
   it('maps every birthday inside the window to its age', () => {
-    const map = computeBirthdayMonthsFromDob('2022-10-23', '2023-01-01', '2026-10-01');
+    const map = computeBirthdayMonthsFromDob('2022-10-17', '2023-01-01', '2026-10-01');
     expect([...map.entries()]).toEqual([
       ['2023-10', 1],
       ['2024-10', 2],
@@ -133,7 +133,7 @@ describe('computeBirthdayMonthsFromDob', () => {
   });
 
   it('is half-open: a birthday on windowEndExclusive is out, one on windowStart is in', () => {
-    expect([...computeBirthdayMonthsFromDob('2022-10-23', '2023-10-23', '2024-10-23').entries()]).toEqual([
+    expect([...computeBirthdayMonthsFromDob('2022-10-17', '2023-10-17', '2024-10-17').entries()]).toEqual([
       ['2023-10', 1],
     ]);
   });
@@ -157,6 +157,6 @@ describe('computeBirthdayMonthsFromDob', () => {
   it('empty for no DOB, an invalid DOB, or a window before the first birthday', () => {
     expect(computeBirthdayMonthsFromDob(null, '2023-01-01', '2026-10-01').size).toBe(0);
     expect(computeBirthdayMonthsFromDob('bad', '2023-01-01', '2026-10-01').size).toBe(0);
-    expect(computeBirthdayMonthsFromDob('2022-10-23', '2022-10-23', '2023-10-23').size).toBe(0);
+    expect(computeBirthdayMonthsFromDob('2022-10-17', '2022-10-17', '2023-10-17').size).toBe(0);
   });
 });

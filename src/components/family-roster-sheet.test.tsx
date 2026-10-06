@@ -45,8 +45,8 @@ describe('FamilyRosterSheet', () => {
 
   it('renders every family member and preserves selected state', () => {
     const members = [
-      createMember('enzo-id', 'Enzo', { additional_info: 'Son' }),
-      createMember('mara-id', 'Mara'),
+      createMember('tomas-id', 'Tomás', { additional_info: 'Son' }),
+      createMember('lucia-id', 'Lucía'),
       createMember('adriana-id', 'Adriana'),
       createMember('leo-id', 'Leo'),
     ];
@@ -62,19 +62,19 @@ describe('FamilyRosterSheet', () => {
           members={members}
           onClose={jest.fn()}
           onToggleMember={jest.fn()}
-          selectedMemberIds={['mara-id']}
+          selectedMemberIds={['lucia-id']}
           visible
         />
       </SafeAreaProvider>,
     );
 
-    expect(getByText('Enzo')).toBeTruthy();
-    expect(getByText('Mara')).toBeTruthy();
+    expect(getByText('Tomás')).toBeTruthy();
+    expect(getByText('Lucía')).toBeTruthy();
     expect(getByText('Adriana')).toBeTruthy();
     expect(getByText('Leo')).toBeTruthy();
     expect(queryByText('Son')).toBeNull();
-    expect(getByTestId('roster-member-mara-id').props.accessibilityState.selected).toBe(true);
-    expect(getByTestId('roster-member-enzo-id').props.accessibilityState.disabled).toBe(false);
+    expect(getByTestId('roster-member-lucia-id').props.accessibilityState.selected).toBe(true);
+    expect(getByTestId('roster-member-tomas-id').props.accessibilityState.disabled).toBe(false);
     expect(getByText('1 tagged')).toBeTruthy();
     expect(getByTestId('roster-keyboard-avoiding-view')).toBeTruthy();
   });
@@ -88,7 +88,7 @@ describe('FamilyRosterSheet', () => {
         }}
       >
         <FamilyRosterSheet
-          members={[createMember('enzo-id', 'Enzo')]}
+          members={[createMember('tomas-id', 'Tomás')]}
           onClose={jest.fn()}
           onToggleMember={jest.fn()}
           selectedMemberIds={[]}
@@ -119,7 +119,7 @@ describe('FamilyRosterSheet', () => {
         }}
       >
         <FamilyRosterSheet
-          members={[createMember('enzo-id', 'Enzo')]}
+          members={[createMember('tomas-id', 'Tomás')]}
           onClose={jest.fn()}
           onToggleMember={jest.fn()}
           selectedMemberIds={[]}
@@ -141,7 +141,7 @@ describe('FamilyRosterSheet', () => {
   });
 
   it('disables unselected rows when an illustrated-memory cap is reached', () => {
-    const members = [createMember('enzo-id', 'Enzo'), createMember('mara-id', 'Mara')];
+    const members = [createMember('tomas-id', 'Tomás'), createMember('lucia-id', 'Lucía')];
 
     const { getByTestId, getByText } = render(
       <SafeAreaProvider
@@ -155,18 +155,18 @@ describe('FamilyRosterSheet', () => {
           members={members}
           onClose={jest.fn()}
           onToggleMember={jest.fn()}
-          selectedMemberIds={['mara-id']}
+          selectedMemberIds={['lucia-id']}
           visible
         />
       </SafeAreaProvider>,
     );
 
-    expect(getByTestId('roster-member-enzo-id').props.accessibilityState.disabled).toBe(true);
+    expect(getByTestId('roster-member-tomas-id').props.accessibilityState.disabled).toBe(true);
     expect(getByText('1 of 1')).toBeTruthy();
   });
 
   it('offers to add the searched name and closes before handing it off', () => {
-    const members = [createMember('enzo-id', 'Enzo')];
+    const members = [createMember('tomas-id', 'Tomás')];
     const onClose = jest.fn();
     const onAddMember = jest.fn();
 
@@ -222,16 +222,16 @@ describe('FamilyRosterSheet', () => {
 });
 
 describe('getRosterAddLabel', () => {
-  const members = [createMember('enzo-id', 'Enzo')];
+  const members = [createMember('tomas-id', 'Tomás')];
 
   it('uses a generic label with no search or an exact match', () => {
     expect(getRosterAddLabel('', members)).toBe('Add someone new');
     expect(getRosterAddLabel('   ', members)).toBe('Add someone new');
-    expect(getRosterAddLabel(' enzo ', members)).toBe('Add someone new');
+    expect(getRosterAddLabel(' tomás ', members)).toBe('Add someone new');
   });
 
   it('names a partial or unknown search', () => {
-    expect(getRosterAddLabel('En', members)).toBe('Add “En”');
+    expect(getRosterAddLabel('To', members)).toBe('Add “To”');
     expect(getRosterAddLabel('Grandma', members)).toBe('Add “Grandma”');
   });
 });

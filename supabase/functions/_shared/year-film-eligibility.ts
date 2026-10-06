@@ -21,7 +21,7 @@ import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from './p
 export const MONTHLY_MIN_POOL = 10;
 export const MONTHLY_MIN_VISUALS = 6;
 // Owner, F1 round 2 (2026-09-27): 60 memories is the floor for a year film
-// (Enzo Y3 subsampled); richer years get fuller films, never more padding.
+// (Tomás Y3 subsampled); richer years get fuller films, never more padding.
 export const BIRTHDAY_MIN_POOL = 60;
 export const BIRTHDAY_MIN_VISUALS = 40;
 export const FAMILY_MIN_POOL = 60;

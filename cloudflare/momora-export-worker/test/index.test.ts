@@ -39,21 +39,21 @@ function seedFamily(): void {
   supabase.users.set('owner-token', { id: OWNER, email: 'owner@example.test' });
   supabase.tables.families.push({ id: 'fam-1', owner_id: OWNER, name: 'Los Yi', illustration_style: 'x', created_at: '2025-01-01T00:00:00Z', deleted_at: null });
   supabase.tables.user_profiles.push({ id: OWNER, name: 'Eduardo', timezone: 'UTC', created_at: '2025-01-01T00:00:00Z' });
-  supabase.tables.family_members.push({ id: 'mem-1', family_id: 'fam-1', user_id: null, name: 'Enzo', nicknames: null, date_of_birth: null, gender: null, profile_picture_key: 'o/enzo.jpg', illustrated_profile_key: null, illustrated_profile_status: 'none', additional_info: null, is_user_profile: false, created_at: '2025-01-01T00:00:00Z' });
+  supabase.tables.family_members.push({ id: 'mem-1', family_id: 'fam-1', user_id: null, name: 'Tomás', nicknames: null, date_of_birth: null, gender: null, profile_picture_key: 'o/tomas.jpg', illustrated_profile_key: null, illustrated_profile_status: 'none', additional_info: null, is_user_profile: false, created_at: '2025-01-01T00:00:00Z' });
   supabase.tables.memories.push(
     { id: 'mem-a', family_id: 'fam-1', user_id: OWNER, memory_type: 'media', content: 'Beach day', audio_transcript: null, link_previews: null, memory_date: '2026-07-01', emotion: 'joy', illustration_key: null, illustration_status: 'none', media_key: 'o/beach.jpg', media_content_type: 'image/jpeg', created_at: '2026-07-01T00:00:00Z' },
     { id: 'mem-b', family_id: 'fam-1', user_id: OWNER, memory_type: 'text_only', content: 'First word', audio_transcript: null, link_previews: null, memory_date: '2025-02-01', emotion: null, illustration_key: 'o/gone.webp', illustration_status: 'completed', media_key: null, media_content_type: null, created_at: '2025-02-01T00:00:00Z' },
   );
   supabase.tables.memory_media.push({ id: 'mm-1', memory_id: 'mem-a', object_key: 'o/beach.jpg', content_type: 'image/jpeg', duration_ms: null, position: 0, created_at: '' });
   supabase.tables.year_films.push(
-    { id: 'film-1', family_id: 'fam-1', kind: 'birthday', scope_start_date: '2025-10-23', scope_label: 'Year Four', video_key: 'o/year-films/f/a/film.mp4', blocked: false, ready_at: '2026-10-26T05:00:00Z' },
+    { id: 'film-1', family_id: 'fam-1', kind: 'birthday', scope_start_date: '2025-10-17', scope_label: 'Year Four', video_key: 'o/year-films/f/a/film.mp4', blocked: false, ready_at: '2026-10-20T05:00:00Z' },
     // Blocked (removed content) and unpublished films are never exported.
     { id: 'film-2', family_id: 'fam-1', kind: 'family_month', scope_start_date: '2026-09-01', scope_label: 'September', video_key: 'o/year-films/g/a/film.mp4', blocked: true, ready_at: null },
     { id: 'film-3', family_id: 'fam-1', kind: 'family_month', scope_start_date: '2026-08-01', scope_label: null, video_key: null, blocked: false, ready_at: null },
   );
   bucket.seed('o/year-films/f/a/film.mp4', 'film-bytes');
   bucket.seed('o/beach.jpg', 'beach-bytes');
-  bucket.seed('o/enzo.jpg', 'enzo-bytes');
+  bucket.seed('o/tomas.jpg', 'tomas-bytes');
   // o/gone.webp is deliberately absent: it must be reported, not fatal.
 }
 
@@ -159,8 +159,8 @@ describe('export workflow + download link', () => {
     const entries = readZip(new Uint8Array(await familyZip.arrayBuffer()));
     expect(entries.map((entry) => entry.name)).toEqual([
       'Momora - Los Yi/README.txt',
-      'Momora - Los Yi/Family/Enzo/profile-photo.jpg',
-      'Momora - Los Yi/Films/2025-10-23 Year Four.mp4',
+      'Momora - Los Yi/Family/Tomás/profile-photo.jpg',
+      'Momora - Los Yi/Films/2025-10-17 Year Four.mp4',
       'Momora - Los Yi/manifest.json',
     ]);
     expect(new TextDecoder().decode(entries[2].data)).toBe('film-bytes');

@@ -33,7 +33,7 @@ function uniqueActorNames(events: FamilyActivityEvent[]): string[] {
 }
 
 export interface FamilyActivityCopyOptions {
-  /** The family's members, for `film_ready` titles ("Enzo's Year Four"). */
+  /** The family's members, for `film_ready` titles ("Tomás's Year Four"). */
   members?: readonly YearFilmMember[];
 }
 

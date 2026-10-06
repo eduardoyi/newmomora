@@ -313,7 +313,7 @@ describe('year-films service', () => {
         { date: '2026-09-05', kind: 'photo' },
       ],
       quoteCandidates: [
-        { memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Enzo', isCurrent: true },
+        { memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Tomás', isCurrent: true },
         { memoryId: 'm-2', textHash: 'h2', text: '', speakerName: null, isCurrent: false },
       ],
     };
@@ -336,7 +336,7 @@ describe('year-films service', () => {
           { memoryId: 'm-1', date: '2026-09-04', kind: 'video' },
           { memoryId: 'm-3', date: null, kind: 'illustration' },
         ],
-        quoteCandidates: [{ memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Enzo', isCurrent: true }],
+        quoteCandidates: [{ memoryId: 'm-1', textHash: 'h1', text: 'Hi', speakerName: 'Tomás', isCurrent: true }],
       });
     });
 

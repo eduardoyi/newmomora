@@ -84,12 +84,12 @@ describe('firstUsablePreviewKey', () => {
 describe('buildTaggedMemberFeatures', () => {
   it('reads the profile nickname list and classifies child/adult from age', () => {
     const membersById = new Map<string, DbFamilyMemberRow>([
-      [CHILD_ID, { id: CHILD_ID, name: 'Enzo Rivas', date_of_birth: '2024-10-23', nicknames: ['Enzito'] }],
+      [CHILD_ID, { id: CHILD_ID, name: 'Tomás Rivas', date_of_birth: '2024-10-17', nicknames: ['Tomasito'] }],
       [OTHER_ID, { id: OTHER_ID, name: 'Maria Rivas', date_of_birth: '1990-01-01', nicknames: [] }],
     ]);
     const features = buildTaggedMemberFeatures([CHILD_ID, OTHER_ID], membersById, '2025-01-01');
     expect(features).toEqual([
-      { firstName: 'Enzo', personType: 'child', nicknames: ['Enzito'] },
+      { firstName: 'Tomás', personType: 'child', nicknames: ['Tomasito'] },
       { firstName: 'Maria', personType: 'adult', nicknames: [] },
     ]);
   });

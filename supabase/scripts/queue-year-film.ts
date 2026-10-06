@@ -10,7 +10,7 @@
  *   # never notified, invisible to members; delete them at the end)
  *   npm run year-film:queue -- --family <id> --forced family_year --start 2026-01-01 --end 2026-12-28 --apply
  *   npm run year-film:queue -- --family <id> --forced birthday --member <memberId> --age-year 4 \
- *     --start 2025-10-23 --end 2026-10-25 --apply
+ *     --start 2025-10-17 --end 2026-10-19 --apply
  *
  *   # re-run one film / every non-forced film of a family from scratch
  *   # (status queued, attempt_count, last_failure_code, skip_reason reset)

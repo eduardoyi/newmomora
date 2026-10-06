@@ -97,7 +97,7 @@ function cardData(opts: { frontOptions: CardData['frontOptions']; qrEnabled: boo
     illustrations: [],
     frontOptions: opts.frontOptions,
     portraits: [
-      { memberId: 'p1', name: 'Mara', role: 'parent', file: 'portrait-1.png', width: 1024, height: 1024 },
+      { memberId: 'p1', name: 'Lucía', role: 'parent', file: 'portrait-1.png', width: 1024, height: 1024 },
       { memberId: 'p2', name: 'Diego', role: 'parent', file: 'portrait-2.png', width: 1024, height: 1024 },
       { memberId: 'c1', name: 'Lía', role: 'child', file: 'portrait-3.png', width: 1024, height: 1024 },
       { memberId: 'c2', name: 'Teo', role: 'child', file: 'portrait-4.png', width: 1024, height: 1024 },
@@ -267,7 +267,7 @@ function qeDone(): boolean {
 }
 
 function readOrder(id: string): FxOrder | null {
-  if (id === 'fx-order-1') return { id, status: 'shipped', packs: 2, priceCents: 4980, polls: 99, address: { name: 'Mara Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' } };
+  if (id === 'fx-order-1') return { id, status: 'shipped', packs: 2, priceCents: 4980, polls: 99, address: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' } };
   const stored = loadOrders()[id];
   if (stored) return stored;
   if (id === 'fx-order-open') return { id, status: 'checkout', packs: 2, priceCents: 4980, polls: 0 };

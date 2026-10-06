@@ -13,7 +13,7 @@ function memory(overrides: Partial<ExportMemory> = {}): ExportMemory {
 
 describe('layout', () => {
   it('makes path segments safe on every desktop OS', () => {
-    expect(sanitizeSegment('Enzo: "the/best" day?  ', 'x')).toBe('Enzo the best day');
+    expect(sanitizeSegment('Tomás: "the/best" day?  ', 'x')).toBe('Tomás the best day');
     expect(sanitizeSegment('ends with dots...', 'x')).toBe('ends with dots');
     expect(sanitizeSegment('CON', 'x')).toBe('CON_');
     expect(sanitizeSegment('   ', 'Fallback')).toBe('Fallback');
@@ -21,10 +21,10 @@ describe('layout', () => {
   });
 
   it('names a memory folder by date and first words, falling back by type', () => {
-    expect(memoryFolderName(memory({ content: 'Enzo le puso el parche en el ojo a Mara\ncon mucho cariño' })))
-      .toBe('2026-09-09 - Enzo le puso el parche en el ojo a Mara');
-    expect(memoryFolderName(memory({ memory_type: 'audio', audio_transcript: 'Enzo ven a lavarte los dientes' })))
-      .toBe('2026-09-09 - Enzo ven a lavarte los dientes');
+    expect(memoryFolderName(memory({ content: 'Tomás le puso el parche en el ojo a Lucía\ncon mucho cariño' })))
+      .toBe('2026-09-09 - Tomás le puso el parche en el ojo a Lucía');
+    expect(memoryFolderName(memory({ memory_type: 'audio', audio_transcript: 'Tomás ven a lavarte los dientes' })))
+      .toBe('2026-09-09 - Tomás ven a lavarte los dientes');
     expect(memoryFolderName(memory({ memory_type: 'audio' }))).toBe('2026-09-09 - Voice memory');
     expect(memoryFolderName(memory({ memory_type: 'media', media_content_type: 'video/mp4' }))).toBe('2026-09-09 - Video');
     expect(memoryFolderName(memory({ content: 'https://example.com/only-a-link' }))).toBe('2026-09-09 - Memory');
@@ -51,17 +51,17 @@ describe('layout', () => {
     const text = renderMemoryText(memory({
       memory_type: 'audio',
       content: 'Bedtime',
-      audio_transcript: 'Enzo ven a lavarte los dientes',
+      audio_transcript: 'Tomás ven a lavarte los dientes',
       emotion: 'funny',
       link_previews: [{ url: 'https://example.com/song' }],
     }), {
       postedBy: 'Adrianita',
-      taggedNames: ['Enzo', 'Mara'],
+      taggedNames: ['Tomás', 'Lucía'],
       comments: [{ authorName: 'Tita', created_at: '2026-09-10T08:00:00Z', content: 'Jajaja' }],
     });
     expect(text).toBe([
-      '2026-09-09', 'Added by Adrianita', 'With Enzo, Mara', 'Feeling: funny', '', 'Bedtime', '',
-      'What was said:', 'Enzo ven a lavarte los dientes', '', 'Links:', '- https://example.com/song', '',
+      '2026-09-09', 'Added by Adrianita', 'With Tomás, Lucía', 'Feeling: funny', '', 'Bedtime', '',
+      'What was said:', 'Tomás ven a lavarte los dientes', '', 'Links:', '- https://example.com/song', '',
       'Comments:', '- Tita (2026-09-10): Jajaja', '',
     ].join('\r\n'));
   });

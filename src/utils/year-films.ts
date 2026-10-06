@@ -28,7 +28,7 @@ function possessive(name: string): string {
 }
 
 /**
- * "Enzo's Year Four" (birthday), "September recap" (monthly), "Your 2026"
+ * "Tomás's Year Four" (birthday), "September recap" (monthly), "Your 2026"
  * (year-end). Names ending in s take a bare apostrophe ("Jesus' Year One").
  * A birthday film whose member is gone is "A birthday film". Uses the
  * member list of the FILM's family (a push can open a film before the family

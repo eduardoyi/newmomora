@@ -12,7 +12,7 @@ import type { BookDocument, BookOutline, BookPage, ManifestPortrait } from '../t
  * tests exercise each of the five checks independently against small,
  * hand-built documents (so a failure points precisely at the broken check),
  * plus the real-books integration test at the bottom (zero violations
- * required on Enzo/Mara, skipped gracefully when book-data isn't present).
+ * required on Tomás/Lucía, skipped gracefully when book-data isn't present).
  */
 
 function emptyPage(overrides: Partial<BookPage> & Pick<BookPage, 'id' | 'sourceElementId' | 'templateId'>): BookPage {
@@ -32,7 +32,7 @@ function docWith(pages: BookPage[]): BookDocument {
 }
 
 describe('auditBookDocument — (a) month continuity', () => {
-  it('flags a backbone month that had memories in the outline but produced zero pages (the diagnosed Enzo bug)', () => {
+  it('flags a backbone month that had memories in the outline but produced zero pages (the diagnosed Tomás bug)', () => {
     const manifest = makeManifest({ 'mem-1': makeMemory({ assets: [makeAsset()] }) });
     const outline = makeOutline([makeElement({ id: 'backbone:oct', kind: 'backbone', title: 'October 2024', memoryIds: ['mem-1'] })]);
     // Simulate the month being wiped out entirely: no page carries this sourceElementId.
@@ -81,7 +81,7 @@ describe('auditBookDocument — (a) month continuity', () => {
 });
 
 describe('auditBookDocument — (b) section-title orphans', () => {
-  it('flags a themed section with a spread-title page but zero content pages behind it (the diagnosed Mara bug)', () => {
+  it('flags a themed section with a spread-title page but zero content pages behind it (the diagnosed Lucía bug)', () => {
     const outline = makeOutline([
       makeElement({ id: 'topic:mirian', kind: 'themed', title: 'Retratos con Mirian', memoryIds: ['mem-1'] }),
     ]);

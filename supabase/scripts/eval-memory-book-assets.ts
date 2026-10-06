@@ -179,7 +179,7 @@
  * `--exclude-portrait-id <uuid>` (repeatable) drops a
  * `family_member_portrait_versions` id from the export entirely -- omitted
  * from `manifest.portraits[]`, never downloaded. Owner editorial call:
- * Mara's 2025-01-25 portrait pair (id `1dbc29b2-43d0-42e0-811c-
+ * Lucía's 2025-01-25 portrait pair (id `1dbc29b2-43d0-42e0-811c-
  * 26d58959dfbd`) is redundant with the 2025-02-04 one. An unrecognized CLI
  * argument (including a malformed flag) is rejected outright -- `parseArgs`
  * throws with the offending token + `CLI_USAGE` rather than silently
@@ -312,7 +312,7 @@ interface CliOptions {
    * to drop from the export entirely -- omitted from `manifest.portraits[]`
    * and never downloaded. Repeatable (same convention as
    * eval-memory-book-outline.ts's `--exclude-memory-id`). Motivating case:
-   * Mara's 2025-01-25 portrait pair is redundant with the 2025-02-04 one
+   * Lucía's 2025-01-25 portrait pair is redundant with the 2025-02-04 one
    * (`--exclude-portrait-id 1dbc29b2-43d0-42e0-811c-26d58959dfbd`).
    */
   excludePortraitIds: string[];

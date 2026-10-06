@@ -71,7 +71,7 @@ function suggestion(id: string, memberId: string, field: string, value: string, 
 const dad = member('dad', 'Eduardo', { relationship: 'parent' });
 const mirian = member('mirian', 'Mirian');
 const rosa = member('rosa', 'Rosa');
-const enzo = member('enzo', 'Enzo', { relationship: 'child', date_of_birth: '2022-10-23' });
+const tomas = member('tomas', 'Tomás', { relationship: 'child', date_of_birth: '2022-10-17' });
 
 const mockResolve = jest.fn();
 const mockLinkMe = jest.fn();
@@ -80,7 +80,7 @@ const mockUpdateMember = jest.fn();
 function setup(options: { myMemberId?: string | null; canEdit?: boolean; suggestions?: FamilyMemberSuggestion[] } = {}) {
   mockedUseFamily.mockReturnValue({ family: { id: 'family-1', name: 'Yi family' } } as ReturnType<typeof useFamily>);
   mockedUseFamilyMembers.mockReturnValue({
-    members: [dad, mirian, rosa, enzo],
+    members: [dad, mirian, rosa, tomas],
     isLoading: false,
     updateMember: mockUpdateMember,
   } as unknown as ReturnType<typeof useFamilyMembers>);
@@ -164,7 +164,7 @@ describe('WhosWhoScreen', () => {
     setup({ myMemberId: null, canEdit: false });
     const { getByTestId, queryByTestId, getByText } = renderScreen();
     expect(getByText('Are you in the family?')).toBeTruthy();
-    expect(queryByTestId('whos-who-me-enzo')).toBeNull();
+    expect(queryByTestId('whos-who-me-tomas')).toBeNull();
     expect(getByTestId('whos-who-me-rosa').props.accessibilityState).toEqual({ disabled: true });
     fireEvent.press(getByTestId('whos-who-me-mirian'));
     await waitFor(() => expect(mockLinkMe).toHaveBeenCalledWith({ memberId: 'mirian', notInList: false }));

@@ -1,5 +1,5 @@
 // Year Film frame check (docs/plans/year-film.md §12 Q13; owner feedback
-// 2026-09-27: "biggest smile → Enzo" was a group video). A vision pass over
+// 2026-09-27: "biggest smile → Tomás" was a group video). A vision pass over
 // the frames that make a claim about a child — award beats, then/now close,
 // voice-fallback clips — against a reference photo of each child.
 //
@@ -192,9 +192,9 @@ export type BurstVerdict = 'keep' | 'prefer_other_window' | 'remove';
  * stays (owner, F2 round 2: blurry, group, face-hidden, crying, screen and
  * monitor frames all belong). Removed only when unsafe, or — in a child's
  * birthday film — when a sibling is clearly the subject and the child isn't
- * visible at all (F2 round 1: Mara's film had a clip of Enzo). Vision alone
+ * visible at all (F2 round 1: Lucía's film had a clip of Tomás). Vision alone
  * can't overrule the tags on that: siblings look alike (F2 round 3 took a
- * Mara-only photo for Enzo), so it only counts when the memory is also
+ * Lucía-only photo for Tomás), so it only counts when the memory is also
  * tagged with that sibling. A clip whose window shows no one tries its
  * other windows first. Fail-open: no verdict keeps the frame — except
  * `failClosed` (public audiences: the holiday card film, owner 2026-10-04),

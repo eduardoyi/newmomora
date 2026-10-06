@@ -98,7 +98,7 @@ describe('enforceThemedSpreadSpacing', () => {
 describe('buildReadingOrder', () => {
   it('assembles the fixed structural pages, birthday-by-age, spacing, backbone, and firsts-at-the-end', () => {
     const sections = buildReadingOrder({
-      childName: 'Enzo',
+      childName: 'Tomás',
       finalBackboneSegments: [
         { id: '2025-01', label: 'January 2025', monthKeys: ['2025-01'], memoryIds: ['m1', 'm2'] },
         { id: '2025-02', label: 'February 2025', monthKeys: ['2025-02'], memoryIds: ['m3'] },
@@ -130,7 +130,7 @@ describe('buildReadingOrder', () => {
 
   it('uses a special segment title as the title, keeping the plain label as a subtitle', () => {
     const sections = buildReadingOrder({
-      childName: 'Enzo',
+      childName: 'Tomás',
       finalBackboneSegments: [{ id: '2024-10', label: 'October 2024', monthKeys: ['2024-10'], memoryIds: ['m1'] }],
       firsts: null,
       birthdaySpreads: [],
@@ -145,7 +145,7 @@ describe('buildReadingOrder', () => {
 
   it('omits the firsts section entirely when not present', () => {
     const sections = buildReadingOrder({
-      childName: 'Enzo',
+      childName: 'Tomás',
       finalBackboneSegments: [],
       firsts: null,
       birthdaySpreads: [],
@@ -180,7 +180,7 @@ describe('buildReadingOrder — chapters (Everything)', () => {
     kicker: null,
   });
   const base = {
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments: segments,
     firsts: null,
     birthdaySpreads: [],

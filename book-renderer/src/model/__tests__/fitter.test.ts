@@ -424,7 +424,7 @@ describe('fitBook — audio-note routing', () => {
     expect(audioPages[1].slots.filter((s) => s.kind === 'audio-note')).toHaveLength(1);
   });
 
-  it('regression (Enzo p24 "Bailando con mami"): a video memory NEVER gets the big audio-note scan mark, even with type "media"', () => {
+  it('regression (Tomás p24 "Bailando con mami"): a video memory NEVER gets the big audio-note scan mark, even with type "media"', () => {
     // The real-world bug report: a video-poster memory whose `type` field is
     // the generic DB catch-all "media" (not "video") must still never be
     // treated as audio — audio-note requires type === 'audio' AND zero
@@ -737,15 +737,15 @@ describe('fitBook — month-section age eyebrow (print-polish round, owner decis
   it('defaults the eyebrow to the age AT THE END of a plain month, in the app chip format, when dateOfBirth is present', () => {
     const manifest = makeManifest(
       { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
-      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-17' } },
     );
     const outline = makeOutline([
       makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
     ]);
     const { document } = fitBook(outline, manifest);
     const header = document.pages[0].params.sectionHeader as { kicker: string | null; title: string };
-    // Last day of March 2025 (2025-03-31) against a 2022-10-23 birth date:
-    // turned 2 years old 2024-10-23, then 5 more full months (Nov/Dec/Jan/
+    // Last day of March 2025 (2025-03-31) against a 2022-10-17 birth date:
+    // turned 2 years old 2024-10-17, then 5 more full months (Nov/Dec/Jan/
     // Feb/Mar) by 2025-03-23 — still 2y5m on 3/31 (turns 2y6m 2025-04-23).
     expect(header.kicker).toBe('2 years, 5 months');
   });
@@ -753,7 +753,7 @@ describe('fitBook — month-section age eyebrow (print-polish round, owner decis
   it('localizes the age eyebrow for an es book, matching the app chip format', () => {
     const manifest = makeManifest(
       { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
-      { language: 'es', child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+      { language: 'es', child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-17' } },
     );
     const outline = makeOutline([
       makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
@@ -800,7 +800,7 @@ describe('fitBook — month-section age eyebrow (print-polish round, owner decis
   it('never computes an age eyebrow for a multi-month range (subtitle already owns the kicker)', () => {
     const manifest = makeManifest(
       { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
-      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-17' } },
     );
     const outline = makeOutline([
       makeElement({
@@ -819,7 +819,7 @@ describe('fitBook — month-section age eyebrow (print-polish round, owner decis
   it('never computes an age eyebrow for a real editorial title that only looks close to a month shape', () => {
     const manifest = makeManifest(
       { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
-      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-17' } },
     );
     const outline = makeOutline([
       makeElement({ id: 'firsts-like', kind: 'backbone', title: 'lo que nos hiciste reír', memoryIds: ['mem-1'] }),
@@ -832,7 +832,7 @@ describe('fitBook — month-section age eyebrow (print-polish round, owner decis
   it('a saved eyebrow:<elementId> edit still overrides the computed age default', () => {
     const manifest = makeManifest(
       { 'mem-1': makeMemory({ assets: [makeAsset()] }) },
-      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-23' } },
+      { child: { id: 'child-1', name: 'Test Child', dateOfBirth: '2022-10-17' } },
     );
     const outline = makeOutline([
       makeElement({ id: 'backbone:2025-03', kind: 'backbone', title: 'March 2025', memoryIds: ['mem-1'] }),
@@ -1328,7 +1328,7 @@ describe('fitBook — panorama splicing (outline.panoramaCandidates)', () => {
     expect((photoSlot.content as PhotoSlotContent).cropBand).toBe('center');
   });
 
-  it('regression (Mara live-data bug): a trusted, placed, qualifying candidate whose PREVIEW is small but originalWidth clears the bar promotes to exactly one panorama-spread at its chronological position', () => {
+  it('regression (Lucía live-data bug): a trusted, placed, qualifying candidate whose PREVIEW is small but originalWidth clears the bar promotes to exactly one panorama-spread at its chronological position', () => {
     // Pinned to the exact real-data shape reported: preview 1280x961
     // (landscape, but not wide enough on its own), originalWidth/Height
     // 4624x3472 (>= the 3500px trust threshold). A single asset, exactly
@@ -2216,7 +2216,7 @@ describe('fitBook — parity-aware split illustrated stories (owner review round
   });
 });
 
-describe('fitBook — month headers render for every segment, including photo-thin ones (owner review round 3 diagnosis: "vanished after p34 in Enzo")', () => {
+describe('fitBook — month headers render for every segment, including photo-thin ones (owner review round 3 diagnosis: "vanished after p34 in Tomás")', () => {
   it('an illustrated-only backbone segment still shows its month header', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({
@@ -2271,7 +2271,7 @@ describe('fitBook — through-the-years splits into one facing spread per 2-3-po
   });
 });
 
-describe('fitBook — closing never prints the outline editorial note (owner review round 3, item 16 — regression for the Mara leak)', () => {
+describe('fitBook — closing never prints the outline editorial note (owner review round 3, item 16 — regression for the Lucía leak)', () => {
   it('the closing page carries no editorialNote param at all, however distinctive the outline text is', () => {
     const manifest = makeManifest({
       'mem-1': makeMemory({ assets: [makeAsset()] }),
@@ -2710,7 +2710,7 @@ describe('fitBook — illustrated-story pairing actually fires (acceptance-revie
 });
 
 describe('fitBook — month-preservation floor under page-cap demotion (owner review round 5, item 2a)', () => {
-  it('spreads omissions fairly across months instead of erasing one entirely — the diagnosed Enzo Oct/Nov/Dec bug', () => {
+  it('spreads omissions fairly across months instead of erasing one entirely — the diagnosed Tomás Oct/Nov/Dec bug', () => {
     // Month A: 6 photo-only memories, deliberately HIGH engagement (would
     // normally be the LAST thing cut by a flat rank sort). Month B: 2
     // photo-only memories, LOW engagement (would normally be cut FIRST —
@@ -2762,7 +2762,7 @@ describe('fitBook — month-preservation floor under page-cap demotion (owner re
 });
 
 describe('fitBook — section dissolves when every member is omitted/reassigned (owner review round 5, item 2b)', () => {
-  it('never renders a themed spread-title with zero content pages behind it — the diagnosed Mara "Retratos con Mirian" bug', () => {
+  it('never renders a themed spread-title with zero content pages behind it — the diagnosed Lucía "Retratos con Mirian" bug', () => {
     const outline = makeOutline([
       makeElement({ id: 'topic:mirian', kind: 'themed', title: 'Retratos con Mirian', memoryIds: ['mem-missing-1', 'mem-missing-2'] }),
     ]);

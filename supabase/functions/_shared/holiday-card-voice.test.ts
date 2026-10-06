@@ -68,8 +68,8 @@ Deno.test('voice samples: the parents\' captions only, share-safe, long enough, 
 });
 
 const SAMPLES = [
-  { memoryId: 'a', date: '2026-01-01', emotion: 'joy', text: 'Hoy Enzo se puso sus lentes de sol y salió corriendo al jardín gritando que era un pirata' },
-  { memoryId: 'b', date: '2026-02-01', emotion: 'funny', text: 'Jaja Mara no quiso soltar la cuchara en todo el almuerzo, súper terca' },
+  { memoryId: 'a', date: '2026-01-01', emotion: 'joy', text: 'Hoy Tomás se puso sus lentes de sol y salió corriendo al jardín gritando que era un pirata' },
+  { memoryId: 'b', date: '2026-02-01', emotion: 'funny', text: 'Jaja Lucía no quiso soltar la cuchara en todo el almuerzo, súper terca' },
 ];
 
 const GOOD_CARD = {
@@ -92,13 +92,13 @@ Deno.test('voice card prompt describes style only and the request uses the cheap
   const { system, user } = buildVoiceCardPrompt(SAMPLES);
   assert(system.includes('STYLE only') || system.includes('Describe STYLE only'));
   assert(system.includes('no names of any person') && system.includes('characteristic'));
-  assert(user.includes('2 captions') && user.includes('1. Hoy Enzo'));
+  assert(user.includes('2 captions') && user.includes('1. Hoy Tomás'));
   const body = buildVoiceCardRequestBody(VOICE_CARD_MODEL, system, user) as { model: string };
   assertEquals(body.model, 'gpt-6-luna');
 });
 
 Deno.test('parseVoiceCard: validates the card, drops names and copied captions, rejects missing essentials', () => {
-  const ctx = { samples: SAMPLES, names: ['Enzo', 'Mara', 'Rivera', 'Soto'] };
+  const ctx = { samples: SAMPLES, names: ['Tomás', 'Lucía', 'Rivera', 'Soto'] };
   const ok = parseVoiceCard(JSON.stringify(GOOD_CARD), ctx);
   assertEquals(ok.flags, []);
   assertEquals(ok.card?.person, 'we');
@@ -106,16 +106,16 @@ Deno.test('parseVoiceCard: validates the card, drops names and copied captions, 
   assertEquals(ok.card?.characteristic, ['súper', 'jaja', 'lentes', 'terca']);
   const dirty = parseVoiceCard(JSON.stringify({
     ...GOOD_CARD,
-    kids_reference: 'calls Enzo "Enzito"',
-    characteristic: ['súper', 'jaja', 'lentes', 'Mara no quiso soltar la cuchara en todo el almuerzo', 'Enzo pirata', 'x'.repeat(200)],
+    kids_reference: 'calls Tomás "Tomasito"',
+    characteristic: ['súper', 'jaja', 'lentes', 'Lucía no quiso soltar la cuchara en todo el almuerzo', 'Tomás pirata', 'x'.repeat(200)],
     openers: ['Hoy', 'Hoy', 7, ''],
     humor: 'sarcastic',
   }), ctx);
   assertEquals(dirty.card, null); // an invalid enum on an essential field
   const partial = parseVoiceCard(JSON.stringify({
     ...GOOD_CARD,
-    kids_reference: 'calls Enzo "Enzito"',
-    characteristic: ['súper', 'jaja', 'lentes', 'no quiso soltar la cuchara en todo el almuerzo', 'Enzo pirata'],
+    kids_reference: 'calls Tomás "Tomasito"',
+    characteristic: ['súper', 'jaja', 'lentes', 'no quiso soltar la cuchara en todo el almuerzo', 'Tomás pirata'],
     openers: ['Hoy', 'Hoy', 7, ''],
     addressee: 'whatever',
   }), ctx);
@@ -160,7 +160,7 @@ Deno.test('sharedWordRun finds the longest copied run of words', () => {
 });
 
 Deno.test('parseVoiceCard: a register that names someone falls back instead of losing the whole card', () => {
-  const { card, flags } = parseVoiceCard(JSON.stringify({ ...GOOD_CARD, register: 'Spanish as Enzo writes it' }), { samples: SAMPLES, names: ['Enzo'] });
+  const { card, flags } = parseVoiceCard(JSON.stringify({ ...GOOD_CARD, register: 'Spanish as Tomás writes it' }), { samples: SAMPLES, names: ['Tomás'] });
   assertEquals(card?.register, 'not clear from the samples');
   assert(flags.includes('dropped_name'));
 });

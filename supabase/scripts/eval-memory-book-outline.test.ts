@@ -163,13 +163,13 @@ Deno.test('resolveBookScope rejects a lone --from', () => {
 
 Deno.test('parseArgs: a known flag combination parses cleanly, including a repeated --exclude-memory-id', () => {
   const options = parseArgs([
-    '--child', 'Enzo',
+    '--child', 'Tomás',
     '--age-year', '1',
     '--exclude-memory-id', 'm1',
     '--exclude-memory-id', 'm2',
     '--dry-run',
   ]);
-  assertEquals(options.child, 'Enzo');
+  assertEquals(options.child, 'Tomás');
   assertEquals(options.ageYear, 1);
   assertEquals(options.excludeMemoryIds, ['m1', 'm2']);
   assertEquals(options.dryRun, true);
@@ -178,7 +178,7 @@ Deno.test('parseArgs: a known flag combination parses cleanly, including a repea
 Deno.test('parseArgs: an unknown argument throws with the offending token and usage, instead of being silently dropped', () => {
   let error: Error | null = null;
   try {
-    parseArgs(['--child', 'Enzo', '--totally-not-a-flag']);
+    parseArgs(['--child', 'Tomás', '--totally-not-a-flag']);
   } catch (e) {
     error = e as Error;
   }
@@ -190,7 +190,7 @@ Deno.test('parseArgs: an unknown argument throws with the offending token and us
 Deno.test('parseArgs: the reported incident -- a mangled multi-flag string arriving as one unrecognized token -- is rejected, not silently ignored', () => {
   let error: Error | null = null;
   try {
-    parseArgs(['--child', 'Enzo', '--exclude-memory-id m1 --exclude-memory-id m2 --exclude-memory-id m3']);
+    parseArgs(['--child', 'Tomás', '--exclude-memory-id m1 --exclude-memory-id m2 --exclude-memory-id m3']);
   } catch (e) {
     error = e as Error;
   }
@@ -264,23 +264,23 @@ Deno.test('ageYearLabel spells out ordinals', () => {
 // --- resolveChild ----------------------------------------------------------
 
 const MEMBERS: ChildCandidate[] = [
-  { id: 'id-1', familyId: 'fam-1', name: 'Enzo', dateOfBirth: '2020-01-01', nicknames: [] },
-  { id: 'id-2', familyId: 'fam-1', name: 'Mara', dateOfBirth: '2022-01-01', nicknames: [] },
-  { id: 'id-3', familyId: 'fam-2', name: 'Enzo', dateOfBirth: '2019-01-01', nicknames: [] },
+  { id: 'id-1', familyId: 'fam-1', name: 'Tomás', dateOfBirth: '2020-01-01', nicknames: [] },
+  { id: 'id-2', familyId: 'fam-1', name: 'Lucía', dateOfBirth: '2022-01-01', nicknames: [] },
+  { id: 'id-3', familyId: 'fam-2', name: 'Tomás', dateOfBirth: '2019-01-01', nicknames: [] },
 ];
 
 Deno.test('resolveChild matches by id', () => {
-  assertEquals(resolveChild(MEMBERS, 'id-2').name, 'Mara');
+  assertEquals(resolveChild(MEMBERS, 'id-2').name, 'Lucía');
 });
 
 Deno.test('resolveChild matches by exact unique name', () => {
-  assertEquals(resolveChild(MEMBERS, 'Mara').id, 'id-2');
+  assertEquals(resolveChild(MEMBERS, 'Lucía').id, 'id-2');
 });
 
 Deno.test('resolveChild throws on ambiguous name', () => {
   let threw = false;
   try {
-    resolveChild(MEMBERS, 'Enzo');
+    resolveChild(MEMBERS, 'Tomás');
   } catch {
     threw = true;
   }
@@ -558,7 +558,7 @@ Deno.test('computeAgeYearBirthdayMonths: calendar-year and custom-range scopes r
   );
 });
 
-Deno.test('computeAgeYearBirthdayMonths: end-to-end -- the real Enzo year-two incident (no specials at all) now flags both boundary months, and the closing month survives even though no memory is dated exactly on the boundary day', () => {
+Deno.test('computeAgeYearBirthdayMonths: end-to-end -- the real Tomás year-two incident (no specials at all) now flags both boundary months, and the closing month survives even though no memory is dated exactly on the boundary day', () => {
   const scope = { type: 'age-year' as const, ageYear: 2 };
   const window = computeScopeWindow(scope, '2023-05-10');
   const months = computeAgeYearBirthdayMonths(scope, window);
@@ -669,7 +669,7 @@ Deno.test('buildReadingOrder: a special segment title renders with the plain mon
     backboneInput('c', '2023-05-20'),
   ]);
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments,
     firsts: null,
     birthdaySpreads: [],
@@ -685,7 +685,7 @@ Deno.test('buildReadingOrder: a special segment title renders with the plain mon
 Deno.test('buildReadingOrder: a backbone segment with no special title renders its plain label, no subtitle', () => {
   const finalBackboneSegments = buildBackboneSegments([backboneInput('a', '2023-07-01'), backboneInput('b', '2023-07-02'), backboneInput('c', '2023-07-03')]);
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments,
     firsts: null,
     birthdaySpreads: [],
@@ -702,12 +702,12 @@ Deno.test('buildReadingOrder: a backbone segment with no special title renders i
 
 Deno.test('buildTaggedMemberFeatures: resolves name and child/adult classification at the memory date', () => {
   const membersById = new Map<string, FamilyMemberForTagging>([
-    ['child-id', { id: 'child-id', name: 'Enzo Ray', dateOfBirth: '2021-01-01', nicknames: [] }],
+    ['child-id', { id: 'child-id', name: 'Tomás Ray', dateOfBirth: '2021-01-01', nicknames: [] }],
     ['grandma-id', { id: 'grandma-id', name: 'Nonna Rosa', dateOfBirth: '1955-01-01', nicknames: [] }],
   ]);
   const result = buildTaggedMemberFeatures(['child-id', 'grandma-id'], membersById, '2023-06-01');
   assertEquals(result, [
-    { firstName: 'Enzo', personType: 'child', nicknames: [] },
+    { firstName: 'Tomás', personType: 'child', nicknames: [] },
     { firstName: 'Nonna', personType: 'adult', nicknames: [] },
   ]);
 });
@@ -825,11 +825,11 @@ Deno.test('selectPeoplePairCandidates: only members co-tagged with the child in 
     { memoryId: 'm5', coTaggedMemberIds: ['grandma'] },
     { memoryId: 'm6', coTaggedMemberIds: ['grandma'] },
   ];
-  const names = new Map([['sibling', 'Mara'], ['grandma', 'Abuela']]);
+  const names = new Map([['sibling', 'Lucía'], ['grandma', 'Abuela']]);
   const candidates = selectPeoplePairCandidates(memberships, names);
   assertEquals(candidates.length, 1);
   assertEquals(candidates[0].memberId, 'sibling');
-  assertEquals(candidates[0].memberName, 'Mara');
+  assertEquals(candidates[0].memberName, 'Lucía');
   assertEquals(candidates[0].memoryIds, ['m1', 'm2', 'm3', 'm4']);
 });
 
@@ -895,8 +895,8 @@ Deno.test('topicCandidatesToUnified / peoplePairCandidatesToUnified / emotionCan
     [{ id: 'topic:beach', kind: 'topic', defaultTitle: 'A day at the beach', memoryIds: ['m1'] }],
   );
   assertEquals(
-    peoplePairCandidatesToUnified([{ memberId: 'mara-id', memberName: 'Mara', memoryIds: ['m1'] }]),
-    [{ id: 'people:mara-id', kind: 'people-pair', defaultTitle: 'With Mara', memoryIds: ['m1'] }],
+    peoplePairCandidatesToUnified([{ memberId: 'lucia-id', memberName: 'Lucía', memoryIds: ['m1'] }]),
+    [{ id: 'people:lucia-id', kind: 'people-pair', defaultTitle: 'With Lucía', memoryIds: ['m1'] }],
   );
   assertEquals(
     emotionCandidatesToUnified([{ emotion: 'funny', memoryIds: ['m1'] }]),
@@ -1297,7 +1297,7 @@ Deno.test('remapInsertIndex: an anchor after all final segments lands after the 
 // --- enforceThemedSpreadSpacing (round-15 owner-approved rule: no two
 // themed spreads adjacent, at most one per backbone gap -- previously only
 // satisfied by page-budget scarcity; round-14 removed that thinning and
-// exposed real stacking, e.g. Enzo's jul-oct quote-anchored spreads landing
+// exposed real stacking, e.g. Tomás's jul-oct quote-anchored spreads landing
 // 4-in-a-row) -------------------------------------------------------------
 
 function spacingSpread(id: string, anchorGap: number, memberCount = 1) {
@@ -1313,7 +1313,7 @@ Deno.test('enforceThemedSpreadSpacing: a no-op when every spread already has its
 });
 
 Deno.test('enforceThemedSpreadSpacing: an oversubscribed gap is won by the highest member-count spread; the rest spill', () => {
-  // Reconstructs the Enzo shape: 4 spreads all anchored to the same gap
+  // Reconstructs the Tomás shape: 4 spreads all anchored to the same gap
   // (a shared jul-oct seasonal window), distinct member counts.
   const spreads = [
     spacingSpread('topic:eating-out', 3, 4),
@@ -1482,7 +1482,7 @@ Deno.test('admitThemedSpreads: rule (a) boundary -- one gap beyond the spill bou
   assertEquals(new Set(allGaps).size, allGaps.length);
 });
 
-Deno.test('admitThemedSpreads: reconstructs the real Enzo shape -- 12 candidate spreads over a 9-segment backbone, budget 8, every survivor within the spill bound of its own anchor', () => {
+Deno.test('admitThemedSpreads: reconstructs the real Tomás shape -- 12 candidate spreads over a 9-segment backbone, budget 8, every survivor within the spill bound of its own anchor', () => {
   // Mirrors the round-16 bug report: most candidates anchor to the shared
   // jul-oct window (segments 6-8), a few scattered earlier.
   const spreads = [
@@ -1589,7 +1589,7 @@ Deno.test('buildReadingOrder: a surviving themed spread, Firsts spread, and birt
   assertEquals(finalBackboneSegments.length, 2); // Jan segment (index 0), Jun segment (index 1)
 
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments,
     firsts: { present: true, title: 'Big and small wins', memoryIds: ['first-steps-memory', 'first-word-memory'] },
     birthdaySpreads: [{ ageTurned: 2, memoryIds: ['bday-1', 'bday-2', 'bday-3'] }],
@@ -1653,7 +1653,7 @@ Deno.test('buildReadingOrder: a surviving themed spread, Firsts spread, and birt
 
 Deno.test('buildReadingOrder: Firsts falls back to FIRSTS_DEFAULT_TITLE when the model supplied no title', () => {
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments: [],
     firsts: { present: true, title: null, memoryIds: ['m1'] },
     birthdaySpreads: [],
@@ -1666,7 +1666,7 @@ Deno.test('buildReadingOrder: Firsts falls back to FIRSTS_DEFAULT_TITLE when the
 
 Deno.test('buildReadingOrder: the firsts section carries warmNames, filtered to its own surviving memoryIds', () => {
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments: [],
     firsts: {
       present: true,
@@ -1688,7 +1688,7 @@ Deno.test('buildReadingOrder: the firsts section carries warmNames, filtered to 
 Deno.test('buildReadingOrder: an out-of-range insert index clamps to the last final segment instead of vanishing', () => {
   const finalBackboneSegments = buildBackboneSegments([backboneInput('a', '2023-01-01')]);
   const sections = buildReadingOrder({
-    childName: 'Mara',
+    childName: 'Lucía',
     finalBackboneSegments,
     firsts: null,
     birthdaySpreads: [],
@@ -1728,7 +1728,7 @@ function readingOrderThemedSpread(
   };
 }
 
-Deno.test('buildReadingOrder: round-15 -- four spreads anchored to the same backbone gap (the real Enzo shape) never end up adjacent, and no gap holds more than one', () => {
+Deno.test('buildReadingOrder: round-15 -- four spreads anchored to the same backbone gap (the real Tomás shape) never end up adjacent, and no gap holds more than one', () => {
   const finalBackboneSegments = buildBackboneSegments([
     backboneInput('aug1', '2025-08-05'),
     backboneInput('aug2', '2025-08-10'),
@@ -1746,7 +1746,7 @@ Deno.test('buildReadingOrder: round-15 -- four spreads anchored to the same back
   // exactly the "stacked 4-in-a-row" bug report: eating-out, toys-building,
   // tender, and travel all draw from the shared jul-oct window.
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments,
     firsts: null,
     birthdaySpreads: [],
@@ -1786,7 +1786,7 @@ Deno.test('buildReadingOrder: already-spaced themed spreads are a no-op -- round
     backboneInput('feb3', '2023-02-15'),
   ]);
   const sections = buildReadingOrder({
-    childName: 'Mara',
+    childName: 'Lucía',
     finalBackboneSegments,
     firsts: null,
     birthdaySpreads: [],
@@ -1807,7 +1807,7 @@ Deno.test('buildReadingOrder: already-spaced themed spreads are a no-op -- round
 
 Deno.test('buildReadingOrder: cover/title/through-the-years/closing always appear even with an empty book', () => {
   const sections = buildReadingOrder({
-    childName: 'Enzo',
+    childName: 'Tomás',
     finalBackboneSegments: [],
     firsts: null,
     birthdaySpreads: [],
@@ -2034,7 +2034,7 @@ Deno.test('buildOutlineSystemPrompt: dedication must NOT open with a salutation 
   assertEquals(prompt.includes('do NOT open with a salutation'), true);
   assertEquals(prompt.includes('Para <name>'), true);
   // The stale example duplicating the furniture's own greeting must be gone.
-  assertEquals(prompt.includes('Para Enzo'), false);
+  assertEquals(prompt.includes('Para Tomás'), false);
 });
 
 Deno.test('buildOutlineSystemPrompt: editorial_note is documented as INTERNAL ONLY, never printed', () => {
@@ -2124,11 +2124,11 @@ function fixtureFeature(overrides: Partial<MemoryFeature> = {}): MemoryFeature {
 
 Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with child/adult markers', () => {
   const features = new Map([
-    ['m1', fixtureFeature({ taggedMembers: [{ firstName: 'Enzo', personType: 'child', nicknames: [] }, { firstName: 'Nonna', personType: 'adult', nicknames: [] }] })],
+    ['m1', fixtureFeature({ taggedMembers: [{ firstName: 'Tomás', personType: 'child', nicknames: [] }, { firstName: 'Nonna', personType: 'adult', nicknames: [] }] })],
   ]);
   const prompt = buildOutlineUserPrompt(
     {
-      childName: 'Enzo',
+      childName: 'Tomás',
       scopeLabel: 'Year One',
       windowStart: '2023-01-01',
       windowLastDay: '2023-12-31',
@@ -2143,7 +2143,7 @@ Deno.test('buildOutlineUserPrompt: includes each memory\'s tagged people with ch
     [],
     features,
   );
-  assertEquals(prompt.includes('Enzo(child)'), true);
+  assertEquals(prompt.includes('Tomás(child)'), true);
   assertEquals(prompt.includes('Nonna(adult)'), true);
 });
 
@@ -2154,14 +2154,14 @@ Deno.test('buildOutlineUserPrompt: round-16 (owner correction) -- a profile nick
       fixtureFeature({
         taggedMembers: [
           { firstName: 'Rosa', personType: 'adult', nicknames: ['nonna', 'nona'] },
-          { firstName: 'Enzo', personType: 'child', nicknames: [] },
+          { firstName: 'Tomás', personType: 'child', nicknames: [] },
         ],
       }),
     ],
   ]);
   const prompt = buildOutlineUserPrompt(
     {
-      childName: 'Enzo',
+      childName: 'Tomás',
       scopeLabel: 'Year One',
       windowStart: '2023-01-01',
       windowLastDay: '2023-12-31',
@@ -2177,7 +2177,7 @@ Deno.test('buildOutlineUserPrompt: round-16 (owner correction) -- a profile nick
     features,
   );
   assertEquals(prompt.includes('Rosa(adult;nn:nonna/nona)'), true);
-  assertEquals(prompt.includes('Enzo(child)'), true); // no nicknames -- no "nn:" suffix, never invented
+  assertEquals(prompt.includes('Tomás(child)'), true); // no nicknames -- no "nn:" suffix, never invented
 });
 
 Deno.test('buildOutlineUserPrompt: per-memory row includes the orientation marker when present, omits the suffix when absent (owner root-cause fix, 2026-08-27)', () => {
@@ -2187,7 +2187,7 @@ Deno.test('buildOutlineUserPrompt: per-memory row includes the orientation marke
   ]);
   const prompt = buildOutlineUserPrompt(
     {
-      childName: 'Enzo',
+      childName: 'Tomás',
       scopeLabel: 'Year One',
       windowStart: '2023-01-01',
       windowLastDay: '2023-12-31',
@@ -2210,7 +2210,7 @@ Deno.test('buildOutlineUserPrompt: flags a special segment for the model with it
   const segments = buildBackboneSegments([backboneInput('a', '2022-05-10'), backboneInput('b', '2022-05-12'), backboneInput('c', '2022-05-20')]);
   const prompt = buildOutlineUserPrompt(
     {
-      childName: 'Enzo',
+      childName: 'Tomás',
       scopeLabel: 'Year One',
       windowStart: '2022-05-01',
       windowLastDay: '2022-05-31',
@@ -2244,7 +2244,7 @@ Deno.test('buildOutlineUserPrompt: birthday flag uses PERIOD wording for a multi
   const build = (multiYear: boolean | undefined) =>
     buildOutlineUserPrompt(
       {
-        childName: 'Enzo',
+        childName: 'Tomás',
         scopeLabel: 'Everything',
         windowStart: '2024-08-01',
         windowLastDay: '2025-02-28',
@@ -2293,7 +2293,7 @@ Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own
     })],
   ]);
   const promptSkeleton = {
-    childName: 'Enzo',
+    childName: 'Tomás',
     scopeLabel: 'Year One',
     windowStart: '2023-01-01',
     windowLastDay: '2023-12-31',
@@ -2319,7 +2319,7 @@ Deno.test('buildOutlineUserPrompt: a single genuine milestone still gets its own
 
 function languageSkeleton(overrides: { configuredLanguage: string | null; languageEvidenceCaptions: string[] }) {
   return {
-    childName: 'Enzo',
+    childName: 'Tomás',
     scopeLabel: 'Year One',
     windowStart: '2023-01-01',
     windowLastDay: '2023-12-31',
@@ -2804,7 +2804,7 @@ Deno.test('parseOutlineResponse: missing panorama_candidates is an empty array, 
 
 Deno.test('parseOutlineResponse: parses dedication and back_cover_line, trimmed', () => {
   const { response } = parseOutlineResponse(
-    { dedication: '  Para Enzo...  ', back_cover_line: '  Un año de recuerdos.  ' },
+    { dedication: '  Para Tomás...  ', back_cover_line: '  Un año de recuerdos.  ' },
     new Set(),
     new Set(),
     new Set(),
@@ -2812,7 +2812,7 @@ Deno.test('parseOutlineResponse: parses dedication and back_cover_line, trimmed'
     new Map(),
     new Map(),
   );
-  assertEquals(response.dedication, 'Para Enzo...');
+  assertEquals(response.dedication, 'Para Tomás...');
   assertEquals(response.backCoverLine, 'Un año de recuerdos.');
 });
 
@@ -3310,14 +3310,14 @@ Deno.test('buildSyntheticMemory: milestones and tagged members carry through in 
   const memory = buildSyntheticMemory(
     fixtureFeature({
       milestones: [{ milestoneId: 'first-steps', name: 'First steps', detail: '', outOfBand: false }],
-      taggedMembers: [{ firstName: 'Enzo', personType: 'child', nicknames: [] }],
+      taggedMembers: [{ firstName: 'Tomás', personType: 'child', nicknames: [] }],
       engagementCount: 3,
     }),
     [],
     false,
   );
   assertEquals(memory.milestones, [{ id: 'first-steps', name: 'First steps', detail: '' }]);
-  assertEquals(memory.taggedMembers, [{ name: 'Enzo', isChild: true }]);
+  assertEquals(memory.taggedMembers, [{ name: 'Tomás', isChild: true }]);
   assertEquals(memory.engagement, 3);
 });
 
@@ -3411,7 +3411,7 @@ async function sha256Hex(text: string): Promise<string> {
 // assertions above only check substrings, so these pin the FULL default
 // output: every new option must be absent-safe and byte-identical.
 const BASELINE_SYSTEM_PROMPT_SHA256 = 'cc45233ba3fc4162a4f3f0ac320a4cec500210305a87960d4238efffa269cf0f';
-const BASELINE_USER_PROMPT_SHA256 = '8cc417b8e91a3af2859782d41ae86601ac39f3697da62c267cc9693130f64f60';
+const BASELINE_USER_PROMPT_SHA256 = '80ea7f29cbb715c5b6d959f79537e65770b84f1da7c1115e254a6250c9f6c038';
 
 function phase2UserPromptInput() {
   const features = new Map([
@@ -3423,7 +3423,7 @@ function phase2UserPromptInput() {
     ['m3', fixtureFeature({ id: 'm3', date: '2023-07-01' })],
   ]);
   const skeleton = {
-    childName: 'Enzo',
+    childName: 'Tomás',
     scopeLabel: 'Year One',
     windowStart: '2023-01-01',
     windowLastDay: '2023-12-31',

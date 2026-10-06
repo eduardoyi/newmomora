@@ -40,9 +40,9 @@
  * console output is ids, dates, counts, and page totals only.
  *
  * Examples:
- *   npm run eval:memory-book-outline -- --child "Enzo" --age-year 1 --dry-run
+ *   npm run eval:memory-book-outline -- --child "Tomás" --age-year 1 --dry-run
  *   npm run eval:memory-book-outline -- --child <family_member-uuid> --calendar-year 2024
- *   npm run eval:memory-book-outline -- --child "Mara" --from 2023-06-01 --to 2023-12-31 --page-cap 100
+ *   npm run eval:memory-book-outline -- --child "Lucía" --from 2023-06-01 --to 2023-12-31 --page-cap 100
  *
  * Requires Supabase vars in supabase/.env.local, R2 vars for thumbnail
  * fetches, and OPENAI_API_KEY (unless --dry-run).
@@ -788,7 +788,7 @@ const PHOTO_CONTENT_TYPE_PREFIX = 'image/';
 const VIDEO_CONTENT_TYPE_PREFIX = 'video/';
 
 // ── LANGUAGE resolution (plan round-18, "books are standalone": caption-less
-// books -- Enzo year one/two's caption-less photo eras -- came out in
+// books -- Tomás year one/two's caption-less photo eras -- came out in
 // ENGLISH because "the family's journal language" was inferred by the model
 // purely from captions it never had. Owner chain: (1) predominant language
 // of the ACCOUNT's captions (whole archive, not the window); (2)
@@ -1409,7 +1409,7 @@ export function dissolveThinBirthdaySpreads(
 // form -- not the original round-3 hand-rolled shape-based model, and not
 // round-13's shape-placeholder oracle that replaced it (both are deleted).
 // The A/B showed the shape-placeholder oracle over-thinned real books
-// (Enzo fell to 93 selected memories, Mara to 96, when the OLD flow -- and
+// (Tomás fell to 93 selected memories, Lucía to 96, when the OLD flow -- and
 // the renderer itself -- comfortably printed ~112+ at the page cap) because
 // pricing a memory in ISOLATION, via a canonical stand-in for its shape,
 // cannot see the pairing/digest-row compression the real fitter applies
@@ -1452,7 +1452,7 @@ export function computePlacedPanoramaGuaranteeCount(pageEstimate: number): numbe
 // hand-written page-accounting model (since DELETED -- it duplicated the
 // real renderer's page-yield math in its own constants, and the two had
 // drifted through 12 layout rounds: predicted 108 pages where the renderer
-// produced 121 on Mara; the hand model predated digest spreads entirely).
+// produced 121 on Lucía; the hand model predated digest spreads entirely).
 // This section imports the REAL fitter (`fitBook`) and calls it directly on
 // a SYNTHETIC `BookManifest`/`BookOutline` built from data this script
 // already loads, so every BINDING page number reflects the real renderer,
@@ -1994,7 +1994,7 @@ export interface ReadingOrderInput {
  *
  * Context: this was previously satisfied only as a side effect of page-
  * budget scarcity (rounds 3-13 thinned most candidate spreads away before
- * they could ever collide); round-14 removed that thinning, so Enzo's 11
+ * they could ever collide); round-14 removed that thinning, so Tomás's 11
  * surviving spreads -- most anchored to the same jul-oct text-heavy window
  * -- started stacking 4-in-a-row with no backbone between them.
  *
@@ -2378,7 +2378,7 @@ export function flagSpecialBackboneSegments(
  *     filters `memory_date < endExclusive`, so that memory can never even
  *     be loaded into `features`, so its month can never appear in
  *     `birthdayMonthToAge`, so the closing month can NEVER be flagged no
- *     matter what data exists. This is why Enzo's year-two book got no
+ *     matter what data exists. This is why Tomás's year-two book got no
  *     "the month you turned two" title at all.
  * (2) The OPENING month's flag depended on a real birthday-milestone memory
  *     actually landing in that exact month -- if the parent never logged
@@ -3122,8 +3122,8 @@ async function main(): Promise<void> {
   //
   // Owner decision, following an A/B test: the shape-placeholder oracle's
   // per-candidate pricing (round-13) lacked pairing/digest-row compression
-  // knowledge and over-thinned real books (Enzo fell to 93 selected
-  // memories, Mara to 96, vs. the ~112+ the OLD flow -- and the real
+  // knowledge and over-thinned real books (Tomás fell to 93 selected
+  // memories, Lucía to 96, vs. the ~112+ the OLD flow -- and the real
   // renderer itself -- comfortably printed at the cap). Fix: this script no
   // longer thins anything for page budget, ever. `planNonBackboneBudget`/
   // `selectBackboneMemories` above now unconditionally keep everyone they

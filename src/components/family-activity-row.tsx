@@ -95,7 +95,7 @@ interface FamilyActivityRowProps {
    * useBatchedMediaUrls) rather than one request per row. */
   mediaUrls: Record<string, string>;
   safety: ActivityContentSafety;
-  /** The family's members, for `film_ready` titles ("Enzo's Year Four"). */
+  /** The family's members, for `film_ready` titles ("Tomás's Year Four"). */
   members?: readonly YearFilmMember[];
   onPress: () => void;
 }

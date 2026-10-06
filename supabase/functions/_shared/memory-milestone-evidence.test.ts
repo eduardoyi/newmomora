@@ -36,10 +36,10 @@ Deno.test('quoteIsVerbatim: word-bounded, tolerant of case/accents/punctuation, 
 
 Deno.test('first-kind entries need first-time wording (the owner over-tag cases are rejected)', () => {
   const rejected: Array<[string, string]> = [
-    ['first-haircut', 'Enzo en la barbería con su corte de pelo'],
+    ['first-haircut', 'Tomás en la barbería con su corte de pelo'],
     ['first-haircut', 'Haircut day at the barber'],
-    ['first-question', 'Enzo asked me a question about the moon'],
-    ['first-question', 'Enzo me hizo una pregunta'],
+    ['first-question', 'Tomás asked me a question about the moon'],
+    ['first-question', 'Tomás me hizo una pregunta'],
     ['first-beach', 'Un día en la playa con los abuelos'],
     ['first-trip', 'Our trip to the lake house'],
     ['first-tooth', 'Her tooth is wiggly'],
@@ -85,7 +85,7 @@ Deno.test('first-time wording about a different subject does not carry the miles
 
 Deno.test('achievement-kind entries need first-time OR achievement wording', () => {
   // balance bike mentioned, no first / learned wording -> rejected (owner case).
-  assertEquals(evaluateMilestoneEvidence('balance-bike', 'Enzo andando en su bici de equilibrio'), {
+  assertEquals(evaluateMilestoneEvidence('balance-bike', 'Tomás andando en su bici de equilibrio'), {
     ok: false,
     reason: 'no_explicit_language',
   });

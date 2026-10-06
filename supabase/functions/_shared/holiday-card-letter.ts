@@ -218,7 +218,7 @@ export function buildLetterSystemPrompt(options: LetterOptions): string {
     'RULES (checked by code where marked [code]; a letter that breaks a [code] rule is thrown away):',
     '1. FACTS ONLY FROM THE DIGEST. Every claim about a person, place or activity must come from the PROFILES, THEMES, PLACES, the optional DETAILS or the LINE OF THE YEAR. Never invent or embellish: no weather, no places, dates, gifts, trips or achievements the digest does not give, no "first time ever" unless a FIRST is listed, no feelings of a specific person beyond the MOODS shown. If the digest is thin, write less, not more. Write no dates.',
     '2. PEOPLE [code]: you may use ONLY the first names under PEOPLE (and the nicknames listed for a child, if the STYLE CARD says the parents use nicknames). Write no other personal name and NO surname or family name anywhere (the signature is added separately; never write it). Refer to anyone else only with a relationship word that appears in a DETAIL\'s "with" field, or say "family and friends". Never infer a relationship.',
-    '3. AGES ARE OPTIONAL, and never a formula. If you give a child\'s age use "age this December" (the card is read in December) and no other number; but weave it in naturally ("Enzo, que llegó a los 4…", "now that Mara is two…") or leave it out. AT MOST ONE of the four variants may open a child\'s sentence with the age pattern ("X tiene N años y…", "X, con N años, …", "X, N, …"); the others must not. Vary the sentence shape per child and per variant (a short remark, a question, a scene, a plain statement). Use each child\'s gender for pronouns and agreement.',
+    '3. AGES ARE OPTIONAL, and never a formula. If you give a child\'s age use "age this December" (the card is read in December) and no other number; but weave it in naturally ("Tomás, que llegó a los 4…", "now that Lucía is two…") or leave it out. AT MOST ONE of the four variants may open a child\'s sentence with the age pattern ("X tiene N años y…", "X, con N años, …", "X, N, …"); the others must not. Vary the sentence shape per child and per variant (a short remark, a question, a scene, a plain statement). Use each child\'s gender for pronouns and agreement.',
     '3b. NATURAL SPEECH, NOT TAGS [code, soft]: the themes, labels and catalog names in the digest are internal tags — rephrase them the way a person talks. Never copy them ("jugar a imaginar", "caminar con confianza", "juego imaginario", "salidas en familia", "actividades al aire libre", "imaginative play", "family outings", "outdoor activities" are tag-speak); say what the child actually does ("disfrazarse e inventar historias", "dio sus primeros pasos").',
     '4. CONCRETE, NOT ABSTRACT. Each child gets two or three plain, specific, true things. Prefer, in this order: the REQUIRED LINE (below) if there is one, then a SPECIFIC thing from the parents\' own words ("specific things about them" — which costume, which game or book or place; pick the most vivid or the one that recurs), then a FIRST (given as a plain fact — say it in your own natural words, never "milestone"), then a recurring theme. REQUIRED LINE [code]: when the user message lists a REQUIRED LINE for a child, the "classic" AND the "playful" letters MUST quote it — whole, or trimmed to its core words (at least four, contiguous, unchanged), in quotation marks — as that child\'s main detail, set in its MOMENT when one is given (retell the moment in a few of your own words, never copy the parents\' sentence) (the "short" and "reflective" letters may use it or not); at most ONE quote per letter. Said simply, the way a parent talks; plain words over pretty ones. Do not write about "how the year felt" in the abstract: at most ONE sentence of general reflection in the whole letter (the FRAMING and LANDING sentences are about the relationship with the reader, not reflection, and do not count). If a child has nothing specific in the digest, name the plain theme ("he loves the park") rather than inventing one.',
     `5. NO ABSTRACT FILLER [code, soft]: never use words like ${ABSTRACT_FILLER_EXAMPLES.map((w) => `"${w}"`).join(', ')}, and no "the year felt wide/close/slow", "days that feel truly theirs", "the shape/texture/rhythm of our days". If a sentence could be about any family, rewrite it with the specific thing.`,
@@ -273,8 +273,8 @@ function themeText(theme: DigestTheme, language: FilmLanguage, voice: 'third' | 
 
 /** Birthdays inside the card's year: the card is read around Christmas, so a
  * birthday before ~Dec 20 is told as done ("cumplió cuatro"), even when the
- * journal has no birthday memories yet (owner review v8: Enzo turns 4 on Oct
- * 23, Mara 2 on Nov 8; the cards are made before that). */
+ * journal has no birthday memories yet (owner review v8: Tomás turns 4 on Oct
+ * 17, Lucía 2 on Nov 14; the cards are made before that). */
 export function turningNote(name: string, age: number | null, birthday: string, lang: FilmLanguage): string {
   const month = MONTH_NAMES[lang][Number(birthday.slice(5, 7)) - 1];
   const day = Number(birthday.slice(8, 10));
@@ -288,7 +288,7 @@ export function turningNote(name: string, age: number | null, birthday: string, 
  * first, their line of the year, a recurring specific from the parents' own
  * words, a distinctive recurring thing in their photos (glasses, a costume).
  * Code picks the order so every run starts from the same strong material
- * (owner review v8: Mara's new glasses never made it in). */
+ * (owner review v8: Lucía's new glasses never made it in). */
 /** Specific details that show up for more than one child: shared, not personal. */
 export function sharedSpecifics(digest: YearDigest): Set<string> {
   const seen = new Map<string, number>();

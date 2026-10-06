@@ -1508,13 +1508,13 @@ describe('useMemories integration', () => {
         .mockResolvedValueOnce({ data: [hit('a'), hit('b')], error: null })
         .mockResolvedValueOnce({ data: [hit('c')], error: null });
 
-      const { result } = renderHook(() => useMemorySearch({ query: ' mara ', memberIds: ['member-1', 'member-2'], emotion: 'joy' }), {
+      const { result } = renderHook(() => useMemorySearch({ query: ' lucia ', memberIds: ['member-1', 'member-2'], emotion: 'joy' }), {
         wrapper: createWrapper(),
       });
 
       await waitFor(() => expect(result.current.hits.map((h) => h.memory.id)).toEqual(['a', 'b']));
       expect(mockedSearchMemories).toHaveBeenCalledWith({
-        familyId: 'family-1', query: 'mara', memberIds: ['member-1', 'member-2'], emotion: 'joy', offset: 0,
+        familyId: 'family-1', query: 'lucia', memberIds: ['member-1', 'member-2'], emotion: 'joy', offset: 0,
       });
       expect(result.current.hasNextPage).toBe(true);
 
@@ -1541,7 +1541,7 @@ describe('useMemories integration', () => {
       mockedSearchMemories.mockResolvedValue({ data: [hit('a')], error: null });
       const { result, rerender } = renderHook(
         (search: { query: string; memberIds: string[]; emotion: string | null }) => useMemorySearch(search),
-        { wrapper: createWrapper(), initialProps: { query: 'mara', memberIds: [] as string[], emotion: null as string | null } },
+        { wrapper: createWrapper(), initialProps: { query: 'lucia', memberIds: [] as string[], emotion: null as string | null } },
       );
       await waitFor(() => expect(result.current.hits).toHaveLength(1));
 

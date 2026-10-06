@@ -424,7 +424,7 @@ export function buildVoiceCleanupSystemPrompt(
   // Audio-memories "keep the sound" fork (docs/features/audio-memories.md):
   // one extra field on the same cleanup call, not a second provider call.
   lines.push(
-    'Also write a short third-person caption describing what the recording is, under 120 characters (examples: "Lila singing Twinkle Twinkle in the bath" / "Enzo contando lo que hizo en la escuela").',
+    'Also write a short third-person caption describing what the recording is, under 120 characters (examples: "Lila singing Twinkle Twinkle in the bath" / "Tomás contando lo que hizo en la escuela").',
     'Write the caption in the same language the speaker used.',
     'If you can understand ANY of the speaker\'s words, you MUST write a caption — mundane, short, or test recordings included (someone trying out the microphone gets a plain caption of what they said).',
     'An empty-string description "" is reserved for recordings with no intelligible words at all — silence, pure noise, and wordless baby babble or sound play ("ba ba", "goo goo") all count as no intelligible words. Never invent a description for those, never output filler like "...", and never return "" when actual words were understood.',
