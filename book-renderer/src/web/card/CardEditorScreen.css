@@ -19,14 +19,15 @@
 .cp-frame { overflow: hidden; background: #fff; box-shadow: 0 12px 34px rgba(60, 40, 100, .2), 0 1px 3px rgba(60, 40, 100, .22); }
 
 /* Status screens (loading, preparing, failed, forbidden) */
-.ce--status { align-items: center; justify-content: center; }
+.ce--status { align-items: stretch; }
+.ce--status .ce-status { margin: auto; }
 .ce-status { width: 100%; max-width: 460px; padding: 24px 16px; }
 .ce-loading { padding: 40px 16px; font-size: 14px; text-align: center; color: #7a6b58; }
 .ce-statuscard { background: #fff; border-radius: 18px; padding: 28px 24px; box-shadow: 0 8px 30px rgba(60, 40, 100, .12); text-align: center; }
 .ce-statuscard__title { margin: 0 0 10px; font-family: var(--font-display, 'Newsreader', Georgia, serif); font-style: italic; font-weight: 400; font-size: 26px; color: #4a3f6b; }
 .ce-statuscard__body { margin: 0; font-size: 14px; line-height: 1.55; color: #4d4234; }
 .ce-statuscard__body a { color: #b22a60; }
-.ce-statuscard__actions { margin-top: 18px; display: flex; justify-content: center; }
+.ce-statuscard__actions { margin-top: 18px; display: flex; justify-content: center; flex-wrap: wrap; gap: 10px; }
 .ce-spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid #e4def2; border-top-color: #8e7fb8; animation: ce-spin 0.9s linear infinite; }
 @keyframes ce-spin { to { transform: rotate(360deg); } }
 

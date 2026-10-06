@@ -1,0 +1,79 @@
+/* The shop's shared page header (moved from the book list's own header). */
+.shop-header {
+  background: var(--color-white);
+  border-bottom: 1px solid var(--color-border);
+  padding: 12px 20px;
+}
+
+.shop-header__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shop-header__left {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.shop-header__wordmark {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.shop-header__wordmark-dot {
+  color: var(--color-wordmarkDot);
+}
+
+.shop-header__back,
+.shop-header__link,
+.shop-header__action {
+  all: unset;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-ink2);
+}
+
+.shop-header__back:hover,
+.shop-header__link:hover,
+.shop-header__action:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+.shop-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: none;
+}
+
+.shop-header__account {
+  margin: 6px 0 0;
+  text-align: right;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--color-ink2);
+}
+
+.shop-header__account .shop-header__action {
+  font-size: 11px;
+  text-decoration: underline;
+}
+
+@media (max-width: 480px) {
+  .shop-header {
+    padding: 10px 14px;
+  }
+  .shop-header__actions {
+    gap: 12px;
+  }
+}

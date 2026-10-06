@@ -30,6 +30,13 @@ export function friendlyAuthError(message: string): FriendlyAuthError {
       waitSeconds,
     };
   }
+  // GoTrue refuses an email with no account when `shouldCreateUser` is false ("Signups not allowed for otp").
+  if (/signups? not allowed/i.test(message)) {
+    return {
+      message: "We couldn't find a Momora account for that email. Use the email you sign in with in the Momora app.",
+      waitSeconds: null,
+    };
+  }
   if (/rate limit/i.test(message)) {
     return { message: 'Too many attempts. Please wait a minute and try again.', waitSeconds: null };
   }
@@ -38,19 +45,22 @@ export function friendlyAuthError(message: string): FriendlyAuthError {
 
 export interface LoginCopy {
   title: string;
+  subtitle: string;
   hint: string;
 }
 
-/** Holiday card pages (`/c/<id>`) say "holiday card"; everything else keeps the Memory Book copy. */
+/** Holiday card pages (`/c/<id>`) say "holiday card"; everything else covers both keepsakes. */
 export function loginCopyForPath(pathname: string): LoginCopy {
   if (/^\/c(\/|$)/.test(pathname)) {
     return {
       title: 'Sign in to your holiday card',
+      subtitle: 'Use the email address for your Momora family account.',
       hint: 'New to Momora? Create your family and start a holiday card from the Momora app first.',
     };
   }
   return {
-    title: 'Sign in to your Memory Book',
-    hint: 'New to Momora? Create your family and start a book from the Momora app first.',
+    title: 'Sign in to Momora',
+    subtitle: 'Order your Memory Books and holiday cards.',
+    hint: 'New to Momora? Create your family in the Momora app first.',
   };
 }

@@ -219,7 +219,7 @@ export function isBusy(step: CheckoutStep): boolean {
  */
 export function creatingCopy(step: Extract<CheckoutStep, { kind: 'creating' }>): { title: string; body: string } {
   if (step.attempt === 0) return { title: 'Redirecting to checkout…', body: '' };
-  return { title: 'Redirecting to checkout…', body: 'This is taking longer than expected. We are trying again, so please keep this page open.' };
+  return { title: 'Redirecting to checkout…', body: 'This is taking longer than expected. We’re trying again, so please keep this page open.' };
 }
 
 // ── The edits version the buyer reviewed ─────────────────────────────────

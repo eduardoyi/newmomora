@@ -16,6 +16,8 @@ export function useFamilyBooks() {
   const [books, setBooks] = useState<MemoryBookRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // The families the caller belongs to (the holiday card tile asks about each of them).
+  const [memberFamilyIds, setMemberFamilyIds] = useState<string[] | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async (isPoll: boolean) => {
@@ -24,6 +26,7 @@ export function useFamilyBooks() {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
     if (!userId) {
+      setMemberFamilyIds([]);
       setBooks([]);
       setLoading(false);
       return;
@@ -41,6 +44,7 @@ export function useFamilyBooks() {
     }
 
     const familyIds = Array.from(new Set((memberships ?? []).map((m) => m.family_id)));
+    setMemberFamilyIds((prev) => (prev && prev.join('|') === familyIds.join('|') ? prev : familyIds));
     if (familyIds.length === 0) {
       setBooks([]);
       setLoading(false);
@@ -78,5 +82,5 @@ export function useFamilyBooks() {
     };
   }, [load]);
 
-  return { books, error, loading, reload: () => load(false) };
+  return { books, error, loading, familyIds: memberFamilyIds, reload: () => load(false) };
 }

@@ -34,7 +34,7 @@ export function CheckoutFrame({
         <button type="button" className="checkout-screen__back" onClick={onBack} disabled={backDisabled}>
           ← {backLabel}
         </button>
-        <span className="checkout-screen__title">{title}</span>
+        <h1 className="checkout-screen__title">{title}</h1>
       </header>
 
       <div className="checkout-screen__body">

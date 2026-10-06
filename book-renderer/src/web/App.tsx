@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+import { hasHeader, subscribeHeaderPresence } from './shell/headerPresence';
 import { useAuthSession } from './auth/useAuthSession';
 import { LoginScreen } from './auth/LoginScreen';
 import { useHandoff } from './auth/useHandoff';
@@ -9,12 +11,13 @@ import { OrderStatusScreen } from './order/OrderStatusScreen';
 import { OrdersListScreen } from './order/OrdersListScreen';
 import { CardRouteLazy } from './card/CardRouteLazy';
 import { CardCheckoutLazy } from './card/checkout/CardCheckoutLazy';
+import { ConnectedShopHeader } from './shell/ConnectedShopHeader';
 import { useRouter } from './router';
 import { getFixtureSlug } from './dev/fixture';
 
 /** The holiday card route: the editor, with the checkout (its own lazy chunk) rendered in its place when ordering. */
-function CardScreen({ cardId, onOpenOrders }: { cardId: string; onOpenOrders?: () => void }) {
-  return <CardRouteLazy cardId={cardId} renderCheckout={(ctx) => <CardCheckoutLazy ctx={ctx} />} onOpenOrders={onOpenOrders} />;
+function CardScreen({ cardId, onOpenOrders, onHome }: { cardId: string; onOpenOrders?: () => void; onHome?: () => void }) {
+  return <CardRouteLazy cardId={cardId} renderCheckout={(ctx) => <CardCheckoutLazy ctx={ctx} />} onOpenOrders={onOpenOrders} onHome={onHome} />;
 }
 
 export function App() {
@@ -72,7 +75,11 @@ function FixtureApp({ bookId }: { bookId: string }) {
 
   if (route.screen === 'order') {
     return (
-      <OrderStatusScreen orderId={route.orderId} onBackToBook={(backBookId) => navigateInFixture(`/b/${backBookId}`)} />
+      <OrderStatusScreen
+        orderId={route.orderId}
+        onBackToBook={(backBookId) => navigateInFixture(`/b/${backBookId}`)}
+        onOpenOrders={() => navigateInFixture('/orders')}
+      />
     );
   }
 
@@ -80,6 +87,7 @@ function FixtureApp({ bookId }: { bookId: string }) {
     return (
       <OrdersListScreen
         onOpenOrder={(orderId) => navigateInFixture(`/order/${orderId}`)}
+        onOpenCardStatus={(orderId) => navigateInFixture(`/order/${encodeURIComponent(orderId)}?kind=card`)}
         onBack={() => navigateInFixture(`/b/${bookId}`)}
       />
     );
@@ -126,7 +134,7 @@ function AuthenticatedApp() {
   }
 
   if (route.screen === 'card') {
-    return <CardScreen key={route.cardId} cardId={route.cardId} onOpenOrders={() => navigate('/orders')} />;
+    return <CardScreen key={route.cardId} cardId={route.cardId} onOpenOrders={() => navigate('/orders')} onHome={() => navigate('/')} />;
   }
 
   if (route.screen === 'book') {
@@ -141,21 +149,40 @@ function AuthenticatedApp() {
   }
 
   if (route.screen === 'order') {
-    return <OrderStatusScreen orderId={route.orderId} onBackToBook={(bookId) => navigate(`/b/${bookId}`)} />;
+    return (
+      <>
+        {/* The page has its own "All orders" link, so the header carries only the wordmark and Sign out. */}
+        <ConnectedShopHeader onHome={() => navigate('/')} />
+        <OrderStatusScreen orderId={route.orderId} onBackToBook={(bookId) => navigate(`/b/${bookId}`)} onOpenOrders={() => navigate('/orders')} />
+      </>
+    );
   }
 
   if (route.screen === 'orders') {
     return (
-      <OrdersListScreen
-        onOpenOrder={(orderId) => navigate(`/order/${orderId}`)}
-        // A holiday card order opens on its card's page, at that order's status.
-        onOpenCardOrder={(cardId, orderId) => navigate(`/c/${encodeURIComponent(cardId)}?order=${encodeURIComponent(orderId)}`)}
-        onBack={() => navigate('/')}
-      />
+      <>
+        {/* This page is the orders list, so the header carries only the wordmark and Sign out. */}
+        <ConnectedShopHeader onHome={() => navigate('/')} />
+        <OrdersListScreen
+          onOpenOrder={(orderId) => navigate(`/order/${orderId}`)}
+          // A holiday card order opens on its card's page, at that order's status.
+          onOpenCardOrder={(cardId, orderId) => navigate(`/c/${encodeURIComponent(cardId)}?order=${encodeURIComponent(orderId)}`)}
+          // A card order whose card is gone opens on its own status page.
+          onOpenCardStatus={(orderId) => navigate(`/order/${encodeURIComponent(orderId)}?kind=card`)}
+          onBack={() => navigate('/')}
+        />
+      </>
     );
   }
 
-  return <BookListScreen onOpenBook={(bookId) => navigate(`/b/${bookId}`)} onOpenOrders={() => navigate('/orders')} />;
+  return (
+    <BookListScreen
+      onOpenBook={(bookId) => navigate(`/b/${bookId}`)}
+      onOpenCard={(cardId) => navigate(`/c/${encodeURIComponent(cardId)}`)}
+      onOpenOrders={() => navigate('/orders')}
+      onHome={() => navigate('/')}
+    />
+  );
 }
 
 /**
@@ -166,7 +193,9 @@ function AuthenticatedApp() {
 function HandoffChipHost() {
   const { session } = useAuthSession();
   const handoff = useHandoff();
-  if (!session) return null;
+  // Pages with a ShopHeader show this info in the header; the floating chip would cover their sticky bottom bars on phones.
+  const headerShown = useSyncExternalStore(subscribeHeaderPresence, hasHeader, hasHeader);
+  if (!session || headerShown) return null;
   if (handoff.phase === 'signedIn' && handoff.userId === session.user.id) {
     return <SignedInChip maskedEmail={handoff.maskedEmail} />;
   }

@@ -21,6 +21,10 @@ import type { FrontPhotoProvider, PickerItem } from '../../card/preview/photoPro
 import { CardPhotoPicker } from '../../card/preview/CardPhotoPicker';
 import { EditableSheet, type FieldState } from '../../card/preview/EditableSheet';
 import type { CardData } from '../../card/types';
+import { useAuthSession } from '../auth/useAuthSession';
+import { ConnectedShopHeader } from '../shell/ConnectedShopHeader';
+import { useDocumentTitle } from '../useDocumentTitle';
+import { cardOrderStatusCopy } from './checkout/cardOrderStatusCopy';
 import { SHOP_CARD_FONTS } from './cardFonts';
 import type { CardApiError, FilmUrls, HolidayCardView } from './cardTypes';
 import { useCardEdits } from './CardEditsProvider';
@@ -34,7 +38,7 @@ import {
   letterToneOptions,
   ORDER_BLOCK_COPY,
   orderGate,
-  orderStatusLabel,
+  orderStatusName,
   previewQrOn,
   reorderGate,
   CHECKOUT_OPEN_NOTE,
@@ -79,8 +83,10 @@ export interface CardEditorScreenProps {
   /** Your own open checkout: cancel it (resolves once it is gone and the card was refetched; rejects with a message-bearing error). */
   onCancelCheckout?: (orderId: string) => Promise<void>;
   onOpenOrder?: (orderId: string) => void;
-  /** "Your orders": shown when the buyer has past orders (the same link the book page shows). */
-  onOpenOrders?: () => void;
+  /** The header's wordmark and "← Home" (navigates to "/"). */
+  onHome: () => void;
+  /** The header's "Your orders" (navigates to "/orders"). */
+  onOpenOrders: () => void;
 }
 
 const SHEET_FONTS = SHOP_CARD_FONTS;
@@ -89,6 +95,7 @@ export function CardEditorScreen(props: CardEditorScreenProps) {
   const queue = useCardEdits();
   const now = useNow(30_000);
   const firstSeen = useRef(Date.now()).current;
+  const nav: Nav = { onHome: props.onHome, onOpenOrders: props.onOpenOrders };
   const screen = deriveScreenState({
     load: props.load,
     error: props.error,
@@ -103,8 +110,8 @@ export function CardEditorScreen(props: CardEditorScreenProps) {
     if (props.view?.editorView) {
       if (props.fontsStatus === 'error') {
         return (
-          <Shell>
-            <StatusCard title="The card fonts did not load" body="We need them to show your card exactly as it will print. Check your connection and try again.">
+          <Shell nav={nav}>
+            <StatusCard title="The card fonts didn't load" body="We need them to show your card exactly as it will print. Check your connection and try again.">
               <button type="button" className="ce-btn" onClick={props.onRetryFonts}>
                 Try again
               </button>
@@ -120,9 +127,12 @@ export function CardEditorScreen(props: CardEditorScreenProps) {
 
 // ── Non-editing states ───────────────────────────────────────────────────
 
-function Shell({ children }: { children: React.ReactNode }) {
+type Nav = Pick<CardEditorScreenProps, 'onHome' | 'onOpenOrders'>;
+
+function Shell({ nav, children }: { nav: Nav; children: React.ReactNode }) {
   return (
     <div className="ce ce--status">
+      <ConnectedShopHeader onHome={nav.onHome} onOpenOrders={nav.onOpenOrders} showBack />
       <div className="ce-status">{children}</div>
     </div>
   );
@@ -138,30 +148,49 @@ function StatusCard({ title, body, children }: { title: string; body: React.Reac
   );
 }
 
-function StatusPanel({ screen, onRetryLoad, onSignOut }: { screen: ScreenState } & CardEditorScreenProps) {
+function StatusPanel({ screen, onRetryLoad, onSignOut, onHome, onOpenOrders }: { screen: ScreenState } & CardEditorScreenProps) {
+  const nav: Nav = { onHome, onOpenOrders };
+  const { session } = useAuthSession();
+  const email = session?.user.email ?? null;
   switch (screen.kind) {
     case 'loading':
       return (
-        <Shell>
+        <Shell nav={nav}>
           <p className="ce-loading">Loading your card…</p>
+        </Shell>
+      );
+    case 'notFound':
+      return (
+        <Shell nav={nav}>
+          <StatusCard title="We couldn't find this card" body="It may have been deleted, or the link is incomplete.">
+            <button type="button" className="ce-btn" onClick={onHome}>
+              Go to your keepsakes
+            </button>
+          </StatusCard>
         </Shell>
       );
     case 'forbidden':
       return (
-        <Shell>
-          <StatusCard title="This card belongs to another account" body="You are signed in with an account that cannot open this card. Sign out and sign in with the account you use in the Momora app.">
-            <button type="button" className="ce-btn" onClick={onSignOut}>
-              Sign out and switch account
+        <Shell nav={nav}>
+          <StatusCard
+            title="You can't open this card"
+            body={`Only the family's owner or a manager can open the holiday card.${email ? ` You're signed in as ${email}.` : ''}`}
+          >
+            <button type="button" className="ce-btn" onClick={onHome}>
+              Go to your keepsakes
+            </button>
+            <button type="button" className="ce-btn ce-btn--ghost" onClick={onSignOut}>
+              Sign out
             </button>
           </StatusCard>
         </Shell>
       );
     case 'error':
       return (
-        <Shell>
-          <StatusCard title="We could not open your card" body={screen.message}>
+        <Shell nav={nav}>
+          <StatusCard title="We couldn't open your card" body={screen.message}>
             <button type="button" className="ce-btn" onClick={onRetryLoad}>
-              Try again
+              Retry
             </button>
           </StatusCard>
         </Shell>
@@ -169,14 +198,14 @@ function StatusPanel({ screen, onRetryLoad, onSignOut }: { screen: ScreenState }
     case 'preparing':
       if (screen.phase === 'film') {
         return (
-          <Shell>
+          <Shell nav={nav}>
             <StatusCard
               title={screen.slow ? 'This is taking longer than usual' : 'Your card is almost ready'}
               body={
                 screen.slow ? (
-                  <>We are still making the film for the QR code. You can close this page: we will notify you in the Momora app when it is ready. If it does not arrive soon, write to {SUPPORT_EMAIL}.</>
+                  <>We're still making the film for the QR code. You can close this page: we'll notify you in the Momora app when it's ready. If it doesn't arrive soon, write to {SUPPORT_EMAIL}.</>
                 ) : (
-                  <>We are making the film for its QR code. This takes about 20 minutes; we will notify you in the Momora app when it is ready. You can close this page.</>
+                  <>We're making the film for its QR code. This takes about 20 minutes; we'll notify you in the Momora app when it's ready. You can close this page.</>
                 )
               }
             >
@@ -186,14 +215,14 @@ function StatusPanel({ screen, onRetryLoad, onSignOut }: { screen: ScreenState }
         );
       }
       return (
-        <Shell>
+        <Shell nav={nav}>
           <StatusCard
             title={screen.slow ? 'This is taking longer than usual' : 'Getting your card ready'}
             body={
               screen.slow ? (
-                <>We are still putting your card together. You can leave this page open or come back later: your card will be here. If it does not appear soon, write to {SUPPORT_EMAIL}.</>
+                <>We're still putting your card together. You can leave this page open or come back later: your card will be here. If it doesn't appear soon, write to {SUPPORT_EMAIL}.</>
               ) : (
-                <>We are choosing a photo and writing your letter. This usually takes about two minutes, and this page updates by itself.</>
+                <>We're choosing a photo and writing your letter. This usually takes about two minutes, and this page updates by itself.</>
               )
             }
           >
@@ -203,16 +232,16 @@ function StatusPanel({ screen, onRetryLoad, onSignOut }: { screen: ScreenState }
       );
     case 'failed':
       return (
-        <Shell>
+        <Shell nav={nav}>
           {screen.retrying ? (
-            <StatusCard title="We hit a snag, and we are retrying" body="Something went wrong while putting your card together. We are trying again, and this page updates by itself." />
+            <StatusCard title="We hit a snag, and we're retrying" body="Something went wrong while putting your card together. We're trying again, and this page updates by itself." />
           ) : (
             <StatusCard
-              title="We could not make this card"
+              title="We couldn't make this card"
               body={
                 <>
-                  Something went wrong that we cannot fix by retrying. Please write to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
-                  {screen.code ? <> and mention {screen.code}</> : null}, and we will sort it out.
+                  Something went wrong that we can't fix by retrying. Please write to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+                  {screen.code ? <> and mention {screen.code}</> : null}, and we'll sort it out.
                 </>
               }
             />
@@ -241,6 +270,7 @@ function EditorBody(props: EditorBodyProps) {
   const isPhone = useIsPhone();
   const isTouch = useIsTouch();
   const textSheet = isPhone || isTouch;
+  useDocumentTitle(`Holiday card ${editor.cardData.year} · Momora`);
   const fontsReady = props.fontsStatus === 'ready';
   const readOnly = screen.kind !== 'editing';
   const locked = screen.kind === 'locked';
@@ -427,7 +457,7 @@ function EditorBody(props: EditorBodyProps) {
     try {
       await props.onCancelCheckout(orderId);
     } catch {
-      setCancelError('We could not cancel the checkout just now. Try again in a moment.');
+      setCancelError("We couldn't cancel the checkout just now. Try again in a moment.");
     } finally {
       setCancelling(false);
     }
@@ -436,6 +466,8 @@ function EditorBody(props: EditorBodyProps) {
 
   return (
     <div className={`ce${isPhone ? ' ce--phone' : ''}`}>
+      <ConnectedShopHeader onHome={props.onHome} onOpenOrders={props.onOpenOrders} showBack />
+      <h1 className="sr-only">Holiday card {cardData.year}</h1>
       <div className="ce-body">
         {openCheckout && (
           <div className="ce-banner" role="status">
@@ -463,12 +495,12 @@ function EditorBody(props: EditorBodyProps) {
         )}
         {locked && (
           <div className="ce-banner" role="status">
-            This card has been ordered, so it can no longer be changed. You can order more copies of exactly this card.
+            This card has been ordered, so it can't be changed any more. You can order more copies of exactly this card.
           </div>
         )}
         {queue.reloaded && (
           <div className="ce-banner ce-banner--warn" role="alert">
-            <span>This card was edited somewhere else, so we reloaded it. Your last change was not saved.</span>
+            <span>This card was edited somewhere else, so we reloaded it. Your last change wasn't saved.</span>
             <button type="button" className="ce-btn ce-btn--ghost ce-btn--small" onClick={queue.dismissReloaded}>
               OK
             </button>
@@ -588,7 +620,7 @@ function EditorBody(props: EditorBodyProps) {
                     {o.cards} cards{o.priceCents !== null ? ` · ${formatPrice(o.priceCents)}` : ''}
                     {o.createdAt ? ` · ${new Date(o.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}
                   </span>
-                  <span className="ce-orders__status">{orderStatusLabel(o.status)}</span>
+                  <span className="ce-orders__status">{cardOrderStatusCopy(orderStatusName(o.status)).label}</span>
                   {props.onOpenOrder && (
                     <button type="button" className="ce-btn ce-btn--ghost ce-btn--small" onClick={() => props.onOpenOrder?.(o.id)}>
                       View
@@ -620,11 +652,6 @@ function EditorBody(props: EditorBodyProps) {
           )}
           {!readOnly && !queue.error && gate.blocked && gate.blocked !== 'saving' && ORDER_BLOCK_COPY[gate.blocked] && <div className="ce-orderbar__why">{ORDER_BLOCK_COPY[gate.blocked]}</div>}
         </div>
-        {props.onOpenOrders && (
-          <button type="button" className="ce-link" onClick={props.onOpenOrders}>
-            Your orders
-          </button>
-        )}
         {locked ? (
           <button type="button" className="ce-btn ce-btn--cta" disabled={!reorder.enabled} onClick={props.onOrder}>
             Order more cards

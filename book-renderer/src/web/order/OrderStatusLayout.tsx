@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { goToOrders } from './OrderStatusError';
 import './OrderStatusScreen.css';
 
 /**
@@ -15,6 +16,8 @@ import './OrderStatusScreen.css';
 export interface OrderStatusLayoutProps {
   backLabel: string;
   onBack: () => void;
+  /** The header's quiet "All orders" link. Omitted = a plain page load of `/orders`. */
+  onOpenOrders?: () => void;
   /** The one-time "Thanks for your order" banner (null = none). */
   thanks: string | null;
   chip: { label: string; tone: 'positive' | 'neutral' | 'negative' };
@@ -55,7 +58,10 @@ export function OrderStatusLayout(props: OrderStatusLayoutProps) {
         <button type="button" className="order-status__back" onClick={props.onBack}>
           {props.backLabel}
         </button>
-        <span className="order-status__title">Order status</span>
+        <h1 className="order-status__title">Order status</h1>
+        <button type="button" className="order-status__all-orders" onClick={props.onOpenOrders ?? goToOrders}>
+          All orders
+        </button>
       </header>
 
       <div className="order-status__body">

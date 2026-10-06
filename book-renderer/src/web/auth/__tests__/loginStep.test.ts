@@ -55,6 +55,17 @@ describe('login step persistence', () => {
   });
 });
 
+describe('friendlyAuthError: no account for that email', () => {
+  it('maps GoTrue\'s "signups not allowed" to a plain sentence', () => {
+    for (const raw of ['Signups not allowed for otp', 'signup not allowed', 'Signups not allowed for this instance']) {
+      expect(friendlyAuthError(raw)).toEqual({
+        message: "We couldn't find a Momora account for that email. Use the email you sign in with in the Momora app.",
+        waitSeconds: null,
+      });
+    }
+  });
+});
+
 describe('friendlyAuthError', () => {
   it('turns GoTrue\'s "request this after N seconds" into friendly copy + a wait', () => {
     const raw = 'For security purposes, you can only request this after 47 seconds.';
@@ -79,8 +90,12 @@ describe('loginCopyForPath', () => {
   it('says holiday card on /c/ paths and Memory Book elsewhere', () => {
     expect(loginCopyForPath('/c/abc').title).toBe('Sign in to your holiday card');
     expect(loginCopyForPath('/c/abc').hint).toContain('holiday card');
-    expect(loginCopyForPath('/b/abc').title).toBe('Sign in to your Memory Book');
-    expect(loginCopyForPath('/').title).toBe('Sign in to your Memory Book');
-    expect(loginCopyForPath('/cards').title).toBe('Sign in to your Memory Book');
+    for (const path of ['/b/abc', '/', '/cards']) {
+      expect(loginCopyForPath(path)).toEqual({
+        title: 'Sign in to Momora',
+        subtitle: 'Order your Memory Books and holiday cards.',
+        hint: 'New to Momora? Create your family in the Momora app first.',
+      });
+    }
   });
 });

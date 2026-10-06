@@ -323,7 +323,7 @@ export class EditQueue {
           // Unknown whether it landed: read the truth, then resend what is still pending.
           timeouts += 1;
           const read = await this.deps.refetch();
-          if (!read) return this.fail('save_failed', 'We could not confirm your last change. Check your connection.', true);
+          if (!read) return this.fail('save_failed', "We couldn't confirm your last change. Check your connection.", true);
           this.adopt(read);
           if (timeouts >= MAX_TIMEOUT_RETRIES) return this.fail('save_failed', 'Saving is taking too long. Try again in a moment.', false);
           continue;
@@ -331,7 +331,7 @@ export class EditQueue {
         if (kind === 'version') {
           conflicts += 1;
           const read = await this.deps.refetch();
-          if (!read) return this.fail('save_failed', 'We could not confirm your last change. Check your connection.', true);
+          if (!read) return this.fail('save_failed', "We couldn't confirm your last change. Check your connection.", true);
           this.adopt(read);
           if (conflicts >= 2) {
             // Edited elsewhere twice in a row: stop fighting, show the server's version.
@@ -365,8 +365,8 @@ export class EditQueue {
         if (kind === 'subscription') {
           return this.fail('subscription', 'A Momora subscription is needed to save changes to this card.', false);
         }
-        if (kind === 'transient') return this.fail('save_failed', 'Your last change could not be saved. We will try again.', true);
-        return this.fail('save_failed', 'Your last change could not be saved.', false);
+        if (kind === 'transient') return this.fail('save_failed', "Your last change couldn't be saved. We'll try again.", true);
+        return this.fail('save_failed', "Your last change couldn't be saved.", false);
       }
     }
   }

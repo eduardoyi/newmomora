@@ -1,3 +1,4 @@
+import { ORDER_LOAD_ERROR, ORDER_NOT_FOUND_ERROR } from '../../order/loadErrors';
 import { CANCELLED_AFTER_PAYMENT_MESSAGE, ORDER_THANKS_MESSAGE } from '../../order/orderStatusCopy';
 import { formatMoney } from '../../order/formatMoney';
 import { type CardOrderStatus, type CardOrderStatusName } from './checkoutTypes';
@@ -194,4 +195,11 @@ export function cardStatusLayoutModel(order: CardOrderStatus, options: { returne
       : null,
     showResume: order.status === 'draft' || order.status === 'quoted',
   };
+}
+
+/** Friendly copy for a failed status read (never a raw server string). */
+export function statusErrorMessage(error: { code: string; message: string; action: string } | null): string {
+  if (error?.code === 'ORDER_NOT_FOUND') return ORDER_NOT_FOUND_ERROR;
+  if (error?.action === 'reload') return error.message; // signed out: the table's own "sign in again" copy
+  return ORDER_LOAD_ERROR;
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import type { MemoryBookOrderRow } from '../types';
 import { isTerminalOrderStatus } from './orderStatusCopy';
+import { friendlyLoadError, ORDER_LOAD_ERROR, ORDER_NOT_FOUND_ERROR } from './loadErrors';
 import { getFixtureSlug, fixtureGetOrder, fixtureOrderRow } from '../dev/fixture';
 
 const POLL_INTERVAL_MS = 5000;
@@ -64,11 +65,11 @@ export function useOrderStatus(orderId: string) {
         .maybeSingle();
 
       if (error) {
-        setState({ loading: false, error: error.message, order: null });
+        setState({ loading: false, error: friendlyLoadError(error, ORDER_LOAD_ERROR, 'order status'), order: null });
         return;
       }
       if (!data) {
-        setState({ loading: false, error: 'Order not found, or you do not have access to it.', order: null });
+        setState({ loading: false, error: ORDER_NOT_FOUND_ERROR, order: null });
         return;
       }
 

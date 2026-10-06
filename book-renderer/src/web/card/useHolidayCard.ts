@@ -48,7 +48,7 @@ export function useHolidayCard(cardId: string): UseHolidayCard {
         setState({ status: 'ready', view, error: null, fetchedAt: now });
         return view;
       } catch (e) {
-        const error = e instanceof CardApiError ? e : new CardApiError(0, 'network_error', 'We could not load your card.');
+        const error = e instanceof CardApiError ? e : new CardApiError(0, 'network_error', "We couldn't load your card.");
         if (mounted.current && mine === seq.current) {
           // Keep showing the last good view on a failed refresh; only a first load fails the screen.
           setState((prev) => ({ ...prev, status: prev.view ? 'ready' : 'error', error, fetchedAt: prev.fetchedAt }));

@@ -10,7 +10,8 @@ import type { OrderListItem } from '../../order/orderListItems';
  * screen does not pull the card editor into its chunk.
  */
 
-export const CARD_ORDER_LIST_COLUMNS = 'id, card_id, status, packs, price_cents, currency, refunded_at, created_at';
+// `card:holiday_cards(year)` is a to-one embed (the client has a column grant on `year`); null when RLS hides a deleted card.
+export const CARD_ORDER_LIST_COLUMNS = 'id, card_id, status, packs, price_cents, currency, refunded_at, created_at, card:holiday_cards(year)';
 
 /** The buyer's card orders, newest first, without bare draft shells (like the book list). A failed read is "none": the book list must not break over it. */
 export async function fetchCardOrderItems(): Promise<OrderListItem[]> {
@@ -19,7 +20,10 @@ export async function fetchCardOrderItems(): Promise<OrderListItem[]> {
     .select(CARD_ORDER_LIST_COLUMNS)
     .neq('status', 'draft')
     .order('created_at', { ascending: false });
-  if (error) return [];
+  if (error) {
+    console.error('card orders list failed:', error.message);
+    return [];
+  }
   return safeCardOrderItems(data);
 }
 

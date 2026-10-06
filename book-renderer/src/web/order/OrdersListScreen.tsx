@@ -1,4 +1,5 @@
 import { useOrders } from './useOrders';
+import type { OrderListItem } from './orderListItems';
 import { useDocumentTitle } from '../useDocumentTitle';
 // Reuses `.order-status-chip*` from OrderStatusScreen.css rather than
 // redefining the same tone→color mapping a second time — the two screens
@@ -18,51 +19,75 @@ function formatDate(iso: string): string {
  * `BookViewScreen` near "Order this book" (only once `useHasPastOrders`
  * confirms the buyer actually has one).
  */
+/** The path a card order opens on its own (no card page to show it on): the order route with `?kind=card`. */
+export function cardStatusPath(orderId: string): string {
+  return `/order/${encodeURIComponent(orderId)}?kind=card`;
+}
+
+/** The accessible name of a row: what it is, when, its status and total. */
+export function orderRowLabel(order: Pick<OrderListItem, 'title' | 'detail' | 'createdAt' | 'chip' | 'total' | 'refunded'>): string {
+  return [order.title, order.detail, formatDate(order.createdAt), order.chip.label, order.total, order.refunded ? 'Refunded' : null].filter(Boolean).join(', ');
+}
+
 export function OrdersListScreen({
   onOpenOrder,
   onOpenCardOrder,
+  onOpenCardStatus,
   onBack,
 }: {
   /** A Memory Book order's status page. */
   onOpenOrder: (orderId: string) => void;
-  /** A holiday card order: the card page opens on that order's status. Rows for cards are inert without it. */
+  /** A holiday card order whose card still exists: the card page opens on that order's status. */
   onOpenCardOrder?: (cardId: string, orderId: string) => void;
+  /** A card order opened on its own (its card was deleted, or no card handler): `/order/<id>?kind=card`. Omitted = a plain page load of that path. */
+  onOpenCardStatus?: (orderId: string) => void;
+  /** Home (the book list). */
   onBack: () => void;
 }) {
   useDocumentTitle('Your orders · Momora');
-  const { loading, error, orders } = useOrders();
+  const { loading, error, orders, reload } = useOrders();
 
   return (
     <div className="orders-list">
       <header className="orders-list__header">
         <button type="button" className="orders-list__back" onClick={onBack}>
-          ← Your books
+          ← Home
         </button>
-        <span className="orders-list__title">Your orders</span>
+        <h1 className="orders-list__title">Your orders</h1>
       </header>
 
       <div className="orders-list__body">
         {loading && <p className="orders-list__hint">Loading your orders…</p>}
-        {error && <p className="orders-list__error">{error}</p>}
+        {error && (
+          <>
+            <p className="orders-list__error" role="alert">
+              {error}
+            </p>
+            <button type="button" className="orders-list__retry" onClick={() => void reload()}>
+              Try again
+            </button>
+          </>
+        )}
 
         {!loading && !error && (orders?.length ?? 0) === 0 && (
           <p className="orders-list__hint">
-            No orders yet — once you order a printed Memory Book, it'll show up here so you can track it.
+            No orders yet. When you order a Memory Book or holiday cards, they'll show up here so you can track them.
           </p>
         )}
 
         {!loading && !error && (orders?.length ?? 0) > 0 && (
           <ul className="orders-list__items">
             {(orders ?? []).map((order) => {
-              const open =
-                order.kind === 'card'
-                  ? order.cardId && onOpenCardOrder
-                    ? () => onOpenCardOrder(order.cardId as string, order.id)
-                    : undefined
-                  : () => onOpenOrder(order.id);
+              // Never an inert row: a card whose page is gone still opens its status on its own.
+              const open = () => {
+                if (order.kind === 'book') onOpenOrder(order.id);
+                else if (order.cardId && onOpenCardOrder) onOpenCardOrder(order.cardId, order.id);
+                else if (onOpenCardStatus) onOpenCardStatus(order.id);
+                else window.location.assign(cardStatusPath(order.id));
+              };
               return (
                 <li key={`${order.kind}:${order.id}`}>
-                  <button type="button" className="orders-list__item" onClick={open} disabled={!open}>
+                  <button type="button" className="orders-list__item" onClick={open} aria-label={orderRowLabel(order)}>
                     <div className="orders-list__item-main">
                       <span className="orders-list__item-title">{order.title}</span>
                       <span className="orders-list__item-date">

@@ -3,6 +3,7 @@ import type { CardEdits } from '../../card/edits';
 import type { CardData } from '../../card/types';
 import type { HolidayCardView, QrState } from './cardTypes';
 import type { ServerRead } from './editQueue';
+import { CARD_ORDER_STATUS_NAMES, type CardOrderStatusName } from './checkout/checkoutTypes';
 
 /**
  * Pure state + selectors for the card editor screen (docs/plans/holiday-cards-
@@ -77,8 +78,11 @@ export function isRetryableFailure(code: string | null): boolean {
 
 export type ScreenState =
   | { kind: 'loading' }
-  /** Signed in as someone who cannot see this card (403 / 404). */
+  /** Signed in as someone who is not the family's owner or a manager (403). */
   | { kind: 'forbidden' }
+  /** 404 / 400 / card_not_found: deleted card or an incomplete link. */
+  | { kind: 'notFound' }
+  /** Anything else that failed to load. The copy is ours: a raw server string is never shown. */
   | { kind: 'error'; message: string }
   /**
    * `phase` 'film': the artwork is done and the QR film renders (~20 min); the
@@ -102,7 +106,7 @@ export interface OpenCheckout {
 
 export interface ScreenInput {
   load: 'loading' | 'ready' | 'error';
-  error: { status: number; code: string; message?: string } | null;
+  error: { status: number; code: string } | null;
   view: HolidayCardView | null;
   /** From the save queue (a 409 `card_ordered` / 423 seen while saving). */
   queueLocked: boolean;
@@ -112,9 +116,22 @@ export interface ScreenInput {
   firstSeenMs: number;
 }
 
-export function isForbiddenError(error: { status: number; code: string } | null): boolean {
-  if (!error) return false;
-  return error.status === 404 || (error.status === 403 && error.code !== 'SUBSCRIPTION_REQUIRED');
+export const LOAD_ERROR_COPY = "We couldn't load your card. Check your connection and try again.";
+export const EDITOR_UNAVAILABLE_COPY = "We couldn't open the editor for this card. Please try again in a moment.";
+
+export type LoadErrorKind = 'not_found' | 'forbidden' | 'generic';
+
+/**
+ * What a failed `get` means to the buyer. `card_not_found` / 404 / 400 (an
+ * invalid or truncated id) are "no such card"; a 403 is "not the owner or a
+ * manager"; everything else (network, timeout, 5xx, a billing 403) is the
+ * generic retry. The server's own message is never shown.
+ */
+export function classifyLoadError(error: { status: number; code: string } | null): LoadErrorKind {
+  if (!error) return 'generic';
+  if (error.status === 404 || error.status === 400 || error.code === 'card_not_found') return 'not_found';
+  if (error.status === 403 && error.code !== 'SUBSCRIPTION_REQUIRED') return 'forbidden';
+  return 'generic';
 }
 
 export function isPreparingSlow(createdAtIso: string | null, firstSeenMs: number, nowMs: number, afterMs: number = PREPARING_SLOW_AFTER_MS): boolean {
@@ -132,8 +149,10 @@ export function deriveScreenState(input: ScreenInput): ScreenState {
   const { view } = input;
   if (!view) {
     if (input.load === 'error' && input.error) {
-      if (isForbiddenError(input.error)) return { kind: 'forbidden' };
-      return { kind: 'error', message: input.error.message ?? 'We could not load your card.' };
+      const kind = classifyLoadError(input.error);
+      if (kind === 'not_found') return { kind: 'notFound' };
+      if (kind === 'forbidden') return { kind: 'forbidden' };
+      return { kind: 'error', message: LOAD_ERROR_COPY };
     }
     return { kind: 'loading' };
   }
@@ -147,7 +166,7 @@ export function deriveScreenState(input: ScreenInput): ScreenState {
   if (view.readiness === 'film') return preparing(view, input, 'film');
   if (view.readiness === 'generating') return preparing(view, input, 'generating');
   // Ready.
-  if (view.editorViewInvalid) return { kind: 'error', message: 'We could not open the editor for this card. Please try again in a moment.' };
+  if (view.editorViewInvalid) return { kind: 'error', message: EDITOR_UNAVAILABLE_COPY };
   const editor = view.editorView;
   if (!editor) return preparing(view, input, 'generating');
 
@@ -182,8 +201,8 @@ export interface QrControl {
 }
 
 export const QR_NOTES = {
-  waiting: 'Your film is still being made. Order when it is ready, or turn the QR off.',
-  unavailable: 'This card prints without a QR code: there is no film to link to.',
+  waiting: "Your film is still being made. Order when it's ready, or turn the QR off.",
+  unavailable: "This card prints without a QR code: there's no film to link to.",
   revoked: 'The film link was turned off, so this card prints without a QR code.',
 } as const;
 
@@ -228,7 +247,7 @@ export type OrderBlock =
 
 export const ORDER_BLOCK_COPY: Record<OrderBlock, string> = {
   saving: 'Saving your changes…',
-  save_error: 'Your last change has not been saved yet.',
+  save_error: "Your last change hasn't been saved yet.",
   not_ready: 'Your card is still being prepared.',
   locked: '',
   checkout_open: 'A checkout is already open for this card.',
@@ -289,18 +308,9 @@ export function letterToneOptions(data: Pick<CardData, 'letters'>): { tone: stri
   return [...known, ...other].map((tone) => ({ tone, label: TONE_LABELS[tone] ?? tone }));
 }
 
-const ORDER_STATUS_LABELS: Record<string, string> = {
-  checkout: 'Checkout open',
-  paid: 'Paid, getting ready',
-  submitted: 'Sent to the printer',
-  in_production: 'Being printed',
-  shipped: 'Shipped',
-  failed: 'Needs attention',
-  cancelled: 'Cancelled',
-};
-
-export function orderStatusLabel(status: string): string {
-  return ORDER_STATUS_LABELS[status] ?? 'In progress';
+/** An order's status as the shared status copy knows it (anything newer reads as the generic "unknown"). */
+export function orderStatusName(status: string): CardOrderStatusName | 'unknown' {
+  return (CARD_ORDER_STATUS_NAMES as readonly string[]).includes(status) ? (status as CardOrderStatusName) : 'unknown';
 }
 
 export function formatPrice(cents: number | null): string {
@@ -319,7 +329,7 @@ export function draftWarning(doc: CardDocument | null, draftTarget: RegionTarget
       blockSave: true,
     };
   }
-  if (doc.safeViolations.length > 0) return { warning: 'That is too wide for the card: it would run too close to the edge.', blockSave: true };
+  if (doc.safeViolations.length > 0) return { warning: "That's too wide for the card: it would run too close to the edge.", blockSave: true };
   return { warning: null, blockSave: false };
 }
 
@@ -330,13 +340,13 @@ export function frontRejectionMessage(code: string): string {
     case 'front_low_resolution':
       return 'That photo is too small to print well on a card. Pick another one.';
     case 'front_unreadable':
-      return 'We could not read that photo. Pick another one.';
+      return "We couldn't read that photo. Pick another one.";
     case 'MEDIA_NOT_PRINTABLE':
     case 'MEDIA_NOT_PHOTO':
-      return 'That photo cannot be printed on a card. Pick another one.';
+      return "That photo can't be printed on a card. Pick another one.";
     case 'MEDIA_NOT_FOUND':
       return 'That photo is no longer available. Pick another one.';
     default:
-      return 'That photo could not be used. Pick another one.';
+      return "That photo couldn't be used. Pick another one.";
   }
 }

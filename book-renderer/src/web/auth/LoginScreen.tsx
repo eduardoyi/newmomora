@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { requestSignInOtp, verifyEmailOtp } from './useAuthSession';
 import { friendlyAuthError, loginCopyForPath } from './authCopy';
 import { clearLoginStep, getSessionStepStorage, loadLoginStep, saveLoginStep, type LoginStep } from './loginStep';
+import { useDocumentTitle } from '../useDocumentTitle';
 import './LoginScreen.css';
 
 const RESEND_COOLDOWN_SECONDS = 60;
@@ -63,6 +64,7 @@ export function LoginScreen({ notice }: { notice?: string } = {}) {
   // Resend cooldown after a send, and a separate wait after GoTrue's "you can
   // only request this after N seconds" rate limit.
   const copy = loginCopyForPath(typeof window !== 'undefined' ? window.location.pathname : '/');
+  useDocumentTitle('Sign in · Momora');
   const [cooldown, startCooldown] = useCountdown();
   const [rateWait, startRateWait] = useCountdown();
 
@@ -135,7 +137,7 @@ export function LoginScreen({ notice }: { notice?: string } = {}) {
             </p>
           )}
           <h1 className="login-card__title">{copy.title}</h1>
-          <p className="login-card__subtitle">Use the email address for your Momora family account.</p>
+          <p className="login-card__subtitle">{copy.subtitle}</p>
           <form onSubmit={handleRequestCode} className="login-card__form">
             <label className="login-field">
               <span className="login-field__label">Email</span>

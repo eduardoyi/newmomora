@@ -21,6 +21,7 @@
 }
 
 .orders-list__title {
+  margin: 0;
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 500;
@@ -131,4 +132,24 @@
     align-items: flex-start;
     gap: 2px;
   }
+}
+
+/* `all: unset` removes the browser outline: put a visible focus ring back. */
+.orders-list__back:focus-visible,
+.orders-list__item:focus-visible {
+  outline: 2px solid var(--lavender-deep);
+  outline-offset: 2px;
+}
+
+.orders-list__retry {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--color-primary);
+  color: var(--color-white);
+  cursor: pointer;
+  margin-top: 4px;
 }

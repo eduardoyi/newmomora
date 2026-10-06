@@ -74,8 +74,9 @@ export async function getCardOrderStatus(orderId: string): Promise<CardOrderStat
   if (import.meta.env.DEV && isCardFixture()) return parseOrderStatus(await fixtureOrderStatus(orderId));
   const { data, error } = await supabase.from('holiday_card_orders').select(ORDER_STATUS_COLUMNS).eq('id', orderId).maybeSingle();
   if (error) {
+    console.error('card order status read failed:', error.message);
     const expired = /jwt|token/i.test(error.message);
-    throw new CardApiError(expired ? 401 : 0, expired ? 'unauthorized' : 'network_error', error.message);
+    throw new CardApiError(expired ? 401 : 0, expired ? 'unauthorized' : 'network_error', 'Could not read the order');
   }
   if (!data) throw new CardApiError(404, 'ORDER_NOT_FOUND', 'Order not found');
   return parseOrderRow(data);

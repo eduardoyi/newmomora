@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import type { MemoryBookOrderListRow } from '../types';
 import { fetchCardOrderItems } from '../card/checkout/cardOrderList';
+import { friendlyLoadError, ORDERS_LOAD_ERROR } from './loadErrors';
 import { bookOrderItem, mergeOrderItems, type OrderListItem } from './orderListItems';
 import { getFixtureSlug, fixtureListOrders } from '../dev/fixture';
 
@@ -95,7 +96,7 @@ export function useOrders() {
     ]);
 
     if (error) {
-      setState({ loading: false, error: error.message, orders: null });
+      setState({ loading: false, error: friendlyLoadError(error, ORDERS_LOAD_ERROR, 'orders list'), orders: null });
       return;
     }
 

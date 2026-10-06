@@ -28,3 +28,24 @@ button {
   font-size: 14px;
   color: var(--color-ink2);
 }
+
+/* Keyboard focus: one visible ring everywhere. `!important` because several
+   controls are `all: unset` (book tiles, header links, sheet close buttons),
+   which would otherwise erase any outline set from a rule that loads earlier. */
+:focus-visible {
+  outline: 2px solid var(--color-primary) !important;
+  outline-offset: 2px !important;
+}
+
+/* Visually hidden, still read by screen readers (a real <h1> where the design shows none). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

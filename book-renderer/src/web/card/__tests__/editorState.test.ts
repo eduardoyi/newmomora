@@ -3,7 +3,12 @@ import { buildCardDocument } from '../../../card/document';
 import { emptyEdits, setChoices, setFrontImage, setLetter } from '../../../card/edits';
 import { cardInputFromData } from '../../../card/fromData';
 import type { MeasureFn } from '../../../card/textFit';
+import { cardOrderStatusCopy } from '../checkout/cardOrderStatusCopy';
+import { CARD_ORDER_STATUS_NAMES } from '../checkout/checkoutTypes';
 import {
+  classifyLoadError,
+  LOAD_ERROR_COPY,
+  orderStatusName,
   CHECKOUT_OPEN_NOTE,
   deriveScreenState,
   isCancelDoneCode,
@@ -40,6 +45,42 @@ const input = (over: Partial<ScreenInput> = {}): ScreenInput => ({
   ...over,
 });
 
+describe('load error split', () => {
+  const state = (status: number, code: string, message = 'raw server text') => deriveScreenState(input({ load: 'error', view: null, error: { status, code } as { status: number; code: string } & { message?: string }, ...{} }));
+  it.each([
+    [404, 'card_not_found', 'notFound'],
+    [400, 'validation_error', 'notFound'], // "cardId is invalid": a truncated or malformed link
+    [200, 'card_not_found', 'notFound'],
+    [403, 'forbidden', 'forbidden'],
+    [403, 'SUBSCRIPTION_REQUIRED', 'error'],
+    [500, 'internal_error', 'error'],
+    [0, 'network_error', 'error'],
+    [0, 'timeout', 'error'],
+    [401, 'unauthorized', 'error'],
+  ] as const)('%s %s → %s', (status, code, kind) => {
+    expect(classifyLoadError({ status, code })).toBe(kind === 'notFound' ? 'not_found' : kind === 'forbidden' ? 'forbidden' : 'generic');
+    expect(state(status, code).kind).toBe(kind);
+  });
+  it('never puts a raw server string on screen', () => {
+    for (const raw of ['cardId is invalid', 'Failed to load card', 'Internal error']) {
+      const s = deriveScreenState(input({ load: 'error', view: null, error: Object.assign(new Error(raw), { status: 500, code: 'internal_error' }) }));
+      expect(s).toEqual({ kind: 'error', message: LOAD_ERROR_COPY });
+    }
+    expect(LOAD_ERROR_COPY).toBe("We couldn't load your card. Check your connection and try again.");
+  });
+});
+
+describe('order status labels match /orders', () => {
+  it("uses the shared card order status copy's label for every status it knows, and the generic label for the rest", () => {
+    for (const name of CARD_ORDER_STATUS_NAMES) {
+      expect(cardOrderStatusCopy(orderStatusName(name)).label.length).toBeGreaterThan(0);
+      expect(orderStatusName(name)).toBe(name);
+    }
+    expect(orderStatusName('something_new')).toBe('unknown');
+    expect(cardOrderStatusCopy(orderStatusName('shipped')).label).toBe(cardOrderStatusCopy('shipped').label);
+  });
+});
+
 describe('deriveScreenState', () => {
   it('loads, then shows the editor', () => {
     expect(deriveScreenState(input({ load: 'loading', view: null }))).toEqual({ kind: 'loading' });
@@ -48,9 +89,8 @@ describe('deriveScreenState', () => {
 
   it('403 / 404 → forbidden ("belongs to another account"); other errors are retryable errors', () => {
     expect(deriveScreenState(input({ load: 'error', view: null, error: { status: 403, code: 'forbidden' } })).kind).toBe('forbidden');
-    expect(deriveScreenState(input({ load: 'error', view: null, error: { status: 404, code: 'card_not_found' } })).kind).toBe('forbidden');
-    expect(deriveScreenState(input({ load: 'error', view: null, error: { status: 0, code: 'network_error', message: 'offline' } }))).toEqual({ kind: 'error', message: 'offline' });
-    // A billing 403 is not "wrong account".
+    expect(deriveScreenState(input({ load: 'error', view: null, error: { status: 404, code: 'card_not_found' } })).kind).toBe('notFound');
+    // A billing 403 is not "not the owner".
     expect(deriveScreenState(input({ load: 'error', view: null, error: { status: 403, code: 'SUBSCRIPTION_REQUIRED' } })).kind).toBe('error');
   });
 

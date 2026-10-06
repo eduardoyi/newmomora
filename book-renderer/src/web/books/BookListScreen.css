@@ -3,45 +3,24 @@
   background: var(--color-bg);
 }
 
-.book-list__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  background: var(--color-white);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.book-list__wordmark {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 500;
-  color: var(--color-ink);
-}
-
-.book-list__wordmark-dot {
-  color: var(--color-wordmarkDot);
-}
-
-.book-list__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.book-list__orders-link,
-.book-list__signout {
-  all: unset;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--color-ink2);
-}
-
 .book-list__body {
   max-width: 960px;
   margin: 0 auto;
   padding: 24px 20px 60px;
+}
+
+.book-list__section {
+  margin: 0 0 32px;
+}
+
+.book-list__section-title {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink2);
+  margin: 0 0 12px;
 }
 
 .book-list__title {
@@ -163,6 +142,38 @@
 }
 
 .status-chip--failed {
+  background: #fde8e8;
+  color: #b42318;
+}
+
+/* Holiday card tile */
+.book-card__thumb--card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--lavender-pale), var(--lavender-soft));
+}
+
+.book-card__card-year {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 40px;
+  font-weight: 400;
+  color: var(--lavender-ink);
+}
+
+.status-chip--card-being_made {
+  background: var(--color-primaryTint);
+  color: var(--color-primaryDark);
+}
+
+.status-chip--card-ready,
+.status-chip--card-ordered {
+  background: var(--lavender-pale);
+  color: var(--lavender-ink);
+}
+
+.status-chip--card-failed {
   background: #fde8e8;
   color: #b42318;
 }

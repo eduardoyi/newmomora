@@ -55,7 +55,7 @@ export function CardCheckoutScreen({ ctx }: { ctx: CardCheckoutContext }) {
     if (ctx.orderId) return <CardOrderStatusPanel orderId={ctx.orderId} returnedFromPayment onBack={ctx.onBack} />;
     return (
       <Frame ctx={ctx}>
-        <Message message="We could not tell which order this was. If you paid, it is safe: open your card to see it, or write to us." onBack={ctx.onBack} />
+        <Message message="We couldn’t tell which order this was. If you paid, it is safe: open your card to see it, or write to us." onBack={ctx.onBack} />
       </Frame>
     );
   }
@@ -196,7 +196,7 @@ function ResumeOrder({ ctx, orderId, onShowStatus }: { ctx: CardCheckoutContext;
     // The card itself has to be loaded to review it (a page load straight onto `?order=`).
     return (
       <Frame ctx={ctx}>
-        {ctx.card.status === 'error' ? <Message message="We could not load your card." onBack={ctx.onBack} onRetry={() => void ctx.card.refetch()} /> : <CheckoutHint>Loading your card…</CheckoutHint>}
+        {ctx.card.status === 'error' ? <Message message="We couldn’t load your card." onBack={ctx.onBack} onRetry={() => void ctx.card.refetch()} /> : <CheckoutHint>Loading your card…</CheckoutHint>}
       </Frame>
     );
   }
@@ -233,7 +233,7 @@ function usePin(ctx: CardCheckoutContext): { status: PinStatus; version: number 
   return { status, version: edits.serverVersion };
 }
 
-const SAVE_PENDING = () => new CardApiError(0, 'SAVE_PENDING', 'Your last change has not been saved yet.');
+const SAVE_PENDING = () => new CardApiError(0, 'SAVE_PENDING', 'Your last change hasn’t been saved yet.');
 
 function toApiError(e: unknown): CardApiError {
   return e instanceof CardApiError ? e : new CardApiError(0, 'network_error', e instanceof Error ? e.message : 'Network error');
@@ -537,12 +537,12 @@ function SummaryStep({
   let before: ReactNode;
   if (pinState === 'ready' && view) {
     before = fontsFailed ? (
-      <CheckoutHint>We could not load the card fonts for a preview here. Your card will print as you saw it in the editor.</CheckoutHint>
+      <CheckoutHint>We couldn’t load the card fonts for a preview here. Your card will print as you saw it in the editor.</CheckoutHint>
     ) : (
       <CardThumbnails view={view} edits={ctx.edits.edits} fontsReady={fontsReady} onImageError={ctx.card.reportImageError} />
     );
   } else if (pinState === 'save_error') {
-    before = <CheckoutError message="Your last change to the card has not been saved yet. Go back to your card to try again." />;
+    before = <CheckoutError message="Your last change to the card hasn’t been saved yet. Go back to your card to try again." />;
   } else {
     before = <CheckoutHint>Checking your latest changes…</CheckoutHint>;
   }

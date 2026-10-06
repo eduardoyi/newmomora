@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useOrderStatus } from './useOrderStatus';
 import { orderStatusCopy, CANCELLED_AFTER_PAYMENT_MESSAGE, ORDER_THANKS_MESSAGE } from './orderStatusCopy';
 import { formatMoney } from './formatMoney';
 import { OrderStatusLayout } from './OrderStatusLayout';
+import { goToOrders, OrderStatusError } from './OrderStatusError';
 import { showsProgressStepper } from './orderProgressSteps';
 import { OrderProgressStepper } from './OrderProgressStepper';
 import { SHIPS_TO_COUNTRIES } from './shippingCountries';
@@ -32,7 +33,41 @@ function shipsToCountryName(code: string): string {
  * copy (`orderStatusCopy.ts` — includes the task's exact required `failed`
  * wording), and polls while the order isn't done changing on its own.
  */
-export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; onBackToBook: (bookId: string) => void }) {
+export function OrderStatusScreen({
+  orderId,
+  onBackToBook,
+  onOpenOrders,
+}: {
+  orderId: string;
+  onBackToBook: (bookId: string) => void;
+  /** The orders list (`/orders`); omitted = a plain page load of it. */
+  onOpenOrders?: () => void;
+}) {
+  // `/order/<id>?kind=card`: a holiday card order opened on its own (its card may
+  // be gone, so there is no card page to show it on). Same layout, card adapter.
+  if (new URLSearchParams(window.location.search).get('kind') === 'card') {
+    return (
+      <Suspense fallback={<LoadingOrder />}>
+        <CardOrderStatusPanel orderId={orderId} returnedFromPayment={false} onBack={onOpenOrders ?? goToOrders} backLabel="← All orders" onOpenOrders={onOpenOrders} />
+      </Suspense>
+    );
+  }
+  return <BookOrderStatusScreen orderId={orderId} onBackToBook={onBackToBook} onOpenOrders={onOpenOrders} />;
+}
+
+// Lazy: the card status page (and its adapter) is only fetched for a card order.
+const CardOrderStatusPanel = lazy(() => import('../card/checkout/CardOrderStatusPanel').then((m) => ({ default: m.CardOrderStatusPanel })));
+
+function LoadingOrder() {
+  return (
+    <div className="order-status order-status--center">
+      <h1 className="order-status__sr-only">Order status</h1>
+      <p className="order-status__hint">Loading your order…</p>
+    </div>
+  );
+}
+
+function BookOrderStatusScreen({ orderId, onBackToBook, onOpenOrders }: { orderId: string; onBackToBook: (bookId: string) => void; onOpenOrders?: () => void }) {
   const { loading, error, order, reload } = useOrderStatus(orderId);
   useDocumentTitle(order ? `Order status · Momora` : null);
 
@@ -41,19 +76,9 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
   // always `order.status`/`orderStatusCopy`, never this query param).
   const [showThanks] = useState(() => new URLSearchParams(window.location.search).get('checkout') === 'success');
 
-  if (loading) {
-    return (
-      <div className="order-status order-status--center">
-        <p className="order-status__hint">Loading your order…</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingOrder />;
   if (error || !order) {
-    return (
-      <div className="order-status order-status--center">
-        <p className="order-status__error">{error ?? 'Order not found.'}</p>
-      </div>
-    );
+    return <OrderStatusError message={error ?? undefined} onRetry={reload} onOpenOrders={onOpenOrders ?? goToOrders} />;
   }
 
   const copy = orderStatusCopy(order.status);
@@ -66,6 +91,7 @@ export function OrderStatusScreen({ orderId, onBackToBook }: { orderId: string; 
     <OrderStatusLayout
       backLabel="← Your book"
       onBack={() => onBackToBook(order.book_id)}
+      onOpenOrders={onOpenOrders}
       thanks={showThanks && order.status !== 'draft' && order.status !== 'quoted' ? ORDER_THANKS_MESSAGE : null}
       chip={{ label: copy.label, tone: copy.tone }}
       message={statusMessage}

@@ -68,6 +68,13 @@ describe('error table', () => {
     expect(describeCheckoutError({ status: 409, code: 'CARD_CHANGED' }, { locked: true }).action).toBe('reload');
   });
 
+  it('keeps the book\'s voice: contractions, and the keepsakes pointer for a missing card', () => {
+    expect(ERROR_TABLE.CARD_NOT_FOUND.message).toBe('We couldn’t find this card. Open it again from your keepsakes.');
+    for (const [code, copy] of Object.entries(ERROR_TABLE)) {
+      expect(copy.message, code).not.toMatch(/\b(could not|cannot|does not|did not|is not|has not|We are)\b/);
+    }
+  });
+
   it('covers the reorder codes and a server error on the reorder snapshot', () => {
     for (const code of ['QR_LINK_DISABLED', 'FILM_BLOCKED', 'FILM_NOT_READY', 'REORDER_UNAVAILABLE', 'internal_error']) expect(ERROR_TABLE[code], code).toBeDefined();
     expect(describeCheckoutError({ status: 500, code: 'internal_error' }).action).toBe('retry');

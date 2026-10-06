@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import type { FrontPhotoProvider } from '../../card/preview/photoProvider';
 import { signOut } from '../auth/useAuthSession';
-import { useHasPastOrders } from '../order/useHasPastOrders';
 import { CardApiError, fetchPickerPool, getCardMediaUrls, getFilmUrls } from './cardApi';
 import { cancelCardCheckout } from './checkout/cardOrdersApi';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
@@ -42,8 +41,10 @@ export interface CardRouteProps {
   /** Used when `renderCheckout` is absent. */
   onOrder?: () => void;
   onOpenOrder?: (orderId: string) => void;
-  /** The buyer's orders page (`/orders`): offered as a link when they have past orders, like the book page. */
+  /** The shared header's "Your orders" (`/orders`). */
   onOpenOrders?: () => void;
+  /** The shared header's wordmark and "← Home" (`/`). */
+  onHome?: () => void;
   /** "Sign out and switch account" (default: the shop's sign-out). */
   onSignOut?: () => void | Promise<void>;
 }
@@ -66,10 +67,9 @@ export default function CardRoute(props: CardRouteProps) {
   );
 }
 
-function CardRouteBody({ cardId, card, renderCheckout, onOrder, onOpenOrder, onOpenOrders, onSignOut }: CardRouteProps & { card: UseHolidayCard }) {
+function CardRouteBody({ cardId, card, renderCheckout, onOrder, onOpenOrder, onOpenOrders, onHome, onSignOut }: CardRouteProps & { card: UseHolidayCard }) {
   const edits = useCardEdits();
   const fonts = useCardFonts();
-  const hasPastOrders = useHasPastOrders();
   const [initialReturn] = useState(readReturnParams);
   const [view, setView] = useState<'editor' | 'checkout'>(initialReturn.orderId || initialReturn.returnStatus ? 'checkout' : 'editor');
   const [resumeOrderId, setResumeOrderId] = useState<string | null>(initialReturn.orderId);
@@ -142,7 +142,8 @@ function CardRouteBody({ cardId, card, renderCheckout, onOrder, onOpenOrder, onO
         // The refetch clears `hasOpenCheckout`, which also reopens editing in the queue.
         await card.refetch();
       }}
-      onOpenOrders={hasPastOrders ? onOpenOrders : undefined}
+      onHome={onHome ?? (() => {})}
+      onOpenOrders={onOpenOrders ?? (() => {})}
       onOpenOrder={
         onOpenOrder ??
         (canCheckout

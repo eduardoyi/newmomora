@@ -26,6 +26,7 @@
 }
 
 .checkout-screen__title {
+  margin: 0;
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 500;
@@ -221,4 +222,11 @@
   font-size: 13px;
   color: var(--color-primaryDark);
   margin: -6px 0 0;
+}
+
+/* `all: unset` removes the browser outline: put a visible focus ring back. */
+.checkout-screen__back:focus-visible {
+  outline: 2px solid var(--lavender-deep);
+  outline-offset: 2px;
+  border-radius: 4px;
 }

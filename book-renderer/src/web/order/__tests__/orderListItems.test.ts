@@ -53,7 +53,7 @@ describe('the card adapter', () => {
     expect(card()).toEqual({
       kind: 'card',
       id: 'card-order-1',
-      title: 'Holiday cards',
+      title: 'Holiday cards 2026',
       detail: '30 cards',
       createdAt: '2026-10-02T10:00:00.000Z',
       chip: { label: 'Payment received', tone: 'positive' },
@@ -72,6 +72,19 @@ describe('the card adapter', () => {
     expect(card({ status: 'brand_new' }).chip.label).toBe('In progress');
     expect(card({ status: 'brand_new' }).terminal).toBe(true);
     expect(card({ packs: null, price_cents: null }).detail).toBeNull();
+  });
+});
+
+describe('card row title carries the card\'s year', () => {
+  it('uses the embedded card year, an array embed, and falls back to the order\'s year for a deleted card', () => {
+    expect(card({ card: { year: 2025 } }).title).toBe('Holiday cards 2025');
+    expect(card({ card: [{ year: 2024 }] }).title).toBe('Holiday cards 2024');
+    expect(card({ card: null, card_id: null, created_at: '2027-01-05T10:00:00.000Z' }).title).toBe('Holiday cards 2027');
+    expect(card({ card: { year: 'x' } }).title).toBe('Holiday cards 2026');
+  });
+  it('survives safeCardOrderItems', () => {
+    const [item] = safeCardOrderItems([{ id: 'c', card_id: 'k', status: 'paid', packs: 2, price_cents: 4980, currency: 'USD', refunded_at: null, created_at: '2026-10-02T10:00:00.000Z', card: { year: 2025 } }]);
+    expect(item.title).toBe('Holiday cards 2025');
   });
 });
 

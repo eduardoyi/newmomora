@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { OrderProgressStepper } from '../../order/OrderProgressStepper';
+import { goToOrders, OrderStatusError } from '../../order/OrderStatusError';
 import { OrderStatusLayout } from '../../order/OrderStatusLayout';
-import { CONFIRMING_SLOW_AFTER_MS, CONFIRMING_SLOW_NOTE, cardStatusLayoutModel, isConfirmingPayment } from './cardOrderStatusCopy';
+import { CONFIRMING_SLOW_AFTER_MS, CONFIRMING_SLOW_NOTE, cardStatusLayoutModel, isConfirmingPayment, statusErrorMessage } from './cardOrderStatusCopy';
 import { CARD_STEPPER, cardShowsStepper } from './cardProgress';
 import { SUPPORT_EMAIL } from './errorCopy';
 import { useCardOrderStatus } from './useCardOrderStatus';
@@ -19,12 +20,18 @@ export function CardOrderStatusPanel({
   orderId,
   returnedFromPayment,
   onBack,
+  backLabel = '← Your card',
+  onOpenOrders,
 }: {
   orderId: string;
   /** The buyer just came back from Stripe's success page. */
   returnedFromPayment: boolean;
   /** Back to the card (also refreshes it: a paid order locks the card). */
   onBack: () => void;
+  /** The back link's text ("← All orders" when opened on its own from the list). */
+  backLabel?: string;
+  /** The orders list; omitted = a plain page load of `/orders`. */
+  onOpenOrders?: () => void;
 }) {
   const { status, order, error, stale, startedAt, reload } = useCardOrderStatus(orderId);
 
@@ -40,22 +47,13 @@ export function CardOrderStatusPanel({
   if (status === 'loading') {
     return (
       <div className="order-status order-status--center">
+        <h1 className="order-status__sr-only">Order status</h1>
         <p className="order-status__hint">Loading your order…</p>
       </div>
     );
   }
   if (status === 'error' || !order) {
-    return (
-      <div className="order-status order-status--center">
-        <p className="order-status__error">{error?.message ?? 'Order not found.'}</p>
-        <button type="button" className="order-status__resume" onClick={reload}>
-          Try again
-        </button>
-        <button type="button" className="order-status__resume" onClick={onBack}>
-          Back to your card
-        </button>
-      </div>
-    );
+    return <OrderStatusError message={statusErrorMessage(error)} onRetry={reload} onOpenOrders={onOpenOrders ?? goToOrders} />;
   }
 
   const model = cardStatusLayoutModel(order, {
@@ -66,8 +64,9 @@ export function CardOrderStatusPanel({
 
   return (
     <OrderStatusLayout
-      backLabel="← Your card"
+      backLabel={backLabel}
       onBack={onBack}
+      onOpenOrders={onOpenOrders}
       thanks={model.thanks}
       chip={model.chip}
       message={model.message}
@@ -92,3 +91,4 @@ export function CardOrderStatusPanel({
     />
   );
 }
+

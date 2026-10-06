@@ -14,9 +14,18 @@ export interface CardOrderListRow {
   currency: string | null;
   refunded_at: string | null;
   created_at: string;
+  /** The embedded card (`holiday_cards(year)`); null when the card is deleted or hidden. */
+  card?: { year: number } | { year: number }[] | null;
 }
 
 const KNOWN: readonly string[] = ['draft', 'quoted', 'checkout', 'paid', 'rendering', 'submitted', 'in_production', 'shipped', 'failed', 'cancelled'];
+
+/** The card's year; a deleted card (no embed) falls back to the year the order was placed. */
+export function cardYear(order: Pick<CardOrderListRow, 'card' | 'created_at'>): number {
+  const card = Array.isArray(order.card) ? order.card[0] : order.card;
+  if (card && Number.isInteger(card.year)) return card.year;
+  return new Date(order.created_at).getFullYear();
+}
 
 /** The holiday card adapter for the shared list row. */
 export function cardOrderItem(order: CardOrderListRow): OrderListItem {
@@ -25,7 +34,7 @@ export function cardOrderItem(order: CardOrderListRow): OrderListItem {
   return {
     kind: 'card',
     id: order.id,
-    title: 'Holiday cards',
+    title: `Holiday cards ${cardYear(order)}`,
     detail: order.packs ? `${order.packs * 10} cards` : null,
     createdAt: order.created_at,
     chip: { label: copy.label, tone: copy.tone },
@@ -59,6 +68,7 @@ export function safeCardOrderItems(rows: unknown): OrderListItem[] {
           currency: typeof r.currency === 'string' ? r.currency : null,
           refunded_at: typeof r.refunded_at === 'string' ? r.refunded_at : null,
           created_at: r.created_at,
+          card: r.card ?? null,
         }),
       );
     } catch {
