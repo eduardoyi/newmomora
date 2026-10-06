@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Keyboard, Platform, type LayoutChangeEvent } from 'react-native';
+import { Keyboard, Platform, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Shared keyboard handling for the app's in-house `Modal` bottom sheets
 // (comments drawer, family roster, report sheet).
@@ -13,16 +14,27 @@ import { Keyboard, Platform, type LayoutChangeEvent } from 'react-native';
 // the residual case of a window that does NOT resize by measuring it.
 
 // Bottom padding an Android sheet root still needs once the keyboard is up:
-// the keyboard height minus however much the window already shrank
-// (`baselineHeight` is the tallest root height seen). Self-correcting -- 0
-// when the window resized, the full keyboard height when it didn't.
+// the keyboard's overlap with the window minus however much the window
+// already shrank (`baselineHeight` is the tallest root height seen).
+// Self-correcting -- 0 when the window resized, the full overlap when it
+// didn't.
+//
+// RN's `keyboardDidShow` height is `ime.bottom - systemBars.bottom`
+// (ReactRootView.java), i.e. it EXCLUDES the navigation bar. A Modal window
+// that runs edge-to-edge (root as tall as the window) extends under that bar,
+// so the real overlap is `keyboardHeight + navBarInset`
+// (device-observed 2026-10-06: composer left hidden by one nav-bar height).
 export function getAndroidKeyboardInset(
   baselineHeight: number,
   currentHeight: number,
   keyboardHeight: number,
+  bottomInset = 0,
+  windowHeight = 0,
 ) {
   if (baselineHeight <= 0 || currentHeight <= 0 || keyboardHeight <= 0) return 0;
-  return Math.max(0, keyboardHeight - Math.max(0, baselineHeight - currentHeight));
+  const coversWindow = windowHeight > 0 && baselineHeight >= windowHeight - 1;
+  const overlap = keyboardHeight + (coversWindow ? bottomInset : 0);
+  return Math.max(0, overlap - Math.max(0, baselineHeight - currentHeight));
 }
 
 export function getSheetKeyboardAvoidingBehavior(platform: string) {
@@ -30,6 +42,8 @@ export function getSheetKeyboardAvoidingBehavior(platform: string) {
 }
 
 export function useModalKeyboardInset(enabled: boolean) {
+  const { bottom: bottomInset } = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [rootHeight, setRootHeight] = useState(0);
@@ -66,7 +80,13 @@ export function useModalKeyboardInset(enabled: boolean) {
 
   const androidKeyboardInset =
     Platform.OS === 'android' && isKeyboardVisible
-      ? getAndroidKeyboardInset(baselineHeight, rootHeight, keyboardHeight)
+      ? getAndroidKeyboardInset(
+          baselineHeight,
+          rootHeight,
+          keyboardHeight,
+          bottomInset,
+          windowHeight,
+        )
       : 0;
 
   return { isKeyboardVisible, androidKeyboardInset, onRootLayout, resetKeyboard };

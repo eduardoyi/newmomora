@@ -173,8 +173,9 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
   for a window that does not resize, `useModalKeyboardInset`
   (`src/hooks/use-modal-keyboard-inset.ts`, shared with `FamilyRosterSheet` and
   `ReportSheet`; use it for any new Modal sheet with a `TextInput`) pads the root by
-  `keyboardHeight - (baselineRootHeight - currentRootHeight)` (baseline = tallest
-  root height since the sheet opened). Do not reintroduce a fixed pixel height
+  `keyboardHeight (+ bottom nav inset when the root covers the whole window,
+  because RN's keyboard height excludes the nav bar) - (baselineRootHeight -
+  currentRootHeight)` (baseline = tallest root height seen). Do not reintroduce a fixed pixel height
   from `useWindowDimensions`; that combination causes top overflow and a delayed
   jump when the keyboard closes. iOS keeps `padding`.
 - React Native `Modal`s are separate Android windows, so the drawer's gesture
