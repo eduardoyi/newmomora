@@ -3,27 +3,10 @@
   background: var(--color-bg);
 }
 
-.orders-list__header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 12px 20px;
-  background: var(--color-white);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.orders-list__back {
-  all: unset;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--color-ink2);
-}
-
 .orders-list__title {
-  margin: 0;
+  margin: 0 0 20px;
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 24px;
   font-weight: 500;
   color: var(--color-ink);
 }
@@ -135,7 +118,6 @@
 }
 
 /* `all: unset` removes the browser outline: put a visible focus ring back. */
-.orders-list__back:focus-visible,
 .orders-list__item:focus-visible {
   outline: 2px solid var(--lavender-deep);
   outline-offset: 2px;

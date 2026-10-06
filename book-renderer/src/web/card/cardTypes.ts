@@ -109,8 +109,20 @@ export interface MyOrderView {
   createdAt: string | null;
 }
 
+/** A front photo candidate from `get`, with a small signed preview (the tile on the home page uses it). */
+export interface FrontCandidateView {
+  mediaId: string;
+  rank: number | null;
+  width: number | null;
+  height: number | null;
+  previewUrl: string | null;
+}
+
 export interface HolidayCardView {
   card: CardRowView;
+  /** The candidates (ranked) and the saved front, each with a preview URL (null when unsigned). */
+  frontCandidates: FrontCandidateView[];
+  frontImage: { mediaId: string; previewUrl: string | null } | null;
   /** See `CardReadiness`; null from an older backend. */
   readiness: CardReadiness | null;
   film: { state: FilmState; filmId: string | null; readyAt: string | null };
@@ -204,8 +216,19 @@ export function parseHolidayCard(raw: unknown): HolidayCardView {
   const rawReadiness = raw.readiness ?? c.readiness;
   const readiness = CARD_READINESS.includes(rawReadiness as CardReadiness) ? (rawReadiness as CardReadiness) : null;
 
+  const frontCandidates: FrontCandidateView[] = [];
+  if (Array.isArray(raw.frontCandidates)) {
+    for (const f of raw.frontCandidates) {
+      if (!isObj(f) || !str(f.mediaId)) continue;
+      frontCandidates.push({ mediaId: f.mediaId as string, rank: num(f.rank), width: num(f.width), height: num(f.height), previewUrl: str(f.previewUrl) });
+    }
+  }
+  const frontImage = isObj(raw.frontImage) && str(raw.frontImage.mediaId) ? { mediaId: raw.frontImage.mediaId as string, previewUrl: str(raw.frontImage.previewUrl) } : null;
+
   return {
     readiness,
+    frontCandidates,
+    frontImage,
     card: {
       id,
       familyId: str(c.familyId) ?? '',

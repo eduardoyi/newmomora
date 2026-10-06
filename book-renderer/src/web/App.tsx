@@ -75,21 +75,26 @@ function FixtureApp({ bookId }: { bookId: string }) {
 
   if (route.screen === 'order') {
     return (
-      <OrderStatusScreen
-        orderId={route.orderId}
-        onBackToBook={(backBookId) => navigateInFixture(`/b/${backBookId}`)}
-        onOpenOrders={() => navigateInFixture('/orders')}
-      />
+      <>
+        <ConnectedShopHeader onHome={() => navigateInFixture(`/b/${bookId}`)} onOpenOrders={() => navigateInFixture('/orders')} showBack />
+        <OrderStatusScreen
+          orderId={route.orderId}
+          onBackToBook={(backBookId) => navigateInFixture(`/b/${backBookId}`)}
+          onOpenOrders={() => navigateInFixture('/orders')}
+        />
+      </>
     );
   }
 
   if (route.screen === 'orders') {
     return (
-      <OrdersListScreen
-        onOpenOrder={(orderId) => navigateInFixture(`/order/${orderId}`)}
-        onOpenCardStatus={(orderId) => navigateInFixture(`/order/${encodeURIComponent(orderId)}?kind=card`)}
-        onBack={() => navigateInFixture(`/b/${bookId}`)}
-      />
+      <>
+        <ConnectedShopHeader onHome={() => navigateInFixture(`/b/${bookId}`)} showBack />
+        <OrdersListScreen
+          onOpenOrder={(orderId) => navigateInFixture(`/order/${orderId}`)}
+          onOpenCardStatus={(orderId) => navigateInFixture(`/order/${encodeURIComponent(orderId)}?kind=card`)}
+        />
+      </>
     );
   }
 
@@ -151,8 +156,8 @@ function AuthenticatedApp() {
   if (route.screen === 'order') {
     return (
       <>
-        {/* The page has its own "All orders" link, so the header carries only the wordmark and Sign out. */}
-        <ConnectedShopHeader onHome={() => navigate('/')} />
+        {/* The one top bar: the page itself has only a back link to its book/card. */}
+        <ConnectedShopHeader onHome={() => navigate('/')} onOpenOrders={() => navigate('/orders')} showBack />
         <OrderStatusScreen orderId={route.orderId} onBackToBook={(bookId) => navigate(`/b/${bookId}`)} onOpenOrders={() => navigate('/orders')} />
       </>
     );
@@ -161,15 +166,14 @@ function AuthenticatedApp() {
   if (route.screen === 'orders') {
     return (
       <>
-        {/* This page is the orders list, so the header carries only the wordmark and Sign out. */}
-        <ConnectedShopHeader onHome={() => navigate('/')} />
+        {/* This page is the orders list, so the header has no "Your orders" link. */}
+        <ConnectedShopHeader onHome={() => navigate('/')} showBack />
         <OrdersListScreen
           onOpenOrder={(orderId) => navigate(`/order/${orderId}`)}
           // A holiday card order opens on its card's page, at that order's status.
           onOpenCardOrder={(cardId, orderId) => navigate(`/c/${encodeURIComponent(cardId)}?order=${encodeURIComponent(orderId)}`)}
           // A card order whose card is gone opens on its own status page.
           onOpenCardStatus={(orderId) => navigate(`/order/${encodeURIComponent(orderId)}?kind=card`)}
-          onBack={() => navigate('/')}
         />
       </>
     );

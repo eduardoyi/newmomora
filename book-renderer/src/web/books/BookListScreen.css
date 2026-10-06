@@ -177,3 +177,44 @@
   background: #fde8e8;
   color: #b42318;
 }
+
+/* The card as a little card: paper, the front photo at 7:5 (landscape) or 5:7 (portrait), the greeting under it. */
+.card-mini {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 10px;
+  background: #faf8fc;
+}
+
+.card-mini__photo {
+  display: block;
+  width: 86%;
+  height: auto;
+  aspect-ratio: 7 / 5;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(60, 40, 100, 0.2);
+}
+
+.card-mini__photo--portrait {
+  width: auto;
+  height: 68%;
+  aspect-ratio: 5 / 7;
+}
+
+.card-mini__greeting {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--lavender-ink);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

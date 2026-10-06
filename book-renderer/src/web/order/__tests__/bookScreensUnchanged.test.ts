@@ -9,6 +9,11 @@ import type { MemoryBookOrderRow } from '../../types';
  * "no visual change for books"). The snapshots in `__snapshots__/` were
  * captured from the screens BEFORE the extraction; a change to them is a
  * change to the book experience and must be deliberate.
+ *
+ * Deliberate change (2026-10-07, one top bar per page): the status screen's own
+ * header row (back / title / "All orders") became the shared ShopHeader rendered
+ * by the host, so the snapshots now start with the back link and the h1 inside the
+ * body. Nothing else in the status markup changed; the checkout snapshots did not.
  */
 
 const state = vi.hoisted(() => ({ order: null as unknown }));

@@ -87,14 +87,15 @@ describe('the orders list shows books and holiday cards together', () => {
     created_at: '2026-10-01T12:00:00.000Z', book_title: 'Lía — 2026',
   });
   const card = cardOrderItem({ id: 'c1', card_id: 'card-1', status: 'paid', packs: 3, price_cents: 7470, currency: 'USD', refunded_at: null, created_at: '2026-10-02T12:00:00.000Z', card: { year: 2026 } });
-  const render = () => renderToStaticMarkup(createElement(OrdersListScreen, { onOpenOrder: noop, onOpenCardOrder: noop, onBack: noop }));
+  const render = () => renderToStaticMarkup(createElement(OrdersListScreen, { onOpenOrder: noop, onOpenCardOrder: noop }));
 
-  it('renders newest first, with a real h1, a Home link and an accessible name per row', () => {
+  it('renders newest first, with a real h1 (the shared header is the one top bar, not this screen) and an accessible name per row', () => {
     state.orders = mergeOrderItems([book], [card]);
     state.error = null;
     const html = render();
     expect(html).toContain('<h1 class="orders-list__title">Your orders</h1>');
-    expect(html).toContain('← Home');
+    expect(html).not.toContain('← Home'); // the shared ShopHeader carries it
+    expect(html).not.toContain('<header');
     expect(html).not.toContain('Your books');
     expect(html.indexOf('Holiday cards 2026')).toBeGreaterThan(-1);
     expect(html.indexOf('Holiday cards 2026')).toBeLessThan(html.indexOf('Lía — 2026'));

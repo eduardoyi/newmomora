@@ -91,7 +91,6 @@ function BookOrderStatusScreen({ orderId, onBackToBook, onOpenOrders }: { orderI
     <OrderStatusLayout
       backLabel="← Your book"
       onBack={() => onBackToBook(order.book_id)}
-      onOpenOrders={onOpenOrders}
       thanks={showThanks && order.status !== 'draft' && order.status !== 'quoted' ? ORDER_THANKS_MESSAGE : null}
       chip={{ label: copy.label, tone: copy.tone }}
       message={statusMessage}

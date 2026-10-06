@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { getHolidayCard } from '../card/cardApi';
+import { cardTilePreview, type CardTilePreview } from './cardPreview';
 import { CARD_POLL_MS, shouldPollCards, tilesFromSummaries, type CardTile, type HolidayCardSummaryRow } from './keepsakes';
 
 /**
@@ -13,6 +15,9 @@ export function useHolidayCardTiles(familyIds: readonly string[] | null) {
   const [tiles, setTiles] = useState<CardTile[]>([]);
   // Until the first answer for these families: the home page must not flash its empty state meanwhile.
   const [loaded, setLoaded] = useState(false);
+  // Front previews by card id (signed URLs last an hour: fetched once per card per page visit).
+  const [previews, setPreviews] = useState<Record<string, CardTilePreview | null>>({});
+  const requested = useRef(new Set<string>());
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const key = familyIds ? [...familyIds].sort().join('|') : null;
 
@@ -42,6 +47,21 @@ export function useHolidayCardTiles(familyIds: readonly string[] | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  // A tile that is not being made and has no preview yet gets one `get` (the same call the editor makes).
+  const needKey = tiles.filter((t) => t.state !== 'being_made' && t.state !== 'failed').map((t) => t.cardId).join('|');
+  useEffect(() => {
+    for (const id of needKey ? needKey.split('|') : []) {
+      if (requested.current.has(id)) continue;
+      requested.current.add(id);
+      getHolidayCard(id)
+        .then((view) => setPreviews((prev) => ({ ...prev, [id]: cardTilePreview(view) })))
+        .catch((e: unknown) => {
+          requested.current.delete(id); // retry on the next poll / revisit
+          console.warn('holiday card preview failed', e instanceof Error ? e.name : '');
+        });
+    }
+  }, [needKey]);
+
   useEffect(() => {
     void load();
     return () => {
@@ -49,5 +69,5 @@ export function useHolidayCardTiles(familyIds: readonly string[] | null) {
     };
   }, [load]);
 
-  return { tiles, loading: !loaded };
+  return { tiles, previews, loading: !loaded };
 }

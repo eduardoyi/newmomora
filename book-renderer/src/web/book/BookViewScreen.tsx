@@ -286,7 +286,7 @@ export function BookViewScreen({
     <div className="book-view">
       <header className="book-view__header">
         <button type="button" className="book-view__back" onClick={onBack}>
-          ← Your books
+          ← Your keepsakes
         </button>
         <span className="book-view__title">{bookLabel}</span>
         {/* memory-book-5c plan Step 6: only an owner/manager can place an

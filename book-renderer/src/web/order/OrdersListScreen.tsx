@@ -33,7 +33,6 @@ export function OrdersListScreen({
   onOpenOrder,
   onOpenCardOrder,
   onOpenCardStatus,
-  onBack,
 }: {
   /** A Memory Book order's status page. */
   onOpenOrder: (orderId: string) => void;
@@ -41,22 +40,15 @@ export function OrdersListScreen({
   onOpenCardOrder?: (cardId: string, orderId: string) => void;
   /** A card order opened on its own (its card was deleted, or no card handler): `/order/<id>?kind=card`. Omitted = a plain page load of that path. */
   onOpenCardStatus?: (orderId: string) => void;
-  /** Home (the book list). */
-  onBack: () => void;
 }) {
   useDocumentTitle('Your orders · Momora');
   const { loading, error, orders, reload } = useOrders();
 
   return (
     <div className="orders-list">
-      <header className="orders-list__header">
-        <button type="button" className="orders-list__back" onClick={onBack}>
-          ← Home
-        </button>
-        <h1 className="orders-list__title">Your orders</h1>
-      </header>
-
+      {/* The page's one top bar is the shared ShopHeader, rendered by the host. */}
       <div className="orders-list__body">
+        <h1 className="orders-list__title">Your orders</h1>
         {loading && <p className="orders-list__hint">Loading your orders…</p>}
         {error && (
           <>

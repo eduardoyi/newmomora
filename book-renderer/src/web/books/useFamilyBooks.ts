@@ -53,7 +53,7 @@ export function useFamilyBooks() {
 
     const { data, error: booksError } = await supabase
       .from('memory_books')
-      .select('id, family_id, child_id, status, scope_label, failure_reason, created_at, updated_at, book_document, child:family_members(name)')
+      .select('id, family_id, child_id, status, scope_label, failure_reason, created_at, updated_at, cover_asset_key, book_document, child:family_members(name)')
       .in('family_id', familyIds)
       .order('created_at', { ascending: false });
 

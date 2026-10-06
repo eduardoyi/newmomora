@@ -28,6 +28,8 @@ export interface MemoryBookRow {
   updated_at: string;
   /** `{ outline, manifest }` (single-renderer contract) — null until `status = 'ready'`. */
   book_document: { outline: unknown; manifest: unknown } | null;
+  /** The denormalized representative cover photo key (set when the book publishes); null for older rows. */
+  cover_asset_key?: string | null;
   child: { name: string } | null;
 }
 

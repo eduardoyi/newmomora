@@ -3,6 +3,7 @@ import { setChoices } from '../../../card/edits';
 import { AddressStep } from '../../order/AddressStep';
 import { CARD_COUNTRY_CODES, formatAddressLines, validateCardAddress } from '../../order/cardAddress';
 import { CheckoutError, CheckoutFrame, CheckoutHint, CheckoutQuote } from '../../order/CheckoutShell';
+import { ConnectedShopHeader } from '../../shell/ConnectedShopHeader';
 import { useDocumentTitle } from '../../useDocumentTitle';
 import type { CardCheckoutContext } from '../CardRoute';
 import { CardApiError } from '../cardTypes';
@@ -44,15 +45,25 @@ import './CardCheckout.css';
 
 const TITLE = 'Order your cards';
 
+/** A card order's status page inside the card route: the shop's one top bar above the shared status layout. */
+function StatusPage({ ctx, orderId, returnedFromPayment }: { ctx: CardCheckoutContext; orderId: string; returnedFromPayment: boolean }) {
+  return (
+    <>
+      <ConnectedShopHeader onHome={ctx.onHome} onOpenOrders={ctx.onOpenOrders} showBack />
+      <CardOrderStatusPanel orderId={orderId} returnedFromPayment={returnedFromPayment} onBack={ctx.onBack} />
+    </>
+  );
+}
+
 export function CardCheckoutScreen({ ctx }: { ctx: CardCheckoutContext }) {
   useDocumentTitle('Order your holiday cards · Momora');
   // The buyer was sent to a specific order's status (ORDER_ALREADY_PAID, a past order's "View").
   const [statusFor, setStatusFor] = useState<string | null>(null);
 
-  if (statusFor) return <CardOrderStatusPanel orderId={statusFor} returnedFromPayment={false} onBack={ctx.onBack} />;
+  if (statusFor) return <StatusPage ctx={ctx} orderId={statusFor} returnedFromPayment={false} />;
   if (ctx.returnStatus === 'cancelled') return <CancelReturn ctx={ctx} onShowStatus={setStatusFor} />;
   if (ctx.returnStatus === 'success') {
-    if (ctx.orderId) return <CardOrderStatusPanel orderId={ctx.orderId} returnedFromPayment onBack={ctx.onBack} />;
+    if (ctx.orderId) return <StatusPage ctx={ctx} orderId={ctx.orderId} returnedFromPayment />;
     return (
       <Frame ctx={ctx}>
         <Message message="We couldn’t tell which order this was. If you paid, it is safe: open your card to see it, or write to us." onBack={ctx.onBack} />
@@ -206,7 +217,7 @@ function ResumeOrder({ ctx, orderId, onShowStatus }: { ctx: CardCheckoutContext;
   if (state.status === 'checkout') {
     return <OrderFlow ctx={ctx} initialOrder={null} resumeOrderId={orderId} onShowStatus={onShowStatus} />;
   }
-  return <CardOrderStatusPanel orderId={orderId} returnedFromPayment={false} onBack={ctx.onBack} />;
+  return <StatusPage ctx={ctx} orderId={orderId} returnedFromPayment={false} />;
 }
 
 // ── The order flow ───────────────────────────────────────────────────────

@@ -1,11 +1,10 @@
 import type { ReactNode } from 'react';
-import { goToOrders } from './OrderStatusError';
 import './OrderStatusScreen.css';
 
 /**
  * The presentational body of an order status page, shared by the Memory Book
  * screen (`OrderStatusScreen.tsx`) and the holiday card status panel
- * (`card/checkout/CardOrderStatusPanel.tsx`): header, one-time "thanks"
+ * (`card/checkout/CardOrderStatusPanel.tsx`): back link, title, one-time "thanks"
  * banner, status chip + message, refund line, progress stepper, tracking
  * button, facts, "Ships to" block, resume button and the contact line.
  * Extracted verbatim from `OrderStatusScreen.tsx`: with the book's props the
@@ -16,8 +15,6 @@ import './OrderStatusScreen.css';
 export interface OrderStatusLayoutProps {
   backLabel: string;
   onBack: () => void;
-  /** The header's quiet "All orders" link. Omitted = a plain page load of `/orders`. */
-  onOpenOrders?: () => void;
   /** The one-time "Thanks for your order" banner (null = none). */
   thanks: string | null;
   chip: { label: string; tone: 'positive' | 'neutral' | 'negative' };
@@ -54,17 +51,14 @@ export function OrderStatusLayout(props: OrderStatusLayoutProps) {
   const { chip, tracking, shipTo } = props;
   return (
     <div className="order-status">
-      <header className="order-status__header">
+      {/* The page's one top bar is the shared ShopHeader (rendered by the host, with
+          "Your orders" and Sign out); the way back to the book/card is a plain link here. */}
+      <div className="order-status__body">
         <button type="button" className="order-status__back" onClick={props.onBack}>
           {props.backLabel}
         </button>
         <h1 className="order-status__title">Order status</h1>
-        <button type="button" className="order-status__all-orders" onClick={props.onOpenOrders ?? goToOrders}>
-          All orders
-        </button>
-      </header>
 
-      <div className="order-status__body">
         {props.thanks && (
           <div className="order-status__thanks" role="status">
             {props.thanks}

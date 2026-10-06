@@ -66,7 +66,6 @@ export function CardOrderStatusPanel({
     <OrderStatusLayout
       backLabel={backLabel}
       onBack={onBack}
-      onOpenOrders={onOpenOrders}
       thanks={model.thanks}
       chip={model.chip}
       message={model.message}

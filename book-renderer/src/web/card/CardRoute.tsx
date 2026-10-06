@@ -32,6 +32,10 @@ export interface CardCheckoutContext {
   /** The resume target when the page was opened from a Stripe return or a "Continue checkout". */
   orderId: string | null;
   returnStatus: 'success' | 'cancelled' | null;
+  /** The shared header's wordmark / "← Home" (`/`). */
+  onHome: () => void;
+  /** The shared header's "Your orders" (`/orders`). */
+  onOpenOrders: () => void;
 }
 
 export interface CardRouteProps {
@@ -90,6 +94,8 @@ function CardRouteBody({ cardId, card, renderCheckout, onOrder, onOpenOrder, onO
           edits,
           orderId: resumeOrderId,
           returnStatus: initialReturn.returnStatus,
+          onHome: onHome ?? (() => {}),
+          onOpenOrders: onOpenOrders ?? (() => {}),
           onBack: () => {
             setView('editor');
             setResumeOrderId(null);
