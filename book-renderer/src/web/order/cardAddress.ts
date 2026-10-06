@@ -126,7 +126,11 @@ export type CardAddressValidation = { ok: true; address: CardShippingAddress } |
 /** US ZIP / Canadian postal code check; returns the normalized code (CA: `A1A 1A1`) or null when invalid. */
 export function normalizePostalCode(countryCode: string, raw: string): string | null {
   const value = raw.trim();
-  if (countryCode === 'US') return US_POSTAL.test(value) ? value : null;
+  // Autofill writes ZIP+4 as "12345 - 6789"; accept it and send "12345-6789".
+  if (countryCode === 'US') {
+    const zip = value.replace(/\s*-\s*/, '-');
+    return US_POSTAL.test(zip) ? zip : null;
+  }
   if (countryCode === 'CA') {
     const match = CA_POSTAL.exec(value);
     return match ? `${match[1]} ${match[2]}`.toUpperCase() : null;

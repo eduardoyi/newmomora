@@ -143,6 +143,13 @@
   cursor: default;
 }
 
+.address-form__hint {
+  margin: 4px 0 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--color-text-secondary, #6b6478);
+}
+
 /* -- Quote -- */
 
 .checkout-quote {

@@ -229,6 +229,8 @@ export function validateCardShippingAddress(input: unknown): AddressValidation {
   const state = (input.state as string).trim().toUpperCase();
   if (!REGION_CODE.test(state)) return { error: 'address.state must be a 2-letter state or province code' };
   let postalCode = (input.postalCode as string).trim();
+  // Autofill writes ZIP+4 as "12345 - 6789"; accept it as "12345-6789".
+  if (countryCode === 'US') postalCode = postalCode.replace(/\s*-\s*/, '-');
   if (countryCode === 'US') {
     if (!US_POSTAL.test(postalCode)) return { error: 'address.postalCode is not a valid US ZIP code' };
   } else {

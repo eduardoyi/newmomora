@@ -89,6 +89,12 @@ Deno.test('validateCardShippingAddress accepts a US address and normalises state
   assertEquals(result.address.countryCode, 'US');
 });
 
+Deno.test('validateCardShippingAddress accepts an autofilled spaced ZIP+4 ("12345 - 6789")', () => {
+  const ok = validateCardShippingAddress({ ...US_ADDRESS, postalCode: '62704 - 1234' });
+  if (!('address' in ok)) throw new Error('expected an address');
+  assertEquals(ok.address.postalCode, '62704-1234');
+});
+
 Deno.test('validateCardShippingAddress normalises a Canadian postal code and rejects bad ones', () => {
   const ok = validateCardShippingAddress({ ...US_ADDRESS, state: 'ON', postalCode: 'k1a0b1', countryCode: 'CA' });
   if (!('address' in ok)) throw new Error('expected an address');

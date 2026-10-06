@@ -78,10 +78,16 @@ export function StripeAddressForm({
   defaultAddress?: ShippingAddressInput;
 }) {
   const [value, setValue] = useState<StripeAddressValue | null>(null);
+  // The element's latest (possibly incomplete) value, only to explain why
+  // the button is disabled -- Stripe marks a bad field only after blur.
+  const [draft, setDraft] = useState<StripeAddressValue | null>(null);
 
   function handleChange(event: StripeAddressElementChangeEvent) {
     setValue(event.complete ? (event.value as StripeAddressValue) : null);
+    setDraft(event.value as StripeAddressValue);
   }
+
+  const hint = value ? null : incompleteAddressHint(draft);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -102,10 +108,31 @@ export function StripeAddressForm({
           }}
           onChange={handleChange}
         />
+        {hint ? (
+          <p className="address-form__hint" role="status">
+            {hint}
+          </p>
+        ) : null}
         <button type="submit" className="address-form__submit" disabled={!value || submitting}>
           {submitting ? 'Getting your quote…' : 'Get quote'}
         </button>
       </form>
     </Elements>
   );
+}
+
+/**
+ * Why the address isn't complete yet, for the line above the disabled button.
+ * Null before the parent starts typing. Autofill often writes a ZIP+4 as
+ * "12345 - 6789", which the element rejects without saying so until blur.
+ */
+export function incompleteAddressHint(draft: StripeAddressValue | null): string | null {
+  if (!draft) return null;
+  const address = draft.address;
+  const postal = address?.postal_code ?? '';
+  if (address?.country === 'US' && /\s/.test(postal)) {
+    return 'Remove the spaces in the ZIP code (for example 12345-6789).';
+  }
+  const anyTyped = Boolean(draft.name || address?.line1 || address?.city || postal);
+  return anyTyped ? 'Complete the address above to continue — check any highlighted field.' : null;
 }
