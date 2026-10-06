@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FamilyMemberAvatar } from '@/components/family-member-avatar';
 import { PlusGlyph } from '@/components/plus-glyph';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { getSheetKeyboardAvoidingBehavior, useModalKeyboardInset } from '@/hooks/use-modal-keyboard-inset';
 import type { FamilyMember } from '@/services/family-members';
 
 interface RosterRowProps {
@@ -113,15 +114,6 @@ export function getRosterAddLabel(searchQuery: string, members: FamilyMember[]):
   return `Add “${name}”`;
 }
 
-export function getRosterKeyboardAvoidingBehavior(
-  platform: string,
-  isKeyboardVisible: boolean,
-) {
-  if (platform === 'ios') return 'padding' as const;
-  if (platform === 'android' && isKeyboardVisible) return 'height' as const;
-  return undefined;
-}
-
 export function getRosterBottomPadding(
   bottomInset: number,
   isKeyboardVisible: boolean,
@@ -140,28 +132,11 @@ export function FamilyRosterSheet({
 }: FamilyRosterSheetProps) {
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
-  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const { isKeyboardVisible, androidKeyboardInset, onRootLayout, resetKeyboard } =
+    useModalKeyboardInset(visible);
 
   const atLimit = maxSelected !== undefined && selectedMemberIds.length >= maxSelected;
   const taggedCount = selectedMemberIds.length;
-
-  useEffect(() => {
-    if (!visible) {
-      return;
-    }
-
-    const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
-      setIsKeyboardVisible(true);
-    });
-    const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
-      setIsKeyboardVisible(false);
-    });
-
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, [visible]);
 
   const filteredMembers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -174,7 +149,7 @@ export function FamilyRosterSheet({
 
   const handleClose = () => {
     Keyboard.dismiss();
-    setIsKeyboardVisible(false);
+    resetKeyboard();
     setSearchQuery('');
     onClose();
   };
@@ -194,9 +169,10 @@ export function FamilyRosterSheet({
       visible={visible}
     >
       <KeyboardAvoidingView
-        behavior={getRosterKeyboardAvoidingBehavior(Platform.OS, isKeyboardVisible)}
+        behavior={getSheetKeyboardAvoidingBehavior(Platform.OS)}
         keyboardVerticalOffset={0}
-        style={styles.root}
+        onLayout={onRootLayout}
+        style={[styles.root, androidKeyboardInset > 0 && { paddingBottom: androidKeyboardInset }]}
         testID="roster-keyboard-avoiding-view"
       >
         <Pressable

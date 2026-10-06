@@ -4,10 +4,9 @@ import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { getSheetKeyboardAvoidingBehavior } from '@/hooks/use-modal-keyboard-inset';
 import {
   getCommentsDrawerBottomPadding,
-  getAndroidKeyboardInset,
-  getCommentsKeyboardAvoidingBehavior,
   MemoryCommentsDrawer,
   shouldDismissCommentsDrawer,
 } from './memory-comments-drawer';
@@ -139,25 +138,13 @@ describe('MemoryCommentsDrawer', () => {
     const { getByTestId } = renderDrawer();
     const sheetStyle = StyleSheet.flatten(getByTestId('comments-drawer').props.style);
 
-    expect(getCommentsKeyboardAvoidingBehavior('ios')).toBe('padding');
+    expect(getSheetKeyboardAvoidingBehavior('ios')).toBe('padding');
     // Android's Modal window resizes itself; a second `height` compensation
     // collapsed the sheet behind the keyboard.
-    expect(getCommentsKeyboardAvoidingBehavior('android')).toBeUndefined();
+    expect(getSheetKeyboardAvoidingBehavior('android')).toBeUndefined();
     expect(sheetStyle.flex).toBe(1);
     expect(sheetStyle.maxHeight).toBe('80%');
     expect(sheetStyle.height).toBeUndefined();
-  });
-
-  it('only pads for the keyboard on Android when the window did not already shrink', () => {
-    // window resized by the full keyboard height -> nothing extra
-    expect(getAndroidKeyboardInset(2000, 1200, 800)).toBe(0);
-    // window did not resize -> full keyboard height
-    expect(getAndroidKeyboardInset(2000, 2000, 800)).toBe(800);
-    // partially resized -> only the remainder
-    expect(getAndroidKeyboardInset(2000, 1500, 800)).toBe(300);
-    // unknown measurements never pad
-    expect(getAndroidKeyboardInset(0, 1200, 800)).toBe(0);
-    expect(getAndroidKeyboardInset(2000, 2000, 0)).toBe(0);
   });
 
   it('removes the safe-area spacer while typing and restores it after keyboard close', () => {

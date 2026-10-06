@@ -2,11 +2,11 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { Keyboard, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { getSheetKeyboardAvoidingBehavior } from '@/hooks/use-modal-keyboard-inset';
 import {
   FamilyRosterSheet,
   getRosterAddLabel,
   getRosterBottomPadding,
-  getRosterKeyboardAvoidingBehavior,
 } from './family-roster-sheet';
 import { spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
@@ -98,9 +98,8 @@ describe('FamilyRosterSheet', () => {
     );
     const listStyle = StyleSheet.flatten(getByTestId('roster-member-list').props.style);
 
-    expect(getRosterKeyboardAvoidingBehavior('ios', false)).toBe('padding');
-    expect(getRosterKeyboardAvoidingBehavior('android', true)).toBe('height');
-    expect(getRosterKeyboardAvoidingBehavior('android', false)).toBeUndefined();
+    expect(getSheetKeyboardAvoidingBehavior('ios')).toBe('padding');
+    expect(getSheetKeyboardAvoidingBehavior('android')).toBeUndefined();
     expect(listStyle.flexShrink).toBe(1);
     expect(listStyle.maxHeight).toBeUndefined();
   });

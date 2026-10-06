@@ -1,7 +1,8 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { getReportKeyboardAvoidingBehavior, ReportSheet } from '@/components/report-sheet';
+import { getSheetKeyboardAvoidingBehavior } from '@/hooks/use-modal-keyboard-inset';
+import { ReportSheet } from '@/components/report-sheet';
 
 function renderSheet(targetType: 'comment' | 'memory_illustration' = 'comment') {
   const onSubmit = jest.fn().mockResolvedValue(undefined);
@@ -29,8 +30,8 @@ describe('ReportSheet', () => {
   it('keeps the optional lower note keyboard-safe and warns against child data', () => {
     const { getByTestId, getByText } = renderSheet();
 
-    expect(getReportKeyboardAvoidingBehavior('ios')).toBe('padding');
-    expect(getReportKeyboardAvoidingBehavior('android')).toBe('height');
+    expect(getSheetKeyboardAvoidingBehavior('ios')).toBe('padding');
+    expect(getSheetKeyboardAvoidingBehavior('android')).toBeUndefined();
     expect(getByTestId('report-note').props.multiline).toBe(true);
     expect(getByTestId('report-note').props.maxLength).toBe(500);
     expect(getByText('Don’t include journal text, child names, or photos.')).toBeTruthy();

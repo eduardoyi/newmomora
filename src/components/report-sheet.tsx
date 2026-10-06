@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
+import { getSheetKeyboardAvoidingBehavior, useModalKeyboardInset } from '@/hooks/use-modal-keyboard-inset';
 import type { ReportReason, ReportTargetType } from '@/services/content-safety';
 
 const REASONS: { value: ReportReason; label: string }[] = [
@@ -23,10 +24,6 @@ const REASONS: { value: ReportReason; label: string }[] = [
   { value: 'misleading_ai_depiction', label: 'Incorrect AI depiction' },
   { value: 'other', label: 'Something else' },
 ];
-
-export function getReportKeyboardAvoidingBehavior(platform: string) {
-  return platform === 'ios' ? 'padding' as const : platform === 'android' ? 'height' as const : undefined;
-}
 
 export function ReportSheet({
   visible,
@@ -44,6 +41,7 @@ export function ReportSheet({
   onSubmit: (reason: ReportReason, note?: string) => Promise<void>;
 }) {
   const insets = useSafeAreaInsets();
+  const { androidKeyboardInset, onRootLayout } = useModalKeyboardInset(visible);
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -72,7 +70,11 @@ export function ReportSheet({
 
   return (
     <Modal animationType="fade" onRequestClose={close} transparent visible={visible}>
-      <KeyboardAvoidingView behavior={getReportKeyboardAvoidingBehavior(Platform.OS)} style={styles.root}>
+      <KeyboardAvoidingView
+        behavior={getSheetKeyboardAvoidingBehavior(Platform.OS)}
+        onLayout={onRootLayout}
+        style={[styles.root, androidKeyboardInset > 0 && { paddingBottom: androidKeyboardInset }]}
+      >
         <Pressable
           accessibilityLabel="Close report"
           accessibilityRole="button"

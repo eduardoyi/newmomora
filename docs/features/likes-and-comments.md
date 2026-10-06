@@ -170,7 +170,9 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
   `SOFT_INPUT_ADJUST_RESIZE` itself, so the window already shrinks for the
   keyboard; adding `behavior="height"` on top compensated twice and collapsed
   the sheet behind the keyboard (regression seen 2026-10-06). As a safety net
-  for a window that does not resize, `getAndroidKeyboardInset` pads the root by
+  for a window that does not resize, `useModalKeyboardInset`
+  (`src/hooks/use-modal-keyboard-inset.ts`, shared with `FamilyRosterSheet` and
+  `ReportSheet`; use it for any new Modal sheet with a `TextInput`) pads the root by
   `keyboardHeight - (baselineRootHeight - currentRootHeight)` (baseline = tallest
   root height since the sheet opened). Do not reintroduce a fixed pixel height
   from `useWindowDimensions`; that combination causes top overflow and a delayed
@@ -235,7 +237,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 | Date | Change |
 |------|--------|
 | 2026-08-21 | Likes are now household-visible: `memory_likes`' select policy was replaced with a household select policy mirroring comments (reversing the 2026-07-13 "liker identities are not exposed" decision). Scope is the read policy only — insert/delete stay self-only, and no liker-list UI was added to the engagement bar; the only place a liker's identity now surfaces is the new [Family activity](./family-activity.md) feed. |
-| 2026-10-06 | Android: dropped double keyboard compensation (`height` behavior) that hid the sheet behind the keyboard; measured-inset fallback |
+| 2026-10-06 | Android: dropped double keyboard compensation (`height` behavior) that hid the sheet behind the keyboard; measured-inset fallback, now a shared hook also used by the roster and report sheets |
 | 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |
 | 2026-07-15 | Keep the comment composer above the Android keyboard and restore bottom docking after keyboard close |
 | 2026-07-14 | Fixed keyboard spacing, visible-viewport overflow, first-comment visibility, and Android drawer reposition flicker |
