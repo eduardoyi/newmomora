@@ -29,6 +29,8 @@ import {
   type FilmAssetRef,
   type FilmMemorySource,
   type FilmPerson,
+  type HolidayGreeting,
+  HOLIDAY_GREETINGS,
   type HolidayInput,
   type MonthlyInput,
   shareSensitiveIds,
@@ -175,13 +177,13 @@ export function mapFamilyRows(rows: FamilyRows, options: MapOptions = {}): Famil
     let assets: FilmAssetRef[] = media.flatMap((m) => {
       const kind = mediaKind(m.content_type);
       return kind
-        ? [{ id: m.id, kind, key: m.object_key, previewKey: m.preview_object_key, durationMs: m.duration_ms, aspectRatio: m.aspect_ratio }]
+        ? [{ id: m.id, kind, key: m.object_key, previewKey: m.preview_object_key, durationMs: m.duration_ms, aspectRatio: m.aspect_ratio, contentType: m.content_type }]
         : [];
     });
     // Legacy single-asset memories predate memory_media rows.
     if (assets.length === 0 && row.media_key && row.media_content_type) {
       const kind = mediaKind(row.media_content_type);
-      if (kind) assets = [{ kind, key: row.media_key, previewKey: null, durationMs: null, aspectRatio: null }];
+      if (kind) assets = [{ kind, key: row.media_key, previewKey: null, durationMs: null, aspectRatio: null, contentType: row.media_content_type }];
     }
     const illustrationReady = row.illustration_status === 'ready' && !!row.illustration_key &&
       !reportedIllustrations.has(row.id);
@@ -253,6 +255,28 @@ export interface FilmRowForPlan {
   ageYear: number | null;
   scopeStart: string;
   scopeEndExclusive: string;
+  /** `family_holiday` only: the film row's `edits` (greeting + the card
+   * front's top picks, written by create_holiday_card_film). Ignored by
+   * every other kind. */
+  edits?: { greeting?: unknown; preferredCloseMedia?: unknown };
+  /** `family_holiday` only: the film has published before (`ready_at` set).
+   * A card film that is already on paper (QR) waives the floors on re-render
+   * so a single deletion cannot kill a printed QR link; an empty pool is
+   * still a hard skip. Ignored by every other kind. */
+  hasPublished?: boolean;
+}
+
+/** The most close-shot preferences a card film carries (the card front's top picks). */
+const HOLIDAY_PREFERRED_CLOSE_MAX = 12;
+
+function holidayGreetingOf(value: unknown): HolidayGreeting | undefined {
+  return typeof value === 'string' && (HOLIDAY_GREETINGS as readonly string[]).includes(value) ? value as HolidayGreeting : undefined;
+}
+
+function preferredCloseMediaOf(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = value.filter((v): v is string => typeof v === 'string' && v.length > 0).slice(0, HOLIDAY_PREFERRED_CLOSE_MAX);
+  return ids.length > 0 ? ids : undefined;
 }
 
 interface PlanBase {
@@ -341,8 +365,16 @@ export function planFilm(data: FamilyFilmData, film: FilmRowForPlan): PlanResult
     // pool (no sensitive memories, no worried/sad/weary), and the quote pick
     // reads the same pool. No quarter rule (docs/plans/holiday-cards.md).
     const holiday = holidayPool(data.memories, scope, sensitive);
-    const evaluation = evaluateHolidayFilm({ memories: data.memories, children, scope, excludeIds: sensitive });
-    if (!evaluation.eligible) return { ok: false, reason: 'BELOW_FLOORS' };
+    if (film.hasPublished) {
+      // Floor waiver: a card film that has published keeps rendering on any
+      // non-empty pool (its QR may be printed).
+      if (holiday.length === 0) return { ok: false, reason: 'EMPTY_POOL' };
+    } else {
+      const evaluation = evaluateHolidayFilm({ memories: data.memories, children, scope, excludeIds: sensitive });
+      if (!evaluation.eligible) return { ok: false, reason: 'BELOW_FLOORS' };
+    }
+    const greeting = holidayGreetingOf(film.edits?.greeting);
+    const preferredCloseMedia = preferredCloseMediaOf(film.edits?.preferredCloseMedia);
     return {
       ok: true,
       plan: {
@@ -361,6 +393,8 @@ export function planFilm(data: FamilyFilmData, film: FilmRowForPlan): PlanResult
           children,
           members: data.members,
           milestones: data.milestones,
+          ...(greeting ? { greeting } : {}),
+          ...(preferredCloseMedia ? { preferredCloseMedia } : {}),
         },
       },
     };

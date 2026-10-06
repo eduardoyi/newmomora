@@ -1,6 +1,7 @@
 {
   // Year Film Worker (docs/plans/year-film-p1.md Step 5): /dispatch starts a
-  // YearFilmWorkflow per attempt; the Workflow reads/writes film rows only
+  // YearFilmWorkflow per attempt (and /holiday-cards/generate a
+  // HolidayCardWorkflow per card generation); the Workflow reads/writes film rows only
   // through workflow-year-film-bridge, runs the model checks, and drives
   // one-off Fly machines (thumbs → prepare → render) of
   // render/year-film-renderer. Deploys are owner-run.
@@ -38,6 +39,10 @@
     { "binding": "FILM_BUCKET", "bucket_name": "momora-prod" }
   ],
   "workflows": [
-    { "binding": "YEAR_FILM_WORKFLOW", "name": "momora-year-film", "class_name": "YearFilmWorkflow" }
+    { "binding": "YEAR_FILM_WORKFLOW", "name": "momora-year-film", "class_name": "YearFilmWorkflow" },
+    // Holiday card generation (docs/plans/holiday-cards-p1.md Step 4b): POST
+    // /holiday-cards/generate (same HMAC as /dispatch) starts one per attempt;
+    // it starts YEAR_FILM_WORKFLOW directly for the card's film.
+    { "binding": "HOLIDAY_CARD_WORKFLOW", "name": "momora-holiday-card", "class_name": "HolidayCardWorkflow" }
   ]
 }

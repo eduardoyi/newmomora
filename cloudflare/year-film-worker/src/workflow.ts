@@ -42,7 +42,7 @@ const PAID_STEP = { retries: { limit: 2, delay: '10 seconds', backoff: 'exponent
 /** A stop (superseded / epoch changed / disabled) must not be retried: it
  * surfaces as a non-retryable `stopped:<state>` error (instanceof doesn't
  * survive a step's serialization). */
-function guard<T>(fn: () => Promise<T>): () => Promise<T> {
+export function guard<T>(fn: () => Promise<T>): () => Promise<T> {
   return async () => {
     try {
       return await fn();

@@ -80,6 +80,7 @@ async function stripeRequest(
   secretKey: string,
   path: string,
   body: Record<string, unknown>,
+  idempotencyKey?: string,
 ): Promise<Record<string, unknown>> {
   const response = await fetchFn(`${STRIPE_API_BASE}${path}`, {
     method: 'POST',
@@ -87,6 +88,9 @@ async function stripeRequest(
       Authorization: `Bearer ${secretKey}`,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Stripe-Version': STRIPE_API_VERSION,
+      // Only sent when a caller asks for it (the holiday-card shop); the book
+      // calls never set it, so their request headers are unchanged.
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
     body: encodeFormBody(body),
   });
@@ -103,6 +107,8 @@ async function stripeRequest(
 export interface CreateStripeCustomerInput {
   email: string;
   address: StripeAddressInput;
+  /** Stripe `Idempotency-Key` (the holiday-card shop retries `create_checkout`). */
+  idempotencyKey?: string;
 }
 
 /** Returns the Customer id. Creating a fresh Customer per order (never
@@ -125,7 +131,7 @@ export async function createStripeCustomer(
       postal_code: input.address.postalCode,
       country: input.address.countryCode,
     },
-  });
+  }, input.idempotencyKey);
   return String(result.id);
 }
 
@@ -144,6 +150,30 @@ export interface CreateCheckoutSessionResult {
   url: string | null;
 }
 
+export interface CheckoutLineItemInput {
+  /** Product name on the Stripe line item / receipt. */
+  name: string;
+  /** Stripe Tax product tax code (txcd_...). */
+  taxCode: string;
+  unitAmountCents: number;
+  quantity?: number;
+}
+
+/** The shape every Checkout Session in this repo shares; the book and the
+ * holiday-card shop differ only in these fields. */
+export interface CreateGenericCheckoutSessionInput {
+  customerId: string;
+  currency: string;
+  lineItems: CheckoutLineItemInput[];
+  /** Written to BOTH the session's and the payment intent's `metadata`
+   * (`charge.refunded` events carry the payment intent's, not the session's). */
+  metadata: Record<string, string>;
+  successUrl: string;
+  cancelUrl: string;
+  /** Stripe `Idempotency-Key`: a retry with the same key returns the same session. */
+  idempotencyKey?: string;
+}
+
 /**
  * `shipping_address_collection` is deliberately OMITTED (Stripe only
  * collects a shipping address on Checkout when that param is explicitly
@@ -152,45 +182,29 @@ export interface CreateCheckoutSessionResult {
  * `customer` (see `createStripeCustomer`) with `automatic_tax.enabled` so
  * Stripe Tax computes VAT against the address we already quoted shipping
  * for, never a second address Checkout's own UI could otherwise collect.
+ *
+ * Generalised for the holiday-card shop (docs/plans/holiday-cards-p1.md
+ * Step 6): `createCheckoutSession` (the book) is now a thin wrapper that
+ * builds the book's two line items and calls this; its request body is
+ * pinned byte-for-byte by a golden test in stripe.test.ts.
  */
-export async function createCheckoutSession(
+export async function createGenericCheckoutSession(
   fetchFn: typeof fetch,
   secretKey: string,
-  input: CreateCheckoutSessionInput,
+  input: CreateGenericCheckoutSessionInput,
 ): Promise<CreateCheckoutSessionResult> {
   const result = await stripeRequest(fetchFn, secretKey, '/checkout/sessions', {
     mode: 'payment',
     customer: input.customerId,
     customer_update: { shipping: 'auto' },
-    line_items: [
-      {
-        price_data: {
-          currency: input.currency,
-          // txcd_35010000 = Books ("bound in a stiffer cover than the
-          // pages" -- a layflat hardcover exactly). CORRECTED 2026-09-10:
-          // the canary-era value txcd_35020200 was believed to be printed
-          // books but is actually PERIODICALS (magazines) -- owner-caught
-          // in the dashboard's tax-code picker during Stripe activation.
-          // Books/periodicals VAT rates differ across the EU, so the
-          // distinction is real money, not taxonomy. Also learned there:
-          // the whole printed-matter family (Books, Periodicals, Printing)
-          // is INELIGIBLE for Managed Payments, so the LLC stays merchant
-          // of record and Stripe Tax does calculation only.
-          product_data: { name: 'Momora Memory Book', tax_code: 'txcd_35010000' },
-          unit_amount: input.priceCents,
-        },
-        quantity: 1,
+    line_items: input.lineItems.map((item) => ({
+      price_data: {
+        currency: input.currency,
+        product_data: { name: item.name, tax_code: item.taxCode },
+        unit_amount: item.unitAmountCents,
       },
-      {
-        price_data: {
-          currency: input.currency,
-          // txcd_92010001 = shipping.
-          product_data: { name: 'Shipping', tax_code: 'txcd_92010001' },
-          unit_amount: input.shippingCostCents,
-        },
-        quantity: 1,
-      },
-    ],
+      quantity: item.quantity ?? 1,
+    })),
     // Canary finding: new accounts enable Managed Payments (Stripe as
     // merchant of record) by default. The 5c design is us-as-MoR with
     // Stripe Tax (hardened plan Decision 4/round-3); disable per-session.
@@ -203,14 +217,134 @@ export async function createCheckoutSession(
     // canaries run. Default is enabled: forgetting the env at launch
     // fails loud in checkout, never silently untaxed.
     automatic_tax: { enabled: Deno.env.get('STRIPE_AUTOMATIC_TAX') !== 'disabled' },
-    metadata: { orderId: input.orderId },
-    payment_intent_data: { metadata: { orderId: input.orderId } },
+    metadata: input.metadata,
+    payment_intent_data: { metadata: input.metadata },
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
-  });
+  }, input.idempotencyKey);
   return {
     sessionId: String(result.id),
     url: typeof result.url === 'string' ? result.url : null,
+  };
+}
+
+/** The Memory Book's checkout (unchanged behaviour): the book line plus a separate shipping line. */
+export async function createCheckoutSession(
+  fetchFn: typeof fetch,
+  secretKey: string,
+  input: CreateCheckoutSessionInput,
+): Promise<CreateCheckoutSessionResult> {
+  return createGenericCheckoutSession(fetchFn, secretKey, {
+    customerId: input.customerId,
+    currency: input.currency,
+    lineItems: [
+      // txcd_35010000 = Books ("bound in a stiffer cover than the
+      // pages" -- a layflat hardcover exactly). CORRECTED 2026-09-10:
+      // the canary-era value txcd_35020200 was believed to be printed
+      // books but is actually PERIODICALS (magazines) -- owner-caught
+      // in the dashboard's tax-code picker during Stripe activation.
+      // Books/periodicals VAT rates differ across the EU, so the
+      // distinction is real money, not taxonomy. Also learned there:
+      // the whole printed-matter family (Books, Periodicals, Printing)
+      // is INELIGIBLE for Managed Payments, so the LLC stays merchant
+      // of record and Stripe Tax does calculation only.
+      { name: 'Momora Memory Book', taxCode: 'txcd_35010000', unitAmountCents: input.priceCents },
+      // txcd_92010001 = shipping.
+      { name: 'Shipping', taxCode: 'txcd_92010001', unitAmountCents: input.shippingCostCents },
+    ],
+    metadata: { orderId: input.orderId },
+    successUrl: input.successUrl,
+    cancelUrl: input.cancelUrl,
+  });
+}
+
+// ── Reading / expiring a session (holiday-card shop) ─────────────────────
+
+export interface StripeCheckoutSessionInfo {
+  id: string;
+  /** 'open' | 'complete' | 'expired'. */
+  status: string | null;
+  /** 'paid' | 'unpaid' | 'no_payment_required'. */
+  paymentStatus: string | null;
+  url: string | null;
+  paymentIntentId: string | null;
+  metadata: Record<string, string>;
+}
+
+function toSessionInfo(json: Record<string, unknown>): StripeCheckoutSessionInfo {
+  const rawMetadata = typeof json.metadata === 'object' && json.metadata !== null ? json.metadata as Record<string, unknown> : {};
+  const metadata: Record<string, string> = {};
+  for (const [key, value] of Object.entries(rawMetadata)) if (typeof value === 'string') metadata[key] = value;
+  return {
+    id: String(json.id),
+    status: typeof json.status === 'string' ? json.status : null,
+    paymentStatus: typeof json.payment_status === 'string' ? json.payment_status : null,
+    url: typeof json.url === 'string' ? json.url : null,
+    paymentIntentId: typeof json.payment_intent === 'string' ? json.payment_intent : null,
+    metadata,
+  };
+}
+
+const SESSION_ID_PATTERN = /^cs_[A-Za-z0-9_]{4,200}$/;
+
+/** `GET /v1/checkout/sessions/{id}`. Throws `StripeApiError` on a non-2xx. */
+export async function retrieveCheckoutSession(
+  fetchFn: typeof fetch,
+  secretKey: string,
+  sessionId: string,
+): Promise<StripeCheckoutSessionInfo> {
+  if (!SESSION_ID_PATTERN.test(sessionId)) throw new StripeApiError(400, 'invalid checkout session id');
+  const response = await fetchFn(`${STRIPE_API_BASE}/checkout/sessions/${sessionId}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Stripe-Version': STRIPE_API_VERSION },
+  });
+  const json = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new StripeApiError(response.status, `Stripe request failed (${response.status})`);
+  return toSessionInfo(json);
+}
+
+/** `POST /v1/checkout/sessions/{id}/expire`: closes an OPEN session (Stripe refuses a completed one with a 400). */
+export async function expireCheckoutSession(
+  fetchFn: typeof fetch,
+  secretKey: string,
+  sessionId: string,
+): Promise<StripeCheckoutSessionInfo> {
+  if (!SESSION_ID_PATTERN.test(sessionId)) throw new StripeApiError(400, 'invalid checkout session id');
+  return toSessionInfo(await stripeRequest(fetchFn, secretKey, `/checkout/sessions/${sessionId}/expire`, {}));
+}
+
+export interface StripePaymentIntentInfo {
+  id: string;
+  /** Total charged, cents (null when Stripe did not send it). */
+  amount: number | null;
+  /** Refunded so far on the latest charge, cents (0 when there is no charge yet). */
+  amountRefunded: number;
+}
+
+const PAYMENT_INTENT_ID_PATTERN = /^pi_[A-Za-z0-9_]{4,200}$/;
+
+/**
+ * `GET /v1/payment_intents/{id}?expand[]=latest_charge`: used to learn whether a
+ * paid order was already refunded BEFORE it is sent to print (webhook events can
+ * arrive out of order). Throws `StripeApiError` on a non-2xx.
+ */
+export async function retrievePaymentIntent(
+  fetchFn: typeof fetch,
+  secretKey: string,
+  paymentIntentId: string,
+): Promise<StripePaymentIntentInfo> {
+  if (!PAYMENT_INTENT_ID_PATTERN.test(paymentIntentId)) throw new StripeApiError(400, 'invalid payment intent id');
+  const response = await fetchFn(`${STRIPE_API_BASE}/payment_intents/${paymentIntentId}?expand%5B%5D=latest_charge`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${secretKey}`, 'Stripe-Version': STRIPE_API_VERSION },
+  });
+  const json = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) throw new StripeApiError(response.status, `Stripe request failed (${response.status})`);
+  const charge = typeof json.latest_charge === 'object' && json.latest_charge !== null ? json.latest_charge as Record<string, unknown> : null;
+  return {
+    id: String(json.id),
+    amount: typeof json.amount === 'number' ? json.amount : null,
+    amountRefunded: charge && typeof charge.amount_refunded === 'number' ? charge.amount_refunded : 0,
   };
 }
 

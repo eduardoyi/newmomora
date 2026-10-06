@@ -39,21 +39,23 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { describeAgeAtDate } from '../functions/_shared/age.ts';
 import { normalizeOpenAiUsage, priceOpenAiUsage } from '../functions/_shared/ai-pricing.ts';
 import {
-  type FrontCandidate,
-  FRONT_JUDGE_BATCH,
   FRONT_JUDGE_MODEL,
-  type FrontPhotoInput,
-  frontPoolPhotos,
+  type FrontVerdict,
+  coreFamilyMemberIds,
   frontPoolStart,
   type FrontRanking,
-  type FrontVerdict,
-  buildFrontJudgeRequestBody,
-  coreFamilyMemberIds,
-  parseFrontJudgeResponse,
-  rankFrontPicks,
   readChatUsage,
-  selectFrontCandidates,
 } from '../functions/_shared/holiday-card-photos.ts';
+import {
+  type FrontPickInput,
+  type FrontPickMemory,
+  type FrontPool,
+  type FrontPickPorts,
+  type PreviewImage,
+  buildFrontPool,
+  runFrontPipeline,
+} from '../functions/_shared/holiday-card-generate-front.ts';
+import type { ChatResult, ImageReaderPort } from '../functions/_shared/holiday-card-generate-ports.ts';
 import {
   buildHolidaySceneIllustrationPrompt,
   HOLIDAY_SCENE_VARIANTS,
@@ -66,7 +68,7 @@ import {
 } from '../functions/_shared/illustration-references.ts';
 import { encodeBytesToBase64, PRIMARY_IMAGE_MODEL } from '../functions/_shared/openai.ts';
 import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from '../functions/_shared/portrait-versions.ts';
-import { createPresignedGetUrls, getObjectBytes, getObjectBytesBatch, getR2Config } from '../functions/_shared/r2.ts';
+import { createPresignedGetUrls, getObjectBytes, getR2Config } from '../functions/_shared/r2.ts';
 import { DEFAULT_ILLUSTRATION_STYLE_TOKEN, getStyleDescription } from '../functions/_shared/styles.ts';
 import {
   type FilmMediaInput,
@@ -75,8 +77,6 @@ import {
   type FilmMilestoneInput,
   isFilmChild,
 } from '../functions/_shared/year-film-eligibility.ts';
-import { shareSensitiveIds } from '../functions/_shared/year-film-script.ts';
-import type { VisionImage } from '../functions/_shared/year-film-vision.ts';
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
@@ -276,6 +276,7 @@ interface CardPhoto {
   objectKey: string;
   previewKey: string | null;
   aspectRatio: number | null;
+  contentType: string | null;
 }
 
 /** A film memory plus what the card needs to judge its photos. */
@@ -393,12 +394,12 @@ async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promis
     });
     const photos: CardPhoto[] = rows
       .filter((m) => m.content_type.startsWith('image/'))
-      .map((m) => ({ mediaId: m.id, objectKey: m.object_key, previewKey: m.preview_object_key, aspectRatio: m.aspect_ratio }));
+      .map((m) => ({ mediaId: m.id, objectKey: m.object_key, previewKey: m.preview_object_key, aspectRatio: m.aspect_ratio, contentType: m.content_type }));
     // Legacy single-asset memories predate memory_media rows.
     if (filmMedia.length === 0 && row.media_key && row.media_content_type) {
       const kind = mediaKind(row.media_content_type);
       if (kind) filmMedia = [{ kind, durationMs: null, hasPreview: kind === 'image' }];
-      if (kind === 'image') photos.push({ mediaId: `legacy:${row.id}`, objectKey: row.media_key, previewKey: null, aspectRatio: null });
+      if (kind === 'image') photos.push({ mediaId: `legacy:${row.id}`, objectKey: row.media_key, previewKey: null, aspectRatio: null, contentType: row.media_content_type });
     }
     return {
       id: row.id,
@@ -427,58 +428,6 @@ async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promis
 
 function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] ?? name;
-}
-
-// ── Pixel probe (ranged reads; mirrors memory-book-worker/src/dimensions.ts) ─
-
-const PROBE_BYTES = 256 * 1024;
-const PROBE_FALLBACK_BYTES = 4 * 1024 * 1024;
-const PROBE_CONCURRENCY = 8;
-
-async function runPool<T>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<void>) {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      await fn(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-}
-
-async function probeDimensions(url: string): Promise<{ width: number; height: number } | null> {
-  const { imageSize } = await import('npm:image-size@1.2.1');
-  for (const bytes of [PROBE_BYTES, PROBE_FALLBACK_BYTES]) {
-    try {
-      const response = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` } });
-      if (!response.ok && response.status !== 206) return null;
-      const buffer = new Uint8Array(await response.arrayBuffer());
-      const { width, height, orientation } = imageSize(buffer);
-      if (!width || !height) continue;
-      // EXIF orientations 5-8 rotate the stored pixels by 90 degrees.
-      return orientation && orientation >= 5 ? { width: height, height: width } : { width, height };
-    } catch {
-      // Header not complete in this range: try the larger one.
-    }
-  }
-  return null;
-}
-
-async function measurePhotos(objectKeys: string[]): Promise<Map<string, { width: number; height: number } | null>> {
-  getR2Config(); // fail fast with a clear error when R2 env is missing
-  const results = new Map<string, { width: number; height: number } | null>();
-  let done = 0;
-  for (const keys of chunk(objectKeys, 100)) {
-    const urls = await createPresignedGetUrls(keys);
-    await runPool(keys, PROBE_CONCURRENCY, async (key) => {
-      const url = urls[key];
-      results.set(key, url ? await probeDimensions(url) : null);
-      done += 1;
-      if (done % 50 === 0 || done === objectKeys.length) console.log(`  ... pixel probe ${done}/${objectKeys.length}`);
-    });
-  }
-  return results;
 }
 
 // ── OpenAI usage (counts and prices only) ────────────────────────────────
@@ -536,24 +485,21 @@ function tally(model: string, usage: unknown, fallbackUsd?: (usage: unknown) => 
   return cost;
 }
 
-// ── Vision images ────────────────────────────────────────────────────────
+// ── Adapters for the production front modules ────────────────────────────
+// The orchestration (pool, ranged probe, previews, judge batches, ranking) is
+// `_shared/holiday-card-generate-front.ts`, the same code the card Workflow
+// runs; this script only supplies Deno/R2/ffmpeg/OpenAI ports and keeps the
+// review page.
 
-const VISION_MAX_EDGE = 1280;
-
-function contentTypeOf(bytes: Uint8Array): VisionImage['contentType'] | null {
-  const format = sniffImageFormat(bytes);
-  return format ? (`image/${format}` as VisionImage['contentType']) : null;
-}
-
-/** Longest edge capped to `VISION_MAX_EDGE`; ffmpeg applies EXIF rotation. */
-async function downscaleToJpeg(bytes: Uint8Array): Promise<Uint8Array | null> {
+/** Longest edge capped to `maxEdge`; ffmpeg applies EXIF rotation. */
+async function downscaleToJpeg(bytes: Uint8Array, maxEdge: number): Promise<Uint8Array | null> {
   const dir = await Deno.makeTempDir();
   try {
     const input = `${dir}/in`;
     const output = `${dir}/out.jpg`;
     await Deno.writeFile(input, bytes);
     const scale =
-      `scale='if(gt(iw,ih),min(${VISION_MAX_EDGE},iw),-2)':'if(gt(iw,ih),-2,min(${VISION_MAX_EDGE},ih))'`;
+      `scale='if(gt(iw,ih),min(${maxEdge},iw),-2)':'if(gt(iw,ih),-2,min(${maxEdge},ih))'`;
     const { code } = await new Deno.Command('ffmpeg', {
       args: ['-v', 'error', '-y', '-i', input, '-frames:v', '1', '-vf', scale, '-q:v', '4', output],
     }).output();
@@ -563,44 +509,7 @@ async function downscaleToJpeg(bytes: Uint8Array): Promise<Uint8Array | null> {
   }
 }
 
-interface PreviewImage {
-  bytes: Uint8Array;
-  contentType: VisionImage['contentType'];
-  source: 'preview' | 'original';
-}
-
-/** The ~1280 px preview when the media row has one, else the original
- * downscaled. Photos whose bytes cannot be read are simply left out. */
-async function fetchPreviewImages(photos: Map<string, CardPhoto>): Promise<Map<string, PreviewImage>> {
-  const out = new Map<string, PreviewImage>();
-  const entries = [...photos.entries()];
-  for (const batch of chunk(entries, 10)) {
-    const keys = batch.flatMap(([, p]) => (p.previewKey ? [p.previewKey] : []));
-    const fetched = await getObjectBytesBatch(keys);
-    const needOriginal: [string, CardPhoto][] = [];
-    for (const [mediaId, photo] of batch) {
-      const entry = photo.previewKey ? fetched.get(photo.previewKey) : undefined;
-      const contentType = entry?.ok && entry.bytes ? contentTypeOf(entry.bytes) : null;
-      if (entry?.ok && entry.bytes && contentType) {
-        out.set(mediaId, { bytes: entry.bytes, contentType, source: 'preview' });
-      } else {
-        needOriginal.push([mediaId, photo]);
-      }
-    }
-    const originals = await getObjectBytesBatch(needOriginal.map(([, p]) => p.objectKey));
-    for (const [mediaId, photo] of needOriginal) {
-      const entry = originals.get(photo.objectKey);
-      if (!entry?.ok || !entry.bytes) continue;
-      const jpeg = await downscaleToJpeg(entry.bytes);
-      if (jpeg) out.set(mediaId, { bytes: jpeg, contentType: 'image/jpeg', source: 'original' });
-    }
-  }
-  return out;
-}
-
-// ── Vision judge ─────────────────────────────────────────────────────────
-
-async function chat(body: Record<string, unknown>): Promise<string | null> {
+async function chat(body: Record<string, unknown>): Promise<ChatResult> {
   const apiKey = Deno.env.get('OPENAI_API_KEY');
   if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
   const call = () =>
@@ -616,42 +525,45 @@ async function chat(body: Record<string, unknown>): Promise<string | null> {
   }
   if (!response.ok) {
     console.error(`OpenAI chat ${response.status}`);
-    return null;
+    return { content: null, usage: null, ok: false };
   }
   const payload = await response.json();
-  tally(String(body.model), payload.usage);
-  const usage = readChatUsage(payload.usage);
-  if (usage) console.log(`  judge call: ${usage.promptTokens} in / ${usage.completionTokens} out tokens`);
-  return payload.choices?.[0]?.message?.content ?? null;
+  return { content: payload.choices?.[0]?.message?.content ?? null, usage: payload.usage, ok: true };
 }
 
-async function judgeCandidates(
-  candidates: FrontCandidate[],
-  images: Map<string, PreviewImage>,
-): Promise<Map<string, FrontVerdict>> {
-  const verdicts = new Map<string, FrontVerdict>();
-  const judgeable = candidates.filter((c) => images.has(c.mediaId));
-  for (const batch of chunk(judgeable, FRONT_JUDGE_BATCH)) {
-    const items = batch.map((c) => {
-      const image = images.get(c.mediaId)!;
-      return {
-        id: c.mediaId,
-        image: { base64: encodeBytesToBase64(image.bytes), contentType: image.contentType },
-        orientation: c.orientation,
-        expectedPeople: c.taggedMemberIds.length,
-      };
-    });
-    const ids = items.map((item) => item.id);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const raw = await chat(buildFrontJudgeRequestBody(FRONT_JUDGE_MODEL, items));
-      const parsed = raw ? parseFrontJudgeResponse(raw, ids) : new Map<string, FrontVerdict>();
-      for (const [id, verdict] of parsed) verdicts.set(id, verdict);
-      if (ids.every((id) => verdicts.has(id))) break;
-      console.log(`  judge batch: ${ids.filter((id) => verdicts.has(id)).length}/${ids.length} valid verdicts${attempt === 0 ? ', retrying' : ''}`);
+/** R2 over presigned URLs (the Worker uses its bucket binding). */
+const r2Images: ImageReaderPort = {
+  async readRange(key, length) {
+    const url = (await createPresignedGetUrls([key]))[key];
+    if (!url) return null;
+    const response = await fetch(url, { headers: { Range: `bytes=0-${length - 1}` } });
+    if (!response.ok && response.status !== 206) return null;
+    return new Uint8Array(await response.arrayBuffer());
+  },
+  async read(key) {
+    try {
+      return await getObjectBytes(key);
+    } catch {
+      return null;
     }
-  }
-  return verdicts;
-}
+  },
+};
+
+const { imageSize } = await import('npm:image-size@1.2.1');
+
+const frontPorts: FrontPickPorts = {
+  chat,
+  usage: (event) => {
+    if (!event.ok) return;
+    tally(event.model, event.usage);
+    const usage = readChatUsage(event.usage);
+    if (usage) console.log(`  judge call: ${usage.promptTokens} in / ${usage.completionTokens} out tokens`);
+  },
+  images: r2Images,
+  imageSize: (bytes) => imageSize(bytes),
+  downscaleToJpeg,
+  progress: (message) => console.log(message),
+};
 
 // ── Illustrated scenes ───────────────────────────────────────────────────
 
@@ -1053,75 +965,43 @@ const { data: families, error: familiesError } = await supabase
   .order('id');
 if (familiesError) throw new Error(`Failed to load families: ${familiesError.message}`);
 
+function pickInputOf(data: FamilyData, today: string, maxVision: number): FrontPickInput {
+  return {
+    today,
+    members: data.members.map((m) => ({ id: m.id, dateOfBirth: m.date_of_birth, relationship: m.relationship })),
+    memories: data.memories satisfies FrontPickMemory[],
+    milestones: data.milestones,
+    maxVision,
+  };
+}
+
 interface FamilyPool {
   data: FamilyData;
-  excluded: Set<string>;
-  rawPhotos: FrontPhotoInput[];
-  pool: FrontPhotoInput[];
+  input: FrontPickInput;
+  front: FrontPool;
 }
 
 const pools: FamilyPool[] = [];
 for (const family of (families ?? []) as FamilyRow[]) {
   if (args.familyId && family.id !== args.familyId) continue;
   const data = await loadFamilyData(supabase, family);
-  const excluded = shareSensitiveIds(data.memories, data.milestones);
-  const rawPhotos: FrontPhotoInput[] = data.memories.flatMap((m) =>
-    m.photos.map((p) => ({
-      memoryId: m.id,
-      mediaId: p.mediaId,
-      date: m.date,
-      taggedMemberIds: m.taggedMemberIds,
-      emotion: m.emotion,
-      topics: m.topics,
-      reported: m.reported,
-      dims: null,
-      aspectRatio: p.aspectRatio,
-    }))
-  );
-  const pool = frontPoolPhotos(rawPhotos, { today: args.today, excludedMemoryIds: excluded });
-  pools.push({ data, excluded, rawPhotos, pool });
-  console.log(`family ${family.id}: ${pool.length} front-pool photos (of ${rawPhotos.length} photos)`);
+  const input = pickInputOf(data, args.today, args.maxVision);
+  const front = buildFrontPool(input);
+  pools.push({ data, input, front });
+  console.log(`family ${family.id}: ${front.pool.length} front-pool photos (of ${front.rawPhotos.length} photos)`);
 }
 if (pools.length === 0) throw new Error('No family to evaluate');
-const chosen = pools.reduce((best, p) => (p.pool.length > best.pool.length ? p : best));
+const chosen = pools.reduce((best, p) => (p.front.pool.length > best.front.pool.length ? p : best));
 console.log(`evaluating family ${chosen.data.family.id}`);
 
-const { data, excluded, pool } = chosen;
-const photoByMedia = new Map<string, CardPhoto>();
-for (const memory of data.memories) for (const photo of memory.photos) photoByMedia.set(photo.mediaId, photo);
+const { data } = chosen;
+const pool = chosen.front.pool;
+getR2Config(); // fail fast with a clear error when R2 env is missing
 
-// Original pixel sizes for the pool (ranged reads).
-const probeKeys = [...new Set(pool.map((p) => photoByMedia.get(p.mediaId)!.objectKey))];
-console.log(`probing ${probeKeys.length} photo originals`);
-const pixels = await measurePhotos(probeKeys);
-const measured = pool.map((p) => ({ ...p, dims: pixels.get(photoByMedia.get(p.mediaId)!.objectKey) ?? null }));
-
-const core = coreFamilyMemberIds(
-  data.members.map((m) => ({ id: m.id, dateOfBirth: m.date_of_birth, relationship: m.relationship })),
-  args.today,
-);
-const selection = selectFrontCandidates(measured, {
-  today: args.today,
-  excludedMemoryIds: excluded,
-  coreMemberIds: core,
-  maxCandidates: args.maxVision,
-});
-console.log(
-  `candidates: ${selection.eligible} print-ready, ${selection.candidates.length} sent to vision; ` +
-    `dropped ${JSON.stringify(selection.dropped)}`,
-);
-
-const previews = await fetchPreviewImages(
-  new Map(selection.candidates.map((c) => [c.mediaId, photoByMedia.get(c.mediaId)!])),
-);
-console.log(
-  `previews: ${previews.size}/${selection.candidates.length} ` +
-    `(${[...previews.values()].filter((p) => p.source === 'preview').length} stored previews, ` +
-    `${[...previews.values()].filter((p) => p.source === 'original').length} downscaled originals)`,
-);
-
-const verdicts = await judgeCandidates(selection.candidates, previews);
-const ranking = rankFrontPicks(selection.candidates, verdicts, { today: args.today, expectedPeople: core.size });
+// Probe, candidates, previews, judge and ranking: the production module.
+const run = await runFrontPipeline(chosen.input, frontPorts);
+const { selection, previews, verdicts, ranking } = run;
+const core = run.coreMemberIds;
 console.log(
   `judged ${verdicts.size}/${selection.candidates.length}: ${ranking.picks.length} picks, ` +
     `${ranking.nearMisses.length} near-misses, hard-dropped ${JSON.stringify(ranking.dropped)}, unjudged ${ranking.unjudged}`,
@@ -1165,7 +1045,7 @@ const pageInput: PageInput = {
   coreNames,
   counts: {
     poolPhotos: pool.length,
-    probed: probeKeys.length,
+    probed: run.probedKeys,
     eligible: selection.eligible,
     candidates: selection.candidates.length,
     previews: previews.size,

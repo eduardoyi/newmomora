@@ -26,6 +26,14 @@
  * when the setting is missing). `--also-lang en|es` adds a second language (off
  * by default: "write it in English instead" on demand).
  *
+ * The v2 pipeline (quote check, details, voice, editor, writers) is the
+ * production module `_shared/holiday-card-generate-letters.ts` -- the same code
+ * the card Workflow runs; this script supplies the Deno/OpenAI ports, the v1
+ * single-call pipeline (eval-only) and the review page. Without `--script` the
+ * line of the year comes from the production quote check over the pool
+ * (`--no-quote-check` skips that call); `--film-present` writes the QR caption
+ * as a card with an eligible film would.
+ *
  * READ-ONLY against the database (RLS-scoped client, see
  * year-film-eval-data.ts). One model call per language (LETTER_MODEL).
  *
@@ -40,26 +48,26 @@
  */
 import { getObjectBytesBatch } from '../functions/_shared/r2.ts';
 import { PRICE_USD_PER_MTOK } from '../functions/_shared/memory-book-outline.ts';
+import { DETAILS_MODEL, type DetailsResult } from '../functions/_shared/holiday-card-details.ts';
 import {
-  buildDetailsPrompt,
-  buildDetailsRequestBody,
-  DETAILS_MODEL,
-  type DetailsResult,
-  parseDetails,
-  selectDetailExcerpts,
-} from '../functions/_shared/holiday-card-details.ts';
-import {
-  buildVoiceCardPrompt,
-  buildVoiceCardRequestBody,
   type CaptionSample,
-  parseVoiceCard,
-  selectVoiceSamples,
   VOICE_CARD_MODEL,
   type VoiceCard,
   type VoiceCardFlag,
-  voiceExamples,
 } from '../functions/_shared/holiday-card-voice.ts';
-import { buildDigestFromPool, buildDigestFromScript, type DigestTheme, type YearDigest } from '../functions/_shared/holiday-card-digest.ts';
+import { buildDigestFromScript, type DigestTheme, type YearDigest } from '../functions/_shared/holiday-card-digest.ts';
+import type { ChatResult } from '../functions/_shared/holiday-card-generate-ports.ts';
+import {
+  buildParentsVoice,
+  buildPoolDigest,
+  cardToneForAngle,
+  extractChildDetails,
+  type LettersPorts,
+  type QuoteCheckResult,
+  resolveLettersLanguage,
+  verifyLineOfYear,
+  writeLanguageLetters,
+} from '../functions/_shared/holiday-card-generate-letters.ts';
 import {
   buildLetterRequestBody,
   buildLetterSystemPrompt,
@@ -72,25 +80,13 @@ import {
   type LetterResult,
   mergeLetterRetry,
   parseLetterResponse,
-  resolveLetterLanguage,
   tonesNeedingLine,
   QR_CAPTION_MAX_CHARS,
   SPANISH_REGISTER,
 } from '../functions/_shared/holiday-card-letter.ts';
-import {
-  buildEditorSystemPrompt,
-  buildEditorUserPrompt,
-  buildWriterSystemPrompt,
-  buildWriterUserPrompt,
-  checkV2Letter,
-  type EditorResult,
-  parseEditorFacts,
-  parseWriterText,
-  selectEditorCandidates,
-  WRITER_ANGLES,
-} from '../functions/_shared/holiday-card-letter-v2.ts';
+import type { EditorResult } from '../functions/_shared/holiday-card-letter-v2.ts';
 import { holidayFilmScope, holidayPool } from '../functions/_shared/year-film-eligibility.ts';
-import { detectJournalLanguage, type FilmLanguage, resolveFilmLanguage } from '../functions/_shared/year-film-i18n.ts';
+import type { FilmLanguage } from '../functions/_shared/year-film-i18n.ts';
 import { type FilmMemorySource, type FilmScript, shareSensitiveIds } from '../functions/_shared/year-film-script.ts';
 import { createAuthedClient, type EvalFamilyData, loadFamilies, loadFamilyData } from './year-film-eval-data.ts';
 
@@ -111,6 +107,10 @@ interface Options {
   greeting: 'christmas' | 'holidays' | 'new-year' | null;
   /** v2 = editor + writer (default); v1 = the single-call letter. */
   pipeline: 'v1' | 'v2';
+  /** Pool path: run the production quote check for the line of the year. */
+  quoteCheck: boolean;
+  /** Pool path: write the QR caption as a card with an eligible film would. */
+  filmPresent: boolean;
 }
 
 function parseArgs(args: string[]): Options {
@@ -127,6 +127,8 @@ function parseArgs(args: string[]): Options {
     confirm: [],
     greeting: null,
     pipeline: 'v2',
+    quoteCheck: true,
+    filmPresent: false,
   };
   for (let i = 0; i < args.length; i += 1) {
     const next = args[i + 1];
@@ -185,6 +187,12 @@ function parseArgs(args: string[]): Options {
       case '--no-llm':
         options.llm = false;
         break;
+      case '--no-quote-check':
+        options.quoteCheck = false;
+        break;
+      case '--film-present':
+        options.filmPresent = true;
+        break;
     }
   }
   return options;
@@ -218,9 +226,19 @@ function subsamplePool(memories: FilmMemorySource[], poolIds: Set<string>, n: nu
 
 const usage = new Map<string, { calls: number; input: number; output: number }>();
 
-async function chat(body: Record<string, unknown>): Promise<string | null> {
+function tally(model: string, payloadUsage: unknown): void {
+  const u = (payloadUsage ?? {}) as { prompt_tokens?: number; completion_tokens?: number };
+  const entry = usage.get(model) ?? { calls: 0, input: 0, output: 0 };
+  entry.calls += 1;
+  entry.input += Number(u.prompt_tokens ?? 0);
+  entry.output += Number(u.completion_tokens ?? 0);
+  usage.set(model, entry);
+}
+
+/** The OpenAI port of the production letters module. No API key = a failed call. */
+async function chatPort(body: Record<string, unknown>): Promise<ChatResult> {
   const apiKey = Deno.env.get('OPENAI_API_KEY');
-  if (!apiKey) return null;
+  if (!apiKey) return { content: null, usage: null, ok: false };
   const call = () =>
     fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -234,15 +252,24 @@ async function chat(body: Record<string, unknown>): Promise<string | null> {
   }
   if (!response.ok) {
     console.error(`OpenAI ${response.status}`);
-    return null;
+    return { content: null, usage: null, ok: false };
   }
   const payload = await response.json();
-  const tally = usage.get(String(body.model)) ?? { calls: 0, input: 0, output: 0 };
-  tally.calls += 1;
-  tally.input += Number(payload.usage?.prompt_tokens ?? 0);
-  tally.output += Number(payload.usage?.completion_tokens ?? 0);
-  usage.set(String(body.model), tally);
-  return payload.choices?.[0]?.message?.content ?? null;
+  return { content: payload.choices?.[0]?.message?.content ?? null, usage: payload.usage, ok: true };
+}
+
+const ports: LettersPorts = {
+  chat: chatPort,
+  usage: (event) => {
+    if (event.ok) tally(event.model, event.usage);
+  },
+};
+
+/** The v1 single-call pipeline's chat: content or null. */
+async function chat(body: Record<string, unknown>): Promise<string | null> {
+  const result = await chatPort(body);
+  if (result.ok) tally(String(body.model), result.usage);
+  return result.content;
 }
 
 /** USD per 1M tokens: the outline model from the book's table, the voice-card
@@ -396,6 +423,7 @@ function renderHtml(args: {
   runId: string;
   label: string;
   digest: YearDigest;
+  fromScript: boolean;
   runs: LanguageRun[];
   thumbs: Map<string, string>;
   model: string;
@@ -486,7 +514,7 @@ table.card{border-collapse:collapse;font-size:13px}table.card th{text-align:left
 <h1>Holiday card letters</h1>
 <p class="note">${esc(args.label)} · ${esc(digest.scope.start)} → ${esc(digest.scope.endExclusive)} (exclusive) · journal language <b>${digest.language}</b> · model ${esc(args.model)}${
     args.cost !== null ? ` · ≈ $${args.cost.toFixed(3)}` : ''
-  } · digest built <b>${digest.filmPresent ? 'from the holiday film script' : 'from the pool (no film)'}</b></p>
+  } · digest built <b>${args.fromScript ? 'from the holiday film script' : `from the pool (${digest.filmPresent ? 'film assumed present' : 'no film'})`}</b></p>
 <section><h2>What the writer saw</h2>
 <p><b>People:</b> ${people}</p>
 <p class="note">${digest.counts.moments} moments over ${digest.counts.months} months · ${digest.counts.photos} photos · ${digest.counts.videos} videos · ${digest.counts.outings} outings</p>
@@ -532,19 +560,49 @@ if (options.subsample !== null) {
 const pool = holidayPool(memories, scope, sensitive);
 // The family's caption-language setting is authoritative (language AND regional
 // register); detection is only the fallback when it is missing or unsupported.
-const detected = resolveFilmLanguage(null, detectJournalLanguage(pool.map((m) => m.text)), null);
-const familyLang = resolveLetterLanguage(data.language, detected);
+const familyLang = resolveLettersLanguage(data.language, pool);
 const journalLanguage: FilmLanguage = familyLang.language;
 const guidance = data.captionInstructions;
-const context = { familyName: data.familyName };
 // --confirm-milestones: treat these candidates as confirmed for the run.
 const milestones = data.milestones.map((m) =>
   options.confirm.some((c) => c.memoryId === m.memoryId && c.milestoneId === m.milestoneId) ? { ...m, status: 'confirmed' } : m
 );
+
+/** The codes the production modules return, as the review page words them. */
+const SKIP_TEXT: Record<string, string> = {
+  no_excerpts: 'no excerpts',
+  call_failed: 'OpenAI call failed or no API key',
+  no_samples: 'no caption samples',
+};
+const skipText = (code: string | null): string | null => (code === null ? null : SKIP_TEXT[code] ?? code);
+const disabledReason = options.llm ? undefined : '--no-llm';
+
+// The line of the year, pool path: the production quote check (a film script
+// brings its own verified quotes).
+let quoteCheck: QuoteCheckResult | null = null;
+if (!script) {
+  quoteCheck = await verifyLineOfYear({
+    memories,
+    milestones,
+    members: data.members,
+    scope,
+    disabledReason: disabledReason ?? (options.quoteCheck ? undefined : '--no-quote-check'),
+  }, ports);
+}
 const buildDigest = (specifics?: Record<string, { detail: string; memoryIds: string[]; recurring: boolean }[]>) =>
   script
-    ? buildDigestFromScript(script, memories, data.members, journalLanguage, { ...context, milestones, specifics })
-    : buildDigestFromPool(memories, milestones, data.members, scope, journalLanguage, { ...context, specifics });
+    ? buildDigestFromScript(script, memories, data.members, journalLanguage, { familyName: data.familyName, milestones, specifics })
+    : buildPoolDigest({
+      memories,
+      milestones,
+      members: data.members,
+      scope,
+      language: journalLanguage,
+      familyName: data.familyName,
+      quotes: quoteCheck?.quotes,
+      specifics,
+      filmPresent: options.filmPresent,
+    });
 let digest = buildDigest();
 
 // Specific details per child, read from their memories' own text (one cheap
@@ -555,74 +613,27 @@ interface ChildDetails {
   result: DetailsResult | null;
   skipped: string | null;
 }
-const childDetails: ChildDetails[] = [];
-{
-  const ownChildIds = digest.children.map((c) => c.memberId);
-  const names = [...digest.people.map((p) => p.name), ...digest.forbiddenNames, ...digest.children.flatMap((c) => c.nicknames.flatMap((n) => [n, ...n.split(/\s+/)]))];
-  const specifics: Record<string, { detail: string; memoryIds: string[]; recurring: boolean }[]> = {};
-  for (const child of digest.children) {
-    const childNames = Object.fromEntries(digest.children.map((c) => [c.memberId, c.name]));
-    const excerpts = selectDetailExcerpts(memories, milestones, { childId: child.memberId, scope, ownChildIds, childNames });
-    const entry: ChildDetails = { name: child.name, excerpts: excerpts.length, result: null, skipped: null };
-    childDetails.push(entry);
-    if (!options.llm) entry.skipped = '--no-llm';
-    else if (excerpts.length === 0) entry.skipped = 'no excerpts';
-    else {
-      const { system, user } = buildDetailsPrompt(child.name, excerpts);
-      // The cheap model sometimes returns too few: one retry, keep the better.
-      for (let attempt = 0; attempt < 2 && (entry.result === null || entry.result.verified < 3); attempt += 1) {
-        const content = await chat(buildDetailsRequestBody(options.detailsModel, system, user));
-        if (content === null) {
-          if (entry.result === null) entry.skipped = 'OpenAI call failed or no API key';
-          continue;
-        }
-        const next = parseDetails(content, excerpts, names, { name: child.name, nicknames: child.nicknames });
-        if (entry.result === null || next.verified > entry.result.verified) entry.result = next;
-        entry.skipped = null;
-      }
-      if (entry.result) specifics[child.memberId] = entry.result.details;
-    }
-  }
-  digest = buildDigest(specifics);
-}
+const extracted = await extractChildDetails({ memories, milestones, scope, digest, model: options.detailsModel, disabledReason }, ports);
+const childDetails: ChildDetails[] = extracted.entries.map((e) => ({ ...e, skipped: skipText(e.skipped) }));
+digest = buildDigest(extracted.specifics);
 
 // The parents' voice: their own captions only (members whose role is parent,
 // through the account each is linked to; if none is linked, the account that
 // wrote the most memories). Independent of the subsample: it is how they write.
-const parentAccounts = data.members.filter((m) => m.relationship === 'parent' && m.userId).map((m) => m.userId!);
-let voiceSource = 'the parents\' linked accounts';
-let authors = parentAccounts;
-if (authors.length === 0) {
-  const counts = new Map<string, number>();
-  for (const m of data.memories) if (m.authorId) counts.set(m.authorId, (counts.get(m.authorId) ?? 0) + 1);
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-  authors = top ? [top[0]] : [];
-  voiceSource = 'the account that wrote the most memories (no parent is linked to an account)';
-}
-const samples = selectVoiceSamples(data.memories, data.milestones, { parentAuthorIds: authors, today: options.today });
-// Names the style card must not carry: the children (and their nicknames) and
-// everyone outside the core family. The parents' own names are left out on
-// purpose: families name themselves "Mami"/"Papi", which IS their voice.
-const personNames = [
-  ...digest.people.filter((p) => p.role === 'child').map((p) => p.name),
-  ...data.members.filter((m) => digest.people.some((p) => p.role === 'child' && p.name === m.name.trim().split(/\s+/)[0])).flatMap((m) => m.nicknames ?? []),
-  ...digest.forbiddenNames,
-];
-const voice: VoiceRun = { source: voiceSource, samples, card: null, flags: [], examples: [], skipped: null, model: options.voiceModel, raw: null };
-if (!options.llm) voice.skipped = '--no-llm';
-else if (samples.length === 0) voice.skipped = 'no caption samples';
-else {
-  const { system, user } = buildVoiceCardPrompt(samples);
-  const content = await chat(buildVoiceCardRequestBody(options.voiceModel, system, user));
-  if (content === null) voice.skipped = 'OpenAI call failed or no API key';
-  else {
-    voice.raw = content;
-    const parsed = parseVoiceCard(content, { samples, names: personNames });
-    voice.card = parsed.card;
-    voice.flags = parsed.flags;
-  }
-}
-voice.examples = voiceExamples(samples, { forbiddenNames: digest.forbiddenNames });
+const voiceRun = await buildParentsVoice(
+  { memories: data.memories, milestones: data.milestones, members: data.members, digest, today: options.today, model: options.voiceModel, disabledReason },
+  ports,
+);
+const voice: VoiceRun = {
+  source: voiceRun.source === 'linked_parents' ? 'the parents\' linked accounts' : 'the account that wrote the most memories (no parent is linked to an account)',
+  samples: voiceRun.samples,
+  card: voiceRun.card,
+  flags: voiceRun.flags,
+  examples: voiceRun.examples,
+  skipped: skipText(voiceRun.skipped),
+  model: voiceRun.model,
+  raw: voiceRun.raw,
+};
 
 const languages: FilmLanguage[] = options.alsoLang && options.alsoLang !== journalLanguage ? [journalLanguage, options.alsoLang] : [journalLanguage];
 const runs: LanguageRun[] = [];
@@ -644,41 +655,37 @@ for (const language of languages) {
     ...(options.greeting ? { greeting: options.greeting } : {}),
   };
   if (options.pipeline === 'v2') {
-    const candidates = selectEditorCandidates(pool, {
+    const written = await writeLanguageLetters({
+      digest,
+      pool,
       scope,
       milestones,
-      children: digest.children.map((c) => ({ id: c.memberId, name: c.name })),
-      people: data.members.map((m) => ({ id: m.id, name: m.name })),
-    });
-    const editorRaw = await chat(buildLetterRequestBody(options.model, buildEditorSystemPrompt(language), buildEditorUserPrompt(digest, candidates, language)));
-    if (editorRaw === null) {
+      members: data.members,
+      language,
+      locale: letterOptions.locale,
+      voice: letterOptions.voice,
+      greeting: options.greeting,
+      model: options.model,
+    }, ports);
+    if (written.editor === null) {
       runs.push({ language, skipped: 'editor call failed', result: null, retried: [] });
       continue;
     }
-    const editor = parseEditorFacts(editorRaw, candidates, digest);
-    const variants: LetterResult['variants'] = [];
-    const rejected: LetterResult['rejected'] = [];
-    for (const angle of WRITER_ANGLES) {
-      const raw = await chat(buildLetterRequestBody(
-        options.model,
-        buildWriterSystemPrompt({ language, locale: letterOptions.locale, greeting: options.greeting ?? undefined }),
-        buildWriterUserPrompt({ angle, facts: editor.facts, broadStrokes: editor.broadStrokes, children: digest.children.map((c) => ({ name: c.name, gender: c.gender })), voice: letterOptions.voice, language }),
-      ));
-      const text = raw === null ? null : parseWriterText(raw);
-      const tone = angle === 'warm' ? 'reflective' : angle;
-      if (!text) {
-        rejected.push({ tone, text: '', flags: [{ code: 'empty' }] });
-        continue;
-      }
-      const checks = checkV2Letter(text, angle, digest, language, { voice: letterOptions.voice, greeting: options.greeting ?? undefined, locale: letterOptions.locale });
-      if (checks.hard.length) rejected.push({ tone, text, flags: checks.hard });
-      else variants.push({ tone, text, chars: Array.from(text).length, flags: checks.soft });
-    }
+    const { candidates, ...editor } = written.editor;
     runs.push({
       language,
       skipped: null,
       retried: [],
-      result: { language, variants, rejected, qrCaption: editor.qrCaption, qrCaptionFlags: [], signature: defaultSignature(data.familyName, language), flags: [] },
+      result: {
+        language,
+        // The card renderer's 'reflective' is the writer's 'warm' angle.
+        variants: written.variants.map((v) => ({ ...v, tone: cardToneForAngle(v.tone) })),
+        rejected: written.rejected.map((v) => ({ ...v, tone: cardToneForAngle(v.tone) })),
+        qrCaption: editor.qrCaption,
+        qrCaptionFlags: [],
+        signature: defaultSignature(data.familyName, language),
+        flags: [],
+      },
       editor: { ...editor, candidates: candidates.length, candidateTexts: new Map(candidates.map((c) => [c.id, `${c.date}: ${c.text}`])) },
     });
     continue;
@@ -718,7 +725,7 @@ const editorHtml = runs.filter((r) => r.editor).map((r) => {
   const dropped = e.dropped.length ? `<p>Dropped by code: ${e.dropped.map((d) => `${esc(d.reason)}: ${esc(d.fact)}`).join(' · ')}</p>` : '';
   return `<section style="max-width:900px;margin:24px auto;padding:16px;border:1px solid #ddd;border-radius:12px;font-family:system-ui"><h2>Editor (${esc(r.language)}): what's worth telling</h2><p>Read ${e.candidates} entries. Broad strokes: <i>${esc(e.broadStrokes ?? '—')}</i></p><ol>${items}</ol>${dropped}</section>`;
 }).join('');
-await Deno.writeTextFile(new URL(`${runId}-letters.html`, outDir), renderHtml({ runId, label, digest, runs, thumbs, model: options.model, cost, voice, setting: { raw: data.language, language: journalLanguage, locale: familyLang.locale, source: familyLang.source, guidance }, stats: new Map(digest.children.map((c, i) => [c.memberId, childDetails[i]?.result ? `extracted ${childDetails[i].result!.extracted} · verified ${childDetails[i].result!.verified} · dropped ${childDetails[i].result!.dropped}` : `skipped: ${childDetails[i]?.skipped ?? '—'}`])) }).replace('</body>', `${editorHtml}</body>`));
+await Deno.writeTextFile(new URL(`${runId}-letters.html`, outDir), renderHtml({ runId, label, digest, fromScript: script !== null, runs, thumbs, model: options.model, cost, voice, setting: { raw: data.language, language: journalLanguage, locale: familyLang.locale, source: familyLang.source, guidance }, stats: new Map(digest.children.map((c, i) => [c.memberId, childDetails[i]?.result ? `extracted ${childDetails[i].result!.extracted} · verified ${childDetails[i].result!.verified} · dropped ${childDetails[i].result!.dropped}` : `skipped: ${childDetails[i]?.skipped ?? '—'}`])) }).replace('</body>', `${editorHtml}</body>`));
 await Deno.writeTextFile(
   new URL(`${runId}-letters.json`, outDir),
   JSON.stringify(
@@ -729,6 +736,7 @@ await Deno.writeTextFile(
       subsample: options.subsample === null ? null : { n: options.subsample, seed: options.seed },
       usage: { byModel: Object.fromEntries(usage), usd: cost },
       setting: { captionLanguage: data.language, resolved: familyLang, hasGuidance: !!guidance, guidanceChars: guidance?.length ?? 0 },
+      quoteCheck: quoteCheck ? { skipped: quoteCheck.skipped, verified: quoteCheck.quotes.length, rejected: quoteCheck.rejected, rejectedReasons: quoteCheck.rejectedReasons } : null,
       voice: { source: voice.source, model: voice.model, samples: voice.samples.length, card: voice.card, flags: voice.flags, examples: voice.examples, skipped: voice.skipped, raw: voice.raw },
       childDetails: childDetails.map((c) => ({ name: c.name, excerpts: c.excerpts, skipped: c.skipped, ...(c.result ? { extracted: c.result.extracted, verified: c.result.verified, dropped: c.result.dropped, reasons: c.result.reasons } : {}) })),
       digest,
@@ -742,7 +750,7 @@ await Deno.writeTextFile(
 
 // stdout: counts and flag codes only.
 console.log(
-  `digest: ${digest.filmPresent ? 'from film script' : 'from pool'}, ${digest.children.length} child profiles ` +
+  `digest: ${script ? 'from film script' : 'from pool'}, ${digest.children.length} child profiles ` +
     `(${digest.children.map((c) => `${c.name}: ${c.memories} moments, ${c.recurring.length} recurring`).join('; ')}), ` +
     `${digest.parents.length} parent profile(s), ${digest.familyThemes.length} family themes, ${digest.places.length} places, ` +
     `${digest.highlights.length} optional details, ${digest.counts.moments} moments, ` +
@@ -762,6 +770,7 @@ for (const run of runs) {
       `caption ${r.qrCaption ? Array.from(r.qrCaption).length : 'none'} · flags ${codes.length ? [...new Set(codes)].join(',') : 'none'}`,
   );
 }
+if (quoteCheck) console.log(`quote check: ${quoteCheck.skipped ? `skipped (${quoteCheck.skipped})` : `${quoteCheck.quotes.length} verified, ${quoteCheck.rejected} rejected ${JSON.stringify(quoteCheck.rejectedReasons)}`}`);
 for (const [model, t] of usage) console.log(`model: ${model} · ${t.calls} call(s) · ${t.input} in / ${t.output} out`);
 if (cost !== null) console.log(`≈ $${cost.toFixed(3)} total`);
 for (const c of childDetails) {
@@ -769,7 +778,7 @@ for (const c of childDetails) {
 }
 console.log(`setting: gallery_caption_language=${data.language ?? '(none)'} → ${familyLang.language}${familyLang.locale ? ` (${familyLang.locale})` : ''} [${familyLang.source}], guidance ${guidance ? `present (${guidance.length} chars)` : 'absent'}, writer ${options.model}`);
 console.log(
-  `voice: ${voice.samples.length} caption sample(s) from ${authors.length} account(s), card ${voice.card ? 'ok' : 'none'}${voice.skipped ? ` (${voice.skipped})` : ''}, ` +
+  `voice: ${voice.samples.length} caption sample(s) from ${voiceRun.authors} account(s), card ${voice.card ? 'ok' : 'none'}${voice.skipped ? ` (${voice.skipped})` : ''}, ` +
     `${voice.card?.characteristic.length ?? 0} characteristic phrase(s), ${voice.examples.length} example(s), flags ${voice.flags.length ? voice.flags.join(',') : 'none'}`,
 );
 console.log(`\nDone.\n  HTML: ${new URL(`${runId}-letters.html`, outDir).pathname}\n  JSON: ${new URL(`${runId}-letters.json`, outDir).pathname}`);

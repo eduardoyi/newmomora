@@ -19,12 +19,28 @@ export interface Env {
   SENTRY_DSN?: string;
   FILM_BUCKET: R2Bucket;
   YEAR_FILM_WORKFLOW: Workflow;
+  HOLIDAY_CARD_WORKFLOW: Workflow;
 }
 
 export interface DispatchPayload {
   filmId: string;
   attemptId: string;
 }
+
+export interface CardGeneratePayload {
+  cardId: string;
+  attemptId: string;
+}
+
+/** Closed failure-code set for a holiday card (holiday_cards.last_failure_code;
+ * never raw errors). */
+export type CardFailureCode =
+  | 'CONTEXT_LOAD_FAILED'
+  | 'FRONT_PICK_FAILED'
+  | 'FILM_SETUP_FAILED'
+  | 'LETTERS_FAILED'
+  | 'NO_LETTERS'
+  | 'UNKNOWN_ERROR';
 
 /** Closed failure-code set persisted as last_failure_code (never raw errors). */
 export type FailureCode =

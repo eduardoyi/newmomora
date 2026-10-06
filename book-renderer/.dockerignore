@@ -13,12 +13,25 @@
 # so a build-time bug in that config can't accidentally copy it anyway.
 book-data/
 book-data
+**/book-data
+
+# card-data/ is the SAME class of data for the holiday card: real family
+# photos, portraits, letters and a QR token (holiday-cards-p1 Step 5). It is
+# gitignored AND must never reach the render worker's image: /render-card gets
+# its card document + pictures per request (presigned URLs), never from disk.
+# vite.card.config.ts (publicDir: false, card-print.html entry only) is the
+# other half of the guarantee; the Dockerfile also fails the build if either
+# directory shows up in the context.
+card-data/
+card-data
+**/card-data
 
 # Build outputs (rebuilt fresh at image-build time — never trust a stale
 # host-machine dist/).
 dist/
 dist-web/
 dist-print/
+dist-card/
 
 node_modules/
 .git/

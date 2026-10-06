@@ -12,25 +12,23 @@
  * attempt, a changed content epoch, or rollout mode `off` answers 409 with
  * `{ state }` so the Workflow stops at its next call.
  *
+ * Holiday card generation (cloudflare/year-film-worker HolidayCardWorkflow)
+ * uses the same signature + nonce hop through `card_*` operations bound to a
+ * card + attempt lease instead of a film: see card-ops.ts.
+ *
  * Logs carry ids, operation names and codes only — never memory text,
  * names, keys or model output.
  */
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
-import { normalizeOpenAiUsage, openAiAudioTokens, priceOpenAiUsage } from '../_shared/ai-pricing.ts';
-import { byMemoryIds as byMemoryIdsChunked, fetchAll } from '../_shared/paged-query.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
+import { type Client, FILM_MEMBER_COLUMNS, FILM_MEMORY_COLUMNS, loadFamilyRows } from './rows.ts';
+import { isValidUsageBody, recordAiUsage } from './usage.ts';
+import { CARD_OPERATIONS, handleCardOperation } from './card-ops.ts';
 
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
-const CHUNK_SIZE = 200;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-type Client = ReturnType<typeof createServiceClient>;
-
-const byMemoryIds = <T>(
-  ids: string[],
-  page: Parameters<typeof byMemoryIdsChunked<T>>[1],
-): Promise<T[]> => byMemoryIdsChunked<T>(ids, page, { chunkSize: CHUNK_SIZE });
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -66,6 +64,7 @@ export async function verifySignedRequest(req: Request, rawBody: string, secret:
 interface BridgeBody {
   operation?: unknown;
   filmId?: unknown;
+  cardId?: unknown;
   attemptId?: unknown;
   [key: string]: unknown;
 }
@@ -96,6 +95,7 @@ interface FilmRow {
   content_epoch: number;
   ai_checks: Record<string, unknown>;
   generation_started_at: string | null;
+  ready_at: string | null;
   attempt_id: string | null;
   status: string;
   video_key: string | null;
@@ -110,73 +110,13 @@ async function loadFilmContext(supabase: Client, film: FilmRow): Promise<Respons
     .maybeSingle();
   if (familyError || !family) return errorResponse('Family not found', 404, 'not_found');
 
-  const { data: members, error: membersError } = await supabase
-    .from('family_members')
-    .select('id, name, date_of_birth, relationship, created_at')
-    .eq('family_id', film.family_id);
-  if (membersError) throw new Error('members_failed');
-
-  const memories = await fetchAll<Record<string, unknown>>((from, to) =>
-    supabase
-      .from('memories')
-      .select('id, user_id, content, audio_transcript, description, memory_date, memory_type, emotion, topics, illustration_status, illustration_key, media_key, media_content_type, onboarding_media_pending, created_at')
-      .eq('family_id', film.family_id)
-      .gte('memory_date', film.scope_start_date)
-      .lt('memory_date', film.scope_end_exclusive)
-      .order('memory_date', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
-  const ids = memories.map((m) => m.id as string);
-  const media = await byMemoryIds(ids, (chunk, from, to) =>
-    supabase
-      .from('memory_media')
-      .select('id, memory_id, object_key, preview_object_key, content_type, duration_ms, aspect_ratio, position')
-      .in('memory_id', chunk)
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
-  const tags = await byMemoryIds(ids, (chunk, from, to) =>
-    supabase
-      .from('memory_family_members')
-      .select('memory_id, family_member_id')
-      .in('memory_id', chunk)
-      .order('memory_id', { ascending: true })
-      .order('family_member_id', { ascending: true })
-      .range(from, to)
-  );
-  const milestones = await byMemoryIds(ids, (chunk, from, to) =>
-    supabase
-      .from('memory_milestones')
-      .select('memory_id, family_member_id, milestone_id, status, out_of_band')
-      .in('memory_id', chunk)
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
-  const portraits = await fetchAll((from, to) =>
-    supabase
-      .from('family_member_portrait_versions')
-      .select('id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, created_at')
-      .eq('family_id', film.family_id)
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
-  // Accounts a parent (owner/manager) blocked: their memories stay out of
-  // every film of the family (owner decision 2026-09-29).
-  const { data: blockedAuthors, error: blockedError } = await supabase.rpc('year_film_parent_blocked_users', {
-    p_family_id: film.family_id,
+  const loaded = await loadFamilyRows(supabase, film.family_id, {
+    from: film.scope_start_date,
+    toExclusive: film.scope_end_exclusive,
+    memberColumns: FILM_MEMBER_COLUMNS,
+    memoryColumns: FILM_MEMORY_COLUMNS,
+    portraits: true,
   });
-  if (blockedError) throw new Error('blocked_failed');
-  // Films are family-wide: every open or reviewing report counts.
-  const reports = await fetchAll((from, to) =>
-    supabase
-      .from('content_reports')
-      .select('target_type, target_id')
-      .eq('family_id', film.family_id)
-      .in('status', ['open', 'reviewing'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  );
 
   return jsonResponse({
     film: {
@@ -193,20 +133,21 @@ async function loadFilmContext(supabase: Client, film: FilmRow): Promise<Respons
       quoteCandidates: film.quote_candidates,
       edits: film.edits,
       editsVersion: film.edits_version,
+      readyAt: film.ready_at,
       poolCutoffAt: film.pool_cutoff_at ?? film.generation_started_at,
       contentEpoch: film.content_epoch,
       aiChecks: film.ai_checks,
     },
     rows: {
       family: { id: family.id, name: family.name, gallery_caption_language: family.gallery_caption_language },
-      members: members ?? [],
-      memories,
-      media,
-      tags,
-      milestones,
-      portraits,
-      reports,
-      blockedAuthorIds: Array.isArray(blockedAuthors) ? blockedAuthors : [],
+      members: loaded.members,
+      memories: loaded.memories,
+      media: loaded.media,
+      tags: loaded.tags,
+      milestones: loaded.milestones,
+      portraits: loaded.portraits,
+      reports: loaded.reports,
+      blockedAuthorIds: loaded.blockedAuthorIds,
     },
   });
 }
@@ -227,17 +168,33 @@ export async function handleWorkflowYearFilmBridge(
     return errorResponse('Invalid JSON body', 400, 'invalid_json');
   }
   const operation = body.operation;
-  if (typeof operation !== 'string' || !OPERATIONS.has(operation) || typeof body.filmId !== 'string' ||
-    !UUID.test(body.filmId) || typeof body.attemptId !== 'string' || !UUID.test(body.attemptId)) {
+  // Holiday card operations (card-ops.ts) are bound to a card + its attempt;
+  // film operations to a film + its attempt.
+  const isCardOperation = typeof operation === 'string' && CARD_OPERATIONS.has(operation);
+  if (typeof operation !== 'string' || (!isCardOperation && !OPERATIONS.has(operation)) ||
+    typeof body.attemptId !== 'string' || !UUID.test(body.attemptId) ||
+    (isCardOperation
+      ? typeof body.cardId !== 'string' || !UUID.test(body.cardId)
+      : typeof body.filmId !== 'string' || !UUID.test(body.filmId))) {
     return errorResponse('Invalid workflow operation', 400, 'validation_error');
   }
-  const filmId = body.filmId;
+  const filmId = body.filmId as string;
   const attemptId = body.attemptId;
   const supabase = (overrides.createServiceClient ?? createServiceClient)();
 
   const { data: fresh, error: nonceError } = await supabase.rpc('record_year_film_bridge_nonce', { p_nonce: nonce });
   if (nonceError) return errorResponse('Bridge unavailable', 500, 'internal_error');
   if (fresh !== true) return errorResponse('Replayed request', 409, 'replayed');
+
+  if (isCardOperation) {
+    const cardId = body.cardId as string;
+    try {
+      return await handleCardOperation(supabase, operation, cardId, attemptId, body);
+    } catch {
+      console.error('workflow year film bridge failed', { operation, cardId });
+      return errorResponse('Workflow bridge operation failed', 500, 'internal_error');
+    }
+  }
 
   try {
     if (WORK_OPERATIONS.has(operation) || operation === 'heartbeat') {
@@ -276,34 +233,12 @@ export async function handleWorkflowYearFilmBridge(
         return data === 'ok' ? jsonResponse({ state: 'ok' }) : jsonResponse({ state: data }, 409);
       }
       case 'record_usage': {
-        if (typeof body.aiCallId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.aiCallId) ||
-          typeof body.usageOperation !== 'string' || !USAGE_OPERATIONS.has(body.usageOperation) ||
-          typeof body.model !== 'string' || body.model.length > 64 || typeof body.success !== 'boolean') {
-          return errorResponse('Invalid usage', 400, 'validation_error');
-        }
+        if (!isValidUsageBody(body, USAGE_OPERATIONS)) return errorResponse('Invalid usage', 400, 'validation_error');
         const { data: film, error: filmError } = await supabase
           .from('year_films').select('family_id').eq('id', filmId).maybeSingle();
         if (filmError || !film) throw filmError ?? new Error('film_missing');
         const { data: family } = await supabase.from('families').select('owner_id').eq('id', film.family_id).maybeSingle();
-        const dimensions = normalizeOpenAiUsage(body.usage, typeof body.audioSeconds === 'number' ? body.audioSeconds : undefined);
-        // gpt-audio: prompt/completion counts include the audio tokens,
-        // which are priced separately.
-        const audio = openAiAudioTokens(body.usage);
-        if (audio.input > 0 && dimensions.input_text_tokens !== undefined) {
-          dimensions.input_text_tokens = Math.max(0, dimensions.input_text_tokens - audio.input);
-        }
-        if (audio.output > 0 && dimensions.output_text_tokens !== undefined) {
-          dimensions.output_text_tokens = Math.max(0, dimensions.output_text_tokens - audio.output);
-        }
-        const priced = priceOpenAiUsage(body.model, dimensions, { audioInputTokens: audio.input, audioOutputTokens: audio.output });
-        const { error } = await supabase.rpc('record_ai_usage_event_detailed', {
-          p_ai_call_id: body.aiCallId, p_usage_request_id: null, p_family_id: film.family_id,
-          p_actor_user_id: family?.owner_id ?? null, p_operation: body.usageOperation, p_model: body.model,
-          p_success: body.success, p_provider_usage: priced.dimensions, p_estimated_cost_usd: priced.estimatedCostUsd,
-          p_cost_basis: priced.costBasis, p_billing_status: priced.billingStatus, p_cost_is_complete: priced.costIsComplete,
-          p_pricing_version: priced.pricingVersion,
-        });
-        if (error) throw error;
+        await recordAiUsage(supabase, film.family_id, family?.owner_id ?? null, body);
         return jsonResponse({ recorded: true });
       }
       case 'set_status': {

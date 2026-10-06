@@ -54,6 +54,7 @@ function deps(overrides: Partial<GetYearFilmUrlDeps> = {}, calls?: Calls): GetYe
       calls?.presigned.push({ keys, ttl });
       return Object.fromEntries(keys.map((k) => [k, `https://signed/${k}`]));
     },
+    liveCardFilms: async () => [],
     now: () => new Date('2026-10-26T14:00:00Z'),
     ...overrides,
   };
@@ -94,6 +95,69 @@ Deno.test('single mode refuses a forced (canary) film like a missing one, even f
   // A stranger cannot tell a forced film from a missing one either.
   const stranger = deps({ loadFilm: async () => ({ ...row, forced: true }), getRole: async () => null });
   assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), stranger)).status, 404);
+});
+
+Deno.test('single mode serves a forced CARD film to owners and managers of the card family, nobody else', async () => {
+  const cardFilm = { ...row, forced: true };
+  const cardLookups: string[][] = [];
+  const base = {
+    loadFilm: async () => cardFilm,
+    liveCardFilms: async (ids: string[]) => {
+      cardLookups.push(ids);
+      return [{ film_id: FILM, family_id: 'fam' }];
+    },
+  };
+  for (const role of ['owner', 'manager']) {
+    const res = await handleGetYearFilmUrl(post({ filmId: FILM }), deps({ ...base, getRole: async () => role }));
+    assertEquals(res.status, 200, role);
+    assertEquals((await res.json()).videoUrl, `https://signed/${row.video_key}`);
+  }
+  assertEquals(cardLookups, [[FILM], [FILM]]);
+  // A viewer of the same family, and a stranger, still see a missing film.
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), deps({ ...base, getRole: async () => 'viewer' }))).status, 404);
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), deps({ ...base, getRole: async () => null }))).status, 404);
+  // Forced film with no live card (deleted card, operator canary): still 404 for the owner.
+  const noCard = deps({ ...base, liveCardFilms: async () => [], getRole: async () => 'owner' });
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), noCard)).status, 404);
+  // A card of ANOTHER family pointing at the film does not count.
+  const otherFamily = deps({ ...base, liveCardFilms: async () => [{ film_id: FILM, family_id: 'someone-else' }], getRole: async () => 'owner' });
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), otherFamily)).status, 404);
+});
+
+Deno.test('single mode: a card film keeps the blocked / unavailable rejections, and non-forced films never query cards', async () => {
+  const lookups: string[][] = [];
+  const cardDeps = (film: Partial<FilmUrlRow>) =>
+    deps({
+      loadFilm: async () => ({ ...row, forced: true, ...film }),
+      liveCardFilms: async (ids) => (lookups.push(ids), [{ film_id: FILM, family_id: 'fam' }]),
+      getRole: async () => 'owner',
+    });
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), cardDeps({ blocked: true }))).status, 409);
+  // An ended card film has no video keys left.
+  assertEquals((await handleGetYearFilmUrl(post({ filmId: FILM }), cardDeps({ video_key: null, poster_key: null, scenes_key: null }))).status, 409);
+  lookups.length = 0;
+  await handleGetYearFilmUrl(post({ filmId: FILM }), deps({ liveCardFilms: async (ids) => (lookups.push(ids), []) }));
+  assertEquals(lookups, []);
+});
+
+Deno.test('batch: a forced card film signs only for owners/managers of its card family; other forced films stay omitted', async () => {
+  const [card, canary] = [1, 2].map(uuid);
+  const films = filmsById({ [card]: { forced: true }, [canary]: { forced: true } });
+  const lookups: string[][] = [];
+  const run = (role: string) =>
+    handleGetYearFilmUrl(
+      post({ filmIds: [card, canary] }),
+      deps({
+        loadFilms: async () => films,
+        getRoles: async (f) => new Map(f.map((x) => [x, role])),
+        liveCardFilms: async (ids) => (lookups.push(ids), [{ film_id: card, family_id: 'fam' }]),
+      }),
+    );
+  assertEquals(Object.keys((await (await run('manager')).json()).posters), [card]);
+  assertEquals(Object.keys((await (await run('owner')).json()).posters), [card]);
+  assertEquals((await (await run('viewer')).json()).posters, {});
+  // Only films the caller manages are looked up, and only once per request.
+  assertEquals(lookups, [[card, canary], [card, canary]]);
 });
 
 Deno.test('posterThumbKey derives poster_thumb.jpg in the poster directory', () => {

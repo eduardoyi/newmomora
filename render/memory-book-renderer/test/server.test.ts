@@ -27,6 +27,7 @@ function testEnv(overrides: Partial<RenderWorkerEnv> = {}): RenderWorkerEnv {
     hmacSecret: HMAC_SECRET,
     r2: { accountId: 'a', accessKeyId: 'b', secretAccessKey: 'c', endpoint: 'https://example.com', bucket: 'test-bucket' },
     servedDistDir: '/nonexistent/dist-print',
+    cardDistDir: '/nonexistent/dist-card',
     concurrency: 1,
     ...overrides,
   };

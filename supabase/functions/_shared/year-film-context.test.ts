@@ -109,3 +109,78 @@ Deno.test('planFilm: a holiday card film clears a lower floor on the share-safe 
   r.memories[20].content = 'naked in the garden';
   assertEquals(planFilm(mapFamilyRows(r), holiday), { ok: false, reason: 'BELOW_FLOORS' });
 });
+
+// ── Card film plumbing (docs/plans/holiday-cards-p1.md Step 4b) ──────────────
+
+function holidayRows(count = 22): FamilyRows {
+  const r = rows();
+  r.memories = Array.from({ length: count }, (_, i) => ({
+    id: `c${i}`, content: `moment ${i}`, memory_date: '2026-09-10', memory_type: 'media', emotion: 'joy', topics: null,
+    illustration_status: 'none', illustration_key: null, media_key: null, media_content_type: null, onboarding_media_pending: false,
+  }));
+  r.media = r.memories.slice(0, 14).map((m, i) => ({ id: `x${i}`, memory_id: m.id, object_key: `u/${m.id}.jpg`, preview_object_key: null, content_type: 'image/jpeg', duration_ms: null, aspect_ratio: 1.5, position: 0 }));
+  r.tags = [{ memory_id: 'c0', family_member_id: 'kid' }];
+  r.milestones = [];
+  r.reports = [];
+  return r;
+}
+
+const holidayFilm = { kind: 'family_holiday' as const, familyMemberId: null, ageYear: null, scopeStart: '2026-01-01', scopeEndExclusive: '2026-10-05' };
+
+Deno.test('planFilm: a card film passes its greeting and preferred close media into the script input', () => {
+  const planned = planFilm(mapFamilyRows(holidayRows()), {
+    ...holidayFilm,
+    edits: { greeting: 'christmas', preferredCloseMedia: ['x1', 'x2', 7, ''] },
+  });
+  assertEquals(planned.ok, true);
+  if (planned.ok && planned.plan.kind === 'family_holiday') {
+    assertEquals(planned.plan.input.greeting, 'christmas');
+    assertEquals(planned.plan.input.preferredCloseMedia, ['x1', 'x2']);
+  }
+  // Invalid / missing values fall back to the script defaults (keys absent).
+  for (const edits of [undefined, {}, { greeting: 'easter', preferredCloseMedia: 'x1' }, { preferredCloseMedia: [] }]) {
+    const fallback = planFilm(mapFamilyRows(holidayRows()), { ...holidayFilm, edits });
+    assertEquals(fallback.ok, true);
+    if (fallback.ok && fallback.plan.kind === 'family_holiday') {
+      assertEquals('greeting' in fallback.plan.input, false);
+      assertEquals('preferredCloseMedia' in fallback.plan.input, false);
+    }
+  }
+});
+
+Deno.test('planFilm: a published card film waives the floors; an empty pool is still a hard skip', () => {
+  const small = holidayRows(5); // far below the 20-moment floor
+  assertEquals(planFilm(mapFamilyRows(small), holidayFilm), { ok: false, reason: 'BELOW_FLOORS' });
+  assertEquals(planFilm(mapFamilyRows(small), { ...holidayFilm, hasPublished: false }), { ok: false, reason: 'BELOW_FLOORS' });
+  const waived = planFilm(mapFamilyRows(small), { ...holidayFilm, hasPublished: true });
+  assertEquals(waived.ok, true);
+  assertEquals(waived.ok && waived.plan.pool.length, 5);
+
+  const empty = holidayRows(0);
+  assertEquals(planFilm(mapFamilyRows(empty), { ...holidayFilm, hasPublished: true }), { ok: false, reason: 'EMPTY_POOL' });
+  // Every memory share-sensitive = an empty share-safe pool.
+  const sensitive = holidayRows(3);
+  sensitive.memories.forEach((m) => { m.content = 'fiebre y hospital'; });
+  assertEquals(planFilm(mapFamilyRows(sensitive), { ...holidayFilm, hasPublished: true }), { ok: false, reason: 'EMPTY_POOL' });
+  // No own children is still NO_OWN_CHILDREN, waiver or not.
+  const noKids = holidayRows();
+  noKids.members = noKids.members.filter((m) => m.id !== 'kid');
+  assertEquals(planFilm(mapFamilyRows(noKids), { ...holidayFilm, hasPublished: true }), { ok: false, reason: 'NO_OWN_CHILDREN' });
+});
+
+Deno.test('planFilm: birthday / month / year films ignore the card-film fields (floors unchanged)', () => {
+  const data = mapFamilyRows(rows());
+  const base = { familyMemberId: null, ageYear: null };
+  const extras = { edits: { greeting: 'christmas', preferredCloseMedia: ['x'] }, hasPublished: true };
+  const month = { ...base, kind: 'family_month' as const, scopeStart: '2026-01-01', scopeEndExclusive: '2026-02-01' };
+  const year = { ...base, kind: 'family_year' as const, scopeStart: '2026-01-01', scopeEndExclusive: '2027-01-01' };
+  const birthday = { kind: 'birthday' as const, familyMemberId: 'kid', ageYear: 4, scopeStart: '2025-10-23', scopeEndExclusive: '2026-10-26' };
+  for (const film of [month, year, birthday]) {
+    assertEquals(planFilm(data, { ...film, ...extras }), planFilm(data, film));
+    assertEquals(planFilm(data, { ...film, ...extras }), { ok: false, reason: 'BELOW_FLOORS' });
+  }
+  // A month film on a bigger pool is byte-identical with and without the extras.
+  const full = holidayRows(40);
+  const monthFull = { ...month, scopeStart: '2026-09-01', scopeEndExclusive: '2026-10-01' };
+  assertEquals(planFilm(mapFamilyRows(full), { ...monthFull, ...extras }), planFilm(mapFamilyRows(full), monthFull));
+});

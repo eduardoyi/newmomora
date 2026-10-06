@@ -6,7 +6,7 @@ const server = createServer(env);
 
 server.listen(env.port, () => {
   // ids/config only — never book content, never secrets.
-  console.log(`memory-book-renderer: listening on :${env.port} (servedDistDir=${env.servedDistDir}, concurrency=${env.concurrency})`);
+  console.log(`memory-book-renderer: listening on :${env.port} (servedDistDir=${env.servedDistDir}, cardDistDir=${env.cardDistDir}, concurrency=${env.concurrency})`);
 });
 
 // Fail loudly rather than leave the process half-alive on an unhandled

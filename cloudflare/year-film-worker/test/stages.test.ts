@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { AttemptStopped, type BridgeClient } from '../src/bridge';
 import type { FlyClient } from '../src/fly';
 import type { ChatFn } from '../src/openai';
-import { pollFailureCode, pollMachine, publish, runFrameChecks, runVoiceChecks, type StageDeps, startThumbs } from '../src/stages';
+import { buildAndSave, pollFailureCode, pollMachine, publish, runFrameChecks, runVoiceChecks, type StageDeps, startThumbs } from '../src/stages';
+import { familyRows, LUCIA, ANA, MARCO, TOMAS } from './card-fixtures';
 import type { Storage } from '../src/storage';
 import { assetId, type PrepareManifest } from '../../../supabase/functions/_shared/year-film-assets.ts';
 import { checkCacheKey } from '../../../supabase/functions/_shared/year-film-checks.ts';
@@ -296,5 +297,90 @@ describe('holiday models', () => {
     const { HOLIDAY_QUOTE_MODEL, QUOTE_MODEL } = await import('../../../supabase/functions/_shared/year-film-quotes.ts');
     expect([HOLIDAY_CLAIM_CHECK_MODEL, HOLIDAY_QUOTE_MODEL]).toEqual(['gpt-6.1-sol', 'gpt-6.1-sol']);
     expect([CLAIM_CHECK_MODEL, QUOTE_MODEL]).toEqual(['gpt-6-sol', 'gpt-6-sol']);
+  });
+});
+
+// ── Card films (docs/plans/holiday-cards-p1.md Step 4b): greeting, close media, floor waiver ──
+
+const OWNER_ID = 'owner';
+function holidayContext(film: Record<string, unknown> = {}, rows = familyRows()) {
+  return {
+    film: {
+      id: FILM, kind: 'family_holiday', familyId: 'fam', ownerId: OWNER_ID, familyMemberId: null, ageYear: null,
+      scopeStart: '2026-01-01', scopeEndExclusive: '2026-10-07', language: 'es', musicBedId: null, quoteCandidates: null,
+      edits: {}, editsVersion: 0, poolCutoffAt: null, contentEpoch: 0, aiChecks: {}, readyAt: null, ...film,
+    },
+    rows,
+  };
+}
+
+/** The script a holiday film's build step saved. */
+async function builtHolidayScript(ctx: ReturnType<typeof holidayContext>) {
+  let script: { scenes: Record<string, unknown>[] } | null = null;
+  const { bridge } = fakeBridge({
+    load_film_context: () => ctx,
+    save_curation: (body) => { script = (body.payload as { film_script: typeof script }).film_script; return { state: 'ok' }; },
+  });
+  expect(await buildAndSave(deps({ bridge }))).toEqual({ saved: true });
+  return script!;
+}
+
+describe('card film (family_holiday) plumbing', () => {
+  it('the film row\'s greeting reaches the end card; without one the default stays', async () => {
+    const christmas = await builtHolidayScript(holidayContext({ edits: { greeting: 'christmas' } }));
+    expect(christmas.scenes.find((s) => s.type === 'end_card')?.greeting).toBe('Feliz Navidad');
+    const newYear = await builtHolidayScript(holidayContext({ edits: { greeting: 'new-year' } }));
+    expect(newYear.scenes.find((s) => s.type === 'end_card')?.greeting).toBe('Feliz Año Nuevo');
+    const none = await builtHolidayScript(holidayContext({ edits: {} }));
+    expect(none.scenes.find((s) => s.type === 'end_card')?.greeting).toBe('Felices fiestas');
+  });
+
+  it('the card front\'s top picks (preferredCloseMedia) win the close', async () => {
+    // Two photos of the whole core family together; the older one is the front's top pick.
+    const rows = familyRows();
+    const family = [TOMAS, LUCIA, ANA, MARCO];
+    for (const [id, date] of [['m-fam-newer', '2026-09-25'], ['m-fam-older', '2026-09-05']] as const) {
+      rows.memories.push({ id, content: 'Foto de toda la familia junta', memory_date: date, memory_type: 'media', emotion: 'joy', topics: [], illustration_status: 'none', illustration_key: null, media_key: null, media_content_type: null, onboarding_media_pending: false, created_at: `${date}T10:00:00Z` });
+      rows.media.push({ id: `a-${id}`, memory_id: id, object_key: `orig/a-${id}`, preview_object_key: null, content_type: 'image/jpeg', duration_ms: null, aspect_ratio: 1.33, position: 0 });
+      for (const t of family) rows.tags.push({ memory_id: id, family_member_id: t });
+    }
+    const closeOf = (script: { scenes: Record<string, unknown>[] }) =>
+      (script.scenes.find((s) => s.type === 'close')?.frames as { memoryId: string }[]).map((f) => f.memoryId);
+    expect(closeOf(await builtHolidayScript(holidayContext({}, rows)))[0]).toBe('m-fam-newer');
+    expect(closeOf(await builtHolidayScript(holidayContext({ edits: { preferredCloseMedia: ['a-m-fam-older'] } }, rows)))[0]).toBe('m-fam-older');
+  });
+
+  it('floor waiver: a card film that has published keeps rendering below the floors; one that has not ends skipped', async () => {
+    const small = familyRows({ monthly: 3 }); // 5 moments, far below the 20-moment floor
+    const first = fakeBridge({ load_film_context: () => holidayContext({ readyAt: null }, small) });
+    expect(await startThumbs(deps({ bridge: first.bridge }))).toEqual({ skipped: true, reason: 'BELOW_FLOORS' });
+    expect(first.calls.find((c) => c.op === 'end_cycle')?.body).toEqual({ outcome: 'skipped', code: 'BELOW_FLOORS' });
+
+    const published = fakeBridge({ load_film_context: () => holidayContext({ readyAt: '2026-10-06T12:00:00Z' }, small) });
+    const result = await startThumbs(deps({ bridge: published.bridge }));
+    expect(result.skipped).toBe(false);
+    expect(published.calls.map((c) => c.op)).not.toContain('end_cycle');
+  });
+
+  it('floor waiver: an empty pool is still a hard skip', async () => {
+    const empty = familyRows();
+    empty.memories = [];
+    empty.media = [];
+    empty.tags = [];
+    const { bridge, calls } = fakeBridge({ load_film_context: () => holidayContext({ readyAt: '2026-10-06T12:00:00Z' }, empty) });
+    expect(await startThumbs(deps({ bridge }))).toEqual({ skipped: true, reason: 'EMPTY_POOL' });
+    expect(calls.find((c) => c.op === 'end_cycle')?.body).toEqual({ outcome: 'skipped', code: 'EMPTY_POOL' });
+  });
+
+  it('birthday / month / year films behave as before: readyAt and edits never waive their floors', async () => {
+    const small = familyRows({ monthly: 3 });
+    for (const kind of ['family_month', 'family_year'] as const) {
+      const scope = kind === 'family_month' ? { scopeStart: '2026-09-01', scopeEndExclusive: '2026-10-01' } : { scopeStart: '2026-01-01', scopeEndExclusive: '2027-01-01' };
+      const { bridge, calls } = fakeBridge({
+        load_film_context: () => holidayContext({ kind, ...scope, readyAt: '2026-10-06T12:00:00Z', edits: { greeting: 'christmas', preferredCloseMedia: ['a-m-swim'] } }, small),
+      });
+      expect(await startThumbs(deps({ bridge }))).toEqual({ skipped: true, reason: 'BELOW_FLOORS' });
+      expect(calls.find((c) => c.op === 'end_cycle')?.body).toEqual({ outcome: 'skipped', code: 'BELOW_FLOORS' });
+    }
   });
 });

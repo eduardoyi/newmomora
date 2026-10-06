@@ -25,6 +25,15 @@
  * defense-in-depth against a CAS-bypassing bug, but does not need to for
  * correctness today.
  *
+ * Routing (holiday-card shop, docs/plans/holiday-cards-p1.md Step 6): the SAME
+ * endpoint now also serves holiday-card orders. `checkout.session.completed` and
+ * `checkout.session.expired` route on `metadata.productType`: `holiday_card` goes
+ * to the card handlers (table `holiday_card_orders`); an ABSENT productType is a
+ * Memory Book session -- legacy and in-flight sessions created before this change
+ * never carried one -- and takes the book path unchanged; any other value is
+ * ignored. `charge.refunded` carries no session metadata, so it looks the
+ * payment intent up in BOTH order tables.
+ *
  * Every handler returns 200 once the event has been durably accounted for
  * (including a deliberate "refuse to process" outcome, e.g. an amount/
  * address mismatch or an unresolved originalFile) -- Stripe retries a
@@ -35,7 +44,15 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { sendTransactionalEmailWithOutcome } from '../_shared/bento.ts';
 import { errorResponse, jsonResponse } from '../_shared/errors.ts';
+import {
+  confirmPaidOrder,
+  type FulfillmentDeps,
+  processRefundedOrder,
+  releaseUnpaidArtifacts,
+} from '../_shared/holiday-card-fulfillment.ts';
+import { alertCardOwner } from '../_shared/holiday-card-order-notify.ts';
 import { backfillOriginalFilesForBook } from '../_shared/memory-book-backfill.ts';
+import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { verifyStripeSignature, type StripeEvent } from '../_shared/stripe.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
@@ -315,11 +332,16 @@ async function handleCheckoutSessionCompleted(
   return jsonResponse({ received: true, orderId, status: 'rendering' });
 }
 
-async function handleChargeRefunded(supabase: SupabaseClient, event: StripeEvent): Promise<Response> {
+async function handleChargeRefunded(
+  dependencies: StripeWebhookDependencies,
+  supabase: SupabaseClient,
+  event: StripeEvent,
+): Promise<Response> {
   const charge = stripeObject(event);
   const paymentIntentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
   if (!paymentIntentId) return jsonResponse({ received: true, ignored: true });
 
+  // Memory Book orders: unchanged.
   const { error } = await supabase
     .from('memory_book_orders')
     .update({ refunded_at: new Date().toISOString() })
@@ -329,7 +351,9 @@ async function handleChargeRefunded(supabase: SupabaseClient, event: StripeEvent
     console.error('stripe-webhook refund record failed', error.message);
     return errorResponse('Failed to record refund', 500, 'internal_error');
   }
-  return jsonResponse({ received: true });
+
+  // Holiday card orders (the plan's "look the payment intent up in BOTH tables").
+  return handleCardChargeRefunded(dependencies, supabase, charge, paymentIntentId);
 }
 
 async function handleCheckoutSessionExpired(supabase: SupabaseClient, event: StripeEvent): Promise<Response> {
@@ -351,11 +375,271 @@ async function handleCheckoutSessionExpired(supabase: SupabaseClient, event: Str
   return jsonResponse({ received: true });
 }
 
+// ── Holiday card orders ──────────────────────────────────────────────────
+
+function fulfillmentDepsFor(dependencies: StripeWebhookDependencies): FulfillmentDeps {
+  return {
+    fetch: dependencies.fetch,
+    sendEmail: dependencies.sendEmail,
+    listKeys: dependencies.listKeys,
+    deleteKey: dependencies.deleteKey,
+    gelatoApiKey: Deno.env.get('GELATO_API_KEY') ?? null,
+    stripeSecretKey: Deno.env.get('STRIPE_SECRET_KEY') ?? null,
+  };
+}
+
+interface CardOrderRow {
+  id: string;
+  status: string;
+  price_cents: number | null;
+  currency: string | null;
+  shipping_address: Record<string, unknown> | null;
+  snapshot_hash: string | null;
+  stripe_session_id: string | null;
+}
+
+const CARD_ALREADY_PAID_STATUSES = new Set(['paid', 'submitted', 'in_production', 'shipped']);
+
+/**
+ * `checkout.session.completed` for a card order. Verify, record the payment
+ * (CAS `checkout -> paid`), then -- and only if everything matched -- confirm the
+ * Gelato draft in the background (`EdgeRuntime.waitUntil`; the sweep is the
+ * fallback). A mismatch leaves the order `paid` with a `failure_reason` marker
+ * (the sweep never confirms a flagged order) and alerts the owner.
+ */
+async function handleCardCheckoutCompleted(
+  dependencies: StripeWebhookDependencies,
+  supabase: SupabaseClient,
+  event: StripeEvent,
+): Promise<Response> {
+  const session = stripeObject(event);
+  const orderId = typeof session.metadata === 'object' && session.metadata !== null
+    ? (session.metadata as Record<string, unknown>).orderId
+    : undefined;
+  if (typeof orderId !== 'string' || !orderId) {
+    console.error('stripe-webhook card checkout.session.completed missing orderId metadata');
+    return jsonResponse({ received: true, ignored: true });
+  }
+
+  const { data: order, error } = await supabase
+    .from('holiday_card_orders')
+    .select('id, status, price_cents, currency, shipping_address, snapshot_hash, stripe_session_id')
+    .eq('id', orderId)
+    .maybeSingle<CardOrderRow>();
+  if (error) {
+    console.error('stripe-webhook card order lookup failed', error.message);
+    return errorResponse('Failed to load order', 500, 'internal_error');
+  }
+  if (!order) {
+    console.error('stripe-webhook card checkout.session.completed order not found', orderId);
+    return jsonResponse({ received: true, ignored: true });
+  }
+  if (CARD_ALREADY_PAID_STATUSES.has(order.status)) return jsonResponse({ received: true, alreadyHandled: true });
+  if (order.status !== 'checkout') {
+    // Money was taken for an order that is not awaiting payment (cancelled or aged
+    // out while the customer was paying): it cannot be fulfilled automatically.
+    console.error('stripe-webhook card payment for an order not in checkout', orderId, order.status);
+    await alertCardOwner(dependencies.sendEmail, orderId, 'PAID_ORDER_NOT_FULFILLABLE', `Payment captured but the order was ${order.status}. Refund or fulfil manually.`);
+    return jsonResponse({ received: true, refused: 'order_not_in_checkout' });
+  }
+
+  const metadata = (session.metadata ?? {}) as Record<string, unknown>;
+  const amountSubtotal = Number(session.amount_subtotal);
+  const sessionCurrency = typeof session.currency === 'string' ? session.currency.toLowerCase() : '';
+  const sessionAddress = (session.customer_details as Record<string, unknown> | undefined)?.address as Record<string, unknown> | undefined
+    ?? (session.shipping_details as Record<string, unknown> | undefined)?.address as Record<string, unknown> | undefined;
+  const paymentStatus = typeof session.payment_status === 'string' ? session.payment_status : null;
+
+  let mismatch: string | null = null;
+  if (paymentStatus !== null && paymentStatus !== 'paid') mismatch = 'PAYMENT_NOT_PAID';
+  else if (typeof session.id === 'string' && order.stripe_session_id !== null && session.id !== order.stripe_session_id) mismatch = 'PAYMENT_MISMATCH_SESSION';
+  else if (!Number.isFinite(amountSubtotal) || order.price_cents === null || amountSubtotal !== order.price_cents) mismatch = 'PAYMENT_MISMATCH_AMOUNT';
+  else if (!order.currency || sessionCurrency !== order.currency.toLowerCase()) mismatch = 'PAYMENT_MISMATCH_CURRENCY';
+  else if (!addressesRoughlyMatch(order.shipping_address, sessionAddress)) mismatch = 'PAYMENT_MISMATCH_ADDRESS';
+  else if (!order.snapshot_hash || metadata.snapshotHash !== order.snapshot_hash) mismatch = 'PAYMENT_MISMATCH_SNAPSHOT';
+
+  const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : null;
+  // The payment is recorded either way (the money is real); a mismatch only
+  // withholds fulfilment.
+  const { data: paidRow, error: paidError } = await supabase
+    .from('holiday_card_orders')
+    .update({
+      status: 'paid',
+      stripe_payment_intent_id: paymentIntentId,
+      // Also clears a PAID_WEBHOOK_MISSED flag the sweep set before the event was re-sent.
+      failure_reason: mismatch,
+    })
+    .eq('id', orderId)
+    .eq('status', 'checkout')
+    .select('id')
+    .maybeSingle();
+  if (paidError) {
+    console.error('stripe-webhook card paid CAS failed', orderId, paidError.message);
+    await alertCardOwner(dependencies.sendEmail, orderId, 'PAID_CAS_FAILED', 'Payment captured but the order row could not be updated. Investigate immediately.');
+    return errorResponse('Failed to record payment', 500, 'internal_error');
+  }
+  if (!paidRow) return jsonResponse({ received: true, alreadyHandled: true });
+
+  if (mismatch) {
+    console.error('stripe-webhook card payment mismatch', orderId, mismatch);
+    await alertCardOwner(dependencies.sendEmail, orderId, mismatch, 'The paid Stripe session did not match the persisted quote/snapshot. Payment captured, the order is NOT sent to print. Review, then clear failure_reason to let the sweep confirm it, or refund.');
+    return jsonResponse({ received: true, refused: mismatch.toLowerCase().replace('payment_', '') });
+  }
+
+  // The only post-payment action: confirm the draft (idempotent). The sweep retries it.
+  const fulfillmentDeps = fulfillmentDepsFor(dependencies);
+  dependencies.waitUntil(
+    confirmPaidOrder(fulfillmentDeps, supabase, orderId)
+      .then(() => undefined)
+      .catch((confirmError) => {
+        console.error('stripe-webhook card confirm failed', orderId, confirmError instanceof Error ? confirmError.name : 'unknown');
+      }),
+  );
+  return jsonResponse({ received: true, orderId, status: 'paid' });
+}
+
+/** `checkout.session.expired` for a card order: `checkout -> cancelled`, then delete the draft and the print files. */
+async function handleCardCheckoutExpired(
+  dependencies: StripeWebhookDependencies,
+  supabase: SupabaseClient,
+  event: StripeEvent,
+): Promise<Response> {
+  const session = stripeObject(event);
+  const orderId = typeof session.metadata === 'object' && session.metadata !== null
+    ? (session.metadata as Record<string, unknown>).orderId
+    : undefined;
+  if (typeof orderId !== 'string' || !orderId) return jsonResponse({ received: true, ignored: true });
+
+  let query = supabase
+    .from('holiday_card_orders')
+    .update({ status: 'cancelled' })
+    .eq('id', orderId)
+    .eq('status', 'checkout');
+  // Only the order's own current session may cancel it.
+  if (typeof session.id === 'string') query = query.eq('stripe_session_id', session.id);
+  const { data: cancelled, error } = await query.select('id').maybeSingle();
+  if (error) {
+    console.error('stripe-webhook card expiry CAS failed', orderId, error.message);
+    return errorResponse('Failed to record checkout expiry', 500, 'internal_error');
+  }
+  if (cancelled) {
+    const fulfillmentDeps = fulfillmentDepsFor(dependencies);
+    dependencies.waitUntil(
+      releaseUnpaidArtifacts(fulfillmentDeps, supabase, orderId)
+        .then(() => undefined)
+        .catch(() => console.error('stripe-webhook card expiry clean-up failed', orderId)),
+    );
+  }
+  return jsonResponse({ received: true });
+}
+
+/** True unless Stripe says this refund was only partial (a goodwill refund must not cancel the print order). */
+function isFullRefund(charge: Record<string, unknown>): boolean {
+  if (charge.refunded === true) return true;
+  if (typeof charge.amount === 'number' && typeof charge.amount_refunded === 'number') return charge.amount_refunded >= charge.amount;
+  return charge.refunded !== false;
+}
+
+/**
+ * `charge.refunded` for a card order. The order is found by payment intent id,
+ * or -- when no row carries it yet (the refund event beat `checkout.session.
+ * completed`) -- by the `{productType:'holiday_card', orderId}` metadata the
+ * payment intent (and so the charge) was created with. A full refund sets
+ * `refunded_at` FIRST (that is what stops a not-yet-confirmed paid order from
+ * ever being confirmed), then finishes the Gelato side: a draft is deleted, a
+ * confirmed order is cancelled. A Gelato outage is left to the sweep (it retries
+ * every refunded order still paid/submitted/in_production); a Gelato refusal
+ * flags the order and alerts the owner.
+ */
+async function handleCardChargeRefunded(
+  dependencies: StripeWebhookDependencies,
+  supabase: SupabaseClient,
+  charge: Record<string, unknown>,
+  paymentIntentId: string,
+): Promise<Response> {
+  type Found = { id: string; status: string; gelato_order_id: string | null; stripe_payment_intent_id: string | null; failure_reason: string | null };
+  const columns = 'id, status, gelato_order_id, stripe_payment_intent_id, failure_reason';
+  const { data: byIntent, error } = await supabase
+    .from('holiday_card_orders')
+    .select(columns)
+    .eq('stripe_payment_intent_id', paymentIntentId)
+    .is('refunded_at', null);
+  if (error) {
+    console.error('stripe-webhook card refund lookup failed', error.message);
+    return errorResponse('Failed to record refund', 500, 'internal_error');
+  }
+  let rows = (byIntent ?? []) as Found[];
+
+  if (rows.length === 0) {
+    const metadata = typeof charge.metadata === 'object' && charge.metadata !== null ? charge.metadata as Record<string, unknown> : {};
+    if (metadata.productType === 'holiday_card' && typeof metadata.orderId === 'string' && metadata.orderId) {
+      const { data: byMetadata, error: metadataError } = await supabase
+        .from('holiday_card_orders')
+        .select(columns)
+        .eq('id', metadata.orderId)
+        .is('refunded_at', null);
+      if (metadataError) {
+        console.error('stripe-webhook card refund metadata lookup failed', metadataError.message);
+        return errorResponse('Failed to record refund', 500, 'internal_error');
+      }
+      // Only an order that has no payment intent yet, or this very one.
+      rows = ((byMetadata ?? []) as Found[]).filter((r) => r.stripe_payment_intent_id === null || r.stripe_payment_intent_id === paymentIntentId);
+    }
+  }
+  if (rows.length === 0) return jsonResponse({ received: true });
+  if (!isFullRefund(charge)) {
+    console.error('stripe-webhook card partial refund ignored', rows[0].id);
+    return jsonResponse({ received: true, partialRefund: true });
+  }
+
+  const fulfillmentDeps = fulfillmentDepsFor(dependencies);
+  for (const row of rows) {
+    const { data: marked, error: markError } = await supabase
+      .from('holiday_card_orders')
+      .update({
+        refunded_at: new Date().toISOString(),
+        // Remember the payment intent if the refund beat the paid event.
+        ...(row.stripe_payment_intent_id === null ? { stripe_payment_intent_id: paymentIntentId } : {}),
+      })
+      .eq('id', row.id)
+      .is('refunded_at', null)
+      .select('id')
+      .maybeSingle();
+    if (markError) {
+      console.error('stripe-webhook card refund record failed', row.id, markError.message);
+      return errorResponse('Failed to record refund', 500, 'internal_error');
+    }
+    if (!marked) continue;
+
+    const outcome = await processRefundedOrder(fulfillmentDeps, supabase, row);
+    if (outcome === 'failed') {
+      await supabase
+        .from('holiday_card_orders')
+        .update({ failure_reason: 'REFUND_NOT_CANCELLED' })
+        .eq('id', row.id)
+        .is('failure_reason', null);
+      await alertCardOwner(
+        dependencies.sendEmail,
+        row.id,
+        'REFUND_NOT_CANCELLED',
+        `The order was refunded while "${row.status}" but the Gelato order could not be cancelled automatically. Cancel it in the Gelato dashboard.`,
+      );
+    }
+    // 'retry': Gelato was unreachable; the sweep finishes it.
+  }
+  return jsonResponse({ received: true });
+}
+
 export interface StripeWebhookDependencies {
   createServiceClient: typeof createServiceClient;
   fetch: typeof fetch;
   verifyStripeSignature: typeof verifyStripeSignature;
   sendEmail: typeof sendTransactionalEmailWithOutcome;
+  /** Holiday cards: background work after the 200 (`EdgeRuntime.waitUntil`); the sweep is the fallback. */
+  waitUntil: (task: Promise<void>) => void;
+  /** Holiday cards: R2 prefix listing + delete for print-file clean-up. */
+  listKeys: (prefix: string) => Promise<string[]>;
+  deleteKey: (key: string) => Promise<void>;
 }
 
 export const DEFAULT_DEPENDENCIES: StripeWebhookDependencies = {
@@ -363,7 +647,24 @@ export const DEFAULT_DEPENDENCIES: StripeWebhookDependencies = {
   fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
   verifyStripeSignature,
   sendEmail: sendTransactionalEmailWithOutcome,
+  waitUntil: (task) => {
+    const runtime = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (task: Promise<void>) => void } }).EdgeRuntime;
+    if (runtime?.waitUntil) runtime.waitUntil(task);
+    else void task; // not on the Edge runtime (tests / local): let it run unawaited
+  },
+  listKeys: listObjectKeys,
+  deleteKey: deleteObject,
 };
+
+type ProductRoute = 'book' | 'holiday_card' | 'unknown';
+
+/** Routes a checkout session event by `metadata.productType`. ABSENT = a Memory Book session (legacy / in flight). */
+export function productRouteOf(event: StripeEvent): ProductRoute {
+  const metadata = stripeObject(event).metadata;
+  const productType = typeof metadata === 'object' && metadata !== null ? (metadata as Record<string, unknown>).productType : undefined;
+  if (productType === undefined || productType === null || productType === '') return 'book';
+  return productType === 'holiday_card' ? 'holiday_card' : 'unknown';
+}
 
 export async function handleStripeWebhook(
   req: Request,
@@ -386,12 +687,20 @@ export async function handleStripeWebhook(
 
   try {
     switch (event.type) {
-      case 'checkout.session.completed':
+      case 'checkout.session.completed': {
+        const route = productRouteOf(event);
+        if (route === 'holiday_card') return await handleCardCheckoutCompleted(dependencies, supabase, event);
+        if (route === 'unknown') return jsonResponse({ received: true, ignored: true });
         return await handleCheckoutSessionCompleted(dependencies.fetch, dependencies.sendEmail, supabase, event);
+      }
       case 'charge.refunded':
-        return await handleChargeRefunded(supabase, event);
-      case 'checkout.session.expired':
+        return await handleChargeRefunded(dependencies, supabase, event);
+      case 'checkout.session.expired': {
+        const route = productRouteOf(event);
+        if (route === 'holiday_card') return await handleCardCheckoutExpired(dependencies, supabase, event);
+        if (route === 'unknown') return jsonResponse({ received: true, ignored: true });
         return await handleCheckoutSessionExpired(supabase, event);
+      }
       default:
         return jsonResponse({ received: true, ignored: true });
     }

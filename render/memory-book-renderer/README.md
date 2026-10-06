@@ -2,8 +2,9 @@
 
 Print-render worker for the memory book checkout & fulfillment pipeline
 (memory-book-5c plan, Step 3). A Dockerized, HMAC-gated HTTP API around
-`book-renderer`'s `renderBookPdfs()`/`fitBookForPrint()` (wave 1), driving
-headless Chrome + R2 inside a Fly.io machine.
+`book-renderer`'s `renderBookPdfs()`/`fitBookForPrint()` (wave 1) and, for the
+holiday card, `renderCardPdf()` (`POST /render-card`), driving headless Chrome
++ R2 inside a Fly.io machine.
 
 This worker never sees the outside world except through this API. It has
 **no database credential and no Prodigi API key** — it can compute a page
@@ -73,6 +74,80 @@ document (ids/counts in `reason`, never memory content).
 Output lands in R2 at `print-orders/<orderId>/<attemptId>/` —
 `interior.pdf`, `cover.pdf`, `status.json`.
 
+### `POST /render-card`
+
+The holiday card (docs/plans/holiday-cards-p1.md Step 5). **Synchronous**: a
+card renders in seconds, so the answer is the result (no status polling, no R2
+idempotency marker; re-posting an order just rewrites the same keys). Same HMAC
+headers as every other op. Never logs or returns letter text, names, addresses
+or URLs: ids, codes and sizes only.
+
+```jsonc
+// request
+{
+  "orderId": "<uuid>",
+  "mode": "validate" | "render",
+  "format": "5R" | "A5",                  // overrides the card document's own `format`
+  "fileLayout": "two_files" | "one_pdf",
+  "card": { ... },                        // the card document (book-renderer/src/card/types.ts CardData)
+  "edits": { ... },                       // CardEdits (book-renderer/src/card/edits.ts)
+  "assets": { "assets/front.jpg": "https://<presigned GET URL>", ... },
+  "outputPrefix": "print-orders/<orderId>/"   // must start with print-orders/ and contain orderId as a path segment
+}
+```
+
+`assets` maps each file name the card document references (`photo.file`, the
+chosen `frontOptions` / illustration file, `portraits[].file`) to a presigned
+https GET URL. Only the pictures this render actually uses are downloaded
+(into a throwaway temp dir, removed afterwards; max 50 MB each, 60 s, no
+redirects, public https hosts only). The card document and edits are served to
+Chromium from memory and never touch disk.
+
+- **`200`** `{ ok: true, mode, files, checks }`
+  - `files`: empty for `validate`; for `render` `[{ side, key, sha256, bytes }]`
+    uploaded to R2 under `outputPrefix`: `two_files` gives `front.pdf`
+    (`side: "front"`, Gelato `default`) and `back.pdf` (`side: "back"`, Gelato
+    `back`), one page each; `one_pdf` gives one 2-page `card.pdf`
+    (`side: "both"`).
+  - `checks`: `{ pageWidthMm, pageHeightMm, pages, letterPt, letterFits,
+    frontDpi, fontsEmbedded }`. Page size is measured from the PDF and is the
+    format's page incl. 4 mm bleed on every side (5R 185.8 x 135 mm, A5
+    218 x 156 mm; portrait swaps them); Chromium snaps page boxes to CSS px, so
+    the measured value is within ~0.3 mm of nominal (the check tolerates 0.53
+    mm / 1.5 pt). No TrimBox/BleedBox is ever written (they shifted the art at
+    Gelato); a PDF carrying one is rejected.
+- **`422`** `{ ok: false, code, message }` for content the shop can show:
+  `LETTER_OVERFLOW` (letter does not fit its readable minimum at this size),
+  `SAFE_MARGIN` (text/QR/portrait too close to the trim), `IMAGE_MISSING` (no
+  URL for a picture the card uses, the URL answered 404/403/410, empty or
+  oversized file, or the picture would not decode), `IMAGE_LOW_RES` (front
+  picture below 150 dpi at its placed size; the editor warns below 200),
+  `PAGE_SIZE` (wrong page count/size or extra page boxes), `FONTS` (vendored
+  faces missing, or a font not embedded / Type 3 in the PDF; checked with
+  pdf-lib, the image has no poppler), `BAD_INPUT` (malformed envelope: not
+  JSON, bad ids/enum values, unsafe asset name or URL, `outputPrefix` outside
+  `print-orders/` or without the orderId, card document that fails
+  `parseCardData`). All envelope problems are 422 `BAD_INPUT`, except a body
+  over 1 MB (`413`).
+- **`401`** `{ ok: false, code: "UNAUTHORIZED" }` bad/missing HMAC.
+- **`5xx`** `{ ok: false, code }` infra: `ASSET_FETCH_FAILED` (502, the asset
+  store errored/timed out), `UPLOAD_FAILED` (502, R2 write failed),
+  `RENDER_FAILED` / `INTERNAL_ERROR` (500).
+
+`validate` runs the whole pipeline (download, Chromium, pdf-lib checks) and
+just skips the upload, so a `200` means "this would print". The pipeline lives
+in `src/card.ts`; the print itself is book-renderer's `renderCardPdf()` with
+its `inline` source (`scripts/lib/renderCardPdf.ts`), the same code the local
+`npm run card:pdf` uses (that CLI reads `card-data/<slug>/` from disk and also
+shells out to poppler for its extra raster/report output; the service does
+not). Env: `BOOK_RENDERER_CARD_DIST_DIR` (default
+`/app/book-renderer/dist-card`, the `vite.card.config.ts` build the Dockerfile
+makes next to `dist-print`).
+
+Latency: a warm render is ~2-3 s; after scale-to-zero the first request also
+pays the 15-20 s cold start (see `fly.toml`), so give the caller a >= 60 s
+timeout. Fly's `hard_limit = 1` keeps one render per machine.
+
 ### `GET /status/:attemptId?orderId=<uuid>`
 
 ```jsonc
@@ -135,9 +210,13 @@ docker run --rm memory-book-renderer \
   find /app -not -path '*/node_modules/*' \( -name manifest.json -o -name book.outline.json \)
 ```
 
-Both commands must print nothing. `test/pii-image.test.ts` runs exactly this
-check as part of the test suite (a real `docker build` + `docker run`, not a
-config-level assertion).
+Both commands must print nothing, and neither may `card-data` (the holiday
+card's real family photos/letters, gitignored): `find /app/book-renderer -type
+d -iname card-data` must also print nothing. `book-renderer/.dockerignore`
+excludes both `book-data/` and `card-data/` from the named context, and the
+Dockerfile additionally fails the build if either directory exists in it.
+`test/pii-image.test.ts` runs exactly these checks as part of the test suite
+(a real `docker build` + `docker run`, not a config-level assertion).
 
 ### Parity proof
 
@@ -225,7 +304,8 @@ rather than relying on flyctl's own build step.
 ## Tests
 
 ```bash
-npm test          # unit/contract suite, incl. a real docker build+run (PII check)
+npm test          # unit/contract suite, incl. a real docker build+run (PII check); test/renderCard.e2e.test.ts
+                  # rebuilds book-renderer's dist-card and prints a synthetic card with real Chromium (skipped without Chrome)
 npm run parity-proof   # separate, slower, real-R2 acceptance script (not part of `npm test`)
 ```
 

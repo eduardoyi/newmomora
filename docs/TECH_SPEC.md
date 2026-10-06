@@ -990,7 +990,7 @@ holiday music beds, and `film_share_tokens` for the public film page; see
 |---|---|
 | `kind` | `birthday` (needs `family_member_id` + `age_year` 1–12) · `family_month` · `family_year` · `family_holiday` (the holiday-card film, docs/plans/holiday-cards.md; operator/on-demand rows only: always `forced`, never created or listed by `year_film_due` / `year_film_candidate_rows`, hidden from members by the `not forced` policy, never announced) |
 | `scope_start_date`, `scope_end_exclusive` | frozen at insert; same convention as the TS scopes |
-| `status` | `queued → curating → preparing → rendering → ready`; terminal `skipped`, `failed` |
+| `status` | `queued → curating → preparing → rendering → ready`; terminal `skipped`, `failed`, and `ended` (holiday-card films only: set by `end_holiday_card_film` when a card is deleted; skipped by every scheduler/recovery/invalidation path — see §2.1i) |
 | `blocked` / `stale` | never serve the current video / a re-render is wanted (current video OK) |
 | `film_script`, `quote_candidates`, `ai_checks`, `edits`, `edits_version`, `music_bed_id`, `language`, `pool_cutoff_at` | curation state; quotes, language and pool cut-off are sticky after the first curate |
 | `referenced_memory_ids`, `referenced_asset_keys`, `referenced_member_ids`, `referenced_portrait_version_ids`, `quoted_memory_text_hashes` | stamped at curate (GIN) for invalidation and the publish check |
@@ -1115,6 +1115,93 @@ in-flight films. `ai_usage_events.operation` adds `year_film_quote`,
   the P1 check `removed <@ referenced_memory_ids` rejected every later save
   that re-sent the set). `blocked` is still only raised for NEW removals.
 - `hideNames` is not built (the render pipeline has no support for it).
+
+### 2.1i Holiday Cards (P1 database)
+
+Plan: [docs/plans/holiday-cards-p1.md](plans/holiday-cards-p1.md) (§2 owner decisions
+2026-10-06, §4 data model) · parent [docs/plans/holiday-cards.md](plans/holiday-cards.md).
+Migration `20261006120000_holiday_cards.sql`; pgTAP `supabase/tests/holiday_cards.sql`;
+rollback `supabase/rollbacks/20261006120000_holiday_cards_down.sql` (applied by hand,
+never by `db push`). US/CA only, **one card per family per year** (the slot stays used
+after a soft delete), no letter regenerations, no film refreshes, no illustrated front,
+greeting fixed at creation, the card film is card-only (never in Keepsakes/Timeline).
+
+**`holiday_cards`** — `id`, `family_id` (cascade), `created_by` (set null), `year`
+(2020–2100), `status` (`generating | ready | failed`), `language` (`en | es`, default
+`en`), `locale`, `film_id` (→ `year_films`, set null; unique), `share_token` (22-char
+base62, unique, minted with the film), `greeting` (`christmas | holidays | new-year`;
+single source for the film end card and the editor), `front_candidates jsonb`,
+`letters jsonb`, `qr_caption`, `signature`, `editor_facts jsonb`, `edits jsonb` +
+`edits_version int` (optimistic-concurrency CAS), `generation_attempts`,
+`last_failure_code`, the generation lease `workflow_instance_id` / `attempt_id` /
+`heartbeat_at`, `created_at`, `updated_at`, `deleted_at`. **Unique index
+`(family_id, year)` including soft-deleted rows.** `film_state` is derived on read
+(join `year_films`), never stored. Client access: column-level `select` on everything
+**except `editor_facts` and the lease columns**; RLS select =
+`has_family_role(family_id, ['owner','manager'])` and `deleted_at is null`; restrictive
+anonymous-deny; no client INSERT/UPDATE/DELETE (service role / definer RPCs only).
+Lease transitions (`workflow_instance_id`, `attempt_id`, `heartbeat_at`, `status`,
+`front_candidates`, `letters`, `editor_facts`, …) are plain service-role writes by the
+generation Workflow's bridge ops and the sweep.
+
+**`holiday_card_orders`** — `id`, `card_id` (→ `holiday_cards`, **on delete set null**),
+`family_id` (cascade), `requested_by` (set null), `status` (`draft → quoted → checkout →
+paid → submitted → in_production → shipped`, `failed`, `cancelled`; no `delivered`),
+`region`, `format`, `product_uid`, `file_layout`, `packs` (10-card packs), `currency`,
+`price_cents`, `gelato_cost_cents` (internal), `shipping_address jsonb`, `card_snapshot
+jsonb` + `snapshot_hash` (frozen at `create_checkout`), `print_files jsonb`,
+`gelato_order_id` (the draft, created at checkout), `gelato_status`, `tracking_number`,
+`tracking_url`, `carrier`, `shipped_at`, `stripe_session_id` (unique),
+`stripe_payment_intent_id` (indexed for refund lookup), `refunded_at`, `failure_reason`,
+timestamps. Constraints: `quoted`+ carry `price_cents`, `packs`, `shipping_address`;
+`checkout`+ carry `card_snapshot` and `snapshot_hash`; `failed` carries a reason.
+RLS like `memory_book_orders`: SELECT buyer-only (`requested_by = auth.uid()`); INSERT a
+bare draft by an owner/manager of the family claiming themselves as buyer, `card_id`
+must be a live card of that family, every server field null (the WITH CHECK pattern);
+no client UPDATE/DELETE. **Grants are column-level** (unlike the book table):
+`gelato_cost_cents` and `print_files` are never readable by clients, and a client
+INSERT can only name `id, card_id, family_id, requested_by` — so clients must name
+columns in `select(...)` / `insert(...).select(...)` (no `*`). Other managers learn of an
+open checkout only through the card's `has_open_checkout` (Step 3 `get`).
+
+**`year_films` additions.** New terminal `status = 'ended'` (CHECK widened). Every
+scheduler path already filters by an explicit status list that excludes it
+(`claim_year_film_dispatch`, `year_film_promote_requeues`, `year_film_recover`,
+`year_film_recheck_skipped`, and the heartbeat/publish/end-cycle CAS functions need an
+in-flight status and a matching `attempt_id`); `year_film_invalidate` gets an explicit
+`status <> 'ended'`. "Year films: select" keeps its original branch and adds: owners/
+managers may read a film referenced by a non-deleted `holiday_cards.film_id` of their
+family (column grants unchanged — no keys or scripts). `save_year_film_edits` now refuses
+a `forced` film (`42501`, like `get_year_film_edit_options`).
+
+**Service-role RPCs** (`revoke all … from public, anon, authenticated`; `grant execute
+… to service_role`; definer, empty `search_path`):
+
+| Function | Returns | Notes |
+|---|---|---|
+| `create_holiday_card(p_family_id uuid, p_user_id uuid, p_year int, p_greeting text, p_language text, p_locale text)` | `holiday_cards` row | Idempotent per (family, year): returns the existing card (greeting never changes). `42501` if `p_user_id` is not an owner/manager of a live family; `23505` `holiday_card_slot_used` if the slot is held by a soft-deleted card. A fresh card is `generating`, `generation_attempts = 0`. |
+| `save_holiday_card_edits(p_card_id uuid, p_expected_version int, p_edits jsonb)` | new `edits_version` (int) | Replaces `edits`. `40001` `edits_version_mismatch`; `55000` `holiday_card_checkout_open` (an order is in `checkout`); `22023` `invalid_edits`; `P0002` `holiday_card_not_found`. |
+| `increment_holiday_card_generation_attempt(p_card_id uuid, p_cap int)` | new count, or `NULL` at the cap / missing / deleted | Atomic `update … where generation_attempts < cap returning`. `NULL` = do not dispatch. |
+| `create_holiday_card_film(p_card_id uuid, p_scope_start date, p_scope_end date, p_greeting text, p_close_media uuid[])` | `table(film_id uuid, token text)` | One transaction, card row locked `FOR UPDATE`. If `film_id` is already set: no-op, returns the existing film and the card's token. Else inserts the forced `family_holiday` row (`queued`; `language` = card language; `edits = {"greeting", "preferredCloseMedia"}`; `p_scope_end` is exclusive), mints the token, links both. `22023` `greeting_mismatch` if `p_greeting` ≠ the card's; `P0002`. |
+| `claim_year_film_by_id(p_film_id uuid)` | `table(film_id, attempt_id, family_id)` | The cron CAS (`queued → curating`, same attempt/lease fields, same `next_attempt_at`/`requeue_after` spacing and `year_film_family_enabled` gate) for one **forced + queued** row. **Zero rows is a normal outcome** (the cron won, rollout excludes the family, spacing, ended). |
+| `end_holiday_card_film(p_card_id uuid)` | `jsonb {ended, film_id, delete_keys[]}` | `ended` status, `attempt_id` cleared, `video/poster/scenes` keys nulled + `cleanup_needed` (the existing cleanup releases the artifacts; `delete_keys` lets the caller delete at once), token revoked. Idempotent. Soft-deletes nothing else. Only touches the card's own forced `family_holiday` film (`22023` `not_a_card_film` otherwise). |
+
+The generation Workflow reuses `year_film_bridge_nonces` /
+`record_year_film_bridge_nonce` (no new nonce table). `holiday_card_new_share_token()` is
+an internal helper (no grants).
+
+**Also in the migration.** `ai_usage_events_operation_check` adds
+`holiday_card_front_judge`, `holiday_card_voice`, `holiday_card_details`,
+`holiday_card_editor`, `holiday_card_writer`, `holiday_card_quote_check` (telemetry
+only; see [usage-limits](features/usage-limits.md)). `claim_family_deletion_fence`
+(re-declared; **compare production's `pg_get_functiondef` with
+`20260929120000_year_films.sql` before `db push` — drift risk**) also locks the family's
+cards/orders and refuses (`55000`) while a card is `generating` with a heartbeat under
+20 minutes old, or a card order is `paid`/`submitted` and `gelato_status` is not yet
+`passed` or later (`printed`, `shipped`, `delivered`, `failed`, `canceled`);
+`in_production`/`shipped` never block. pg_cron job `invoke-sweep-holiday-card-orders`
+(every 10 minutes, Vault `project_url` + `cron_secret`) calls the
+`sweep-holiday-card-orders` Edge Function (not yet deployed).
 
 ### 2.2 Indexes
 
@@ -2086,7 +2173,7 @@ The selected asset is the first video, otherwise the first audio, otherwise the 
 The current model is **one active token per memory**, not per book. Exports reuse that active token, so revoking it disables every printed copy using it. A later export can mint a fresh token after revocation, but independently revocable book copies require a future schema/export change.
 
 
-**Table `film_share_tokens`** (migration `20261005120000_family_holiday_film_share.sql`, holiday cards C5): `token` (text PK, `check (token ~ '^[A-Za-z0-9]{22}$')`, application-generated like `media_share_tokens`), `film_id` (FK → `year_films`, cascade), `created_at`, `revoked_at` (null = active; partial unique index `film_share_tokens_active_film_key` = one active token per film). RLS: select-only for `authenticated` through `year_films` (the policy's join runs under the caller's own `year_films` RLS, so a member sees a token only for a film they can see; forced films, including every holiday film, keep their tokens service-role only), plus a restrictive anonymous-deny policy; grants mirror `media_share_tokens` (`revoke all` from `anon`/`authenticated`, `grant select` to `authenticated`); no client writes. Minted by service-role scripts / the future holiday-cards pipeline (`supabase/scripts/publish-holiday-film-sample.ts` for the owner's sample card). Family and account deletion cascade through `year_films` (no extra sweep, same as `media_share_tokens`).
+**Table `film_share_tokens`** (migration `20261005120000_family_holiday_film_share.sql`, holiday cards C5): `token` (text PK, `check (token ~ '^[A-Za-z0-9]{22}$')`, application-generated like `media_share_tokens`), `film_id` (FK → `year_films`, cascade), `created_at`, `revoked_at` (null = active; partial unique index `film_share_tokens_active_film_key` = one active token per film). RLS: select-only for `authenticated` through `year_films` (the policy's join runs under the caller's own `year_films` RLS, so a member sees a token only for a film they can see; forced films, including every holiday film, keep their tokens service-role only — except a card's own film, which owners/managers can read through the card-film branch of the `year_films` policy, §2.1i), plus a restrictive anonymous-deny policy; grants mirror `media_share_tokens` (`revoke all` from `anon`/`authenticated`, `grant select` to `authenticated`); no client writes. Minted by service-role scripts / the future holiday-cards pipeline (`supabase/scripts/publish-holiday-film-sample.ts` for the owner's sample card). Family and account deletion cascade through `year_films` (no extra sweep, same as `media_share_tokens`).
 
 The same `workers/memory-viewer` Worker serves the **public film page**, resolving `film_share_tokens` → `year_films` with the service role on every request (details: `workers/memory-viewer/README.md` "Public film page"):
 
@@ -3531,13 +3618,38 @@ family owner), `heartbeat`, `set_status`, `record_machine`,
 `409 { state }` when the attempt is superseded, the epoch moved, or the
 rollout is off. Logs: ids and codes only.
 
+**Holiday card ops (Holiday Cards P1).** Body `{ operation, cardId,
+attemptId, … }`, same HMAC + nonce ledger, called by the worker's
+`HolidayCardWorkflow`. `card_start` claims the card lease (`attempt_id =
+workflow_instance_id = attemptId`, `heartbeat_at`) only while the card is live
+and `generating` and the previous lease is empty, stale (> 20 min) or this
+attempt; otherwise `{ state }` and the Workflow stops quietly. Every later
+`card_*` op refreshes the heartbeat with the attempt in its own `UPDATE` and
+answers `409 { state: 'deleted' | 'superseded' }` otherwise:
+`card_heartbeat`, `card_load_context { today }` (card + caption instructions +
+family rows from the earlier of Dec 1 of the previous year / today − 12
+months), `card_load_media { mediaIds ≤ 200 }` (family-scoped),
+`card_save_front` (ids, numbers and enums only — model text never stored),
+`card_create_film { scopeStart, scopeEnd, closeMedia }`
+(`create_holiday_card_film` with the card's own greeting), `card_claim_film`
+(`claim_year_film_by_id` for the card's own film), `card_end_film_cycle {
+filmAttemptId }` (`year_film_end_cycle(…, 'aborted', 'DISPATCH_FAILED')`),
+`card_save_letters` (sanitized `letters`, `qr_caption` — null without a film —,
+`signature`, `editor_facts`), `card_record_usage` (only the six
+`holiday_card_*` operations), `card_finish { outcome: 'ready' | 'failed',
+code }` (clears the lease).
+
 ### 4.29 `get-year-film-url`
 
 JWT (permanent accounts). Body `{ filmId }` → `{ videoUrl, posterUrl,
 scenesUrl, durationMs, expiresIn: 900 }`. Any family member once surfaced;
 owners/managers earlier. 404 `not_found` for missing, not-a-member (no
 oracle) or **forced** (operator/canary) films, 409 `film_unavailable` for
-blocked or unpublished films.
+blocked or unpublished films. **Exception (Holiday Cards P1):** a forced film
+is served to an owner/manager of its family when a non-deleted
+`holiday_cards` row of that family has `film_id` = the film (single and batch
+modes); viewers, other families, deleted cards and card-less forced films keep
+the 404.
 
 **Batch mode (Year Film P2).** Body `{ filmIds: string[] }` (1–50 uuids,
 deduped; anything else is 400 `validation_error`) → `{ posters: { [filmId]:
@@ -3551,6 +3663,88 @@ owner/manager early preview in batch mode). Anything else is omitted from
 `posters`, never an error. Films rendered before the thumb-writing renderer
 image have no thumb object (the presigned URL would 404); none exist in
 production after the canary cleanup.
+
+### 4.30 `holiday-cards` (Holiday Cards P1)
+
+JWT; owner or manager of the card's family for every op (`disable_link`:
+owner only). Billing write gate (`checkBillingFamilyWrite`, 403
+`SUBSCRIPTION_REQUIRED`) on `create` and `save_edits` only. Body `{ op, … }`;
+errors `{ error, code }`. Full behaviour: [holiday-cards.md](./features/holiday-cards.md).
+
+| Op | Request | Response / errors |
+|---|---|---|
+| `create` | `{ familyId, greeting: 'christmas' \| 'holidays' \| 'new-year', timezone? }` | 201 new / 200 existing `{ success, created, card, generation: { state, failureCode, attempts, dispatched }, regionWarning }`. `create_holiday_card` (one card per family per year); dispatches generation once (attempt 1 via `increment_holiday_card_generation_attempt`). `regionWarning: true` when the timezone isn't US/CA — never blocking (the address at quote is the gate). 409 `holiday_card_slot_used` (a soft-deleted card holds the year). |
+| `get` | `{ cardId }` | `{ card, film: { state: none\|rendering\|ready\|blocked\|failed, filmId, readyAt }, qrUrl, linkDisabled, frontCandidates[] (signed 1 h previews), frontImage, hasOpenCheckout, isOrdered, generation }`. Never returns the token, `editor_facts` or lease columns. |
+| `picker_pool` | `{ cardId, cursor?, limit? ≤ 50 }` | `{ items: [{ memoryId, mediaId, previewKey, date, aspectRatio }], nextCursor }` — family photos Dec 1 (year − 1) → today, sensitive/reported excluded. |
+| `save_edits` | `{ cardId, expectedVersion, edits }` | `{ success, editsVersion, edits }` (normalized; `choices.greeting` stripped). Media ids must belong to the family (404 `MEDIA_NOT_FOUND`); a new front is measured by ranged GET (422 `front_unreadable` / `front_low_resolution`). 409 `edits_version_mismatch { currentVersion }`, 423 `holiday_card_checkout_open`. |
+| `delete` | `{ cardId }` | `{ success, deleted, filmEnded }`. 409 `card_ordered` (any order paid or later), 423 while a checkout is open. Soft delete → `end_holiday_card_film` → delete that film's R2 keys. The year's slot stays used. |
+| `disable_link` | `{ cardId, confirm: true }` | Owner only. Revokes the card's share token even when ordered. `{ success, revoked, reason: null \| 'no_link' \| 'already_disabled' }`. |
+
+No letter regeneration, film refresh or greeting change (owner, 2026-10-06).
+
+### 4.31 `holiday-card-orders` (Holiday Cards P1)
+
+JWT; owner/manager of the order's family + billing write gate on every
+mutating op; orders are buyer-only (404 `ORDER_NOT_FOUND` otherwise). US + CA
+only, 5R, USD, $2.49/card shipping included, packs 2/3/5/10.
+
+| Op | Request | Effect |
+|---|---|---|
+| `create_draft` | `{ cardId }` | 201 `{ orderId, status: 'draft' }` (200 when an open draft exists). 409 `CARD_NOT_READY`. |
+| `quote` | `{ orderId, address: { name, line1, line2?, city, state, postalCode, countryCode }, packs }` | Gelato quote + deliverability + max-cost guard; CAS draft/quoted → `quoted` (clears earlier checkout progress, deletes an old draft/files). 422 `COUNTRY_NOT_SUPPORTED` / `NOT_DELIVERABLE` / `OVER_COST_GUARD`. Never returns costs. |
+| `create_checkout` | `{ orderId }` | QR gate (QR off when no token, token revoked or `choices.qr === false`; on → film must be ready, not blocked) → snapshot + hash → `/render-card` (render) → Gelato **draft** (`orderReferenceId = orderId`) → Stripe Checkout (metadata on session **and** payment intent: `{ productType: 'holiday_card', orderId, snapshotHash }`) → `checkout`. Resumable and idempotent (no second render/draft). 422 render/snapshot codes leave the order `quoted`. |
+| `cancel_checkout` | `{ orderId }` | Expires the session, `cancelled`, deletes draft + files (lets the parent edit again). |
+| `status` | `{ orderId }` | Status, packs, price, Gelato status, tracking, `shippedAt`, `failureReason`, `refunded`. |
+
+`stripe-webhook` routes `checkout.session.completed` / `expired` by
+`metadata.productType` (absent → Memory Book, unchanged); `charge.refunded`
+looks the payment intent up in both order tables. Card `completed` verifies
+amount, currency, address, session and snapshot hash, CAS `checkout → paid`,
+then confirms the Gelato draft (PATCH only while it is still a draft) →
+`submitted` (webhook `waitUntil`, sweep as fallback).
+
+### 4.32 `sweep-holiday-card-orders` (Holiday Cards P1)
+
+`verify_jwt = false`, `x-cron-secret`, pg_cron every 10 min. Passes: confirm
+paid orders (reads the PaymentIntent first — refunded before confirm →
+cancelled; partial refund → held + alert; alert at 30 min, `failed` at 6 h);
+finish refunds (retry the Gelato delete/cancel for refunded orders still
+active); track submitted/in-production (passed/printed → `in_production`,
+shipped + tracking → `shipped` + email, failed/canceled → `failed` + owner
+alert; `on_hold` alerts once and keeps polling); age `quoted`/`checkout` after
+48 h; retention of `print-orders/<orderId>/` (30 days after `shipped_at`; at
+once for never-paid failed/cancelled; paid-then-failed kept until refunded or
+30 days); re-dispatch cards stuck in `generating` and retry `failed` cards
+with a retryable code after 10 min (cap 3 via
+`increment_holiday_card_generation_attempt`; `NO_LETTERS` and
+`generation_attempts_exhausted` are terminal); hourly alert when an ordered
+card's film is failed/ended/lost its video (once, marker
+`ordered_film_unavailable`).
+Fulfilment ignores `families.deleted_at` for paid orders.
+
+### 4.33 Holiday card workers and render route (Holiday Cards P1)
+
+- **`cloudflare/year-film-worker`** hosts `HolidayCardWorkflow` (binding
+  `HOLIDAY_CARD_WORKFLOW`). `POST /holiday-cards/generate { cardId, attemptId
+  }` is signed exactly like `/dispatch` (`DISPATCH_SIGNING_SECRET`; callers use
+  `_shared/year-film-worker-dispatch.ts` `postSignedToYearFilmWorker`); 202
+  (also for a duplicate instance). Steps: `init` → front probe/judge/store →
+  film setup/claim/start (starts `YEAR_FILM_WORKFLOW` through its binding) →
+  letters prepare/write (pool digest, no film wait) → `finish`. Failure codes:
+  `CONTEXT_LOAD_FAILED`, `FRONT_PICK_FAILED`, `FILM_SETUP_FAILED`,
+  `LETTERS_FAILED`, `NO_LETTERS`, `UNKNOWN_ERROR`.
+- **Film plumbing**: `planFilm` passes the row's `edits.greeting` and
+  `edits.preferredCloseMedia` into `buildHolidayScript`; a `family_holiday`
+  film that has published before skips the floors (an empty pool is still
+  `EMPTY_POOL`).
+- **`render/memory-book-renderer` `POST /render-card`** (HMAC like the book
+  routes): `{ orderId, mode: 'validate' | 'render', format: '5R' | 'A5',
+  fileLayout: 'two_files' | 'one_pdf', card, edits, assets: { file: presignedUrl },
+  outputPrefix: 'print-orders/<orderId>/<snapshotHash[0:16]>/' }` → 200 `{ ok, mode, files: [{ side,
+  key, sha256, bytes }], checks }` or 422 `{ code: LETTER_OVERFLOW | SAFE_MARGIN
+  | IMAGE_MISSING | IMAGE_LOW_RES | PAGE_SIZE | FONTS | BAD_INPUT }`. Synchronous;
+  front floor 150 dpi; no TrimBox/BleedBox; pdf-lib checks (no poppler in the
+  image). Callers: `_shared/render-card-client.ts`.
 
 ---
 
@@ -3836,6 +4030,8 @@ per family, not per user). No style picker UI.
 | `CRON_SECRET` | Shared secret for cron-triggered functions |
 | `SENTRY_DSN` | Optional. Sentry `momora-edge-functions` DSN; when set, `_shared/sentry.ts` reports uncaught errors and `console.error` calls ([observability.md](./features/observability.md)) |
 | `EXPORT_EMAIL_BRIDGE_SECRET` | HMAC secret shared with the export Worker for `send-export-email` |
+| `GELATO_API_KEY` | Gelato Order API key (holiday card quotes, drafts, confirmation, tracking). Edge Functions only. |
+| `HOLIDAY_CARD_CHECKOUT_ORIGIN` | Optional. Origin for holiday card Checkout success/cancel URLs (`/c/<cardId>?order=…`); falls back to `MEMORY_BOOK_CHECKOUT_ORIGIN`. |
 | `MEMORY_BOOK_PAUSED_SCOPE_FAMILY_ALLOWLIST` | Optional. Comma-separated family ids (trimmed) exempt from `generate-memory-book`'s `PAUSED_SCOPE_KINDS` pause (a paused kind returns 409 `SCOPE_PAUSED` for everyone else). `PAUSED_SCOPE_KINDS` is currently EMPTY — `everything` was un-paused for all families 2026-10-01 — so the secret is unset and only matters if a kind is paused again. Unset/empty/malformed = nobody. |
 | `R2_ACCOUNT_ID` | Cloudflare account ID |
 | `R2_ACCESS_KEY_ID` | R2 S3 API access key |

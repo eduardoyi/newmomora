@@ -14,6 +14,11 @@
  *
  * Neither mode serves a blocked film (content the family removed or
  * reported), a forced (operator canary) film, or one without a published video.
+ * The one exception to the forced rule is a HOLIDAY CARD film
+ * (docs/plans/holiday-cards-p1.md Step 7): a forced `family_holiday` film that
+ * a non-deleted `holiday_cards` row of the same family points at is served to
+ * that family's owners and managers only (never to viewers, never in the
+ * batch for anyone else). Every other rejection is unchanged.
  */
 import { getAuthenticatedNonAnonymousUser } from '../_shared/auth.ts';
 import { handleCors } from '../_shared/cors.ts';
@@ -55,6 +60,8 @@ export interface GetYearFilmUrlDeps {
   /** The caller's role per family (films in a batch may span families). */
   getRoles: (familyIds: string[], userId: string) => Promise<Map<string, string | null>>;
   presign: (keys: string[], ttl: number) => Promise<Record<string, string>>;
+  /** Non-deleted holiday cards that reference any of `filmIds` (their film id and family). */
+  liveCardFilms: (filmIds: string[]) => Promise<{ film_id: string; family_id: string }[]>;
   now: () => Date;
 }
 
@@ -89,8 +96,11 @@ export async function handleGetYearFilmUrl(req: Request, deps: GetYearFilmUrlDep
   if (!film) return errorResponse('Film not found', 404, 'not_found');
   const role = await deps.getRole(film.family_id, user.id);
   if (!role) return errorResponse('Film not found', 404, 'not_found');
-  // Operator canary films are invisible to the app, like a missing film.
-  if (film.forced) return errorResponse('Film not found', 404, 'not_found');
+  // Operator canary films are invisible to the app, like a missing film --
+  // except a card's own film, for the family's owners/managers.
+  if (film.forced && !(await isManagerOfCardFilm(deps, filmId, film.family_id, role))) {
+    return errorResponse('Film not found', 404, 'not_found');
+  }
   if (film.blocked || !film.video_key || !film.poster_key) return errorResponse('Film not available', 409, 'film_unavailable');
   if (!isSurfaced(film, deps) && role !== 'owner' && role !== 'manager') return errorResponse('Film not found', 404, 'not_found');
 
@@ -103,6 +113,22 @@ export async function handleGetYearFilmUrl(req: Request, deps: GetYearFilmUrlDep
     durationMs: film.duration_ms,
     expiresIn: FILM_URL_TTL_SECONDS,
   });
+}
+
+function isManagerRole(role: string | null): boolean {
+  return role === 'owner' || role === 'manager';
+}
+
+/** True when `filmId` is the film of a live holiday card of `familyId` and the caller manages that family. */
+async function isManagerOfCardFilm(
+  deps: GetYearFilmUrlDeps,
+  filmId: string,
+  familyId: string,
+  role: string | null,
+): Promise<boolean> {
+  if (!isManagerRole(role)) return false;
+  const cards = await deps.liveCardFilms([filmId]);
+  return cards.some((card) => card.film_id === filmId && card.family_id === familyId);
 }
 
 function isSurfaced(film: FilmUrlRow, deps: GetYearFilmUrlDeps): boolean {
@@ -121,11 +147,19 @@ async function handleBatch(rawIds: unknown, userId: string, deps: GetYearFilmUrl
   const films = await deps.loadFilms(ids);
   const roles = await deps.getRoles([...new Set(films.map((f) => f.family_id))], userId);
 
+  // Card films are forced; only look them up when the batch has a forced film
+  // the caller manages (the common batch never pays this query).
+  const forcedManaged = films.filter((f) => f.forced && isManagerRole(roles.get(f.family_id) ?? null));
+  const cardFilms = forcedManaged.length > 0 ? await deps.liveCardFilms(forcedManaged.map((f) => f.id)) : [];
+  const isLiveCardFilm = (film: FilmUrlRow & { id: string }) =>
+    cardFilms.some((card) => card.film_id === film.id && card.family_id === film.family_id);
+
   const signable: { id: string; thumbKey: string }[] = [];
   for (const film of films) {
     // Unknown/forbidden/not-servable ids are simply omitted (no oracle).
     if (!roles.get(film.family_id)) continue;
-    if (film.blocked || film.forced || !film.video_key || !film.poster_key) continue;
+    if (film.forced && !(isManagerRole(roles.get(film.family_id) ?? null) && isLiveCardFilm(film))) continue;
+    if (film.blocked || !film.video_key || !film.poster_key) continue;
     if (!isSurfaced(film, deps)) continue;
     const thumbKey = posterThumbKey(film.poster_key);
     if (thumbKey) signable.push({ id: film.id, thumbKey });
@@ -165,6 +199,15 @@ if (import.meta.main) {
       getRole: (familyId, userId) => getCallerFamilyRole(supabase, familyId, userId),
       getRoles: (familyIds, userId) => getCallerFamilyRoles(supabase, familyIds, userId),
       presign: createPresignedGetUrls,
+      liveCardFilms: async (filmIds) => {
+        const { data, error } = await supabase
+          .from('holiday_cards')
+          .select('film_id, family_id')
+          .in('film_id', filmIds)
+          .is('deleted_at', null);
+        if (error) throw error;
+        return (data ?? []) as { film_id: string; family_id: string }[];
+      },
       now: () => new Date(),
     });
   });

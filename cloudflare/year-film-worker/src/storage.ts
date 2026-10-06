@@ -49,3 +49,34 @@ export function createStorage(bucket: R2Bucket): Storage {
     },
   };
 }
+
+/** Holiday card attempt files (the prepared letters between Workflow steps)
+ * live under `{ownerId}/holiday-cards/{cardId}/{attemptId}/` so the
+ * owner-prefix account deletion sweep covers them; the Workflow deletes the
+ * prefix when it ends. */
+export function cardAttemptPrefix(ownerId: string, cardId: string, attemptId: string): string {
+  return `${ownerId}/holiday-cards/${cardId}/${attemptId}/`;
+}
+
+/** Original/preview photo reads for the card front picks (ImageReaderPort of
+ * _shared/holiday-card-generate-ports.ts). Never throws: a missing or
+ * unreadable object is null (the probes then treat it as unmeasurable). */
+export interface ImageReader {
+  readRange(key: string, length: number): Promise<Uint8Array | null>;
+  read(key: string): Promise<Uint8Array | null>;
+}
+
+export function createImageReader(bucket: R2Bucket): ImageReader {
+  const bytes = async (key: string, range?: { offset: number; length: number }): Promise<Uint8Array | null> => {
+    try {
+      const object = await bucket.get(key, range ? { range } : undefined);
+      return object ? new Uint8Array(await object.arrayBuffer()) : null;
+    } catch {
+      return null;
+    }
+  };
+  return {
+    readRange: (key, length) => bytes(key, { offset: 0, length }),
+    read: (key) => bytes(key),
+  };
+}

@@ -84,6 +84,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# The holiday card print build (`dist-card/`, vite.card.config.ts) is built
+# the same way, next to `dist-print/`, for POST /render-card (see README). The
+# `card-data/` directory (real family photos + letters, gitignored) is the
+# card equivalent of `book-data/`: book-renderer/.dockerignore excludes both.
+#
 # ── book-renderer: install (full, incl. devDependencies — puppeteer,
 # pdf-lib, and vite-node are ALL devDependencies there today; this image
 # needs every one of them at runtime, not just for a build step, so
@@ -91,6 +96,9 @@ WORKDIR /app
 # NODE_ENV-driven default) and build the print-only PII-safe bundle. ────────
 COPY --from=bookrenderer . /app/book-renderer
 WORKDIR /app/book-renderer
+# Fail closed if the named context ever stops honouring book-renderer/.dockerignore:
+# neither real-data directory may exist in the image at all.
+RUN if [ -e card-data ] || [ -e book-data ]; then echo "FATAL: card-data/ or book-data/ reached the build context (check book-renderer/.dockerignore)" >&2; exit 1; fi
 RUN npm ci --include=dev
 # NOT `npm run build` (that runs the DEFAULT vite.config.ts, whose
 # `publicDir: 'book-data'` is exactly what this whole build context
@@ -98,6 +106,9 @@ RUN npm ci --include=dev
 # dedicated, PII-safe config (publicDir: false, print.html entry only,
 # dist-print/ output — see that file's own header comment).
 RUN npx vite build --config vite.print.config.ts
+# Holiday card print entry (card-print.html only, publicDir: false — see
+# vite.card.config.ts), also built at image build time, never at request time.
+RUN npx vite build --config vite.card.config.ts
 
 # ── render worker's own server ──────────────────────────────────────────
 # WORKDIR mirrors this repo's own local layout EXACTLY
@@ -119,6 +130,7 @@ COPY src ./src
 
 ENV PORT=8080
 ENV BOOK_RENDERER_DIST_DIR=/app/book-renderer/dist-print
+ENV BOOK_RENDERER_CARD_DIST_DIR=/app/book-renderer/dist-card
 # Fly `hard_limit = 1` (fly.toml) already ensures one request per machine;
 # this is Puppeteer's own internal page-render worker-pool size within that
 # one request (renderBookPdfs()'s own `concurrency` option, unchanged from

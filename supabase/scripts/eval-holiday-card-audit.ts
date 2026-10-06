@@ -47,6 +47,8 @@
  */
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { getTopicById } from '../functions/_shared/memory-topics.ts';
+import { measurePhotos as measurePhotosRanged } from '../functions/_shared/holiday-card-generate-front.ts';
+import type { ImageReaderPort } from '../functions/_shared/holiday-card-generate-ports.ts';
 import { createPresignedGetUrls, getR2Config } from '../functions/_shared/r2.ts';
 import {
   addDays,
@@ -399,56 +401,24 @@ async function loadFamilyData(supabase: AuthedClient, family: FamilyRow): Promis
   return { family, members: (members ?? []) as MemberRow[], memories, milestones };
 }
 
-// ── Pixel probe (ranged reads; mirrors memory-book-worker/src/dimensions.ts) ─
+// ── Pixel probe (ranged reads: the production module) ───────────────────
 
-const PROBE_BYTES = 256 * 1024;
-const PROBE_FALLBACK_BYTES = 4 * 1024 * 1024;
-const PROBE_CONCURRENCY = 8;
-
-async function runPool<T>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<void>) {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      await fn(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-}
-
-async function probeDimensions(url: string): Promise<{ width: number; height: number } | null> {
-  const { imageSize } = await import('npm:image-size@1.2.1');
-  for (const bytes of [PROBE_BYTES, PROBE_FALLBACK_BYTES]) {
-    try {
-      const response = await fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` } });
-      if (!response.ok && response.status !== 206) return null;
-      const buffer = new Uint8Array(await response.arrayBuffer());
-      const { width, height, orientation } = imageSize(buffer);
-      if (!width || !height) continue;
-      // EXIF orientations 5-8 rotate the stored pixels by 90 degrees.
-      return orientation && orientation >= 5 ? { width: height, height: width } : { width, height };
-    } catch {
-      // Header not complete in this range: try the larger one.
-    }
-  }
-  return null;
-}
+/** R2 over presigned URLs (the card Workflow uses its bucket binding). */
+const r2Images: ImageReaderPort = {
+  async readRange(key, length) {
+    const url = (await createPresignedGetUrls([key]))[key];
+    if (!url) return null;
+    const response = await fetch(url, { headers: { Range: `bytes=0-${length - 1}` } });
+    if (!response.ok && response.status !== 206) return null;
+    return new Uint8Array(await response.arrayBuffer());
+  },
+  read: () => Promise.resolve(null), // the audit never reads whole objects
+};
 
 async function measurePhotos(objectKeys: string[]): Promise<Map<string, { width: number; height: number } | null>> {
   getR2Config(); // fail fast with a clear error when R2 env is missing
-  const results = new Map<string, { width: number; height: number } | null>();
-  let done = 0;
-  for (const keys of chunk(objectKeys, 100)) {
-    const urls = await createPresignedGetUrls(keys);
-    await runPool(keys, PROBE_CONCURRENCY, async (key) => {
-      const url = urls[key];
-      results.set(key, url ? await probeDimensions(url) : null);
-      done += 1;
-      if (done % 50 === 0 || done === objectKeys.length) console.log(`  ... pixel probe ${done}/${objectKeys.length}`);
-    });
-  }
-  return results;
+  const { imageSize } = await import('npm:image-size@1.2.1');
+  return await measurePhotosRanged(objectKeys, r2Images, (bytes) => imageSize(bytes), (message) => console.log(message));
 }
 
 // ── Evaluation ───────────────────────────────────────────────────────────

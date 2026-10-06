@@ -61,6 +61,9 @@ export interface FilmAssetRef {
   previewKey: string | null;
   durationMs: number | null;
   aspectRatio: number | null;
+  /** memory_media.content_type (legacy: memories.media_content_type). The
+   * holiday card front only prints jpeg/png/webp. */
+  contentType?: string | null;
 }
 
 export interface FilmMemorySource extends FilmMemoryInput {

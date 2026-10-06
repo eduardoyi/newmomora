@@ -51,6 +51,20 @@ runner('Docker image PII safety (real docker build + run)', () => {
     expect(output).toBe('');
   });
 
+  it('contains zero card-data/ directories anywhere in the image (the holiday card equivalent: real family photos + letters)', () => {
+    const output = runFind('/app', '-type', 'd', '-iname', 'card-data');
+    expect(output).toBe('');
+  });
+
+  it('the holiday card print build (dist-card/) exists: card-print.html + hashed assets + vendored fonts, no card.json / edits.json / user pictures', () => {
+    const entries = runFind('/app/book-renderer/dist-card', '-maxdepth', '1').split('\n').filter(Boolean);
+    expect(entries).toContain('/app/book-renderer/dist-card/card-print.html');
+    expect(entries).toContain('/app/book-renderer/dist-card/assets');
+    expect(entries.some((e) => e.endsWith('/index.html') || e.endsWith('/card.html'))).toBe(false);
+    expect(runFind('/app/book-renderer/dist-card', '(', '-name', 'card.json', '-o', '-name', 'edits.json', ')')).toBe('');
+    expect(runFind('/app/book-renderer/dist-card/assets', '-iname', '*.woff2').split('\n').filter(Boolean).length).toBeGreaterThan(0);
+  });
+
   it('contains zero manifest.json / book.outline.json files anywhere outside node_modules (the two per-book data files that would mean book-data leaked in some other shape)', () => {
     const output = runFind('/app', '-not', '-path', '*/node_modules/*', '(', '-name', 'manifest.json', '-o', '-name', 'book.outline.json', ')');
     expect(output).toBe('');

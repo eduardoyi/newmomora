@@ -4,6 +4,7 @@ import { CardFront } from '../CardFront';
 import { CardSheet } from '../CardSheet';
 import { buildCardDocument, cardStats, type CardDocument } from '../document';
 import { emptyEdits, normalizeEdits, setChoices, setFrontImage } from '../edits';
+import { CardRenderError, type CardErrorCode } from '../errors';
 import { cardInputFromData } from '../fromData';
 import { createCanvasMeasure, ensureCardFonts } from '../measure';
 import { parseCardData, type CardGreetingKey, type CardOrientation, type GreetingPosition } from '../types';
@@ -23,10 +24,13 @@ import { parseCardData, type CardGreetingKey, type CardOrientation, type Greetin
  * fonts are loaded and the document is fitted; `[data-print-error]` for any hard
  * failure (missing data, letter that does not fit its readable minimum, text
  * closer to the trim than the safe margin). Fit numbers are exposed as
- * `window.__CARD_STATS__` (counts and millimetres only, never text).
+ * `window.__CARD_STATS__` (counts and millimetres only, never text). A hard
+ * failure with a known cause also sets `data-print-error-code` (see
+ * `../errors.ts`: LETTER_OVERFLOW, SAFE_MARGIN, FONTS, BAD_INPUT) so
+ * renderCardPdf can rethrow it typed.
  */
 
-type State = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; doc: CardDocument; side: 'both' | 'front' | 'back' };
+type State = { status: 'loading' } | { status: 'error'; message: string; code: CardErrorCode | null } | { status: 'ready'; doc: CardDocument; side: 'both' | 'front' | 'back' };
 
 declare global {
   interface Window {
@@ -42,11 +46,20 @@ export function CardPrintApp() {
     const q = new URLSearchParams(window.location.search);
     const slug = q.get('slug');
     (async () => {
-      if (!slug) throw new Error('missing required query param: slug');
+      if (!slug) throw new CardRenderError('BAD_INPUT', 'missing required query param: slug');
       const res = await fetch(`/${slug}/card.json`);
-      if (!res.ok) throw new Error(`card.json fetch failed: ${res.status}`);
-      const data = parseCardData(await res.json());
-      await ensureCardFonts();
+      if (!res.ok) throw new CardRenderError('BAD_INPUT', `card.json fetch failed: ${res.status}`);
+      let data: ReturnType<typeof parseCardData>;
+      try {
+        data = parseCardData(await res.json());
+      } catch (e) {
+        throw new CardRenderError('BAD_INPUT', e instanceof Error ? e.message : 'card.json is not valid');
+      }
+      try {
+        await ensureCardFonts();
+      } catch (e) {
+        throw new CardRenderError('FONTS', e instanceof Error ? e.message : 'print fonts did not load');
+      }
 
       // The saved editor state (card-data/<slug>/edits.json), unless edits=0; explicit params win.
       let edits = emptyEdits();
@@ -75,16 +88,18 @@ export function CardPrintApp() {
 
       // Hard failures: never print a letter below the readable minimum or text inside the safe margin.
       if (!doc.back.letter.fit.fits && q.get('allowOverflow') !== '1') {
-        throw new Error(`letter does not fit at its ${doc.back.letter.fit.fontPt} pt readable minimum`);
+        throw new CardRenderError('LETTER_OVERFLOW', `letter does not fit at its ${doc.back.letter.fit.fontPt} pt readable minimum`);
       }
       if (doc.safeViolations.length > 0) {
-        throw new Error(`too close to the trim: ${doc.safeViolations.map((v) => `${v.name} ${v.minDistanceMm} mm`).join(', ')}`);
+        throw new CardRenderError('SAFE_MARGIN', `too close to the trim: ${doc.safeViolations.map((v) => `${v.name} ${v.minDistanceMm} mm`).join(', ')}`);
       }
       window.__CARD_STATS__ = cardStats(doc);
       const side = (q.get('side') as 'both' | 'front' | 'back' | null) ?? 'both';
       if (!cancelled) setState({ status: 'ready', doc, side });
     })().catch((e: unknown) => {
-      if (!cancelled) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) });
+      if (!cancelled) {
+        setState({ status: 'error', message: e instanceof Error ? e.message : String(e), code: e instanceof CardRenderError ? e.code : null });
+      }
     });
     return () => {
       cancelled = true;
@@ -108,7 +123,13 @@ export function CardPrintApp() {
     };
   }, [state]);
 
-  if (state.status === 'error') return <div data-print-error={state.message}>{state.message}</div>;
+  if (state.status === 'error') {
+    return (
+      <div data-print-error={state.message} data-print-error-code={state.code ?? undefined}>
+        {state.message}
+      </div>
+    );
+  }
   if (state.status === 'loading') return <div data-print-loading="true" />;
 
   const { doc, side } = state;

@@ -488,6 +488,11 @@ verify_jwt = false
 [functions.sweep-memory-book-orders]
 verify_jwt = false
 
+# Holiday card orders sweep: pg_cron calls it with the x-cron-secret header
+# (validateCronSecret), never a user JWT.
+[functions.sweep-holiday-card-orders]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 64327

@@ -88,7 +88,7 @@ export interface StageDeps {
 interface FilmContext {
   film: {
     id: string;
-    kind: 'birthday' | 'family_month' | 'family_year';
+    kind: 'birthday' | 'family_month' | 'family_year' | 'family_holiday';
     familyId: string;
     ownerId: string;
     familyMemberId: string | null;
@@ -98,8 +98,17 @@ interface FilmContext {
     language: string | null;
     musicBedId: string | null;
     quoteCandidates: QuoteCandidate[] | null;
-    edits: { removedMemoryIds?: string[]; quote?: { memoryId: string; textHash: string } | null; musicBedId?: string };
+    edits: {
+      removedMemoryIds?: string[];
+      quote?: { memoryId: string; textHash: string } | null;
+      musicBedId?: string;
+      /** family_holiday (create_holiday_card_film): the card's greeting + the front's top picks. */
+      greeting?: string;
+      preferredCloseMedia?: string[];
+    };
     editsVersion: number;
+    /** Set at every publish (never cleared): has this film ever been ready. */
+    readyAt?: string | null;
     poolCutoffAt: string | null;
     contentEpoch: number;
     aiChecks: CheckCache & Record<string, unknown>;
@@ -135,6 +144,10 @@ async function load(deps: StageDeps): Promise<Loaded> {
     ageYear: ctx.film.ageYear,
     scopeStart: ctx.film.scopeStart,
     scopeEndExclusive: ctx.film.scopeEndExclusive,
+    // Read only for family_holiday (card films): greeting + preferred close
+    // media, and the floor waiver once the film has published.
+    edits: ctx.film.edits,
+    hasPublished: ctx.film.readyAt != null,
   });
   return {
     ctx,

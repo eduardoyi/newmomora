@@ -17,6 +17,7 @@ import { type PushRouteData, sendExpoPushNotification } from '../_shared/expo-pu
 import { deleteObject, listObjectKeys } from '../_shared/r2.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
+import { postSignedToYearFilmWorker } from '../_shared/year-film-worker-dispatch.ts';
 
 // Films started per hourly run. Every family's recap is due at 00:30 local on
 // the 1st and surfaces at 19:00, so this caps the monthly rush at ~60/hour
@@ -170,28 +171,8 @@ export async function runScheduler(deps: SchedulerDeps): Promise<Record<string, 
   return summary;
 }
 
-async function signedDispatch(filmId: string, attemptId: string): Promise<boolean> {
-  const endpoint = Deno.env.get('CLOUDFLARE_YEAR_FILM_WORKFLOW_URL');
-  const secret = Deno.env.get('CLOUDFLARE_YEAR_FILM_WORKFLOW_SECRET');
-  if (!endpoint || !secret) return false;
-  const body = JSON.stringify({ filmId, attemptId });
-  const timestamp = String(Date.now());
-  const nonce = crypto.randomUUID();
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${nonce}.${body}`));
-  const signature = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  const response = await fetch(`${endpoint.replace(/\/$/, '')}/dispatch`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-dispatch-timestamp': timestamp,
-      'x-dispatch-nonce': nonce,
-      'x-dispatch-signature': signature,
-    },
-    body,
-    signal: AbortSignal.timeout(15_000),
-  });
-  return response.ok;
+function signedDispatch(filmId: string, attemptId: string): Promise<boolean> {
+  return postSignedToYearFilmWorker('/dispatch', { filmId, attemptId });
 }
 
 export async function handleScheduleYearFilms(req: Request): Promise<Response> {

@@ -16,7 +16,8 @@
     "deploy:dry-run": "wrangler deploy --dry-run --env=\"\""
   },
   "dependencies": {
-    "@sentry/cloudflare": "^11.0.0"
+    "@sentry/cloudflare": "^11.0.0",
+    "image-size": "1.2.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.7",

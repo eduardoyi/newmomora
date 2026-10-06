@@ -42,7 +42,8 @@ function createMultiFamilyDeleteSupabase(calls: string[]) {
 
         if (
           table === 'memories' || table === 'family_members' ||
-          table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs' || table === 'gallery_import_runs'
+          table === 'memory_illustration_jobs' || table === 'portrait_generation_jobs' || table === 'gallery_import_runs' ||
+          table === 'holiday_card_orders'
         ) {
           return {
             select: () => ({
@@ -393,6 +394,8 @@ function fakeSupabaseForCollect(options: {
   galleryRuns?: Array<{ id: string }>;
   galleryPreviewAssets?: Array<{ preview_object_key: string | null }>;
   galleryApprovalLeases?: Array<{ expected_assets: unknown; uploaded_assets: unknown }>;
+  holidayCardOrders?: Array<{ id: string; print_files: unknown }>;
+  holidayCardOrdersError?: { message: string } | null;
   portraitVersionsError?: { message: string } | null;
 }) {
   return {
@@ -450,6 +453,14 @@ function fakeSupabaseForCollect(options: {
 
       if (table === 'gallery_import_runs') {
         return { select: () => ({ eq: async () => ({ data: options.galleryRuns ?? [], error: null }) }) };
+      }
+
+      if (table === 'holiday_card_orders') {
+        return {
+          select: () => ({
+            eq: async () => ({ data: options.holidayCardOrders ?? [], error: options.holidayCardOrdersError ?? null }),
+          }),
+        };
       }
 
       if (table === 'gallery_import_assets') {
@@ -524,6 +535,98 @@ Deno.test('collectFamilyStorageKeys includes transient gallery previews and unfi
   });
   const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
   assertEquals(keys.length, 2);
+});
+
+const CARD_ORDER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const CARD_ORDER_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+Deno.test('collectFamilyStorageKeys includes print-orders objects of holiday card orders (print_files keys + prefix listing)', async () => {
+  const supabase = fakeSupabaseForCollect({
+    memories: [], mediaAssets: [], members: [],
+    holidayCardOrders: [
+      {
+        id: CARD_ORDER_ID,
+        print_files: {
+          front: { key: `print-orders/${CARD_ORDER_ID}/front.pdf`, sha256: 'abc' },
+          back: { key: `print-orders/${CARD_ORDER_ID}/back.pdf`, sha256: 'def' },
+        },
+      },
+      { id: CARD_ORDER_B_ID, print_files: null },
+    ],
+  });
+  const listed: string[] = [];
+  const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID, async (prefix) => {
+    listed.push(prefix);
+    // The render wrote an unrecorded file too (a failed attempt's leftover).
+    return prefix === `print-orders/${CARD_ORDER_ID}/`
+      ? [`${prefix}front.pdf`, `${prefix}attempt-2/back.pdf`]
+      : [];
+  });
+  assertEquals(listed.sort(), [`print-orders/${CARD_ORDER_ID}/`, `print-orders/${CARD_ORDER_B_ID}/`].sort());
+  assertEquals(keys.sort(), [
+    `print-orders/${CARD_ORDER_ID}/attempt-2/back.pdf`,
+    `print-orders/${CARD_ORDER_ID}/back.pdf`,
+    `print-orders/${CARD_ORDER_ID}/front.pdf`,
+  ]);
+});
+
+Deno.test('collectFamilyStorageKeys reads print_files keys without a lister, ignores non print-orders strings, and surfaces a lookup failure', async () => {
+  const supabase = fakeSupabaseForCollect({
+    memories: [], mediaAssets: [], members: [],
+    holidayCardOrders: [{
+      id: CARD_ORDER_ID,
+      print_files: { files: [{ key: `print-orders/${CARD_ORDER_ID}/card.pdf`, sha256: 'abc' }], note: 'not-a-key', other: `${OWNER_ID}/memories/x.jpg` },
+    }],
+  });
+  assertEquals(await collectFamilyStorageKeys(supabase as never, FAMILY_ID), [`print-orders/${CARD_ORDER_ID}/card.pdf`]);
+
+  let failed = false;
+  try {
+    await collectFamilyStorageKeys(
+      fakeSupabaseForCollect({ memories: [], mediaAssets: [], members: [], holidayCardOrdersError: { message: 'boom' } }) as never,
+      FAMILY_ID,
+    );
+  } catch {
+    failed = true;
+  }
+  assertEquals(failed, true);
+});
+
+Deno.test('deleteOwnedFamilies lists and deletes a card order\'s print-orders prefix before finalizing the fence', async () => {
+  const calls: string[] = [];
+  const base = createMultiFamilyDeleteSupabase(calls);
+  const client = {
+    ...base.client,
+    from(table: string) {
+      if (table === 'holiday_card_orders') {
+        return {
+          select: () => ({
+            eq: async (_c: string, familyId: string) => ({
+              data: familyId === FAMILY_ID ? [{ id: CARD_ORDER_ID, print_files: null }] : [],
+              error: null,
+            }),
+          }),
+        };
+      }
+      return base.client.from(table);
+    },
+  };
+
+  const deleted = await deleteOwnedFamilies(client as never, OWNER_ID, {
+    listObjectKeys: async (prefix) => {
+      calls.push(`list:${prefix}`);
+      return prefix === `print-orders/${CARD_ORDER_ID}/` ? [`${prefix}front.pdf`, `${prefix}back.pdf`] : [];
+    },
+    deleteObject: async (key) => {
+      calls.push(`delete:${key}`);
+    },
+  });
+
+  assertEquals(deleted, true);
+  assertEquals(calls.includes(`delete:print-orders/${CARD_ORDER_ID}/front.pdf`), true);
+  assertEquals(calls.includes(`delete:print-orders/${CARD_ORDER_ID}/back.pdf`), true);
+  const finalizeIndex = calls.indexOf('finalize');
+  assertEquals(calls.findIndex((c) => c === `delete:print-orders/${CARD_ORDER_ID}/front.pdf`) < finalizeIndex, true);
 });
 
 Deno.test('collectFamilyStorageKeys de-duplicates keys referenced from multiple columns', async () => {

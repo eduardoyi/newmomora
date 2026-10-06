@@ -2223,6 +2223,216 @@ export type Database = {
         }
         Relationships: []
       }
+      holiday_card_orders: {
+        Row: {
+          card_id: string | null
+          card_snapshot: Json | null
+          carrier: string | null
+          created_at: string
+          currency: string | null
+          failure_reason: string | null
+          family_id: string
+          file_layout: string | null
+          format: string | null
+          gelato_cost_cents: number | null
+          gelato_order_id: string | null
+          gelato_status: string | null
+          id: string
+          packs: number | null
+          price_cents: number | null
+          print_files: Json | null
+          product_uid: string | null
+          refunded_at: string | null
+          region: string | null
+          requested_by: string | null
+          shipped_at: string | null
+          shipping_address: Json | null
+          snapshot_hash: string | null
+          status: string
+          stripe_payment_intent_id: string | null
+          stripe_session_id: string | null
+          tracking_number: string | null
+          tracking_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          card_id?: string | null
+          card_snapshot?: Json | null
+          carrier?: string | null
+          created_at?: string
+          currency?: string | null
+          failure_reason?: string | null
+          family_id: string
+          file_layout?: string | null
+          format?: string | null
+          gelato_cost_cents?: number | null
+          gelato_order_id?: string | null
+          gelato_status?: string | null
+          id?: string
+          packs?: number | null
+          price_cents?: number | null
+          print_files?: Json | null
+          product_uid?: string | null
+          refunded_at?: string | null
+          region?: string | null
+          requested_by?: string | null
+          shipped_at?: string | null
+          shipping_address?: Json | null
+          snapshot_hash?: string | null
+          status?: string
+          stripe_payment_intent_id?: string | null
+          stripe_session_id?: string | null
+          tracking_number?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          card_id?: string | null
+          card_snapshot?: Json | null
+          carrier?: string | null
+          created_at?: string
+          currency?: string | null
+          failure_reason?: string | null
+          family_id?: string
+          file_layout?: string | null
+          format?: string | null
+          gelato_cost_cents?: number | null
+          gelato_order_id?: string | null
+          gelato_status?: string | null
+          id?: string
+          packs?: number | null
+          price_cents?: number | null
+          print_files?: Json | null
+          product_uid?: string | null
+          refunded_at?: string | null
+          region?: string | null
+          requested_by?: string | null
+          shipped_at?: string | null
+          shipping_address?: Json | null
+          snapshot_hash?: string | null
+          status?: string
+          stripe_payment_intent_id?: string | null
+          stripe_session_id?: string | null
+          tracking_number?: string | null
+          tracking_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "holiday_card_orders_card_id_fkey"
+            columns: ["card_id"]
+            isOneToOne: false
+            referencedRelation: "holiday_cards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "holiday_card_orders_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      holiday_cards: {
+        Row: {
+          attempt_id: string | null
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          editor_facts: Json | null
+          edits: Json
+          edits_version: number
+          family_id: string
+          film_id: string | null
+          front_candidates: Json | null
+          generation_attempts: number
+          greeting: string
+          heartbeat_at: string | null
+          id: string
+          language: string
+          last_failure_code: string | null
+          letters: Json | null
+          locale: string | null
+          qr_caption: string | null
+          share_token: string | null
+          signature: string | null
+          status: string
+          updated_at: string
+          workflow_instance_id: string | null
+          year: number
+        }
+        Insert: {
+          attempt_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          editor_facts?: Json | null
+          edits?: Json
+          edits_version?: number
+          family_id: string
+          film_id?: string | null
+          front_candidates?: Json | null
+          generation_attempts?: number
+          greeting: string
+          heartbeat_at?: string | null
+          id?: string
+          language?: string
+          last_failure_code?: string | null
+          letters?: Json | null
+          locale?: string | null
+          qr_caption?: string | null
+          share_token?: string | null
+          signature?: string | null
+          status?: string
+          updated_at?: string
+          workflow_instance_id?: string | null
+          year: number
+        }
+        Update: {
+          attempt_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          deleted_at?: string | null
+          editor_facts?: Json | null
+          edits?: Json
+          edits_version?: number
+          family_id?: string
+          film_id?: string | null
+          front_candidates?: Json | null
+          generation_attempts?: number
+          greeting?: string
+          heartbeat_at?: string | null
+          id?: string
+          language?: string
+          last_failure_code?: string | null
+          letters?: Json | null
+          locale?: string | null
+          qr_caption?: string | null
+          share_token?: string | null
+          signature?: string | null
+          status?: string
+          updated_at?: string
+          workflow_instance_id?: string | null
+          year?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "holiday_cards_family_id_fkey"
+            columns: ["family_id"]
+            isOneToOne: false
+            referencedRelation: "families"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "holiday_cards_film_id_fkey"
+            columns: ["film_id"]
+            isOneToOne: false
+            referencedRelation: "year_films"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       invite_code_words: {
         Row: {
           word: string
@@ -4240,6 +4450,14 @@ export type Database = {
           run_id: string
         }[]
       }
+      claim_year_film_by_id: {
+        Args: { p_film_id: string }
+        Returns: {
+          attempt_id: string
+          family_id: string
+          film_id: string
+        }[]
+      }
       claim_year_film_dispatch: {
         Args: { p_limit: number; p_now?: string }
         Returns: {
@@ -4408,6 +4626,62 @@ export type Database = {
         }
         Returns: string
       }
+      create_holiday_card: {
+        Args: {
+          p_family_id: string
+          p_greeting: string
+          p_language: string
+          p_locale: string
+          p_user_id: string
+          p_year: number
+        }
+        Returns: {
+          attempt_id: string | null
+          created_at: string
+          created_by: string | null
+          deleted_at: string | null
+          editor_facts: Json | null
+          edits: Json
+          edits_version: number
+          family_id: string
+          film_id: string | null
+          front_candidates: Json | null
+          generation_attempts: number
+          greeting: string
+          heartbeat_at: string | null
+          id: string
+          language: string
+          last_failure_code: string | null
+          letters: Json | null
+          locale: string | null
+          qr_caption: string | null
+          share_token: string | null
+          signature: string | null
+          status: string
+          updated_at: string
+          workflow_instance_id: string | null
+          year: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "holiday_cards"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      create_holiday_card_film: {
+        Args: {
+          p_card_id: string
+          p_close_media: string[]
+          p_greeting: string
+          p_scope_end: string
+          p_scope_start: string
+        }
+        Returns: {
+          film_id: string
+          token: string
+        }[]
+      }
       current_user_local_date: { Args: never; Returns: string }
       delete_family: {
         Args: { fam: string }
@@ -4435,6 +4709,7 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      end_holiday_card_film: { Args: { p_card_id: string }; Returns: Json }
       enqueue_ai_usage_alerts: {
         Args: { p_environment_id: string; p_now?: string }
         Returns: {
@@ -4878,6 +5153,11 @@ export type Database = {
       has_family_role: {
         Args: { fam: string; roles: string[] }
         Returns: boolean
+      }
+      holiday_card_new_share_token: { Args: never; Returns: string }
+      increment_holiday_card_generation_attempt: {
+        Args: { p_cap: number; p_card_id: string }
+        Returns: number
       }
       insert_family_member_suggestions: {
         Args: { p_family_id: string; p_rows: Json }
@@ -5396,6 +5676,10 @@ export type Database = {
           subject_family_member_id: string
           tint: string
         }[]
+      }
+      save_holiday_card_edits: {
+        Args: { p_card_id: string; p_edits: Json; p_expected_version: number }
+        Returns: number
       }
       save_year_film_edits: {
         Args: { p_edits: Json; p_film_id: string }

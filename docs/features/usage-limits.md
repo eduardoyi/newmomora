@@ -96,7 +96,7 @@ Service-role-only table (RLS enabled, no client policies), one row per external 
 | `id`, `created_at` | |
 | `attribution_scope` | `family` (default) or `onboarding` |
 | `family_id`, `onboarding_request_id`, `actor_user_id` | Exact attribution. Family events require a real `family_id` and no onboarding request. Onboarding events link to one server-issued opaque attempt request, have `family_id = null`, and actor attribution may become null after anonymous Auth cleanup. |
-| `operation` | `illustration` \| `portrait` \| `safety_chat` \| `emotion_chat` \| `emotion_vision` \| `transcription` \| `voice_cleanup` \| `relationship_chat` (telemetry only, not capped — see [family-relationships](../plans/family-relationships.md)) \| `year_film_quote` \| `year_film_vision` \| `year_film_audio` (Year Film checks: telemetry only; bounded by the verdict cache, attempt limits and edit fair-use — see [year-film](year-film.md)) |
+| `operation` | `illustration` \| `portrait` \| `safety_chat` \| `emotion_chat` \| `emotion_vision` \| `transcription` \| `voice_cleanup` \| `relationship_chat` (telemetry only, not capped — see [family-relationships](../plans/family-relationships.md)) \| `year_film_quote` \| `year_film_vision` \| `year_film_audio` (Year Film checks: telemetry only; bounded by the verdict cache, attempt limits and edit fair-use — see [year-film](year-film.md)) \| `holiday_card_front_judge` \| `holiday_card_voice` \| `holiday_card_details` \| `holiday_card_editor` \| `holiday_card_writer` \| `holiday_card_quote_check` (Holiday Card generation, `20261006120000_holiday_cards.sql`: telemetry only, **not capped** — see below) |
 | `usage_request_id`, `family_id`, `actor_user_id`, `operation`, `model`, `request_intent`, `provider` | durable attribution and request linkage |
 | `success` | boolean |
 | `provider_usage`, token/audio dimensions, `pricing_version`, `cost_basis`, `billing_status`, `cost_is_complete`, `estimated_cost_usd` | allowlisted provider data and immutable cost interpretation |
@@ -195,6 +195,21 @@ redelivered.
   `enable_anonymous_sign_ins` only alongside this Edge integration; this migration deliberately
   does **not** change anonymous-user RLS or Auth configuration. Add stronger controls before
   raising the voice allowance or treating anonymous onboarding as a broad public API.
+
+## Holiday Cards: no user-facing caps
+
+The six `holiday_card_*` operations (front-photo judge, voice card, details, letter editor,
+letter writer, quote verification) are **telemetry only** — they are written to
+`ai_usage_events` for cost visibility and are never reserved against the 5/20/100 image
+limits (only image generations are metered). There are deliberately **no per-card
+counters** (no letter-regeneration or film-refresh columns): the only user-facing limit is
+**one card per family per year**, enforced by the unique `(family_id, year)` index on
+`holiday_cards` *including soft-deleted rows* (deleting a card does not free the slot, so
+delete + create is not a free rewrite). Letters are edited by hand and the card film is
+rendered once at creation (re-rendered only by the existing content invalidation). System
+retries are bounded by `holiday_cards.generation_attempts` through
+`increment_holiday_card_generation_attempt(card, cap)`. See
+[docs/plans/holiday-cards-p1.md](../plans/holiday-cards-p1.md) §2 and TECH_SPEC §2.1i.
 
 ## Extension guide
 

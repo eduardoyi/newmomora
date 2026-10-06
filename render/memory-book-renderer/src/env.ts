@@ -29,6 +29,12 @@ export interface RenderWorkerEnv {
    * for local dev/tests against a manually-built dist-print.
    */
   servedDistDir: string;
+  /**
+   * Absolute path to book-renderer's holiday-card print build
+   * (`vite.card.config.ts`'s `dist-card/` output, built next to `dist-print/`
+   * by the Dockerfile). Used by POST /render-card only.
+   */
+  cardDistDir: string;
   /** Puppeteer page-render worker pool size — forwarded to renderBookPdfs(). */
   concurrency: number;
 }
@@ -53,6 +59,7 @@ export function loadEnv(): RenderWorkerEnv {
       bucket: requireEnv('R2_BUCKET'),
     },
     servedDistDir: process.env.BOOK_RENDERER_DIST_DIR ?? '/app/book-renderer/dist-print',
+    cardDistDir: process.env.BOOK_RENDERER_CARD_DIST_DIR ?? '/app/book-renderer/dist-card',
     // Default 2 (5c canary: concurrency 4 on the 4GB Fly machine OOM-killed
     // Chrome around the heavy month pages — Target.closeTarget protocol
     // errors). Print-res pages hold multi-MB decoded originals each.

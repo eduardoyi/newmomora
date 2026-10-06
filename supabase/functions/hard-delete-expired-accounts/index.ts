@@ -30,10 +30,18 @@ const DEFAULT_DEPENDENCIES: HardDeleteDependencies = {
  * can live under other members' `{uid}/` prefixes (see plan §7's "child
  * photo replacement by non-creators" note), so the owner's own prefix alone
  * would miss them.
+ *
+ * Holiday card orders (docs/plans/holiday-cards-p1.md Step 7) keep their print
+ * PDFs under `print-orders/<orderId>/...`, NOT under any member's uid prefix.
+ * `holiday_card_orders` cascades with the family, so both the keys recorded in
+ * `print_files` and (when `listKeys` is given) every object under each order's
+ * prefix are collected here, before the rows disappear. The prefix listing also
+ * catches files a render wrote but never recorded (a failed attempt).
  */
 export async function collectFamilyStorageKeys(
   supabase: ServiceClient,
   familyId: string,
+  listKeys?: (prefix: string) => Promise<string[]>,
 ): Promise<string[]> {
   const keys: string[] = [];
 
@@ -150,7 +158,30 @@ export async function collectFamilyStorageKeys(
     }
   }
 
+  const { data: cardOrders, error: cardOrdersError } = await supabase
+    .from('holiday_card_orders')
+    .select('id, print_files')
+    .eq('family_id', familyId);
+  if (cardOrdersError) {
+    throw new Error(`Holiday card order storage lookup failed: ${cardOrdersError.message}`);
+  }
+  for (const order of cardOrders ?? []) {
+    keys.push(...printOrderKeysIn(order.print_files));
+    if (listKeys) keys.push(...(await listKeys(`print-orders/${order.id}/`)));
+  }
+
   return [...new Set(keys)];
+}
+
+/** Every `print-orders/...` string anywhere inside a `print_files` jsonb (its exact shape is the renderer's; only the keys matter). */
+function printOrderKeysIn(value: unknown, depth = 0): string[] {
+  if (depth > 6) return [];
+  if (typeof value === 'string') return value.startsWith('print-orders/') ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap((item) => printOrderKeysIn(item, depth + 1));
+  if (value && typeof value === 'object') {
+    return Object.values(value).flatMap((item) => printOrderKeysIn(item, depth + 1));
+  }
+  return [];
 }
 
 /**
@@ -224,7 +255,7 @@ export async function deleteOwnedFamilies(
   const storageByFamily: Array<{ familyId: string; keys: string[] }> = [];
   for (const family of ownedFamilies ?? []) {
     try {
-      const keys = await collectFamilyStorageKeys(supabase, family.id);
+      const keys = await collectFamilyStorageKeys(supabase, family.id, dependencies.listObjectKeys);
       const versionPrefixes = keys
         .filter((key) => key.endsWith('/photo.jpg') && key.includes('/portraits/'))
         .map((key) => key.slice(0, -'photo.jpg'.length));
