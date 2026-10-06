@@ -21,7 +21,7 @@ function order(overrides: Record<string, unknown> = {}): CardOrderStatus {
     status: 'paid',
     packs: 3,
     cards: 30,
-    priceCents: 7470,
+    priceCents: 6870,
     currency: 'USD',
     region: 'US',
     shippingAddress: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
@@ -118,7 +118,7 @@ describe('cardStatusLayoutModel (card order -> the shared status page)', () => {
     const model = cardStatusLayoutModel(order(), opts);
     expect(model.facts).toEqual([
       { label: 'Cards', value: '30' },
-      { label: 'Total', value: '$74.70 (shipping included, plus tax if applicable)' },
+      { label: 'Total', value: '$68.70 (shipping included, plus tax if applicable)' },
     ]);
     expect(cardStatusLayoutModel(order({ cards: null, priceCents: null }), opts).facts).toBeNull();
   });

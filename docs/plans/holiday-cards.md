@@ -47,7 +47,7 @@ in the US, USPS 4–5 days; USPS Priority Express 3–4 days as a late option).
 | Process | Same as the book and the films: **dogfood stages on the laptop first** (§6, C0–C5), iterate locally, order the sample from here; **then** the product (app, shop, Fly, Workflow). |
 | Who | Owners/managers, subscribers. Card editor + checkout live on the web shop like books (`shop.usemomora.com`); the app's Keepsakes tab links in. |
 | Reorders | "Order more of this card" without redesigning. |
-| Price | **$2.49/card, shipping included**, quantities 20 / 30 / 50 / 100 (owner, 2026-10-04). |
+| Price | **$2.49/card, shipping included**, quantities 20 / 30 / 50 / 100 (owner, 2026-10-04). **Superseded 2026-10-06 (owner): tiered price, shipping included, tax extra: 10 cards $2.99 ($29.90), 20 $2.49 ($49.80), 30 $2.29 ($68.70), 50 $1.99 ($99.50), 100 $1.79 ($179.00); "Save X%" vs the 10-card per-card price = 0/17/23/33/40%.** |
 | Signature | Defaults from the family name in the app ("Love, the {name} family"), **editable** like the letter. |
 | Sample QR | Build the public `/f/:token` film page **early** (before C4) so the sample's QR works when the cards arrive. |
 

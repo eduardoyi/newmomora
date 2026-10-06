@@ -15,7 +15,7 @@ import {
 import type { CardOrderQuote } from '../checkoutTypes';
 
 const ADDRESS: CardShippingAddress = { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' };
-const QUOTE: CardOrderQuote = { orderId: 'order-1', packs: 3, cards: 30, priceCents: 7470, currency: 'USD', region: 'US', format: '5R' };
+const QUOTE: CardOrderQuote = { orderId: 'order-1', packs: 3, cards: 30, priceCents: 6870, currency: 'USD', region: 'US', format: '5R' };
 
 function run(model: CheckoutModel, ...events: CheckoutEvent[]): CheckoutModel {
   return events.reduce(checkoutReducer, model);

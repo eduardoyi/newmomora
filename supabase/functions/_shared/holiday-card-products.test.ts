@@ -15,6 +15,7 @@ import {
   priceCents,
   regionForCountry,
   regionGuessForTimezone,
+  savingsPercent,
   type QuoteForGuard,
 } from './holiday-card-products.ts';
 
@@ -22,30 +23,40 @@ function quote(productsCents: number | null, shipping: (number | null)[], curren
   return { currency, quotes: [{ productsCents, currency, shipmentMethods: shipping.map((priceCents) => ({ priceCents })) }] };
 }
 
-Deno.test('us_ca product: 5R, two files, USD, $2.49 per card', () => {
+Deno.test('us_ca product: 5R, two files, USD, tiered per-card price', () => {
   const product = CARD_PRODUCTS.us_ca;
   assertEquals(product.format, '5R');
   assertEquals(product.fileLayout, 'one_pdf');
   assertEquals(product.currency, 'USD');
-  assertEquals(product.pricePerCardCents, 249);
+  assertEquals(product.tiers.map((t) => [t.packs, t.cards, t.pricePerCardCents]), [[1, 10, 299], [2, 20, 249], [3, 30, 229], [5, 50, 199], [10, 100, 179]]);
   assert(product.productUid.startsWith('pack_of_cards_qt_10_pcs_pf_5r_'));
   assert(product.productUid.includes('glossy-protection'));
   assertEquals([...product.countries], ['US', 'CA']);
   assertEquals([...ENABLED_COUNTRIES], ['US', 'CA']);
 });
 
-Deno.test('packs: 20/30/50/100 cards map to 2/3/5/10 packs and price at $2.49 a card', () => {
-  assertEquals(PACK_OPTIONS.map((o) => [o.packs, o.cards]), [[2, 20], [3, 30], [5, 50], [10, 100]]);
+Deno.test('packs: 10/20/30/50/100 cards map to 1/2/3/5/10 packs and price per tier', () => {
+  assertEquals(PACK_OPTIONS.map((o) => [o.packs, o.cards]), [[1, 10], [2, 20], [3, 30], [5, 50], [10, 100]]);
+  assertEquals(priceCents('us_ca', 1), 2990);
   assertEquals(priceCents('us_ca', 2), 4980);
-  assertEquals(priceCents('us_ca', 3), 7470);
-  assertEquals(priceCents('us_ca', 5), 12450);
-  assertEquals(priceCents('us_ca', 10), 24900);
+  assertEquals(priceCents('us_ca', 3), 6870);
+  assertEquals(priceCents('us_ca', 5), 9950);
+  assertEquals(priceCents('us_ca', 10), 17900);
+  assertEquals(packsForCards(10), 1);
   assertEquals(packsForCards(50), 5);
   assertEquals(packsForCards(40), null);
+  assert(isValidPacks(1));
   assert(isValidPacks(3));
-  assert(!isValidPacks(1));
+  assert(!isValidPacks(0));
+  assert(!isValidPacks(4));
   assert(!isValidPacks('3'));
-  assertThrows(() => priceCents('us_ca', 1), Error, 'HOLIDAY_CARD_PACKS_INVALID');
+  assertThrows(() => priceCents('us_ca', 4), Error, 'HOLIDAY_CARD_PACKS_INVALID');
+  assertThrows(() => priceCents('us_ca', 0), Error, 'HOLIDAY_CARD_PACKS_INVALID');
+  assertThrows(() => savingsPercent('us_ca', 4), Error, 'HOLIDAY_CARD_PACKS_INVALID');
+});
+
+Deno.test('savingsPercent: relative to the 10-card per-card price, rounded', () => {
+  assertEquals([1, 2, 3, 5, 10].map((packs) => savingsPercent('us_ca', packs)), [0, 17, 23, 33, 40]);
 });
 
 Deno.test('regionForCountry: US and CA only, case/space tolerant', () => {
@@ -93,13 +104,14 @@ Deno.test('deliverability: needs a real numeric shipping price; 0 counts, null d
 
 Deno.test('max cost: price * (1 - MIN_MARGIN), floored without float drift', () => {
   assertEquals(MIN_MARGIN, 0.3);
+  assertEquals(maxCostCents(2990), 2093);
   assertEquals(maxCostCents(4980), 3486);
-  assertEquals(maxCostCents(12450), 8715);
-  assertEquals(maxCostCents(24900), 17430);
+  assertEquals(maxCostCents(9950), 6965);
+  assertEquals(maxCostCents(17900), 12530);
 });
 
 Deno.test('guard accepts the real US quotes (2026-10-04) for every sold size', () => {
-  const cases: [number, number, number][] = [[2, 1168, 703], [5, 3244, 856], [10, 5990, 1111]];
+  const cases: [number, number, number][] = [[1, 584, 652], [2, 1168, 703], [5, 3244, 856], [10, 5990, 1111]];
   for (const [packs, products, ship] of cases) {
     const verdict = evaluateQuote('us_ca', packs, quote(products, [ship]));
     assert(verdict.ok, `packs ${packs}`);
@@ -108,6 +120,21 @@ Deno.test('guard accepts the real US quotes (2026-10-04) for every sold size', (
       assertEquals(verdict.priceCents, priceCents('us_ca', packs));
     }
   }
+});
+
+Deno.test('guard compares the cost to that tier price (10 cards: $12.36 <= 0.7 x $29.90)', () => {
+  const ok = evaluateQuote('us_ca', 1, quote(584, [652]));
+  assert(ok.ok);
+  if (ok.ok) {
+    assertEquals(ok.costCents, 1236);
+    assertEquals(ok.priceCents, 2990);
+    assertEquals(ok.maxCostCents, 2093);
+  }
+  // The same $29.00 cost passes a 100-card price but not the 10-card one.
+  assert(!evaluateQuote('us_ca', 1, quote(1000, [1200])).ok);
+  assert(evaluateQuote('us_ca', 10, quote(1000, [1200])).ok);
+  const over = evaluateQuote('us_ca', 1, quote(584, [1510])); // 20.94 > 20.93
+  assertEquals(over.ok === false && over.reason, 'over_cost_guard');
 });
 
 Deno.test('guard picks the cheapest real shipping and ignores null prices', () => {

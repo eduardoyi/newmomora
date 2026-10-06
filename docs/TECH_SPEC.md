@@ -3754,7 +3754,10 @@ No letter regeneration, film refresh or greeting change (owner, 2026-10-06).
 
 JWT; owner/manager of the order's family + billing write gate on every
 mutating op; orders are buyer-only (404 `ORDER_NOT_FOUND` otherwise). US + CA
-only, 5R, USD, $2.49/card shipping included, packs 2/3/5/10.
+only, 5R, USD, tiered per-card price with shipping included (packs 1/2/3/5/10 =
+10/20/30/50/100 cards at $2.99/$2.49/$2.29/$1.99/$1.79 per card = $29.90 / $49.80 /
+$68.70 / $99.50 / $179.00; `CARD_PRODUCTS.us_ca.tiers`, `priceCents`, `savingsPercent`
+in `_shared/holiday-card-products.ts`), packs 1/2/3/5/10.
 
 | Op | Request | Effect |
 |---|---|---|

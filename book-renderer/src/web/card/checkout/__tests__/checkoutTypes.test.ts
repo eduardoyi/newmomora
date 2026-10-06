@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { CardApiError } from '../../cardTypes';
 import {
   PACK_OPTIONS,
-  PRICE_PER_CARD_CENTS,
   formatMoney,
   isSafeCheckoutUrl,
   parseCancel,
@@ -15,15 +14,15 @@ import {
 } from '../checkoutTypes';
 
 describe('packs and prices', () => {
-  it('offers 20 / 30 / 50 / 100 cards at $2.49 each, shipping included', () => {
-    expect(PRICE_PER_CARD_CENTS).toBe(249);
+  it('offers 10 / 20 / 30 / 50 / 100 cards, totals from the tier table', () => {
     expect(PACK_OPTIONS.map((o) => [o.packs, o.cards, o.totalCents])).toEqual([
+      [1, 10, 2990],
       [2, 20, 4980],
-      [3, 30, 7470],
-      [5, 50, 12450],
-      [10, 100, 24900],
+      [3, 30, 6870],
+      [5, 50, 9950],
+      [10, 100, 17900],
     ]);
-    expect(formatMoney(7470)).toBe('$74.70');
+    expect(formatMoney(6870)).toBe('$68.70');
   });
 });
 
@@ -34,8 +33,8 @@ describe('parsers', () => {
   });
 
   it('quote', () => {
-    const q = parseQuote({ success: true, orderId: 'o', status: 'quoted', region: 'US', format: '5R', packs: 3, cards: 30, priceCents: 7470, currency: 'USD' });
-    expect(q).toEqual({ orderId: 'o', packs: 3, cards: 30, priceCents: 7470, currency: 'USD', region: 'US', format: '5R' });
+    const q = parseQuote({ success: true, orderId: 'o', status: 'quoted', region: 'US', format: '5R', packs: 3, cards: 30, priceCents: 6870, currency: 'USD' });
+    expect(q).toEqual({ orderId: 'o', packs: 3, cards: 30, priceCents: 6870, currency: 'USD', region: 'US', format: '5R' });
     expect(() => parseQuote({ orderId: 'o', packs: 4, priceCents: 1 })).toThrow(CardApiError);
     expect(() => parseQuote({ orderId: 'o', packs: 2 })).toThrow(CardApiError);
   });
@@ -77,12 +76,12 @@ describe('parsers', () => {
 
   it('a holiday_card_orders row (the direct, buyer-only read) maps onto the same status shape', () => {
     const row = parseOrderRow({
-      id: 'o', card_id: 'c', status: 'cancelled', packs: 3, price_cents: 7470, currency: 'USD', region: 'US', gelato_status: null,
+      id: 'o', card_id: 'c', status: 'cancelled', packs: 3, price_cents: 6870, currency: 'USD', region: 'US', gelato_status: null,
       tracking_number: null, tracking_url: null, carrier: null, shipped_at: null, failure_reason: null, refunded_at: '2026-10-03T12:00:00Z',
       shipping_address: { name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' },
       created_at: '2026-10-01T10:00:00Z',
     });
-    expect(row).toMatchObject({ orderId: 'o', cardId: 'c', status: 'cancelled', cards: 30, priceCents: 7470, refunded: true, refundedAt: '2026-10-03T12:00:00Z', createdAt: '2026-10-01T10:00:00Z' });
+    expect(row).toMatchObject({ orderId: 'o', cardId: 'c', status: 'cancelled', cards: 30, priceCents: 6870, refunded: true, refundedAt: '2026-10-03T12:00:00Z', createdAt: '2026-10-01T10:00:00Z' });
     expect(row.shippingAddress).toEqual({ name: 'Lucía Rivera', line1: '1 Example Street', city: 'Springfield', state: 'IL', postalCode: '62701', countryCode: 'US' });
     expect(parseOrderRow({ id: 'o', status: 'paid', shipping_address: { name: 'x' } }).shippingAddress).toBeNull();
     expect(() => parseOrderRow(null)).toThrow(CardApiError);

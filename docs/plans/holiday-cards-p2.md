@@ -47,7 +47,7 @@ then go through support).
 | Ordered cards | Content **locks after the first paid order**; **reorders of the same card** stay allowed (owner, 2026-10-04) and print exactly what was printed the first time. |
 | Sign-in handoff | **Build it, for cards AND Memory Books** (owner, 2026-10-06): app taps open the shop already signed in (§5 Step 2b). |
 | Paid canary | **Printed canary** (owner, 2026-10-06): the owner orders his own card through the real app → shop → Stripe flow (20 cards to his Houston PO box); the Gelato confirm is **held** first (hold list), we inspect, then **release** it so Gelato prints and ships — proving the whole paid path (webhook, hold, release, confirm, production check of the one-PDF file, tracking, emails) AND serving as the physical 5R sample (the separate-files sample 05f43f74 was refused; a one-PDF re-sample was drafted and NOT ordered in favour of this). Real cost ≈ $21. P3 gate. |
-| From P1 | US/CA only; one card per family per year; no letter rewrites or film refreshes; no illustrated front; owners/managers only; packs 2/3/5/10 = 20/30/50/100 cards at $2.49 incl. shipping, tax added at checkout. |
+| From P1 | US/CA only; one card per family per year; no letter rewrites or film refreshes; no illustrated front; owners/managers only; packs 1/2/3/5/10 = 10/20/30/50/100 cards at tiered per-card prices incl. shipping ($2.99 / $2.49 / $2.29 / $1.99 / $1.79 = $29.90 / $49.80 / $68.70 / $99.50 / $179.00; owner, 2026-10-06), tax added at checkout. |
 
 ## 3. What exists (verified 2026-10-06, three review rounds)
 
@@ -295,8 +295,9 @@ types.
   turn the QR off").
 
 ### Step 5 — Shop: checkout + order status
-- `card/web/CardCheckoutScreen.tsx`: `create_draft` → quantity (20/30/50/100,
-  "$2.49 per card, shipping included, plus tax", `ship_by_note`) → address
+- `card/web/CardCheckoutScreen.tsx`: `create_draft` → quantity (10/20/30/50/100,
+  per-card price + "Save X%" per option, hint "Shipping included · tax added at checkout";
+  table in `card/checkout/cardPricing.ts`; `ship_by_note`) → address
   (`AddressStep` gains an `allowedCountries` prop → US/CA for cards; Stripe
   element enforces city + state; the manual form relies on the server rule +
   error map) → `quote` → summary with front/back thumbnails rendered from the

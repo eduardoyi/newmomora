@@ -11,7 +11,8 @@
 A printed 5×7 holiday card made from the family's year: a family photo on the
 front, an AI-written letter (editable) on the back, and a QR code to a
 card-only holiday film on a public link. Printed and shipped by Gelato in
-packs of 10 to US/CA addresses, $2.49/card shipping included.
+packs of 10 to US/CA addresses, tiered price with shipping included (10 cards
+$2.99/card down to 100 at $1.79/card; table under Constraints & gotchas).
 
 ## User-facing behavior
 
@@ -159,6 +160,24 @@ Canonical contracts: TECH_SPEC §4.28–§4.33.
 
 ## Constraints & gotchas
 
+- **Tiered price (owner, 2026-10-06; shipping included, tax extra):**
+
+  | packs | cards | per card | total | Save |
+  |---|---|---|---|---|
+  | 1 | 10 | $2.99 | $29.90 | 0% |
+  | 2 | 20 | $2.49 | $49.80 | 17% |
+  | 3 | 30 | $2.29 | $68.70 | 23% |
+  | 5 | 50 | $1.99 | $99.50 | 33% |
+  | 10 | 100 | $1.79 | $179.00 | 40% |
+
+  Server table: `US_CA_TIERS` in `_shared/holiday-card-products.ts`
+  (`priceCents`, `savingsPercent`, `PACK_OPTIONS`); the cost guard compares each
+  order's cost to its own tier price. The shop mirrors it in ONE module,
+  `book-renderer/src/web/card/checkout/cardPricing.ts` (pinned by
+  `cardPricing.test.ts`): change both together. The webhook checks
+  `amount_subtotal` against the stored `price_cents`; `create_checkout` returns
+  `QUOTE_STALE` when the stored price no longer equals `priceCents`, so a tier
+  change forces re-quotes.
 - **Repo is public:** fixtures use the fictional "Rivera Soto" family.
 - **No PII in logs:** ids, statuses and codes only; Gelato errors never carry
   its `message` (it can echo addresses).
@@ -209,4 +228,5 @@ npx supabase test db supabase/tests/holiday_cards.sql
 |---|---|
 | 2026-10-06 | P1 backend: tables/RPCs, generation Workflow, orders (Gelato + Stripe), sweep, `/render-card` |
 | 2026-10-06 | US 5R switched to ONE 2-page PDF (`one_pdf`) after Gelato refused separate files |
+| 2026-10-06 | Tiered pricing + 10-card option (packs 1/2/3/5/10, $2.99 down to $1.79 per card), "Save X%" in the shop |
 | 2026-10-06 | P2: switch + summary, card-level checkout claim + version pin, reorders from the frozen first order, orders kill switch, held canary, shop editor + checkout (book-consistent), `/orders` with cards, app tile, sign-in handoff (books + cards), local sign-out |

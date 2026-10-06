@@ -1,6 +1,7 @@
 import { emptyEdits, normalizeEdits, type CardEdits } from '../../../card/edits';
 import type { CardData } from '../../../card/types';
 import { validateCardAddress } from '../../order/cardAddress';
+import { PACK_OPTIONS } from '../checkout/cardPricing';
 import { CardApiError, type FilmUrls, type PickerPoolPage } from '../cardTypes';
 
 /**
@@ -305,7 +306,9 @@ export function fixtureQuote(orderId: string, packs: number, address: unknown): 
   if (qe && !qeDone()) {
     return delay(null, 300).then(() => Promise.reject(new CardApiError(422, qe, 'Quote refused')));
   }
-  const priceCents = packs * 10 * 249;
+  const option = PACK_OPTIONS.find((o) => o.packs === packs);
+  if (!option) return Promise.reject(new CardApiError(400, 'PACKS_INVALID', 'packs must be 1, 2, 3, 5 or 10'));
+  const priceCents = option.totalCents;
   writeOrder({ ...order, status: 'quoted', packs, priceCents, address: check.address });
   return delay({ success: true, orderId, status: 'quoted', region: 'US', format: '5R', packs, cards: packs * 10, priceCents, currency: 'USD' }, 600);
 }

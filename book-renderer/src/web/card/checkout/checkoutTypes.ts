@@ -9,28 +9,9 @@ import { CardApiError } from '../cardTypes';
 
 // ── Packs and prices ─────────────────────────────────────────────────────
 
-export type Packs = 2 | 3 | 5 | 10;
-
-export const CARDS_PER_PACK = 10;
-/** Shipping included; tax is added by Stripe at checkout. */
-export const PRICE_PER_CARD_CENTS = 249;
-
-export interface PackOption {
-  packs: Packs;
-  cards: number;
-  /** The list price the quote will confirm (the server's price is the authority). */
-  totalCents: number;
-}
-
-export const PACK_OPTIONS: readonly PackOption[] = ([2, 3, 5, 10] as const).map((packs) => ({
-  packs,
-  cards: packs * CARDS_PER_PACK,
-  totalCents: packs * CARDS_PER_PACK * PRICE_PER_CARD_CENTS,
-}));
-
-export function isPacks(value: unknown): value is Packs {
-  return value === 2 || value === 3 || value === 5 || value === 10;
-}
+// The price table lives in ONE module (it mirrors the server's tiers).
+export { CARDS_PER_PACK, PACK_OPTIONS, isPacks, type PackOption, type Packs } from './cardPricing';
+import { CARDS_PER_PACK, isPacks, type Packs } from './cardPricing';
 
 export function formatMoney(cents: number, currency = 'USD'): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);

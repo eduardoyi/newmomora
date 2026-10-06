@@ -15,7 +15,6 @@ export function shipByNoteFor(note: string | null | undefined, countryCode: stri
   return text;
 }
 
-export const PRICE_NOTE = '$2.49 per card · shipping included · plus tax';
 
 /** The book's "edits freeze at payment" line, said for a card (shown on every step, like the book's). */
 export const FREEZE_NOTICE = 'Your card prints exactly as it looks right now. Once you pay, it can no longer be edited, but you can order more copies of it later.';

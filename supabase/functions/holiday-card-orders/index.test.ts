@@ -163,7 +163,7 @@ Deno.test('quote rejects a country we do not ship to with COUNTRY_NOT_SUPPORTED,
 Deno.test('quote rejects packs that are not offered', async () => {
   await withEnv(async () => {
     const h = harness(cardWorldSeed());
-    for (const packs of [1, 4, 100, '2', null]) {
+    for (const packs of [0, 4, 100, '2', null]) {
       const response = await h.call({ op: 'quote', orderId: IDS.order, address: US_ADDRESS, packs });
       assertEquals(response.status, 400);
       assertEquals((await response.json()).code, 'PACKS_INVALID');
@@ -193,6 +193,22 @@ Deno.test('quote CASes draft -> quoted and persists the whole bundle in one upda
     assertEquals((row.shipping_address as Row).postalCode, '62704');
     // The quote bundle landed in exactly one UPDATE of the order.
     assertEquals(h.db.log.filter((entry) => entry.table === 'holiday_card_orders' && entry.op === 'update').length, 1);
+  });
+});
+
+Deno.test('quote prices the smallest and largest tiers from the tier table', async () => {
+  await withEnv(async () => {
+    for (const [packs, cards, price] of [[1, 10, 2990], [3, 30, 6870], [10, 100, 17900]]) {
+      const h = harness(cardWorldSeed());
+      const response = await h.call({ op: 'quote', orderId: IDS.order, address: US_ADDRESS, packs });
+      assertEquals(response.status, 200, `packs ${packs}`);
+      const body = await response.json();
+      assertEquals(body.packs, packs);
+      assertEquals(body.cards, cards);
+      assertEquals(body.priceCents, price);
+      assertEquals(orderRow(h.db).price_cents, price);
+      assertEquals(orderRow(h.db).packs, packs);
+    }
   });
 });
 
@@ -647,6 +663,12 @@ Deno.test('create_checkout: preconditions on the card and the quote', async () =
     const response = await stale.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
     assertEquals(response.status, 409);
     assertEquals((await response.json()).code, 'QUOTE_STALE');
+
+    // A quote priced before the 2026-10-06 tier table (10 packs at the old flat $2.49) is stale.
+    const preTiers = harness(cardWorldSeed({ order: { ...QUOTED_ORDER, packs: 10, price_cents: 24900 } }));
+    const old = await preTiers.call({ op: 'create_checkout', orderId: IDS.order, expectedEditsVersion: 0 });
+    assertEquals(old.status, 409);
+    assertEquals((await old.json()).code, 'QUOTE_STALE');
     assertEquals(stale.world.renderCalls.length, 0);
 
     const draft = harness(cardWorldSeed());

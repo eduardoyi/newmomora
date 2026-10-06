@@ -2,8 +2,10 @@
 // §2, §3 "Gelato facts", Step 2 / Step 6). Pure: no I/O, no env, no Deno-only
 // APIs, so it runs in Edge Functions and Cloudflare Workers alike.
 //
-// v1 sells US + CA only (owner, 2026-10-06): 5x7 ("5R"), USD, $2.49 per card
-// with shipping included, packs of 10. Europe (A5, one 2-page PDF, EUR) is NOT
+// v1 sells US + CA only (owner, 2026-10-06): 5x7 ("5R"), USD, shipping included,
+// packs of 10, TIERED per-card price (owner, 2026-10-06: $2.99 at 10 cards down
+// to $1.79 at 100; see `US_CA_TIERS`). The shop mirrors the table in
+// book-renderer/src/web/card/checkout/cardPricing.ts: change both together. Europe (A5, one 2-page PDF, EUR) is NOT
 // sold: books exclude the EU for the same VAT reason. The map is data-driven so
 // an `eu` entry can be added later without touching the callers:
 //   1. extend `CardRegion` with 'eu',
@@ -23,6 +25,27 @@ export type CardPrintFormat = '5R' | 'A5';
 export type CardFileLayout = 'two_files' | 'one_pdf';
 export type CardCurrency = 'USD' | 'EUR';
 
+export const CARDS_PER_PACK = 10;
+
+export interface PriceTier {
+  /** Gelato quantity (packs of 10). */
+  packs: number;
+  cards: number;
+  /** What the parent pays per card at this quantity, shipping included, tax excluded. */
+  pricePerCardCents: number;
+}
+
+function tier(packs: number, pricePerCardCents: number): PriceTier {
+  return { packs, cards: packs * CARDS_PER_PACK, pricePerCardCents };
+}
+
+/**
+ * Tiered US/CA price (owner decision 2026-10-06; shipping included, tax extra):
+ * 10 cards $2.99 ($29.90), 20 $2.49 ($49.80), 30 $2.29 ($68.70), 50 $1.99
+ * ($99.50), 100 $1.79 ($179.00). The first tier is the "Save X%" baseline.
+ */
+const US_CA_TIERS: readonly PriceTier[] = [tier(1, 299), tier(2, 249), tier(3, 229), tier(5, 199), tier(10, 179)];
+
 export interface CardProduct {
   region: CardRegion;
   /** Gelato product uid (one pack = 10 cards; Gelato `quantity` counts packs). */
@@ -30,8 +53,8 @@ export interface CardProduct {
   format: CardPrintFormat;
   fileLayout: CardFileLayout;
   currency: CardCurrency;
-  /** What the parent pays per card, shipping included, tax excluded. */
-  pricePerCardCents: number;
+  /** The price tiers, one per sellable pack count (per-card price shipping included, tax excluded). */
+  tiers: readonly PriceTier[];
   /** ISO 3166-1 alpha-2 codes this product ships to. */
   countries: readonly string[];
 }
@@ -51,12 +74,10 @@ export const CARD_PRODUCTS: Record<CardRegion, CardProduct> = {
     format: '5R',
     fileLayout: 'one_pdf',
     currency: 'USD',
-    pricePerCardCents: 249,
+    tiers: US_CA_TIERS,
     countries: ENABLED_COUNTRIES,
   },
 };
-
-export const CARDS_PER_PACK = 10;
 
 export interface PackOption {
   /** Gelato quantity (packs of 10). */
@@ -64,22 +85,44 @@ export interface PackOption {
   cards: number;
 }
 
-/** Quantities offered: 20 / 30 / 50 / 100 cards. */
-export const PACK_OPTIONS: readonly PackOption[] = [2, 3, 5, 10].map((packs) => ({ packs, cards: packs * CARDS_PER_PACK }));
+/**
+ * Quantities offered: 10 / 20 / 30 / 50 / 100 cards. Every region offers the
+ * same pack counts (only the per-card price may differ), so this is derived
+ * from the US/CA tiers; a region with a different set would need per-region
+ * validation.
+ */
+export const PACK_OPTIONS: readonly PackOption[] = US_CA_TIERS.map(({ packs, cards }) => ({ packs, cards }));
 
 export function isValidPacks(packs: unknown): packs is number {
   return typeof packs === 'number' && PACK_OPTIONS.some((option) => option.packs === packs);
 }
 
-/** Packs for a card count (20/30/50/100), or null when it is not offered. */
+/** Packs for a card count (10/20/30/50/100), or null when it is not offered. */
 export function packsForCards(cards: unknown): number | null {
   return PACK_OPTIONS.find((option) => option.cards === cards)?.packs ?? null;
 }
 
+function tierFor(region: CardRegion, packs: number): PriceTier {
+  const found = isValidPacks(packs) ? CARD_PRODUCTS[region].tiers.find((t) => t.packs === packs) : undefined;
+  if (!found) throw new Error('HOLIDAY_CARD_PACKS_INVALID');
+  return found;
+}
+
 /** Total price (tax excluded, shipping included). Throws on a pack count that is not offered. */
 export function priceCents(region: CardRegion, packs: number): number {
-  if (!isValidPacks(packs)) throw new Error('HOLIDAY_CARD_PACKS_INVALID');
-  return CARD_PRODUCTS[region].pricePerCardCents * packs * CARDS_PER_PACK;
+  const t = tierFor(region, packs);
+  return t.pricePerCardCents * t.cards;
+}
+
+/**
+ * "Save X%" for the shop: the tier's per-card price against the smallest
+ * tier's, rounded to a whole percent (0 for the smallest tier). Throws on a
+ * pack count that is not offered.
+ */
+export function savingsPercent(region: CardRegion, packs: number): number {
+  const t = tierFor(region, packs);
+  const base = CARD_PRODUCTS[region].tiers[0];
+  return Math.round((1 - t.pricePerCardCents / base.pricePerCardCents) * 100);
 }
 
 // ── Region lookups ────────────────────────────────────────────────────────
@@ -183,10 +226,11 @@ export function gelatoFilesFor(layout: CardFileLayout, urls: CardPrintFileUrls):
  * the price and passes through, so it is not part of this.
  *
  * US numbers (Gelato quotes, 2026-10-04..06, USD, USPS Ground Advantage):
- *   1 pack  (sample, not sold): $5.84 + $6.52 shipping = $12.36
+ *   1 pack:  $5.84 + $6.52 shipping = $12.36 vs price $29.90 (cap $20.93, ok)
  *   2 packs: $11.68 + $7.03 = $18.71 vs price $49.80 (cap $34.86, ok)
- *   5 packs: $32.44 + $8.56 = $41.00 vs price $124.50 (cap $87.15, ok)
- *  10 packs: $59.90 + $11.11 = $71.01 vs price $249.00 (cap $174.30, ok)
+ *   5 packs: $32.44 + $8.56 = $41.00 vs price $99.50 (cap $69.65, ok)
+ *  10 packs: $59.90 + $11.11 = $71.01 vs price $179.00 (cap $125.30, ok)
+ * Each tier's guard compares the cost to THAT order's price (`priceCents`).
  * Alaska/Hawaii/PR/APO addresses can push shipping far above these; the guard
  * refuses a quote that would make a shipping-included price unprofitable.
  */

@@ -12,7 +12,8 @@ import { CardOrderStatusPanel } from './CardOrderStatusPanel';
 import { CardThumbnails } from './CardThumbnails';
 import { cancelCardCheckout, createCardCheckout, createCardDraft, getCardOrderStatus, quoteCardOrder } from './cardOrdersApi';
 import { checkoutReducer, creatingCopy, initialModel, pinStatus, type CheckoutStep, type PinStatus } from './checkoutMachine';
-import { FREEZE_NOTICE, PRICE_NOTE, REORDER_NOTICE, shipByNoteFor } from './checkoutCopy';
+import { PRICE_NOTE } from './cardPricing';
+import { FREEZE_NOTICE, REORDER_NOTICE, shipByNoteFor } from './checkoutCopy';
 import { PACK_OPTIONS, formatMoney, type Packs } from './checkoutTypes';
 import { describeCheckoutError, interpretCancelOutcome, type ErrorView } from './errorCopy';
 import { buildThumbnailInput, qrSummaryLine } from './thumbnailInput';
@@ -482,7 +483,13 @@ function QuantityStep({ packs, onPick, onContinue }: { packs: Packs | null; onPi
         {PACK_OPTIONS.map((option) => (
           <label key={option.packs} className={`cc-option${packs === option.packs ? ' is-selected' : ''}`}>
             <input type="radio" name="packs" value={option.packs} checked={packs === option.packs} onChange={() => onPick(option.packs)} />
-            <span className="cc-option__cards">{option.cards} cards</span>
+            <span className="cc-option__main">
+              <span className="cc-option__cards">{option.cards} cards</span>
+              <span className="cc-option__each">
+                {formatMoney(option.pricePerCardCents)} per card
+                {option.savingsPercent > 0 && <span className="cc-option__save">Save {option.savingsPercent}%</span>}
+              </span>
+            </span>
             <span className="cc-option__price">{formatMoney(option.totalCents)}</span>
           </label>
         ))}
@@ -542,7 +549,10 @@ function SummaryStep({
   return (
     <CheckoutQuote
       before={before}
-      lines={[{ label: 'Cards', value: `${quote.cards} cards` }]}
+      lines={[
+        { label: 'Cards', value: `${quote.cards} cards` },
+        { label: 'Price per card', value: formatMoney(Math.round(quote.priceCents / quote.cards), quote.currency) },
+      ]}
       total={formatMoney(quote.priceCents, quote.currency)}
       taxNote="Shipping is included. Tax, if applicable, is calculated at checkout."
       extra={

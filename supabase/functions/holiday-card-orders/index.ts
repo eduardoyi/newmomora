@@ -398,7 +398,7 @@ async function handleQuote(
   const denied = await authorizeWrite(dependencies, supabase, order.family_id, callerId);
   if (denied) return denied;
 
-  if (!isValidPacks(body.packs)) return errorResponse('packs must be 2, 3, 5 or 10', 400, 'PACKS_INVALID');
+  if (!isValidPacks(body.packs)) return errorResponse('packs must be 1, 2, 3, 5 or 10', 400, 'PACKS_INVALID');
   const packs = body.packs;
 
   const validated = validateCardShippingAddress(body.address);
