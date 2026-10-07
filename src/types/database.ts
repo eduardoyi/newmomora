@@ -5305,6 +5305,7 @@ export type Database = {
         Args: { p_member_id: string }
         Returns: boolean
       }
+      keepsakes_overview: { Args: { p_family_id: string }; Returns: Json }
       link_family_member_account: {
         Args: { p_family_id: string; p_member_id: string; p_user_id: string }
         Returns: undefined

@@ -13,6 +13,7 @@ import {
   createContentReport,
   fetchMyBlockedFamilyAccounts,
   fetchMyContentReports,
+  setFamilyAccountBlocked,
 } from '@/services/content-safety';
 
 jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
@@ -29,6 +30,7 @@ const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedFetchReports = fetchMyContentReports as jest.MockedFunction<typeof fetchMyContentReports>;
 const mockedFetchBlocks = fetchMyBlockedFamilyAccounts as jest.MockedFunction<typeof fetchMyBlockedFamilyAccounts>;
 const mockedCreateReport = createContentReport as jest.MockedFunction<typeof createContentReport>;
+const mockedSetBlocked = setFamilyAccountBlocked as jest.MockedFunction<typeof setFamilyAccountBlocked>;
 
 describe('useContentSafety', () => {
   it('shares reveals across consumers but isolates them by authenticated account', async () => {
@@ -141,5 +143,38 @@ describe('useContentSafety', () => {
       expect(hook.result.current.isTargetReported('memory_illustration', 'memory-1', 'generation-a')).toBe(true);
       expect(hook.result.current.isTargetReported('memory_illustration', 'memory-1', 'generation-b')).toBe(false);
     });
+  });
+
+  it('marks the Keepsakes overview stale after a report and after a block', async () => {
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as never);
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1' } as never);
+    mockedFetchReports.mockResolvedValue({ data: [], error: null });
+    mockedFetchBlocks.mockResolvedValue({ data: [], error: null });
+    mockedCreateReport.mockResolvedValue({ data: 'r-new', error: null });
+    mockedSetBlocked.mockResolvedValue({
+      data: { id: 'b-new', family_id: 'family-1', blocker_user_id: 'user-1', blocked_user_id: 'user-2' } as never,
+      error: null,
+    });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { gcTime: Infinity } },
+    });
+    const invalidate = jest.spyOn(client, 'invalidateQueries');
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const hook = renderHook(() => useContentSafety(), { wrapper });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+    const expected = { queryKey: ['keepsakes-overview'], refetchType: 'none' };
+
+    await act(async () => {
+      await hook.result.current.report({ targetType: 'memory', targetId: 'memory-1', reason: 'privacy' });
+    });
+    expect(invalidate).toHaveBeenCalledWith(expected);
+
+    invalidate.mockClear();
+    await act(async () => {
+      await hook.result.current.setAccountBlocked({ shouldBlock: true, membershipId: 'm-2' });
+    });
+    expect(invalidate).toHaveBeenCalledWith(expected);
   });
 });

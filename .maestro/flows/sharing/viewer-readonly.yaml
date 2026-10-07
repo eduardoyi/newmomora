@@ -51,15 +51,20 @@ appId: com.memora.app
 - tapOn:
     id: timeline-view-list
 
-# Keepsakes: viewers see the family's films (Year Film P2) but never books or
-# the Create a book CTA. A family without films shows the gentle empty line
-# instead, so wait for either.
+# Keepsakes: viewers get "Family films" -- the family's films (Year Film P2)
+# but never books, cards or the storefront. A family without films shows the
+# gentle empty line instead, so wait for either.
 - tapOn:
     id: tab-keepsakes
 - extendedWaitUntil:
     visible:
-      id: "keepsakes-viewer-empty|keepsakes-year-.*"
+      id: "keepsakes-viewer-empty|keepsakes-library"
     timeout: 15000
+- assertVisible: "Family films"
+- assertNotVisible:
+    id: "keepsakes-store.*"
+- assertNotVisible:
+    id: keepsakes-needs-you
 - assertNotVisible:
     id: memory-books-create
 - assertNotVisible:

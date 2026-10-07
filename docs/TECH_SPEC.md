@@ -1271,6 +1271,71 @@ editable/orderable until its film is done; meanwhile the app and shop show "Prep
 - **`holiday_card_summary`** (dropped and recreated; same args, zero-row rules, fields and
   grant) gains a trailing **`readiness text`** column (null when no card).
 
+**Keepsakes overview** (migration `20261009120000_keepsakes_overview.sql`, pgTAP
+`supabase/tests/keepsakes_overview_test.sql`, rollback
+`supabase/rollbacks/20261009120000_keepsakes_overview_down.sql`, applied by hand; plan
+[keepsakes-redesign.md](plans/keepsakes-redesign.md) A1). One member RPC feeds the
+whole Keepsakes tab.
+
+- **`keepsakes_overview(p_family_id) → jsonb`** — `stable security definer`, **granted
+  to `authenticated`** (not `anon`). Raises `42501` for anonymous sessions and
+  non-members (like `year_films_enabled`). Owner-local dates (the family owner's
+  timezone, computed once per call via `year_film_owner_tz`). Shape:
+  ```
+  { recap: null | { month_start, delivers_on (YYYY-MM-DD, owner-local), moments, visuals,
+                    min_moments: 10, min_visuals: 6, picture_key: text|null },
+    has_viewers: bool|null, year_moments: int|null, holiday_pool: int|null,
+    holiday_min_pool: 20|null, holiday_ship_by_note: text|null, preview_key: text|null,
+    book_preview_keys: { "<family_member_id>": "<key>" }|null,
+    orders: [ { product: 'book'|'card', item_id: uuid, status: text, shipped_at: timestamptz|null } ] }
+  ```
+  - **`recap`** (all members): null unless the family passes `year_films_enabled`'s gates
+    **minus the ≥ 10 memories check** (rollout includes the family, `launch_date <=` the
+    next 1st, `billing_write_allowed`, an own child with a date of birth). `moments` /
+    `visuals` count the current owner-local month's pool; `picture_key` is the newest
+    pooled memory with a resolvable picture, excluding authors **the caller** hid
+    (`blocked_family_accounts` by blocker, the timeline's personal-block rule).
+  - **Owner/manager only** (`has_family_role(.., ['owner','manager'])`; otherwise the
+    field is `null`, `orders` is `[]`): `has_viewers` (any `viewer` membership);
+    `year_moments` (pooled count for the owner-local calendar year); `holiday_pool`
+    (the same window through the holiday card's pool: minus share-sensitive memories and
+    `worry | sad | weary` emotions) with `holiday_min_pool` = `HOLIDAY_MIN_POOL` (20);
+    `holiday_ship_by_note` (`holiday_card_settings.ship_by_note`, only while
+    `holiday_card_family_enabled`); `preview_key` (newest picture across the family, a
+    one-year lookback); `book_preview_keys` (the same, per **own child** by
+    `year_film_is_own_child`, memories tagged via `memory_family_members`; children with
+    no picture are omitted); `orders`.
+  - **`orders`**: per item, the single latest row (`created_at desc, id desc`) among
+    **paid-or-later, non-refunded** rows. Books: `paid | rendering | submitted |
+    in_production | shipped | delivered` (`shipped_at` is always null: the table has
+    none). Cards: `paid | submitted | in_production | shipped`, `card_id` not null.
+    Drafts, quotes, checkouts, cancelled, failed and refunded rows are ignored, so a
+    reorder in progress never displaces a shipped row. Family-wide on purpose (the shelf
+    shows family keepsakes whoever paid; `memory_book_orders`' own RLS is buyer-only).
+    Status only: never addresses, prices or tracking.
+- **`keepsake_pool(p_family_id, p_start, p_end_excl, p_caller, p_member_id,
+  p_picture_only, p_limit, p_with_holiday)`** — **internal helper, no client grant**
+  (`revoke all` from `public`, `anon`, `authenticated`; only `keepsakes_overview` calls
+  it). Returns one row per pooled memory with `is_visual`, `picture_key` and
+  `in_holiday_pool`. It **mirrors the Year Film worker's pool**: `mapFamilyRows`
+  (`year-film-context.ts`) and `rows.ts` for the exclusions (open/reviewing
+  `content_reports` on the memory; `onboarding_media_pending` — the boolean alone;
+  owner/manager-blocked authors via `year_film_parent_blocked_users`), `visualKind` /
+  `hasVideoClip` (`year-film-eligibility.ts`) for visuals (never audio; a ready
+  illustration without an open `memory_illustration` report; an image from
+  `memory_media` or the legacy `media_key` when no usable `memory_media` rows exist; a
+  video with null duration or ≥ 2000 ms) and `holidayPool` + `shareSensitiveIds`
+  (`year-film-script.ts`, ported to a Postgres regex) for the holiday pool. **A change to
+  any of those rules must change the helper too** (and the pgTAP test).
+  `picture_key`: illustration → `illustration_key`; video → its poster
+  (`preview_object_key`); image → `preview_object_key ?? object_key` (or the legacy
+  `media_key`); a visual memory with no resolvable key is skipped, never a null that
+  hides an older picture.
+- **Performance.** The owner timezone is computed once. Every scan is date-bounded
+  (month for the recap, calendar year for `year_moments` / `holiday_pool`, a one-year
+  lookback with `limit 1` for the previews, which stop early on `idx_memories_family_id_memory_date`).
+  The open-report set is read once per helper call (`content_reports` status index).
+
 ### 2.2 Indexes
 
 ```sql

@@ -197,3 +197,20 @@ export function yearFilmRoute(filmId: string, source?: YearFilmOpenSource): Href
 export function keepsakeRecapsRoute(year: number): Href {
   return `/(app)/keepsakes/recaps/${year}` as Href;
 }
+
+// The Keepsakes tab (docs/plans/keepsakes-redesign.md): the fallback for a
+// product page opened by a cold-start deep link, where there is nothing to go back to.
+export const keepsakesTabRoute = '/(app)/(tabs)/keepsakes' as Href;
+
+// Native product pages opened from the Keepsakes storefront
+// (docs/plans/keepsakes-redesign.md D3/D4/D5). Both are stack screens under
+// `app/(app)/keepsakes/` (no tab bar). `memberId` preselects the child on the
+// Memory Book page and is ignored by the holiday-card page.
+export type KeepsakeProduct = 'holiday-card' | 'memory-book';
+export function keepsakeProductRoute(product: KeepsakeProduct, memberId?: string): Href {
+  const path = `/(app)/keepsakes/${product}`;
+  if (product === 'memory-book' && memberId) {
+    return `${path}?memberId=${encodeURIComponent(memberId)}` as Href;
+  }
+  return path as Href;
+}

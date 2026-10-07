@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { useFamilyMemoryBooks, useMemoryBooks } from '@/hooks/useMemoryBooks';
-import { familyMemoryBooksQueryKey } from '@/hooks/queryKeys';
+import { familyMemoryBooksQueryKey, keepsakesOverviewQueryKey } from '@/hooks/queryKeys';
 import { useAuth } from '@/hooks/use-auth';
 import {
   countEligibleMemoriesForScope,
@@ -128,8 +128,10 @@ describe('useMemoryBooks', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const yearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
-    await act(async () => { await result.current.generate(yearOne.option); });
+    let outcome: string | undefined;
+    await act(async () => { outcome = await result.current.generate(yearOne.option); });
 
+    expect(outcome).toBe('started');
     expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({
       familyId: 'family-1',
       childId: 'child-1',
@@ -150,8 +152,10 @@ describe('useMemoryBooks', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const yearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
-    await act(async () => { await result.current.generate(yearOne.option); });
+    let outcome: string | undefined;
+    await act(async () => { outcome = await result.current.generate(yearOne.option); });
 
+    expect(outcome).toBe('exists');
     expect(mockedDispatch).not.toHaveBeenCalled();
     const afterYearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
     expect(afterYearOne.dispatchError).toBeNull();
@@ -176,8 +180,10 @@ describe('useMemoryBooks', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
     const yearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
-    await act(async () => { await result.current.generate(yearOne.option); });
+    let outcome: string | undefined;
+    await act(async () => { outcome = await result.current.generate(yearOne.option); });
 
+    expect(outcome).toBe('error');
     const afterFailure = result.current.rows.find((row) => row.option.label === 'Year One')!;
     expect(afterFailure.dispatchError).toBe('Something went wrong. Please try again.');
     // The DB row exists and is queued -- still shown as progress, not an
@@ -189,6 +195,47 @@ describe('useMemoryBooks', () => {
     expect(mockedDispatch).toHaveBeenCalledTimes(2);
     const afterRetry = result.current.rows.find((row) => row.option.label === 'Year One')!;
     expect(afterRetry.dispatchError).toBeNull();
+  });
+
+  it('returns "error" when the insert itself fails (not a conflict)', async () => {
+    mockedCreate.mockResolvedValue({ data: null, error: { message: 'insert failed', code: '500' }, conflict: false });
+
+    const { result } = renderHook(
+      () => useMemoryBooks({ familyId: 'family-1', childId: 'child-1', dateOfBirth: '2023-06-01' }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const yearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
+    let outcome: string | undefined;
+    await act(async () => { outcome = await result.current.generate(yearOne.option); });
+
+    expect(outcome).toBe('error');
+    expect(mockedDispatch).not.toHaveBeenCalled();
+    expect(result.current.rows.find((row) => row.option.label === 'Year One')!.dispatchError).toBe('insert failed');
+  });
+
+  it('invalidates the keepsakes overview after generate and retryDispatch', async () => {
+    mockedCreate.mockResolvedValue({ data: book({ id: 'new-book' }), error: null, conflict: false });
+    mockedDispatch.mockResolvedValue({ data: { success: true, status: 'generating' }, error: null });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { gcTime: Infinity, retry: false }, mutations: { gcTime: Infinity, retry: false } },
+    });
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(
+      () => useMemoryBooks({ familyId: 'family-1', childId: 'child-1', dateOfBirth: '2023-06-01' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const yearOne = result.current.rows.find((row) => row.option.label === 'Year One')!;
+    await act(async () => { await result.current.generate(yearOne.option); });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: keepsakesOverviewQueryKey('family-1') });
+
+    invalidate.mockClear();
+    await act(async () => { await result.current.retryDispatch(yearOne.option, 'new-book'); });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: keepsakesOverviewQueryKey('family-1') });
   });
 
   it('retries a failed scope by inserting a fresh row, leaving the failed row as history', async () => {

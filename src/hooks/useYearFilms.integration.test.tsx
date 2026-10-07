@@ -12,12 +12,10 @@ import {
   useYearFilmEditOptions,
   useMarkYearFilmViewed,
   useYearFilmPosters,
-  useYearFilmsEnabled,
   useYearFilmViews,
 } from '@/hooks/useYearFilms';
 import {
   fetchFamilyYearFilms,
-  fetchYearFilmsEnabled,
   fetchYearFilmViews,
   getYearFilmEditOptions,
   getYearFilmPosters,
@@ -32,7 +30,6 @@ jest.mock('@/hooks/use-auth', () => ({ useAuth: jest.fn() }));
 jest.mock('@/services/year-films', () => ({
   fetchFamilyYearFilms: jest.fn(),
   fetchYearFilmViews: jest.fn(),
-  fetchYearFilmsEnabled: jest.fn(),
   getYearFilmPosters: jest.fn(),
   markYearFilmViewed: jest.fn(),
   markYearFilmCompleted: jest.fn(),
@@ -43,7 +40,6 @@ jest.mock('@/services/year-films', () => ({
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedFetchFilms = fetchFamilyYearFilms as jest.MockedFunction<typeof fetchFamilyYearFilms>;
 const mockedFetchViews = fetchYearFilmViews as jest.MockedFunction<typeof fetchYearFilmViews>;
-const mockedEnabled = fetchYearFilmsEnabled as jest.MockedFunction<typeof fetchYearFilmsEnabled>;
 const mockedPosters = getYearFilmPosters as jest.MockedFunction<typeof getYearFilmPosters>;
 const mockedMarkViewed = markYearFilmViewed as jest.MockedFunction<typeof markYearFilmViewed>;
 const mockedMarkCompleted = markYearFilmCompleted as jest.MockedFunction<typeof markYearFilmCompleted>;
@@ -112,7 +108,6 @@ describe('useYearFilms hooks', () => {
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as ReturnType<typeof useAuth>);
     mockedFetchFilms.mockResolvedValue({ data: [], error: null });
     mockedFetchViews.mockResolvedValue({ data: [], error: null });
-    mockedEnabled.mockResolvedValue({ data: false, error: null });
     mockedMarkViewed.mockResolvedValue({ error: null });
     mockedMarkCompleted.mockResolvedValue({ error: null });
   });
@@ -290,27 +285,6 @@ describe('useYearFilms hooks', () => {
         await expect(result.current.mutateAsync('film-1')).rejects.toThrow('denied');
       });
       await waitFor(() => expect(result.current.isError).toBe(true));
-    });
-  });
-
-  describe('useYearFilmsEnabled', () => {
-    it('returns the server boolean', async () => {
-      mockedEnabled.mockResolvedValue({ data: true, error: null });
-
-      const { result } = renderHook(() => useYearFilmsEnabled('family-1'), { wrapper: createWrapper() });
-
-      await waitFor(() => expect(result.current.enabled).toBe(true));
-      expect(mockedEnabled).toHaveBeenCalledWith('family-1');
-    });
-
-    it('is false while loading and on error', async () => {
-      mockedEnabled.mockResolvedValue({ data: null, error: { message: 'x' } });
-
-      const { result } = renderHook(() => useYearFilmsEnabled('family-1'), { wrapper: createWrapper() });
-
-      expect(result.current.enabled).toBe(false);
-      await waitFor(() => expect(result.current.isError).toBe(true));
-      expect(result.current.enabled).toBe(false);
     });
   });
 

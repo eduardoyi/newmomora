@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import {
   calendarMemoriesQueryKeyBase,
+  keepsakesOverviewQueryKeyBase,
   memoriesQueryKeyBase,
   memoryDetailQueryKey,
   memoryMonthCountsQueryKeyBase,
@@ -157,6 +158,10 @@ export function setMemoryEmotionInCache(
 export function invalidateMemoryQueries(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
   queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+  // Memory create/edit/delete (and illustration retry) change the Keepsakes
+  // overview's moment counts and previews. Mark stale only: the Keepsakes tab
+  // stays mounted, and its focus refetch picks the change up.
+  queryClient.invalidateQueries({ queryKey: [keepsakesOverviewQueryKeyBase], refetchType: 'none' });
 }
 
 function compareMemoriesDesc(

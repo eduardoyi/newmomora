@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
+import { keepsakesOverviewQueryKeyBase } from '@/hooks/queryKeys';
 import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 import {
   createContentReport,
@@ -134,6 +135,8 @@ export function useContentSafety() {
         // native widget while the normal mutation subscription catches up.
         void clearMemoryWidgetForScope({ accountId: userId, familyId }).catch(() => undefined);
       }
+      // A reported memory/illustration leaves the recap pool and previews.
+      void queryClient.invalidateQueries({ queryKey: [keepsakesOverviewQueryKeyBase], refetchType: 'none' });
     },
   });
 
@@ -157,6 +160,8 @@ export function useContentSafety() {
       if (userId && input.shouldBlock) {
         void clearMemoryWidgetForScope({ accountId: userId, familyId }).catch(() => undefined);
       }
+      // Blocking (or unblocking) an author changes the overview's picture/previews.
+      void queryClient.invalidateQueries({ queryKey: [keepsakesOverviewQueryKeyBase], refetchType: 'none' });
     },
   });
 

@@ -1,11 +1,12 @@
 appId: com.memora.app
 ---
-# Keepsakes tab (docs/features/keepsakes.md): the tab opens, shows either the
-# family's book shelves or the one family pitch, and (for an owner/manager)
-# the Create a book CTA -- which opens the create sheet directly for a
-# one-child family or "Whose book?" first when there are several. Stops at
-# the open sheet -- no book is started. Assumes the account has at least one
-# child (otherwise the CTA reads "Go to Family").
+# Keepsakes tab (docs/features/keepsakes.md, docs/plans/keepsakes-redesign.md):
+# the tab opens with its header and the "Your keepsakes" library, and (for an
+# owner/manager) the "Make something" storefront -- whose Memory Book card
+# opens the native product page. Stops on the product page -- no book is
+# started. Assumes an owner/manager account whose family has at least one
+# film or book (otherwise the library shows the "first one is on its way" line
+# instead of `keepsakes-library`).
 - runFlow: ../auth/login.yaml
 - tapOn:
     id: tab-keepsakes
@@ -13,22 +14,17 @@ appId: com.memora.app
     visible:
       id: keepsakes-header
     timeout: 15000
-- assertVisible: "Made from your moments."
 - extendedWaitUntil:
     visible:
-      id: memory-books-create
+      id: keepsakes-library
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: keepsakes-store-memory-book
     timeout: 15000
 - tapOn:
-    id: memory-books-create
-- runFlow:
-    when:
-      visible:
-        id: child-picker-sheet
-    commands:
-      - tapOn:
-          id: "child-picker-.*"
-          index: 0
+    id: keepsakes-store-memory-book
 - extendedWaitUntil:
     visible:
-      id: create-book-sheet
+      id: keepsakes-product-memory-book
     timeout: 15000

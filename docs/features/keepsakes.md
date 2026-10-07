@@ -1,261 +1,406 @@
 # Feature: Keepsakes
 
-**Status:** `in-progress` (books shipped; films land with Year Film P2)
-**Last updated:** 2026-10-02
+**Status:** `in-progress` (tab redesign + native product pages built 2026-10-08; deploys with the `keepsakes_overview` migration and an OTA)
+**Last updated:** 2026-10-08
 **PRD reference:** [Memory Book plan](../plans/memory-book.md), [Year Film plan](../plans/year-film.md) §8
-**Plan:** [timeline-calendar-keepsakes.md](../plans/timeline-calendar-keepsakes.md) Phase C
+**Plans:** [keepsakes-redesign.md](../plans/keepsakes-redesign.md) (the tab, the storefront, the product pages; approved design "Keepsakes Redesign v3") ·
+[timeline-calendar-keepsakes.md](../plans/timeline-calendar-keepsakes.md) Phase C (the original tab)
 
 ## Overview
 
-The Keepsakes tab (which replaced the Calendar tab) is the home for everything
-Momora *makes* from a family's memories: Memory Books and Year Films
-(monthly, birthday, year-end; see [year-film.md](./year-film.md)). Books used to live
-one child at a time behind a row on each child's profile. They now live
-together, one shelf per child, and the profile keeps a "See {name}'s
-keepsakes" link into that child's shelf.
+The Keepsakes tab is the home for everything Momora *makes* from a family's
+memories: Memory Books, holiday cards and Year Films (monthly, birthday,
+year-end; see [year-film.md](./year-film.md)). It has three parts, top to
+bottom:
+
+1. A slim **"needs you"** line, only when an action is waiting.
+2. **"Make something"**: a storefront row of product cards. Each opens its own
+   native product page.
+3. **"Your keepsakes"**: a library with one shelf per year, its own filter,
+   child chips and status badges.
+
+**No price appears anywhere in the app.** Prices live in the shop, so changing
+them needs no app update. Product pages carry a "Free to make" block instead
+(making is included with Momora Plus; you only pay if you decide to print), and
+UI copy avoids the word "generate".
+
+## Roles
+
+| Role | Sees |
+|------|------|
+| Owner, manager | Everything: the needs-you line, the storefront, books, cards and films, order badges |
+| Viewer | **"Family films"** only: the page title changes, there is no storefront, no "Your keepsakes" wording, no needs-you line, no order badges. Next-up recap tiles still show. The filter button sits in the page header (owners and managers get it on the "Your keepsakes" header) |
+
+- **Privacy cue.** When the family has at least one viewer
+  (`keepsakes_overview.has_viewers`), "Books and cards are only visible to
+  owners and managers." sits under "Your keepsakes" (`keepsakes-privacy`), and
+  each product page carries "Viewers in your family won't see this
+  {card|book}. Your surprise is safe." Without viewers neither shows.
+- A viewer (or a deep link with no access) who reaches a product page is sent
+  back: both pages call `leave()` once their first state settles.
 
 ## User-facing behavior
 
-- **Tab** (`app/(app)/(tabs)/keepsakes.tsx`, tab icon: gift / `redeem`):
-  - Title "Made from your moments."
-  - **One section per year**, newest first (`buildKeepsakeYears`,
-    `keepsakes-year-{year}`; the current year always exists, and a year with
-    nothing to draw renders nothing). Films file under the year of their
-    `placement_date`; books under the year of `scope_end_date` (an
-    "everything" book, which has none, under `created_at`).
-    - **Family films** (`keepsakes-family-films-{year}`): the year-end film as
-      a large tile (cover about half the width), then the latest **3** monthly
-      recaps as small covers. With more than three, "See all {year} recaps"
-      (`keepsakes-recaps-{year}`) opens the grid at
-      `app/(app)/keepsakes/recaps/[year].tsx` (`keepsakeRecapsRoute(year)`;
-      logs `year_film_recaps_opened`).
-    - **Upcoming card** (`keepsakes-upcoming-recap`, current year only): a
-      dashed "{Month} recap · {Mon 1}" card, e.g. "October recap · Nov 1".
-      It shows only when `useYearFilmsEnabled(familyId)` (the server's
-      `year_films_enabled`) is true, so it never promises a recap that can't
-      come.
-    - **One shelf per own child** (`keepsakes-shelf-{year}-{memberId}`, a
-      horizontal row): that child's **birthday-film covers first, then that
-      year's book tiles** (ready / generating / failed). "Own child" =
-      `isOwnChild` (`src/utils/family-relationships.ts`, mirrors the Edge
-      rule): an explicit role wins (`child` yes, any other role no), and
-      unsorted members fall back to under-13 by birthday. A niece sorted as
-      "Cousin" gets no shelf, but anyone with a book or a birthday film keeps
-      one (never hide an existing book). A shelf with nothing in it is
-      skipped.
-    - The current year's shelf carries the compact "Create {name}'s first
-      book" tile for a child with no book at all (owners/managers only).
-  - Film tiles (`keepsakes-film-{filmId}`) open the player:
-    `router.push(yearFilmRoute(id, 'keepsakes'))`. Titles come from
-    `filmTitle`; covers are `FilmCover`.
-  - **Tile states** (`filmDisplayState`, see [year-film.md](./year-film.md)
-    "Remaking"): a film whose edit removed moments is *remaking* -- the same
-    tile slot shows a paper placeholder with a soft pulse and "Remaking…"
-    (`keepsakes-film-{filmId}-remaking`, not pressable, no poster request);
-    a film re-rendering for a music/quote edit is *updating* -- the normal
-    playable tile plus an "Updating…" badge (`keepsakes-film-{filmId}-updating`).
-    A blocked film whose remake failed is hidden (filtered in the hook). The
-    recaps grid and the child page use the same tile, so the states apply there.
-- **Holiday card tile** (`holiday-card-tile`, tab only, owners/managers only, above the
-  year sections in its own block so an empty year can't hide it): shown when the family
-  has this year's card or the server switch is on (`holiday_card_summary`). States:
-  **make** ("Make your holiday card", opens the greeting sheet), **generating**
-  ("Preparing your card…"), **ready** ("Edit & order your card"), **failed** ("We couldn't
-  make your card", hello@usemomora.com) and **ordered** ("Your cards are ordered"); all but
-  *make* open `shop.usemomora.com/c/<cardId>` through `openShopUrl` (signed-in handoff).
-  Viewers never see it. Details: [holiday-cards.md](./holiday-cards.md).
-- **Empty state** (no books **and** no films anywhere): **one family-level
-  pitch**, not one per child, below whatever year sections exist (e.g. the
-  upcoming card).
-  - **Films first (2026-10-02):** until films are really coming
-    (`year_films_enabled`: 10+ moments this month and a kid with a birthday,
-    when the current year's section shows the dated upcoming card instead),
-    the pitch opens with a FILMS block (`keepsakes-films-intro`): "A little
-    film of your month." -- any month with 10+ moments becomes a film on the
-    1st, birthdays get their own (plus "once your kids' birthdays are in
-    Family" when no own child has one). It explains, never promises. The
-    book part follows under a BOOKS eyebrow. The Family-page stack variant
-    stays books-only.
-  - Headline: "Your family's years, printed and bound." The layflat bullets
-    are unchanged, and the example cover is a real photo **or finished
-    illustration** of the first child (`fetchExampleCoverAssetKey`), falling
-    back to their portrait until one exists. While the cover is the portrait
-    fallback, the lookup re-runs on every tab focus, so the first
-    illustration replaces it as soon as it lands (2026-10-02; illustrations
-    were missing, so a family fresh out of onboarding got a blank cover).
-  - The CTA "Create a book" opens a **"Whose book?"** picker when there's
-    more than one shelf. It goes straight to the create sheet for a
-    one-child family.
-  - With no child at all, the CTA reads "Go to Family" and shows a hint to
-    add the child with their birthday.
-- **Create sheet with nothing makeable yet (2026-10-02):** when no book was
-  ever requested and every scope's loaded count is under the ~30-memory
-  threshold (`hasNoBookReadyScope`, `create-book-sheet.tsx`), the sheet
-  replaces the list of dead-end options with "{name}'s first book needs a
-  few more memories", the count against ~30 with a progress bar, a "Look
-  through my photos" gallery-import offer (only when gallery import is
-  enabled; it closes the sheet and opens `/(app)/gallery-import` with
-  `surface: 'keepsakes'`), and a quiet "See all options anyway".
-- **Tiles:** ready book → opens the web book (`shop.usemomora.com/b/<id>`);
-  failed → the retry sheet; generating → not tappable (it polls).
-- **Viewers:** see the **films** (year sections, recaps, birthday films, the
-  upcoming card) and **no book UI** -- no book tiles, no first-book tile, no
-  Create CTA (books stay owner/manager-only, owner decision 2026-09-15; RLS
-  already allows select). `keepsakes-viewer-empty` ("Books and films your
-  family makes will show up here.") shows only when there are no films either.
-- **One child's keepsakes** (`app/(app)/keepsakes/[memberId].tsx`,
-  `memoryBooksRoute(memberId)`):
-  - Opened from the child profile row "See {name}'s keepsakes" (owner/manager
-    only, as before) and from book-ready/failed pushes.
-  - **Birthday films** (all years, newest first, `keepsakes-child-films`)
-    sit above the existing books body; viewers see them too.
-  - The same books body filtered to one child, with the personalized pitch
-    ("A year of {name}, printed and bound.") when there are neither books nor
-    films. Films but no book shows the first-book tile instead of the pitch.
-  - Viewers who reach it see existing books read-only.
-  - On a cold-start push with no history, Back goes to Family.
-- **Recaps grid** (`app/(app)/keepsakes/recaps/[year].tsx`): a 3-column grid of
-  that year's monthly recaps, newest first. `keepsakes/recaps/[year]` and
-  `keepsakes/[memberId]` are sibling routes with no `_layout`; the extra path
-  segment keeps them from colliding.
+### The tab
+
+`app/(app)/(tabs)/keepsakes.tsx` keeps the focus handling (`keepsakes_opened`,
+a fresh `todayIso` on every focus) and renders `KeepsakesTab`
+(`src/components/keepsakes/keepsakes-tab.tsx`). The page header lives in the
+tab component (title "Keepsakes", or "Family films" for viewers;
+`keepsakes-header`) so the viewer's header filter button and the owner's
+section button drive the same filter state and sheet.
+
+Order: header, needs-you line, storefront (owners/managers), library.
+
+#### Needs-you line (`needs-you-banner.tsx`, `keepsakes-needs-you`)
+
+One slim line, never dismissable; it clears itself once handled. Chosen by
+`pickNeedsYou` (`src/utils/keepsakes.ts`), at most one, owners and managers only,
+in this priority:
+
+1. The holiday card is **ready** ("Your holiday card is ready to order").
+2. The holiday card **failed** ("Your holiday card couldn't be made").
+3. The most recently updated **failed book** ("{Name}'s book couldn't be made").
+
+Limits:
+- Card banners show only while `holiday_card_summary.enabled` (the season is
+  open), so "ready" nags at most until the season closes.
+- A failed-book banner shows only while the failure is under 30 days old
+  (`FAILED_BOOK_BANNER_DAYS`, by `updated_at`). After that it is just the badge
+  on the shelf, so an abandoned book does not nag forever.
+- Only each scope's *relevant* book counts (`buildRelevantBookRows` applies
+  `pickRelevantBook`): a failed book followed by a ready retry gives no banner.
+
+Tap: card -> `openShopUrl(holidayCardWebUrl(cardId))`; failed book -> the
+retry sheet for that child (`MemoryBookFlowHost`).
+
+#### Storefront (`make-something-row.tsx`, `keepsakes-store`)
+
+A horizontal row of neutral product cards from the registry (see "Adding a
+product"). Tap -> `router.push(keepsakeProductRoute(product))` and
+`keepsakes_product_opened { product }`.
+- **Holiday card** (`keepsakes-store-holiday-card`): only in season
+  (`holiday_card_summary.enabled`, the server switch) and for owners/managers.
+  It leads the row, wider, with the card object (`HolidayCardObject`) on the
+  family's newest picture (`overview.preview_key`), the subtitle "Your card
+  could look like this, with a letter from your year." and a pill with
+  `overview.holiday_ship_by_note` verbatim (hidden when null).
+- **Memory Book** (`keepsakes-store-memory-book`): always for owners/managers.
+  The `BookCoverTile` uses `overview.book_preview_keys[firstOwnChildId]` (a wash
+  when none).
+- The storefront waits for `useHolidayCard` to settle so an in-season card does
+  not pop in and shift the row.
+
+#### Library (`keepsakes-library.tsx`, `keepsakes-library`)
+
+- **Header row:** eyebrow "YOUR KEEPSAKES" plus the filter button
+  (`keepsakes-filter-button`, with an active-count dot). Hidden when the library
+  holds nothing but an upcoming recap.
+- **Filter** (`keepsakes-filter-sheet.tsx`): Type (All / Films / Books / Holiday
+  cards) and Year (viewers: Year only). Child chips (`keepsakes-chip-{memberId|all}`,
+  hidden with fewer than 2) sit in the header too. A child chip keeps only that
+  child's items (books, birthday films); family-wide items (recaps, year-end
+  film, the card, the upcoming recap) show only under "All". The state resets
+  when the family changes, and a selection whose child or year no longer exists
+  is dropped. No match -> "Nothing matches this filter" + Reset
+  (`keepsakes-filter-empty`).
+- **One shelf per year** (`keepsakes-year-{year}`): a horizontal row on a shared
+  baseline. The current year (and the year holding the upcoming recap) is always
+  open; past years are folded rows "{year} · {N} keepsakes" (viewers: "{N}
+  films") that open in place and fold again from the year header
+  (`keepsakes-year-toggle-{year}`; logs `keepsakes_year_toggled`). Items:
+  film poster (`keepsake-film-tile.tsx`, `variant: 'shelf'`), book hardcover
+  (`BookCoverTile`), holiday card front with an envelope peeking out behind it
+  (`shelf-holiday-card.tsx`), and the **next-up recap tile**
+  (`upcoming-recap-tile.tsx`, `keepsakes-upcoming-recap`). A year with more than 3
+  monthly recaps ends its row with an "All {year} recaps" tile
+  (`keepsakes-recaps-{year}`, `keepsakeRecapsRoute(year)`).
+- **Next-up recap tile:** dashed with a progress bar and "{N} more moments this
+  month" (or "{n} more with a picture") before the floors (10 moments, 6
+  visuals), solid with "arrives {Mon d}" in Caveat after. The faded picture is the
+  newest moment of the month that has one (`recap.picture_key`); a flat tile when
+  none. The month and dates come from the owner-local `recap.month_start` /
+  `delivers_on`, never the device clock. Known gap: from 00:00 to ~19:00 on the
+  1st it restarts for the new month before the last film surfaces.
+- **Badges** (`keepsake-badge.tsx`): a pill with a dot on the item. Raspberry
+  (`needsYou`) = waiting on you; lavender (`progress`) = in progress. Delivered
+  items and finished films carry no badge; there is no "New" badge.
+
+| Item | State | Badge |
+|------|-------|-------|
+| Book | queued / generating | "Being made" (progress) |
+| Book | failed | "Couldn't be made" (needs you) |
+| Book | ready + order paid / rendering / submitted / in production | "Ordered" (progress) |
+| Book | ready + order shipped | "Shipped" (progress; no date: `memory_book_orders` has none) |
+| Book | ready + order delivered, or no order | none |
+| Card | generating | "Being made" (progress) |
+| Card | ready | "Ready to order" (needs you) |
+| Card | failed | "Couldn't be made" (needs you) |
+| Card | ordered (`summary.ordered`) | "Ordered", or "Shipped · {MMM d}" once the order is `shipped` (progress) |
+| Film | any | none (remaking / updating are handled inside `KeepsakeFilmTile`) |
+
+- **States:** a spinner until members, films and (owners) books load; an inline
+  `keepsakes-error` + "Try again" if films or books fail; if the overview RPC
+  fails the tab degrades silently (no upcoming tile, no order badges, no privacy
+  line). A viewer with no films keeps `keepsakes-viewer-empty`; an owner with an
+  empty library sees "Films show up here on their own. Your first one is on its
+  way." Any populated library, including a viewer with only past-year films,
+  renders `keepsakes-library`.
+- **Film tile states** (`filmDisplayState`, see [year-film.md](./year-film.md)
+  "Remaking"): a film whose edit removed moments is *remaking* (paper
+  placeholder, "Remaking…", `keepsakes-film-{id}-remaking`, not pressable); one
+  re-rendering for a music/quote edit is *updating* (playable plus an
+  "Updating…" badge, `keepsakes-film-{id}-updating`). Film tiles
+  (`keepsakes-film-{id}`) open the player with `yearFilmRoute(id, 'keepsakes')`.
+- **Cards on the shelf:** `holiday_card_summary` returns only the newest card, so
+  the card is on the shelf from creation until Jan 31 once ordered (today's
+  behavior). A history of past-year cards is out of scope.
+
+### Product pages
+
+Both are **stack screens** under `app/(app)/keepsakes/` (no tab bar), registered
+in `app/(app)/_layout.tsx`, built from the shared pieces in
+`src/components/keepsakes/product-page.tsx` (`ProductPageShell`, `ProductStage`,
+`ProductHeading`, `EligibilityBox`, `PrivacyNote`, `FactsBox`, `OptionRow`,
+`ProductCtaBar`) and `free-to-make.tsx` (`FreeToMake`). Layout: a 40px round white
+back button; a stage (surface box, radius 24, ~300 high) holding the product
+object; eyebrow, title and body; the "Free to make" block; the product's own
+content; privacy note (only with viewers); facts; and a **fixed bottom CTA bar**
+(border-top, a 52-high primary button, a 12px sub-line) that adds the live bottom
+safe-area inset. There are no text inputs. "Leave" is shared
+(`useLeaveKeepsakesPage`): `router.back()`, or `router.replace(keepsakesTabRoute)`
+when there is no history (a cold-start deep link); `leaveAfterModalDismiss` waits
+~450 ms so a closing `overFullScreen` Modal never gets stuck under a popped screen.
+
+#### Holiday card (`holiday-card.tsx`, `keepsakeProductRoute('holiday-card')`)
+
+- Testids: `keepsakes-product-holiday-card`, `holiday-card-product-cta`,
+  `keepsakes-product-back`, `holiday-card-product-stage`.
+- Stage: `HolidayCardObject` (width 154) on `overview.preview_key`; the family
+  line is `holidayCardFamilyLine(own children's first names, year)`.
+- Eyebrow "HOLIDAY CARDS · {year}", title "Your family, on this year's card.", the
+  facts "5×7, printed on both sides. Shipped to your door." / the QR fact /
+  "One card per family each year. Order more copies anytime.", and the ship-by pill
+  (`overview.holiday_ship_by_note`, hidden when null).
+- **Eligibility and the QR promise.** Card create has no floor: below the
+  holiday film floor the card ships *without* a QR film. So the page compares
+  `overview.holiday_pool` with `holiday_min_pool` (20): at or above, "Your {year}
+  has {year_moments} moments, plenty for the letter." and "Scan the back to watch
+  a short film made for this card."; below, "Your {year} has {N} moments so far."
+  and "Add a few more moments and the back links to a short film of your year."
+  With no overview: no eligibility line and no QR fact.
+- **CTA** follows `holidayCardTileState(summary, todayIso)`, *not* `cardId !== null`
+  (the summary returns the newest card of any year):
+  - `make` -> "Make our {year} card" -> `HolidayGreetingSheet` -> `create`. A
+    `createdRef` is set only when the outcome is a **new** card; closing the sheet
+    then leaves the page (after the Modal dismiss). A refused create
+    (`subscription_required`, disabled...) keeps the user on the page and the sheet
+    shows why. An existing card's Continue opens the shop and stays.
+  - `generating | ready | failed | ordered` -> "Open your card" -> `openShopUrl`.
+  - **First-load latch:** the page latches the state when it first settles; a
+    first-load `null` (out of season, no billing, viewer, deep link) leaves. A state
+    that turns `null` *later* (a refused create refetching a summary that hides the
+    card) never auto-leaves; the page keeps showing the last real state.
+
+#### Memory Book (`memory-book.tsx`, `keepsakeProductRoute('memory-book', memberId?)`)
+
+- Testids: `keepsakes-product-memory-book`, `memory-book-product-cta`,
+  `memory-book-scope-{scopeKey}`, `memory-book-scope-more`,
+  `memory-book-child-{memberId}`, `memory-book-eligibility`, `memory-book-thin`,
+  `memory-book-import-photos`, `memory-book-dispatch-error`.
+- Stage: `BookCoverTile` (width 200) with `overview.book_preview_keys[childId]` (a
+  wash when none). Eyebrow "MEMORY BOOK", title "A year of {name}, printed and
+  bound."
+- **Who it's for:** chips for the family's own children (`isOwnChild`, or anyone
+  who already has books, like the shelves); hidden with a single child. `?memberId=`
+  preselects. No own children: the hint "Add your child to make a book" and a "Go
+  to Family" button (`familyRosterRoute`).
+- **Which part of {name}'s story** (the name, never a pronoun): `splitScopeOptions`
+  (`src/utils/keepsakes.ts`) gives the two newest *completed* age-years as `visible`
+  (ones that already have a book included, labeled "already made" / "being made" /
+  "couldn't be made"; Everything fills in with fewer than 2) and the rest as
+  `more`, shown under "See {N} more" (`memory-book-scope-more`) in groups Years of
+  life / Calendar years / Everything, newest first. The in-progress age-year and
+  the current calendar year carry a caution line. Calendar years and in-progress
+  periods are never `visible` (claiming one mid-period locks the window, the rule
+  behind `pickSuggestedScopes`). Default selection: the first `visible` without a
+  book, else Everything if it has none, else the first `visible`.
+- **Eligibility:** "{N} moments in this period." for the selected scope. A thin
+  period (below `MEMORY_BOOK_THIN_THRESHOLD`, 30) is **warned, not blocked**: "Not
+  many moments yet" plus the gallery-import action (when gallery import is enabled;
+  same `/(app)/gallery-import` push with `surface: 'keepsakes'` as the stack path).
+- Facts: "Layflat, 8.3×8.3 inches. Thick pages that open completely." / "Chosen for
+  you. We pick the moments that tell the story."
+- **Per-child state.** Everything scope-dependent is in `ChildBookPage`, **keyed by
+  child id**, which calls `useMemoryBooks` for that one child. Its `pendingKeys` and
+  `dispatchErrors` are keyed by scope keys (`everything:null:null` and the calendar
+  years are shared across children), so a shared instance would leak "being made"
+  and error state between chips.
+- **CTA** (`bookCtaFor`, `src/utils/keepsake-product-pages.ts`):
+  - no book -> "Make {name}'s {scope} book" -> `generate(option)`, which returns
+    `'started' | 'exists' | 'error'`: `started` -> `setPendingKeepsakesToast("We're
+    making your {scope} book…")` and leave; `exists` -> stay (the row refetches and
+    shows its real status); `error` -> stay and show the row's `dispatchError`.
+  - ready -> "Open {name}'s book" -> `openShopUrl(memoryBookWebUrl(id))`.
+  - failed -> "Try again" -> `generate(option)` (a fresh row; the failed one stays as
+    history).
+  - queued with a `dispatchError`, or queued for more than 10 minutes
+    (`STUCK_QUEUE_MS`) -> "Try again" -> `retryDispatch(option, bookId)` (re-dispatch
+    the same row; otherwise a failed dispatch is a permanently disabled button).
+  - queued/generating, healthy -> disabled "Being made…".
+- The toast reaches the tab through `src/lib/keepsakes-toast.ts` (a module store:
+  the tab never unmounts, so a route param could re-show it on every focus);
+  `KeepsakesTab` consumes it on focus and shows `BookToast`.
+
+### One child's keepsakes (stack, unchanged)
+
+`app/(app)/keepsakes/[memberId].tsx` (`memoryBooksRoute(memberId)`), opened from
+the child profile row "See {name}'s keepsakes" (owners/managers) and from
+book-ready/failed pushes. Birthday films (all years, newest first,
+`keepsakes-child-films`) sit above that child's books; the same books body filtered
+to one child with the personalized pitch ("A year of {name}, printed and bound.")
+when there are neither books nor films, the `CreateBookSheet`/`RetryBookSheet`
+flow, and viewers see existing books read-only. On a cold-start push with no
+history, Back goes to Family. This path still uses `KeepsakesBody`
+(`variant="stack"`, `src/components/memory-books/memory-books-body.tsx`), which also
+exports `MemoryBookFlowHost` (used by the tab's retry host).
+
+### Recaps grid
+
+`app/(app)/keepsakes/recaps/[year].tsx`: a 3-column grid of that year's monthly
+recaps, newest first, reached from the "All {year} recaps" tile
+(`year_film_recaps_opened`). The product pages and `[memberId]` are sibling routes
+with no `_layout`; `holiday-card` and `memory-book` are static segments, so they
+win over the dynamic `[memberId]`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  Tab[Keepsakes tab] --> Body[KeepsakesBody]
-  Route[keepsakes/memberId] --> Body
-  Body -->|one query, polls while active + focused| Fam[useFamilyMemoryBooks]
-  Fam --> DB[(memory_books)]
-  Body -->|focus refetch; polls 20s only while a film is remaking/updating| Films[useFamilyYearFilms]
-  Films --> FDB[(year_films)]
-  Body -->|buildKeepsakeYears| Years[KeepsakeYearSection per year]
-  Years --> Covers[FilmCover posters]
-  Body -->|buildMemoryBookRows + scope options| Shelves[Book tiles]
-  Body -->|on Create / failed tile| Host[MemoryBookFlowHost]
-  Host --> Hook[useMemoryBooks childId]
-  Hook -->|eligibility, example cover, generate| DB
-  Hook -->|invalidate| Fam
+  Screen[tabs/keepsakes.tsx] --> Tab[KeepsakesTab]
+  Tab --> Ov[useKeepsakesOverview]
+  Ov -->|RPC| RPC[(keepsakes_overview)]
+  Tab --> Fam[useFamilyMemoryBooks]
+  Tab --> Films[useFamilyYearFilms]
+  Tab --> HC[useHolidayCard]
+  Tab -->|buildRelevantBookRows, buildShelfItems, pickNeedsYou, applyKeepsakesFilter| U[src/utils/keepsakes.ts]
+  Tab --> Store[MakeSomethingRow]
+  Store -->|KEEPSAKE_PRODUCTS| Reg[src/constants/keepsake-products.ts]
+  Store -->|keepsakeProductRoute| Pages[holiday-card.tsx / memory-book.tsx]
+  Pages --> HC
+  Pages --> Ov
+  Pages -->|per child, keyed| MB[useMemoryBooks]
+  Pages -->|setPendingKeepsakesToast| Toast[keepsakes-toast.ts]
+  Toast --> Tab
 ```
 
-- **One family-wide query.** `useFamilyMemoryBooks` (`fetchMemoryBooksForFamily`,
-  key `familyMemoryBooksQueryKey` = `['memory-books', familyId, 'family']`)
-  feeds every shelf, so shelf membership and contents can't disagree.
-  - Rows per child: `buildMemoryBookRows(buildMemoryBookScopeOptions(dob,
-    todayIso), books)`. This is the same pure builder `useMemoryBooks` uses,
-    including the `pickRelevantBook` active > ready > failed tie-break.
-  - Polls every 4s only while a book is queued/generating **and** the screen
-    is focused, because tab screens never unmount.
-- **Films** come from `useFamilyYearFilms` (one family query, `placement_date`
-  desc, minus `hidden` films). Books poll while a book is generating; films
-  normally don't -- they arrive by push, the drawer, or the body's refetch each
-  time the tab is focused (tab screens never unmount). The exception: while a
-  film is `remaking`/`updating` the hook refetches every 20 s, and only while
-  the screen is focused (`KeepsakesBody` passes its `isFocused`; the recaps
-  route uses `useIsFocused`). The tab doesn't fetch books for viewers.
-- **`KeepsakesBody`** (`memory-books-body.tsx`) owns the one ScrollView, the
-  CTA overlay, the toast, the pitch and the create/retry host;
-  `KeepsakeYearSection` (`src/components/keepsakes/`) is presentational and
-  receives the book tiles and the first-book tile from the body as render
-  props, so it never touches the books hooks.
-- **Create/retry is per child and lazy.** `MemoryBookFlowHost` mounts
-  `useMemoryBooks` (eligibility counts, suggestions, `generate`) only once a
-  flow starts, for that one child.
-  - It stays mounted after its sheet closes so an in-flight generate call can
-    finish.
-  - `useMemoryBooks` invalidates the family key after every write, so the
-    shelf updates without waiting for a poll.
-- **"Today"** decides the scope options. The tab recomputes it on every focus
-  and passes it down. It's part of the eligibility query key
-  (`memoryBookEligibilityQueryKey(..., todayIso)`), so a tab left open past
-  midnight doesn't reuse stale counts.
-- **CTA and toast offsets:** on the tab they clear the floating tab bar
-  (`max(28, insets.bottom + 8)` on Android, 28 on iOS, plus the ~50pt bar).
-  On the stack route they sit above the bottom inset.
+- **The tab owns the queries**: `useFamily`, `useFamilyMembers`,
+  `useFamilyMemoryBooks` (one family-wide books query, polls every 4 s only while a
+  book is queued/generating *and* the tab is focused), `useFamilyYearFilms`,
+  `useKeepsakesOverview` and a single `useHolidayCard`, plus the filter, the
+  open-years set, the retry host and the toast. The product pages call the hooks
+  they need themselves; the query cache is shared, so there is no second fetch.
+- **Pure helpers** (`src/utils/keepsakes.ts`, no React, "today" passed in):
+  `buildRelevantBookRows` (books deduplicated through the per-child row logic first),
+  `buildShelfItems`, the badge mapping, `groupShelfByYear`, `yearSummaryLabel`,
+  `pickNeedsYou`, `applyKeepsakesFilter`, `splitScopeOptions`.
+  `holidayCardTileState` lives in `src/utils/holiday-card-state.ts`.
+- **"Today"** decides scope options and what a previous-year card means. The tab
+  recomputes it on every focus; a stack page fixes it for the visit.
+
+### The overview RPC (`keepsakes_overview`)
+
+`public.keepsakes_overview(p_family_id) returns jsonb`, stable, security definer
+(migration `supabase/migrations/20261009120000_keepsakes_overview.sql`, pgTAP
+`supabase/tests/keepsakes_overview_test.sql`, rollback in `supabase/rollbacks/`).
+Parsed defensively in `src/services/keepsakes.ts` (`KeepsakesOverview`); the hook
+(`useKeepsakesOverview`) uses `staleTime` 30 s, refetches on focus when stale, does
+not poll, and yields `overview: null` on an RPC error (the UI degrades, never
+crashes). Contract: [TECH_SPEC.md](../TECH_SPEC.md) next to the holiday-card RPC.
+
+| Field | Who | Used for |
+|-------|-----|----------|
+| `recap` (`month_start`, `delivers_on`, `moments`, `visuals`, `min_*`, `picture_key`) | everyone | the next-up recap tile (null unless the family passes the `year_films_enabled` gates except the >=10 check) |
+| `has_viewers` | owner/manager | the privacy cue |
+| `year_moments`, `holiday_pool`, `holiday_min_pool` (20) | owner/manager | the card page's eligibility line and QR promise |
+| `holiday_ship_by_note` | owner/manager | the ship-by pill (null out of season) |
+| `preview_key` | owner/manager | the card object (storefront + card page) |
+| `book_preview_keys` (`childId -> key`) | owner/manager | the book cover on the storefront and the book page |
+| `orders` (status only, never address or price) | owner/manager | order badges; latest paid-or-later row per item, refunds excluded |
+
+The pool mirrors the film worker (`year-film-eligibility.ts`,
+`year-film-context.ts`): reported / onboarding-pending / blocked-author memories are
+out, audio is never a visual, and the preview keys also exclude reported
+illustrations and the caller's personal blocks, so a hidden image never resurfaces.
+The query is invalidated by `useHolidayCard.create`, `useMemoryBooks`
+`generate`/`retryDispatch` and the memory / report / block mutations; push handlers
+are not invalidation points (the focus refetch covers them).
+
+## Adding a product
+
+The storefront maps over `KEEPSAKE_PRODUCTS` in `src/constants/keepsake-products.ts`:
+
+```ts
+{ id, title, subtitle, cardWidth, isAvailable(ctx), route() }
+```
+
+To add one (say, a calendar):
+1. Add its id to `KeepsakeProduct` in `src/lib/routes.ts` and make
+   `keepsakeProductRoute` build its path (add a test in `routes.test.ts`).
+2. Add the page `app/(app)/keepsakes/<id>.tsx` and register it in
+   `app/(app)/_layout.tsx`. Build it from `product-page.tsx` +
+   `FreeToMake` (extend `FreeToMakeProduct` and its copy) + `PrivacyNote`; give it
+   the testIDs `keepsakes-product-<id>` and `<id>-product-cta`. Follow the card page
+   for a modal-driven create (leave only when a NEW item exists, via
+   `useLeaveKeepsakesPage().leaveAfterModalDismiss`) or the book page for an inline
+   create.
+3. Add the entry to `KEEPSAKE_PRODUCTS` and its object in `make-something-row.tsx`
+   (title, subtitle, width, `isAvailable`). A season-gated product reads its switch
+   from the context.
+4. If it produces shelf items, extend `ShelfItem` / `buildShelfItems` / the badge
+   mapping / the type filter in `src/utils/keepsakes.ts`, and the order status in
+   `keepsakes_overview`.
+5. Add `keepsakes_product_opened`'s `product` union in `src/services/analytics.ts`
+   and a row in [analytics.md](./analytics.md).
+6. No prices anywhere in the app.
 
 ## Data model
 
-No schema change. Reads `memory_books` (all of a family's rows, the same
-`MEMORY_BOOK_LIST_COLUMNS`), `year_films` (client-granted columns, via
-`useFamilyYearFilms`), the `year_films_enabled` RPC and
-`family_members.relationship` / `date_of_birth` (shelf membership). See
-[memory-book-generation.md](./memory-book-generation.md) for the table and
-generation pipeline.
-
-## Client integration
-
-| Layer | Files | Responsibility |
-|-------|-------|----------------|
-| Routes | `app/(app)/(tabs)/keepsakes.tsx`, `app/(app)/keepsakes/[memberId].tsx`, `app/(app)/keepsakes/recaps/[year].tsx` | Tab (focus → today + poll gate + `keepsakes_opened`), the one-child route, the recaps grid |
-| Components | `src/components/memory-books/memory-books-body.tsx` (`KeepsakesBody`, `MemoryBookFlowHost`), `child-picker-sheet.tsx`, plus the existing `book-cover-tile`, `create-book-sheet`, `retry-book-sheet`, `book-toast` | Year sections + shelves, pitch, CTA, the create/retry flow |
-| Components (films) | `src/components/keepsakes/` (`keepsake-year-section`, `keepsake-film-tile`, `upcoming-recap-card`), `src/components/year-films/film-cover.tsx` (`FilmCover`, shared with the Timeline card and the drawer) | Year section layout, pressable film tiles, the upcoming card, the 9:16 poster |
-| Components (holiday card) | `src/components/keepsakes/holiday-card-tile.tsx` (`HolidayCardTile`, `holidayCardTileState`), `holiday-greeting-sheet.tsx` (`HolidayGreetingSheet`) | The tile's five states; the choices-only greeting sheet (create → region note → shop). testIDs `holiday-card-tile`, `holiday-card-tile-{make,generating,ready,failed,ordered}`, `holiday-greeting-{christmas,holidays,new-year}`, `holiday-greeting-{confirm,cancel,continue,error,region,note}` |
-| Hooks | `src/hooks/useMemoryBooks.ts` (`useFamilyMemoryBooks`, `useMemoryBooks`, `buildMemoryBookRows`), `src/hooks/useYearFilms.ts` (`useFamilyYearFilms`, `useYearFilmsEnabled`, `useYearFilmPosters`) | Family queries + book polling; per-child create/retry; films, upcoming gate, posters |
-| Hooks (holiday card) | `src/hooks/useHolidayCard.ts` (`useHolidayCard`: summary query keyed `holidayCardQueryKey`, polls 10 s while generating and focused, `create` mutation that invalidates it) | Summary + create |
-| Services | `src/services/memory-books.ts` (`fetchMemoryBooksForFamily`), `src/services/year-films.ts`, `src/services/holiday-cards.ts` (`fetchHolidayCardSummary`, `createHolidayCard`, `holidayCardWebUrl`, typed create errors) | Family-wide reads; the holiday-card RPC + `holiday-cards` create |
-| Utils | `src/utils/family-relationships.ts` (`isOwnChild`), `src/utils/year-films.ts` (`buildKeepsakeYears`, `filmTitle`, `filmSubtitle`) | Shelf membership; year grouping and titles |
-| Analytics | `keepsakes_opened`, `keepsakes_create_book_tapped { children_count }`, `year_film_recaps_opened { year }` (the player logs `year_film_opened` from the route's `source`) | [analytics.md](./analytics.md) |
-
-### Extension guide
-
-- **A new film kind or surface:** film grouping lives in `buildKeepsakeYears`
-  (`src/utils/year-films.ts`); add the kind there, then render it in
-  `KeepsakeYearSection`. Reuse `KeepsakeFilmTile` so taps open the player with
-  `source=keepsakes`.
-- **"Print this year"** (out of scope for P2): open this child's create flow
-  (`memoryBooksRoute(childId)`, or a preset scope param).
-- **Opening books to viewers:** in `KeepsakesBody`, stop passing `[]` books to
-  `buildKeepsakeYears` for non-`canGenerate` roles, drop the
-  `variant === 'tab' && !canGenerate` null `familyId` for the books query, and
-  gate the create/retry entry points. RLS already allows select.
-- **New shelf rule:** change `shelfMembers` in `buildKeepsakeYears` and the
-  matching `shelves` filter in `KeepsakesBody`. Keep "has a book" (and "has a
-  birthday film") in it so existing items never disappear.
+The overview RPC is read-only. Otherwise the tab reads `memory_books`
+(`MEMORY_BOOK_LIST_COLUMNS`), `year_films` (client-granted columns, via
+`useFamilyYearFilms`), `holiday_card_summary`, and `family_members.relationship` /
+`date_of_birth` (shelf membership and chips). See
+[memory-book-generation.md](./memory-book-generation.md) and
+[holiday-cards.md](./holiday-cards.md) for the tables and pipelines.
 
 ## Testing
 
-- `src/screen-tests/keepsakes.integration.test.tsx` ("today" pinned to
-  2026-10-15):
-  - one-child route: tiles per state, web open, retry, create + toast,
-    viewer read-only, personalized pitch, cold-start Back; birthday films above
-    the books (newest first, only that child's, tap opens the player); films
-    with no book show the first-book tile; viewers see the films;
-  - tab: shelves filed under the year (`keepsakes-shelf-{year}-{memberId}`, a
-    cousin is excluded, a member with a book is included), one family pitch +
-    "Whose book?" only with no books and no films, the picker skipped for one
-    child, no child → Family, book open/retry from a year shelf; films per
-    year (birthday, year-end, recaps), latest three recaps + "See all" only
-    past three, the upcoming card only when enabled, viewer sees films but no
-    book UI, `keepsakes-viewer-empty` only with no films, focus refetch;
-  - recaps grid: that year's recaps newest first, `year_film_recaps_opened`,
-    empty state + Back.
-  `remaking` tile (placeholder, not pressable) and `updating` badge (still
-  pressable) in the tab and the recaps grid, focus state passed to the hook.
-- Holiday card entry: `src/components/keepsakes/holiday-card-tile.test.tsx` (state table,
-  viewer/switch-off hiding, tap targets with `openShopUrl`), `holiday-greeting-sheet.test.tsx`
-  (greetings per language, create, double-tap guard, region note, error copy),
-  `src/services/holiday-cards.test.ts`, `src/hooks/useHolidayCard.integration.test.tsx`, and a
-  "Holiday card entry" block in `keepsakes.integration.test.tsx` (above the year sections,
-  hidden for viewers / switch off / child page, per-state shop open, create flow).
-- `src/components/year-films/film-cover.test.tsx` (poster, placeholder, sizes,
-  re-sign on error, no poster request for a blocked film),
-  `src/components/year-films/remaking-placeholder.test.tsx`, `src/components/keepsakes/upcoming-recap-card.test.tsx`
-  (label incl. December).
-- `src/hooks/useMemoryBooks.integration.test.tsx` (`useFamilyMemoryBooks`
-  grouping, focus-gated polling, family invalidation after generate).
-- `src/utils/family-relationships.test.ts` (`isOwnChild`),
-  `src/utils/year-films.test.ts` (`buildKeepsakeYears`, `filmDisplayState`, polling condition).
-- `src/components/floating-tab-bar.test.tsx`.
-- Maestro: `keepsakes/open-keepsakes.yaml`, `check-icons.yaml`,
-  `sharing/viewer-readonly.yaml` (viewers see films or the empty line, never
-  the Create CTA or the book pitch).
+- `src/screen-tests/keepsakes.integration.test.tsx` (the tab, "today" pinned to
+  2026-10-15; the stack route; the recaps grid).
+- Product pages: `src/screen-tests/keepsakes-holiday-card-page.integration.test.tsx`
+  (CTA per state, eligibility/QR copy, privacy and ship-by gating, out-of-season and
+  viewer back-out, no auto-leave after the first settle, new card leaves after the
+  Modal dismiss, refused create keeps the page, `createdRef` gate, existing card
+  opens the shop) and `keepsakes-memory-book-page.integration.test.tsx` (visible
+  periods, "See N more" grouping and order, cautions, already-made labels and
+  default, thin warning + import action, every CTA state including the tri-state
+  `generate`, double-tap guard, per-child state isolation, no own children, viewer).
+- Units: `src/utils/keepsakes.test.ts`, `src/utils/keepsake-product-pages.test.ts`,
+  `src/utils/holiday-card-state.test.ts`, `src/lib/routes.test.ts`,
+  `src/lib/keepsakes-toast.test.ts`, `src/hooks/useLeaveKeepsakesPage.test.ts`,
+  `src/components/keepsakes/holiday-card-object.test.tsx`, plus the tab components'
+  own tests and `src/hooks/useKeepsakesOverview.integration.test.tsx`,
+  `src/services/keepsakes.test.ts`.
+- Maestro: `keepsakes/open-keepsakes.yaml` (header, library, store -> Memory Book
+  page), `year-film/open-from-keepsakes.yaml` (unfolds a past year if needed),
+  `sharing/viewer-readonly.yaml` (viewers: "Family films", no `keepsakes-store-*`).
 
 ## Changelog
 
 | Date | Change |
 |------|--------|
 | 2026-09-29 | Keepsakes tab replaces Calendar; books move off the child profile (plan Phase C) |
-| 2026-09-29 | Year Film P2: tab restructured into year sections (Family films, upcoming-recap card, child shelves with birthday films + books), recaps grid route, films on the child page, viewers see films (books still hidden), `MemoryBooksBody` → `KeepsakesBody`, shelf test ids → `keepsakes-shelf-{year}-{memberId}` |
-| 2026-10-02 | Example book cover uses illustrations too, with the kid's portrait as a fallback (was blank for a new family). New-family empty state: a films intro that explains what makes a film (until the dated upcoming card takes over), and a "not enough memories yet" create sheet with progress and a gallery-import offer instead of a list of options that can't work |
-| 2026-10-06 | Holiday card tile + greeting sheet above the year sections (Holiday Cards P2 Step 6) |
-| 2026-09-30 | Film tiles get *remaking* (placeholder, not pressable) and *updating* (badge) states; the films query polls every 20 s while focused and any film is in progress |
+| 2026-09-29 | Year Film P2: year sections, recaps grid, films on the child page, viewers see films |
+| 2026-10-02 | Example book cover uses illustrations; new-family films intro; "not enough memories yet" create sheet |
+| 2026-10-06 | Holiday card tile + greeting sheet (Holiday Cards P2 Step 6) |
+| 2026-10-08 | Tab redesign ([plan](../plans/keepsakes-redesign.md)): needs-you line, "Make something" storefront, "Your keepsakes" library with filter/badges/folded years, next-up recap tile, viewer "Family films" page; native Holiday card and Memory Book product pages (no prices, "Free to make"); `keepsakes_overview` RPC; old tab-only body, `HolidayCardTile`, `UpcomingRecapCard`, `KeepsakeYearSection` and `ChildPickerSheet` removed |

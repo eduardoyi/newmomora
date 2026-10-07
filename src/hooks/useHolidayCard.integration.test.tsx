@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
-import { holidayCardQueryKey } from '@/hooks/queryKeys';
+import { holidayCardQueryKey, keepsakesOverviewQueryKey } from '@/hooks/queryKeys';
 import { holidayCardPollInterval, useHolidayCard } from '@/hooks/useHolidayCard';
 import {
   createHolidayCard,
@@ -97,6 +97,20 @@ describe('useHolidayCard', () => {
     expect(mockedCreate).toHaveBeenCalledWith('family-1', 'holidays');
     expect(outcome).toEqual({ ok: true, result: { cardId: 'card-7', created: true, regionWarning: false } });
     await waitFor(() => expect(result.current.summary?.status).toBe('generating'));
+  });
+
+  it('create also invalidates the Keepsakes overview', async () => {
+    mockedFetch.mockResolvedValue({ data: summary(), error: null });
+    mockedCreate.mockResolvedValue({ data: { cardId: 'card-7', created: true, regionWarning: false }, error: null });
+    const { wrapper, queryClient } = setup();
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useHolidayCard('family-1'), { wrapper });
+    await waitFor(() => expect(result.current.summary?.enabled).toBe(true));
+
+    await act(async () => {
+      await result.current.create('holidays');
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: keepsakesOverviewQueryKey('family-1') });
   });
 
   it('create returns the typed failure and still refreshes the summary', async () => {

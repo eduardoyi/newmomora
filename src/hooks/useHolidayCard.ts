@@ -8,7 +8,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
-import { holidayCardQueryKey } from '@/hooks/queryKeys';
+import { holidayCardQueryKey, keepsakesOverviewQueryKey } from '@/hooks/queryKeys';
 import {
   createHolidayCard,
   fetchHolidayCardSummary,
@@ -73,6 +73,8 @@ export function useHolidayCard(
     // without waiting for the refetch, which may already hide the tile.
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey });
+      // A new card adds an order-less card to the Keepsakes overview.
+      void queryClient.invalidateQueries({ queryKey: keepsakesOverviewQueryKey(familyId) });
     },
   });
 

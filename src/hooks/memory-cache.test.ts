@@ -196,6 +196,15 @@ describe('invalidateMemoryQueries', () => {
     expect(spy).toHaveBeenCalledWith({ queryKey: ['memories'], refetchType: 'none' });
     expect(spy).toHaveBeenCalledWith({ queryKey: [calendarMemoriesQueryKeyBase] });
   });
+
+  it('marks the Keepsakes overview stale without refetching it', () => {
+    const queryClient = createQueryClient();
+    const spy = jest.spyOn(queryClient, 'invalidateQueries');
+
+    invalidateMemoryQueries(queryClient);
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['keepsakes-overview'], refetchType: 'none' });
+  });
 });
 
 describe('prependMemoryToListCaches', () => {

@@ -180,6 +180,8 @@ export default function AppLayout() {
         <Stack.Screen name="family/[id]" />
         <Stack.Screen name="family/[id]/portraits" />
         <Stack.Screen name="keepsakes/[memberId]" />
+        <Stack.Screen name="keepsakes/holiday-card" />
+        <Stack.Screen name="keepsakes/memory-book" />
         <Stack.Screen
           name="family/[id]/edit"
           options={{ presentation: 'modal' }}

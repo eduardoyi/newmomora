@@ -10,20 +10,24 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { useHolidayCard } from '@/hooks/useHolidayCard';
+import { useKeepsakesOverview } from '@/hooks/useKeepsakesOverview';
 import { useFamilyMemoryBooks, useMemoryBooks, type MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
-import { useFamilyYearFilms, useYearFilmsEnabled } from '@/hooks/useYearFilms';
+import { useFamilyYearFilms } from '@/hooks/useYearFilms';
+import { setPendingKeepsakesToast } from '@/lib/keepsakes-toast';
 import { invokeEdgeFunction } from '@/services/ai';
 import type { HolidayCardSummary } from '@/services/holiday-cards';
+import type { KeepsakesOverview } from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import { resetWebHandoffForTests } from '@/services/web-handoff';
 import type { YearFilm } from '@/services/year-films';
 
-// Keepsakes (docs/plans/timeline-calendar-keepsakes.md C2-C5,
-// docs/plans/year-film-p2.md Step 7): the tab's year sections and the
-// per-child route both render KeepsakesBody. Shelves derive from ONE
-// family-wide books query and the family films query (both mocked here), with
-// the real buildMemoryBookRows / buildKeepsakeYears; the create/retry flow's
-// per-child hook is mocked. "Today" is pinned to 2026-10-15.
+// Keepsakes (docs/plans/keepsakes-redesign.md; the stack route is still
+// docs/plans/timeline-calendar-keepsakes.md C5): the TAB renders KeepsakesTab
+// (header, needs-you line, storefront, library) and the per-child route
+// renders KeepsakesBody. Shelves derive from ONE family-wide books query, the
+// family films query, the holiday card summary and the keepsakes overview
+// (all mocked here), with the real pure helpers in utils/keepsakes.ts; the
+// create/retry flow's per-child hook is mocked. "Today" is pinned to 2026-10-15.
 
 const mockRouter = { back: jest.fn(), canGoBack: jest.fn(() => true), replace: jest.fn(), navigate: jest.fn(), push: jest.fn() };
 let mockMemberId = 'child-1';
@@ -55,9 +59,10 @@ jest.mock('@/hooks/useMemoryBooks', () => ({
   useMemoryBooks: jest.fn(),
 }));
 jest.mock('@/hooks/useHolidayCard', () => ({ useHolidayCard: jest.fn() }));
+jest.mock('@/hooks/useKeepsakesOverview', () => ({ useKeepsakesOverview: jest.fn() }));
+jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
 jest.mock('@/hooks/useYearFilms', () => ({
   useFamilyYearFilms: jest.fn(),
-  useYearFilmsEnabled: jest.fn(),
   useYearFilmPosters: jest.fn(() => ({})),
   invalidateYearFilmPoster: jest.fn(),
 }));
@@ -83,15 +88,13 @@ const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof us
 const mockedUseFamilyMemoryBooks = useFamilyMemoryBooks as jest.MockedFunction<typeof useFamilyMemoryBooks>;
 const mockedUseMemoryBooks = useMemoryBooks as jest.MockedFunction<typeof useMemoryBooks>;
 const mockedUseFamilyYearFilms = useFamilyYearFilms as jest.MockedFunction<typeof useFamilyYearFilms>;
-const mockedUseYearFilmsEnabled = useYearFilmsEnabled as jest.MockedFunction<typeof useYearFilmsEnabled>;
 const mockedUseHolidayCard = useHolidayCard as jest.MockedFunction<typeof useHolidayCard>;
+const mockedUseKeepsakesOverview = useKeepsakesOverview as jest.MockedFunction<typeof useKeepsakesOverview>;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { trackEvent: mockTrackEvent } = require('@/services/analytics') as { trackEvent: jest.Mock };
 
 const lila = { id: 'child-1', family_id: 'family-1', name: 'Lila', date_of_birth: '2023-06-01', relationship: null };
 const theo = { id: 'child-2', family_id: 'family-1', name: 'Theo', date_of_birth: '2025-02-01', relationship: 'child' };
-const grandma = { id: 'grandma', family_id: 'family-1', name: 'Mirian', date_of_birth: '1955-01-01', relationship: 'grandparent' };
-const niece = { id: 'niece', family_id: 'family-1', name: 'Elena', date_of_birth: '2021-01-01', relationship: 'cousin' };
 
 function book(overrides: Partial<MemoryBookListRow>): MemoryBookListRow {
   return {
@@ -174,11 +177,31 @@ const theoBirthday2026 = film({
 
 const generate = jest.fn();
 
-function mockFilms(films: YearFilm[], { upcoming = false, isLoading = false } = {}) {
+function mockFilms(films: YearFilm[], { isLoading = false, isError = false } = {}) {
   mockedUseFamilyYearFilms.mockReturnValue({
-    films, isLoading, isFetched: true, isRefetching: false, isError: false, error: null, refetch: jest.fn(),
+    films, isLoading, isFetched: true, isRefetching: false, isError, error: null, refetch: jest.fn(),
   } as unknown as ReturnType<typeof useFamilyYearFilms>);
-  mockedUseYearFilmsEnabled.mockReturnValue({ enabled: upcoming, isLoading: false, isError: false });
+}
+
+function overviewOf(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview {
+  return {
+    recap: null,
+    has_viewers: false,
+    year_moments: 40,
+    holiday_pool: 30,
+    holiday_min_pool: 20,
+    holiday_ship_by_note: null,
+    preview_key: null,
+    book_preview_keys: {},
+    orders: [],
+    ...overrides,
+  };
+}
+
+function mockOverview(overview: KeepsakesOverview | null) {
+  mockedUseKeepsakesOverview.mockReturnValue({
+    overview, isLoading: false, refetch: jest.fn(),
+  } as unknown as ReturnType<typeof useKeepsakesOverview>);
 }
 
 const createHolidayCard = jest.fn();
@@ -235,6 +258,7 @@ beforeEach(() => {
   mockYear = '2026';
   mockFilms([]);
   mockHolidayCard(null);
+  mockOverview(overviewOf());
   mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' } as ReturnType<typeof useFamily>);
   mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
   mockedUseMemoryBooks.mockReturnValue({
@@ -369,311 +393,502 @@ describe('One child\'s keepsakes (keepsakes/[memberId])', () => {
   });
 });
 
-describe('Keepsakes tab', () => {
-  it('shows one shelf per own child, filed under the year (explicit role wins; any member with a book too)', () => {
-    mockedUseFamilyMembers.mockReturnValue({
-      members: [lila, theo, grandma, niece], isLoading: false,
-    } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockBooks([yearOneReady, book({ id: 'gb', child_id: 'grandma', scope_kind: 'everything', scope_start_date: null, scope_end_date: null, scope_label: 'Everything' })]);
-
-    const { getByTestId, queryByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
-
-    // Lila's Year One ends in 2024; the grandma's unbounded book files under its created_at year.
-    expect(getByTestId('keepsakes-shelf-2024-child-1')).toBeTruthy();
-    expect(getByTestId('keepsakes-shelf-2026-grandma')).toBeTruthy();
-    // Theo is an own child with no book: the current year's shelf carries the first-book tile.
-    expect(getByTestId('keepsakes-shelf-2026-child-2')).toBeTruthy();
-    expect(getByText('Create Theo’s first book')).toBeTruthy();
-    // Lila already has a book, so no first-book tile and no empty 2026 shelf for her.
-    expect(queryByTestId('keepsakes-shelf-2026-child-1')).toBeNull();
-    // Under 13 but sorted as a cousin -- not an own child, no book.
-    expect(queryByTestId('keepsakes-shelf-2026-niece')).toBeNull();
-    expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_opened', {});
-  });
-
-  it('shows ONE family pitch when nobody has a book or a film, and asks whose book first', async () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila, theo], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockBooks([]);
-
-    const { getByTestId, getAllByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    expect(getAllByTestId('memory-books-empty')).toHaveLength(1);
-    expect(getByText('Your family’s years, printed and bound.')).toBeTruthy();
-    // No bare year title or first-book tiles next to the pitch.
-    expect(queryByTestId('keepsakes-year-2026')).toBeNull();
-    expect(queryByTestId('memory-books-first-book-child-1')).toBeNull();
-
-    fireEvent.press(getByTestId('memory-books-create'));
-    expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_create_book_tapped', { children_count: 2 });
-    fireEvent.press(await waitFor(() => getByTestId('child-picker-child-2')));
-
-    await waitFor(() => expect(getByTestId('create-book-sheet')).toBeTruthy());
-    expect(mockedUseMemoryBooks).toHaveBeenCalledWith(expect.objectContaining({ childId: 'child-2' }));
-  });
-
-  it('skips the picker for a one-child family', async () => {
-    mockBooks([]);
-    const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    fireEvent.press(getByTestId('memory-books-create'));
-    await waitFor(() => expect(getByTestId('create-book-sheet')).toBeTruthy());
-    expect(queryByTestId('child-picker-sheet')).toBeNull();
-  });
-
-  it('routes to Family when there is no child to make a book for', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [grandma], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockBooks([]);
-    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
-    expect(getByTestId('memory-books-no-child-hint')).toBeTruthy();
-    fireEvent.press(getByText('Go to Family'));
-    expect(mockRouter.navigate).toHaveBeenCalledWith('/(app)/(tabs)/family');
-  });
-
-  it('opens a book from its year shelf and starts the retry flow for a failed one', async () => {
-    mockBooks([yearOneReady, yearThreeFailed]);
-    const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
-    // Year One ends 2024; Year Three ends 2026.
-    expect(getByTestId('keepsakes-shelf-2024-child-1')).toBeTruthy();
-    expect(getByTestId('keepsakes-shelf-2026-child-1')).toBeTruthy();
-
-    fireEvent.press(getByTestId(`memory-book-tile-${YEAR_ONE_KEY}`));
-    await waitFor(() =>
-      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/b/book-1#h=${HANDOFF_CODE}`),
-    );
-
-    fireEvent.press(getByTestId(`memory-book-tile-${YEAR_THREE_KEY}`));
-    await waitFor(() => expect(getByTestId('retry-book-sheet')).toBeTruthy());
-  });
-
-  it('files birthday films, the year-end film and recaps under their year sections', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([recap(9), lilaBirthday2026, yearEndFilm, lilaBirthday2025]);
-    mockBooks([]);
-    const { getByTestId, queryByTestId, queryByText } = renderWithQuery(<KeepsakesScreen />);
-
-    expect(getByTestId('keepsakes-year-2026')).toBeTruthy();
-    expect(getByTestId('keepsakes-year-2025')).toBeTruthy();
-    // 2026: the September recap in Family films, Lila's birthday film on her shelf.
-    expect(getByTestId('keepsakes-family-films-2026')).toBeTruthy();
-    expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
-    expect(getByTestId('keepsakes-shelf-2026-child-1')).toBeTruthy();
-    expect(getByTestId('keepsakes-film-birthday-lila-2026')).toBeTruthy();
-    // 2025: year-end film + Lila's earlier birthday film.
-    expect(getByTestId('keepsakes-film-year-end-2025')).toBeTruthy();
-    expect(getByTestId('keepsakes-shelf-2025-child-1')).toBeTruthy();
-    expect(getByTestId('keepsakes-film-birthday-lila-2025')).toBeTruthy();
-    // Films replace the pitch; the create tile is still offered (no book yet).
-    expect(queryByTestId('memory-books-empty')).toBeNull();
-    expect(getByTestId('memory-books-first-book-child-1')).toBeTruthy();
-    expect(queryByText('Your 2026')).toBeNull();
-  });
-
-  it('opens the player with source=keepsakes from a film tile', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([yearEndFilm]);
-    mockBooks([]);
-    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
-    expect(getByText('Your 2025')).toBeTruthy();
-    fireEvent.press(getByTestId('keepsakes-film-year-end-2025'));
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/year-end-2025?source=keepsakes');
-  });
-
-  it('shows the latest three recaps and a "See all" link only when there are more', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([recap(5), recap(6), recap(7), recap(8), recap(9)]);
-    mockBooks([]);
-    const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-
-    for (const shown of ['09', '08', '07']) expect(getByTestId(`keepsakes-film-recap-${shown}`)).toBeTruthy();
-    for (const hidden of ['06', '05']) expect(queryByTestId(`keepsakes-film-recap-${hidden}`)).toBeNull();
-
-    fireEvent.press(getByTestId('keepsakes-recaps-2026'));
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/keepsakes/recaps/2026');
-  });
-
-  it('has no "See all" link with three recaps or fewer', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([recap(7), recap(8), recap(9)]);
-    mockBooks([]);
-    const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    expect(queryByTestId('keepsakes-recaps-2026')).toBeNull();
-  });
-
-  it('shows the dashed upcoming-recap card only when films are enabled', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockBooks([]);
-
-    mockFilms([], { upcoming: false });
-    const off = renderWithQuery(<KeepsakesScreen />);
-    expect(off.queryByTestId('keepsakes-upcoming-recap')).toBeNull();
-    off.unmount();
-
-    mockFilms([], { upcoming: true });
-    const on = renderWithQuery(<KeepsakesScreen />);
-    expect(on.getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
-    expect(on.getByText('October recap · Nov 1')).toBeTruthy();
-    // It lives in the current year only.
-    expect(on.getByTestId('keepsakes-year-2026')).toBeTruthy();
-  });
-
-  it('shows a viewer the films but no book UI', () => {
-    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([lilaBirthday2026, recap(9)], { upcoming: true });
-    mockBooks([yearThreeFailed]);
-    const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-
-    expect(getByTestId('keepsakes-film-birthday-lila-2026')).toBeTruthy();
-    expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
-    expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
-    expect(queryByTestId('keepsakes-viewer-empty')).toBeNull();
-    expect(queryByTestId(`memory-book-tile-${YEAR_THREE_KEY}`)).toBeNull();
-    expect(queryByTestId('memory-books-first-book-child-1')).toBeNull();
-    expect(queryByTestId('memory-books-create')).toBeNull();
-    expect(queryByTestId('memory-books-empty')).toBeNull();
-  });
-
-  it('shows a viewer the empty message only when there are no films', () => {
-    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
-    mockBooks([yearOneReady]);
-    const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    expect(getByTestId('keepsakes-viewer-empty')).toBeTruthy();
-    expect(queryByTestId(`memory-book-tile-${YEAR_ONE_KEY}`)).toBeNull();
-    expect(queryByTestId('memory-books-create')).toBeNull();
-  });
-
-  it('shows a remaking film as a non-pressable placeholder tile and an updating film as a playable tile with a badge', () => {
-    mockedUseFamilyMembers.mockReturnValue({ members: [lila], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockFilms([
-      film({ id: 'recap-09', kind: 'family_month', scope_start_date: '2026-09-01', placement_date: '2026-09-30', blocked: true, stale: true, status: 'rendering' }),
-      film({ id: 'recap-08', kind: 'family_month', scope_start_date: '2026-08-01', placement_date: '2026-08-31', stale: true, status: 'curating' }),
-      film({ id: 'recap-07', kind: 'family_month', scope_start_date: '2026-07-01', placement_date: '2026-07-31' }),
-    ]);
-    mockBooks([]);
-    const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-
-    // Remaking: placeholder, same tile, no pressable tile, no updating badge.
-    expect(getByTestId('keepsakes-film-recap-09-remaking')).toBeTruthy();
-    expect(getByText('Remaking…')).toBeTruthy();
-    expect(queryByTestId('keepsakes-film-recap-09')).toBeNull();
-    fireEvent.press(getByTestId('keepsakes-film-recap-09-remaking'));
-    expect(mockRouter.push).not.toHaveBeenCalled();
-
-    // Updating: still a playable tile, with the badge.
-    expect(getByTestId('keepsakes-film-recap-08-updating')).toHaveTextContent('Updating…');
-    fireEvent.press(getByTestId('keepsakes-film-recap-08'));
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/recap-08?source=keepsakes');
-
-    // A settled film has neither.
-    expect(queryByTestId('keepsakes-film-recap-07-updating')).toBeNull();
-    expect(queryByTestId('keepsakes-film-recap-07-remaking')).toBeNull();
-  });
-
-  it('passes the tab focus state to the films hook so polling stops when the tab is blurred', () => {
-    mockBooks([]);
-    renderWithQuery(<KeepsakesScreen />);
-    expect(mockedUseFamilyYearFilms).toHaveBeenCalledWith('family-1', { isFocused: true });
-  });
-
-  it('refetches the films each time the tab is focused', () => {
-    const refetch = jest.fn();
-    mockedUseFamilyYearFilms.mockReturnValue({
-      films: [], isLoading: false, isFetched: true, isRefetching: false, isError: false, error: null, refetch,
-    } as unknown as ReturnType<typeof useFamilyYearFilms>);
-    mockBooks([]);
-    renderWithQuery(<KeepsakesScreen />);
-    expect(refetch).toHaveBeenCalled();
-  });
+const freshFailedYearThree = book({
+  id: 'book-3', status: 'failed', scope_start_date: '2025-06-01', scope_end_date: '2026-05-31',
+  scope_label: 'Year Three', failure_reason: 'Outline generation failed',
+  created_at: '2026-10-09T00:00:00.000Z', updated_at: '2026-10-10T00:00:00.000Z',
 });
 
-describe('Holiday card entry (holiday-cards-p2 Step 6)', () => {
-  const readyCard = () => holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready' });
+describe('Keepsakes tab', () => {
+  describe('owner, full library', () => {
+    it('renders header, storefront and library: this year open, past years folded', () => {
+      mockedUseFamilyMembers.mockReturnValue({ members: [lila, theo], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockHolidayCard(holidaySummary({ enabled: true }));
+      mockOverview(overviewOf({ holiday_ship_by_note: 'Order by Dec 10 for Christmas delivery in the US.' }));
+      mockFilms([recap(9), recap(8), yearEndFilm, lilaBirthday2025]);
+      mockBooks([yearOneReady, yearThreeFailed]);
 
-  it('renders above the year sections for an owner/manager, even when the year is empty', () => {
-    mockHolidayCard(holidaySummary());
-    mockBooks([]);
-    const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    expect(getByTestId('holiday-card-tile')).toBeTruthy();
-    expect(getByText('Make your holiday card')).toBeTruthy();
-    // Nothing to draw in 2026 (no films, no books): the empty-year guard hides the section, not the tile.
-    expect(queryByTestId('keepsakes-year-2026')).toBeNull();
-    expect(mockedUseHolidayCard).toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(getByTestId('keepsakes-header')).toBeTruthy();
+      expect(getByText('Keepsakes')).toBeTruthy();
+      // Storefront: the holiday card (in season) leads, then the Memory Book.
+      expect(getByTestId('keepsakes-store-holiday-card')).toBeTruthy();
+      expect(getByTestId('keepsakes-store-memory-book')).toBeTruthy();
+      expect(getByText('Order by Dec 10 for Christmas delivery in the US.')).toBeTruthy();
+      // The library: 2026 open (recaps + Year Three), the past years folded.
+      expect(getByTestId('keepsakes-library')).toBeTruthy();
+      expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
+      expect(getByTestId('keepsakes-film-recap-08')).toBeTruthy();
+      expect(getByTestId(`memory-book-tile-${YEAR_THREE_KEY}`)).toBeTruthy();
+      expect(getByTestId('keepsakes-year-toggle-2025')).toBeTruthy();
+      expect(getByTestId('keepsakes-year-toggle-2024')).toBeTruthy();
+      expect(queryByTestId('keepsakes-film-year-end-2025')).toBeNull();
+      expect(queryByTestId(`memory-book-tile-${YEAR_ONE_KEY}`)).toBeNull();
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_opened', {});
+    });
+
+    it('lists the old tab\'s dead UI nowhere: no FAB, no pitch, no films intro, no first-book tile', () => {
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(queryByTestId('memory-books-create')).toBeNull();
+      expect(queryByTestId('memory-books-empty')).toBeNull();
+      expect(queryByTestId('keepsakes-films-intro')).toBeNull();
+      expect(queryByTestId('memory-books-first-book-child-1')).toBeNull();
+    });
+
+    it('never shows a price', () => {
+      mockHolidayCard(holidaySummary({ enabled: true }));
+      mockFilms([recap(9)]);
+      mockBooks([yearOneReady, yearThreeFailed]);
+      const { toJSON } = renderWithQuery(<KeepsakesScreen />);
+      expect(JSON.stringify(toJSON())).not.toMatch(/\$\d/);
+    });
+
+    it('opens a past year in place, folds it again, and tracks each toggle', () => {
+      mockFilms([recap(9), yearEndFilm]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(queryByTestId('keepsakes-film-year-end-2025')).toBeNull();
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2025'));
+      expect(getByTestId('keepsakes-film-year-end-2025')).toBeTruthy();
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_year_toggled', { year: 2025, open: true });
+
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2025'));
+      expect(queryByTestId('keepsakes-film-year-end-2025')).toBeNull();
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_year_toggled', { year: 2025, open: false });
+    });
+
+    it('opens the player with source=keepsakes from a film poster', () => {
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-film-recap-09'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/recap-09?source=keepsakes');
+    });
+
+    it('ends a year of more than three monthly recaps with the "All recaps" tile, which opens the grid', () => {
+      mockFilms([recap(5), recap(6), recap(7), recap(8), recap(9)]);
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      // The row still shows every month.
+      for (const month of ['05', '06', '07', '08', '09']) expect(getByTestId(`keepsakes-film-recap-${month}`)).toBeTruthy();
+      fireEvent.press(getByTestId('keepsakes-recaps-2026'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/(app)/keepsakes/recaps/2026');
+    });
+
+    it('has no "All recaps" tile with three recaps or fewer', () => {
+      mockFilms([recap(7), recap(8), recap(9)]);
+      mockBooks([]);
+      expect(renderWithQuery(<KeepsakesScreen />).queryByTestId('keepsakes-recaps-2026')).toBeNull();
+    });
+
+    it('shows a remaking film as a non-pressable placeholder and an updating film as a playable poster with a badge', () => {
+      mockFilms([
+        film({ id: 'recap-09', kind: 'family_month', scope_start_date: '2026-09-01', placement_date: '2026-09-30', blocked: true, stale: true, status: 'rendering' }),
+        film({ id: 'recap-08', kind: 'family_month', scope_start_date: '2026-08-01', placement_date: '2026-08-31', stale: true, status: 'curating' }),
+        film({ id: 'recap-07', kind: 'family_month', scope_start_date: '2026-07-01', placement_date: '2026-07-31' }),
+      ]);
+      mockBooks([]);
+      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(getByTestId('keepsakes-film-recap-09-remaking')).toBeTruthy();
+      expect(getByText('Remaking…')).toBeTruthy();
+      expect(queryByTestId('keepsakes-film-recap-09')).toBeNull();
+      fireEvent.press(getByTestId('keepsakes-film-recap-09-remaking'));
+      expect(mockRouter.push).not.toHaveBeenCalled();
+
+      expect(getByTestId('keepsakes-film-recap-08-updating')).toHaveTextContent('Updating…');
+      fireEvent.press(getByTestId('keepsakes-film-recap-08'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/(app)/year-film/recap-08?source=keepsakes');
+
+      expect(queryByTestId('keepsakes-film-recap-07-updating')).toBeNull();
+      expect(queryByTestId('keepsakes-film-recap-07-remaking')).toBeNull();
+    });
   });
 
-  it('sits above the year sections', () => {
-    mockHolidayCard(readyCard());
-    mockFilms([recap(9)]);
-    mockBooks([]);
-    const { toJSON } = renderWithQuery(<KeepsakesScreen />);
-    const json = JSON.stringify(toJSON());
-    expect(json.indexOf('holiday-card-tile')).toBeGreaterThan(-1);
-    expect(json.indexOf('holiday-card-tile')).toBeLessThan(json.indexOf('keepsakes-year-2026'));
+  describe('badges, orders and the needs-you line', () => {
+    it('badges books by state; a paid order reads "Ordered", a shipped one "Shipped"', () => {
+      mockFilms([]);
+      mockBooks([yearOneReady, yearTwoGenerating, freshFailedYearThree]);
+      mockOverview(overviewOf({ orders: [{ product: 'book', item_id: 'book-1', status: 'shipped', shipped_at: null }] }));
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      // Year Two (2025) is generating; Year One (2024) shipped; Year Three (2026) failed.
+      expect(getByTestId('keepsakes-badge-book:book-3')).toHaveTextContent('Couldn’t be made');
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2025'));
+      expect(getByTestId('keepsakes-badge-book:book-2')).toHaveTextContent('Being made');
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2024'));
+      expect(getByTestId('keepsakes-badge-book:book-1')).toHaveTextContent('Shipped');
+    });
+
+    it('a ready holiday card sits on this year\'s shelf with a "Ready to order" badge and opens the shop', async () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(getByTestId('keepsakes-badge-card:card-1')).toHaveTextContent('Ready to order');
+      fireEvent.press(getByTestId('keepsakes-card-card-1'));
+      await waitFor(() =>
+        expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-1#h=${HANDOFF_CODE}`),
+      );
+    });
+
+    it('a shipped card reads "Shipped · {date}"', () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', ordered: true }));
+      mockOverview(overviewOf({ orders: [{ product: 'card', item_id: 'card-1', status: 'shipped', shipped_at: '2026-10-12T12:00:00.000Z' }] }));
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-badge-card:card-1')).toHaveTextContent('Shipped · Oct 12');
+    });
+
+    it('a ready card raises the needs-you line, which opens the shop', async () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockBooks([]);
+      const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByText('Your holiday card is ready to order')).toBeTruthy();
+      fireEvent.press(getByTestId('keepsakes-needs-you'));
+      await waitFor(() =>
+        expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-1#h=${HANDOFF_CODE}`),
+      );
+    });
+
+    it('a recently failed book raises the needs-you line, which opens the retry sheet; confirming makes a fresh book', async () => {
+      mockBooks([freshFailedYearThree]);
+      const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByText('Lila’s book couldn’t be made')).toBeTruthy();
+
+      fireEvent.press(getByTestId('keepsakes-needs-you'));
+      await waitFor(() => expect(getByTestId('retry-book-sheet')).toBeTruthy());
+      expect(mockedUseMemoryBooks).toHaveBeenCalledWith(expect.objectContaining({ childId: 'child-1' }));
+      fireEvent.press(getByTestId('retry-book-confirm'));
+      await waitFor(() => expect(generate).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'age_year', startDate: '2025-06-01', endDate: '2026-05-31' }),
+      ));
+    });
+
+    it('a superseded failure raises no banner (the retry made a ready book of the same scope)', () => {
+      mockBooks([
+        freshFailedYearThree,
+        book({
+          id: 'book-3b', status: 'ready', scope_start_date: '2025-06-01', scope_end_date: '2026-05-31',
+          scope_label: 'Year Three', created_at: '2026-10-11T00:00:00.000Z', updated_at: '2026-10-11T00:05:00.000Z',
+        }),
+      ]);
+      const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(queryByTestId('keepsakes-needs-you')).toBeNull();
+    });
+
+    it('a failed book on the shelf opens the retry sheet', async () => {
+      mockBooks([yearThreeFailed]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId(`memory-book-tile-${YEAR_THREE_KEY}`));
+      await waitFor(() => expect(getByTestId('retry-book-sheet')).toBeTruthy());
+    });
+
+    it('a ready book opens the shop', async () => {
+      mockBooks([yearOneReady]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2024'));
+      fireEvent.press(getByTestId(`memory-book-tile-${YEAR_ONE_KEY}`));
+      await waitFor(() =>
+        expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/b/book-1#h=${HANDOFF_CODE}`),
+      );
+    });
   });
 
-  it('is hidden from viewers, even when a card exists', () => {
-    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
-    mockHolidayCard(readyCard());
-    mockFilms([recap(9)]);
-    mockBooks([]);
-    const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
-    expect(queryByTestId('holiday-card-tile')).toBeNull();
-    expect(mockedUseHolidayCard).not.toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+  describe('storefront', () => {
+    it('leaves the holiday card out of season; the Memory Book stays', () => {
+      mockHolidayCard(holidaySummary({ enabled: false }));
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(queryByTestId('keepsakes-store-holiday-card')).toBeNull();
+      expect(getByTestId('keepsakes-store-memory-book')).toBeTruthy();
+    });
+
+    it('opens a product page and tracks it', () => {
+      mockHolidayCard(holidaySummary({ enabled: true }));
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      fireEvent.press(getByTestId('keepsakes-store-memory-book'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/(app)/keepsakes/memory-book');
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_product_opened', { product: 'memory-book' });
+
+      fireEvent.press(getByTestId('keepsakes-store-holiday-card'));
+      expect(mockRouter.push).toHaveBeenCalledWith('/(app)/keepsakes/holiday-card');
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_product_opened', { product: 'holiday-card' });
+    });
+
+    it('reads the holiday summary once, for owners and managers', () => {
+      mockBooks([]);
+      renderWithQuery(<KeepsakesScreen />);
+      expect(mockedUseHolidayCard).toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+    });
   });
 
-  it('is hidden when the switch is off and there is no card', () => {
-    mockHolidayCard(holidaySummary({ enabled: false }));
-    mockBooks([]);
-    expect(renderWithQuery(<KeepsakesScreen />).queryByTestId('holiday-card-tile')).toBeNull();
+  describe('privacy line', () => {
+    it('shows only when the family has a viewer', () => {
+      mockOverview(overviewOf({ has_viewers: true }));
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const on = renderWithQuery(<KeepsakesScreen />);
+      expect(on.getByText('Books and cards are only visible to owners and managers.')).toBeTruthy();
+      on.unmount();
+
+      mockOverview(overviewOf({ has_viewers: false }));
+      const off = renderWithQuery(<KeepsakesScreen />);
+      expect(off.queryByTestId('keepsakes-privacy')).toBeNull();
+    });
   });
 
-  it('is not part of one child\'s keepsakes page', () => {
-    mockHolidayCard(readyCard());
-    mockBooks([yearOneReady]);
-    expect(renderWithQuery(<MemberKeepsakesScreen />).queryByTestId('holiday-card-tile')).toBeNull();
+  describe('upcoming recap', () => {
+    const lockedRecap = {
+      month_start: '2026-10-01', delivers_on: '2026-11-01', moments: 6, visuals: 4,
+      min_moments: 10, min_visuals: 6, picture_key: null,
+    };
+
+    it('shows the locked tile with progress on the current year\'s shelf', () => {
+      mockOverview(overviewOf({ recap: lockedRecap }));
+      mockBooks([]);
+      const { getByTestId, getByText, getAllByText } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-year-2026')).toBeTruthy();
+      expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+      // On the tile and in the caption under it.
+      expect(getAllByText('October recap')).toHaveLength(2);
+      expect(getByText('4 more moments this month')).toBeTruthy();
+      expect(getByText('6 of 10 moments')).toBeTruthy();
+    });
+
+    it('is labelled from the owner-local month, not the device date, and filed under its year (open)', () => {
+      mockOverview(overviewOf({ recap: { ...lockedRecap, month_start: '2027-01-01', delivers_on: '2027-02-01', moments: 12, visuals: 7 } }));
+      mockBooks([]);
+      const { getByTestId, getByText, getAllByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getAllByText('January recap').length).toBeGreaterThan(0);
+      expect(getByText('arrives')).toBeTruthy();
+      expect(getByText('Feb 1')).toBeTruthy();
+      // Filed under 2027 and never folded.
+      expect(getByTestId('keepsakes-year-2027')).toBeTruthy();
+      expect(queryByTestId('keepsakes-year-toggle-2027')).toBeNull();
+      expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+    });
+
+    it('is absent when the overview has no recap (or failed)', () => {
+      mockOverview(null);
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(queryByTestId('keepsakes-upcoming-recap')).toBeNull();
+    });
   });
 
-  it.each([
-    ['ready', readyCard()],
-    ['generating', holidaySummary({ cardId: 'card-1', year: 2026, status: 'generating' })],
-    ['failed', holidaySummary({ cardId: 'card-1', year: 2026, status: 'failed' })],
-    ['ordered', holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', ordered: true })],
-  ])('%s: opens the shop card page signed in', async (state, summary) => {
-    mockHolidayCard(summary);
-    mockBooks([]);
-    const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
-    fireEvent.press(getByTestId(`holiday-card-tile-${state}`));
-    await waitFor(() =>
-      expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-1#h=${HANDOFF_CODE}`),
-    );
+  describe('filter and child chips', () => {
+    it('applies a year from the filter sheet, shows the active count and tracks it', () => {
+      mockFilms([recap(9), yearEndFilm]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      fireEvent.press(getByTestId('keepsakes-filter-button'));
+      fireEvent.press(getByTestId('keepsakes-filter-year-2025'));
+      fireEvent.press(getByTestId('keepsakes-filter-apply'));
+
+      expect(getByTestId('keepsakes-film-year-end-2025')).toBeTruthy();
+      expect(queryByTestId('keepsakes-year-2026')).toBeNull();
+      expect(getByTestId('keepsakes-filter-dot')).toHaveTextContent('1');
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_filter_applied', { type: 'all', has_year: true, has_child: false });
+    });
+
+    it('a type filter that matches nothing offers a reset', () => {
+      mockFilms([recap(9)]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      fireEvent.press(getByTestId('keepsakes-filter-button'));
+      fireEvent.press(getByTestId('keepsakes-filter-type-books'));
+      fireEvent.press(getByTestId('keepsakes-filter-apply'));
+      expect(getByTestId('keepsakes-filter-empty')).toBeTruthy();
+
+      fireEvent.press(getByTestId('keepsakes-filter-empty-reset'));
+      expect(queryByTestId('keepsakes-filter-empty')).toBeNull();
+      expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
+    });
+
+    it('child chips (two or more children) keep that child\'s items; family-wide films only show under All', () => {
+      mockedUseFamilyMembers.mockReturnValue({ members: [lila, theo], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockFilms([recap(9), lilaBirthday2026, theoBirthday2026]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      fireEvent.press(getByTestId('keepsakes-chip-child-2'));
+      expect(getByTestId('keepsakes-film-birthday-theo-2026')).toBeTruthy();
+      expect(queryByTestId('keepsakes-film-birthday-lila-2026')).toBeNull();
+      expect(queryByTestId('keepsakes-film-recap-09')).toBeNull();
+
+      fireEvent.press(getByTestId('keepsakes-chip-all'));
+      expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
+    });
+
+    it('resets the filter and the open years when the family changes', () => {
+      mockFilms([recap(9), yearEndFilm]);
+      mockBooks([]);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+      const view = render(<QueryClientProvider client={client}><KeepsakesScreen /></QueryClientProvider>);
+
+      fireEvent.press(view.getByTestId('keepsakes-year-toggle-2025'));
+      expect(view.getByTestId('keepsakes-film-year-end-2025')).toBeTruthy();
+
+      mockedUseFamily.mockReturnValue({ familyId: 'family-2', role: 'manager' } as ReturnType<typeof useFamily>);
+      view.rerender(<QueryClientProvider client={client}><KeepsakesScreen /></QueryClientProvider>);
+      expect(view.queryByTestId('keepsakes-film-year-end-2025')).toBeNull();
+      expect(view.getByTestId('keepsakes-year-toggle-2025')).toBeTruthy();
+    });
   });
 
-  it('make: pick a greeting, create the card, then stay in the app until it is ready', async () => {
-    mockHolidayCard(holidaySummary());
-    mockBooks([]);
-    createHolidayCard.mockResolvedValue({ ok: true, result: { cardId: 'card-9', created: true, regionWarning: false } });
-    const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+  describe('loading, errors and focus', () => {
+    it('shows a spinner until the data has loaded', () => {
+      mockFilms([], { isLoading: true });
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-loading')).toBeTruthy();
+      expect(queryByTestId('keepsakes-store-memory-book')).toBeNull();
+    });
 
-    fireEvent.press(getByTestId('holiday-card-tile-make'));
-    fireEvent.press(getByTestId('holiday-greeting-holidays'));
-    fireEvent.press(getByTestId('holiday-greeting-confirm'));
+    it('shows an inline error with a retry when films fail', () => {
+      const refetch = jest.fn();
+      mockedUseFamilyYearFilms.mockReturnValue({
+        films: [], isLoading: false, isFetched: true, isRefetching: false, isError: true, error: null, refetch,
+      } as unknown as ReturnType<typeof useFamilyYearFilms>);
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-error')).toBeTruthy();
+      fireEvent.press(getByTestId('keepsakes-retry-load'));
+      expect(refetch).toHaveBeenCalled();
+    });
 
-    // The ~20 minute confirmation; OK closes it and the app stays put (the
-    // "ready" push opens the shop later).
-    fireEvent.press(await waitFor(() => getByTestId('holiday-greeting-continue')));
-    expect(createHolidayCard).toHaveBeenCalledWith('holidays');
-    expect(Linking.openURL).not.toHaveBeenCalled();
+    it('degrades without the overview: the library and storefront still render', () => {
+      mockOverview(null);
+      mockFilms([recap(9)]);
+      mockBooks([yearThreeFailed]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-library')).toBeTruthy();
+      expect(getByTestId('keepsakes-store-memory-book')).toBeTruthy();
+    });
+
+    it('passes the tab focus state to the films hook so polling stops when the tab is blurred', () => {
+      mockBooks([]);
+      renderWithQuery(<KeepsakesScreen />);
+      expect(mockedUseFamilyYearFilms).toHaveBeenCalledWith('family-1', { isFocused: true });
+      expect(mockedUseKeepsakesOverview).toHaveBeenCalledWith('family-1', { isFocused: true });
+    });
+
+    it('refetches the films and the card summary each time the tab is focused', () => {
+      const refetchFilms = jest.fn();
+      mockedUseFamilyYearFilms.mockReturnValue({
+        films: [], isLoading: false, isFetched: true, isRefetching: false, isError: false, error: null, refetch: refetchFilms,
+      } as unknown as ReturnType<typeof useFamilyYearFilms>);
+      const refetchHoliday = jest.fn();
+      mockedUseHolidayCard.mockReturnValue({
+        summary: null, isLoading: false, isError: false, refetch: refetchHoliday, create: createHolidayCard, isCreating: false,
+      } as unknown as ReturnType<typeof useHolidayCard>);
+      mockBooks([]);
+      renderWithQuery(<KeepsakesScreen />);
+      expect(refetchFilms).toHaveBeenCalled();
+      expect(refetchHoliday).toHaveBeenCalled();
+    });
   });
 
-  it('make: a server refusal shows inline and opens nothing', async () => {
-    mockHolidayCard(holidaySummary());
-    mockBooks([]);
-    createHolidayCard.mockResolvedValue({ ok: false, error: { code: 'disabled', message: 'x' } });
-    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+  describe('toast from a product page', () => {
+    it('shows once, then is gone on the next visit', () => {
+      mockBooks([]);
+      setPendingKeepsakesToast('We’re making your Year Four book…');
+      const first = renderWithQuery(<KeepsakesScreen />);
+      expect(first.getByText('We’re making your Year Four book…')).toBeTruthy();
+      first.unmount();
 
-    fireEvent.press(getByTestId('holiday-card-tile-make'));
-    fireEvent.press(getByTestId('holiday-greeting-christmas'));
-    fireEvent.press(getByTestId('holiday-greeting-confirm'));
+      const second = renderWithQuery(<KeepsakesScreen />);
+      expect(second.queryByText('We’re making your Year Four book…')).toBeNull();
+    });
+  });
 
-    await waitFor(() => expect(getByText("Holiday cards aren't available yet")).toBeTruthy());
-    expect(Linking.openURL).not.toHaveBeenCalled();
+  describe('owner, brand-new family', () => {
+    it('shows the storefront and the "first one is on its way" line, with no filter and no old pitch', () => {
+      mockHolidayCard(holidaySummary({ enabled: false }));
+      mockFilms([]);
+      mockBooks([]);
+      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(getByTestId('keepsakes-store-memory-book')).toBeTruthy();
+      expect(getByText('Films show up here on their own. Your first one is on its way.')).toBeTruthy();
+      expect(queryByTestId('keepsakes-filter-button')).toBeNull();
+      expect(queryByTestId('memory-books-empty')).toBeNull();
+      expect(queryByTestId('keepsakes-films-intro')).toBeNull();
+    });
+  });
+
+  describe('viewer', () => {
+    beforeEach(() => {
+      mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
+    });
+
+    it('is "Family films": films only, no storefront, no banner, no order badges, filter in the header', () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockFilms([lilaBirthday2026, recap(9)]);
+      mockBooks([yearThreeFailed]);
+      mockOverview(overviewOf({
+        has_viewers: null,
+        recap: { month_start: '2026-10-01', delivers_on: '2026-11-01', moments: 6, visuals: 4, min_moments: 10, min_visuals: 6, picture_key: null },
+      }));
+      const { getByTestId, getByText, queryByTestId, queryByText } = renderWithQuery(<KeepsakesScreen />);
+
+      expect(getByText('Family films')).toBeTruthy();
+      expect(queryByText('Keepsakes')).toBeNull();
+      expect(queryByText('Your keepsakes')).toBeNull();
+      expect(getByTestId('keepsakes-library')).toBeTruthy();
+      expect(getByTestId('keepsakes-film-birthday-lila-2026')).toBeTruthy();
+      expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
+      expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+      expect(getByTestId('keepsakes-filter-button')).toBeTruthy();
+      expect(queryByTestId('keepsakes-store')).toBeNull();
+      expect(queryByTestId('keepsakes-needs-you')).toBeNull();
+      expect(queryByTestId('keepsakes-privacy')).toBeNull();
+      expect(queryByTestId(`memory-book-tile-${YEAR_THREE_KEY}`)).toBeNull();
+      expect(queryByTestId('keepsakes-card-card-1')).toBeNull();
+      expect(queryByTestId('memory-books-create')).toBeNull();
+      // Nothing is fetched for books or cards.
+      expect(mockedUseHolidayCard).not.toHaveBeenCalledWith('family-1', expect.objectContaining({ enabled: true }));
+      expect(mockedUseFamilyMemoryBooks).toHaveBeenCalledWith(expect.objectContaining({ familyId: null }));
+    });
+
+    it('the header filter sheet offers years only', () => {
+      mockFilms([recap(9), yearEndFilm]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-filter-button'));
+      expect(queryByTestId('keepsakes-filter-type-books')).toBeNull();
+      fireEvent.press(getByTestId('keepsakes-filter-year-2025'));
+      fireEvent.press(getByTestId('keepsakes-filter-apply'));
+      expect(getByTestId('keepsakes-film-year-end-2025')).toBeTruthy();
+    });
+
+    it('shows the gentle empty line when there are no films', () => {
+      mockBooks([yearOneReady]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-viewer-empty')).toBeTruthy();
+      expect(queryByTestId(`memory-book-tile-${YEAR_ONE_KEY}`)).toBeNull();
+      expect(queryByTestId('keepsakes-filter-button')).toBeNull();
+    });
+
+    it('a viewer with only past-year films still gets the library', () => {
+      mockFilms([yearEndFilm]);
+      mockBooks([]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-library')).toBeTruthy();
+      expect(queryByTestId('keepsakes-viewer-empty')).toBeNull();
+      expect(getByTestId('keepsakes-year-toggle-2025')).toBeTruthy();
+    });
   });
 });
 
@@ -718,38 +933,7 @@ describe('Recaps grid (keepsakes/recaps/[year])', () => {
   });
 });
 
-describe('Keepsakes for a brand-new family (2026-10-02)', () => {
-  it('explains what makes a film when films are not coming yet, above the book pitch', () => {
-    mockBooks([]);
-    const { getByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
-
-    expect(getByTestId('keepsakes-films-intro')).toBeTruthy();
-    expect(getByText('A little film of your month.')).toBeTruthy();
-    // Lila already has a birthday, so no "add birthdays" nudge.
-    expect(getByText(/Birthdays get their own film too\.$/)).toBeTruthy();
-    expect(getByText('BOOKS')).toBeTruthy();
-  });
-
-  it('nudges for birthdays when no kid has one yet', () => {
-    mockedUseFamilyMembers.mockReturnValue({
-      members: [{ ...lila, date_of_birth: null, relationship: 'child' }],
-      isLoading: false,
-    } as unknown as ReturnType<typeof useFamilyMembers>);
-    mockBooks([]);
-    const { getByText } = renderWithQuery(<KeepsakesScreen />);
-
-    expect(getByText(/once your kids’ birthdays are in Family/)).toBeTruthy();
-  });
-
-  it('leaves films to the dated upcoming-recap card once they are really coming', () => {
-    mockFilms([], { upcoming: true });
-    mockBooks([]);
-    const { queryByTestId, getByTestId } = renderWithQuery(<KeepsakesScreen />);
-
-    expect(queryByTestId('keepsakes-films-intro')).toBeNull();
-    expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
-  });
-
+describe('One child\'s keepsakes: a brand-new family (2026-10-02)', () => {
   describe('create-book drawer with nothing makeable yet', () => {
     function mockThinRows() {
       mockedUseMemoryBooks.mockReturnValue({
@@ -775,7 +959,7 @@ describe('Keepsakes for a brand-new family (2026-10-02)', () => {
     it('explains how far along they are instead of listing dead ends, and offers gallery import', async () => {
       mockBooks([]);
       mockThinRows();
-      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      const { getByTestId, getByText, queryByTestId } = renderWithQuery(<MemberKeepsakesScreen />);
       fireEvent.press(getByTestId('memory-books-create'));
 
       await waitFor(() => expect(getByTestId('create-book-not-enough')).toBeTruthy());
@@ -790,7 +974,7 @@ describe('Keepsakes for a brand-new family (2026-10-02)', () => {
     it('keeps the full list one tap away', async () => {
       mockBooks([]);
       mockThinRows();
-      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      const { getByTestId, queryByTestId } = renderWithQuery(<MemberKeepsakesScreen />);
       fireEvent.press(getByTestId('memory-books-create'));
 
       fireEvent.press(await waitFor(() => getByTestId('create-book-show-options')));
@@ -803,7 +987,7 @@ describe('Keepsakes for a brand-new family (2026-10-02)', () => {
       mockGalleryImportEnabled = false;
       mockBooks([]);
       mockThinRows();
-      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      const { getByTestId, queryByTestId } = renderWithQuery(<MemberKeepsakesScreen />);
       fireEvent.press(getByTestId('memory-books-create'));
 
       await waitFor(() => expect(getByTestId('create-book-not-enough')).toBeTruthy());
@@ -817,7 +1001,7 @@ describe('Keepsakes for a brand-new family (2026-10-02)', () => {
       isLoading: false,
     } as unknown as ReturnType<typeof useFamilyMembers>);
     mockBooks([]);
-    renderWithQuery(<KeepsakesScreen />);
+    renderWithQuery(<MemberKeepsakesScreen />);
 
     await waitFor(() =>
       expect(useMediaUrl as jest.Mock).toHaveBeenCalledWith('portraits/lila.webp', undefined),

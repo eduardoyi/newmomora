@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/use-auth';
 import {
   familyMemoryBooksQueryKey,
+  keepsakesOverviewQueryKey,
   memoryBookEligibilityQueryKey,
   memoryBooksQueryKey,
 } from '@/hooks/queryKeys';
@@ -32,6 +33,12 @@ import { getLocalTodayIso } from '@/utils/portrait-versions';
 // "progress" state (~3 minute expectation); ready/failed are their own
 // terminal states. 'available'/'thin' cover the no-book-yet case.
 export type MemoryBookDisplayStatus = 'available' | 'thin' | 'in_progress' | 'ready' | 'failed';
+
+/** What `generate` reports: a new row was created and dispatched; the exact
+ * scope already had an active row (23505 conflict -- the existing row's own
+ * status renders); or the insert / dispatch failed (see the row's
+ * `dispatchError`). */
+export type GenerateMemoryBookResult = 'started' | 'exists' | 'error';
 
 export interface MemoryBookScopeRow {
   key: string;
@@ -206,6 +213,8 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth, todayIso: today
   const refetchBooks = useCallback(async () => {
     await booksQuery.refetch();
     void queryClient.invalidateQueries({ queryKey: familyMemoryBooksQueryKey(familyId) });
+    // A new/retried book changes the Keepsakes overview's order/preview data.
+    void queryClient.invalidateQueries({ queryKey: keepsakesOverviewQueryKey(familyId) });
   }, [booksQuery, familyId, queryClient]);
 
   // Locked design point 3: "one cheap count query at picker-open" per
@@ -280,8 +289,8 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth, todayIso: today
    * (locked design point 5: retry creates a fresh queued row + dispatch;
    * the failed row stays as history) -- both are a plain insert + dispatch
    * from this hook's point of view. */
-  const generate = useCallback(async (option: MemoryBookScopeOption) => {
-    if (!familyId || !childId || !user) return;
+  const generate = useCallback(async (option: MemoryBookScopeOption): Promise<GenerateMemoryBookResult> => {
+    if (!familyId || !childId || !user) return 'error';
     const key = memoryBookScopeKey(option);
     clearError(key);
     setPending(key, true);
@@ -302,10 +311,10 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth, todayIso: today
           // refetch and let the existing row's own status render. Never an
           // error wall for this case (locked design point 5).
           await refetchBooks();
-          return;
+          return 'exists';
         }
         setDispatchErrors((prev) => ({ ...prev, [key]: insertResult.error?.message ?? 'Could not start your book.' }));
-        return;
+        return 'error';
       }
 
       const bookId = insertResult.data.id;
@@ -317,6 +326,7 @@ export function useMemoryBooks({ familyId, childId, dateOfBirth, todayIso: today
         setDispatchErrors((prev) => ({ ...prev, [key]: dispatchResult.error!.message }));
       }
       await refetchBooks();
+      return dispatchResult.error ? 'error' : 'started';
     } finally {
       setPending(key, false);
     }

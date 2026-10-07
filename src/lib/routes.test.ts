@@ -1,4 +1,4 @@
-import { keepsakeRecapsRoute, newMemoryRoute, yearFilmRoute } from '@/lib/routes';
+import { keepsakeProductRoute, keepsakeRecapsRoute, keepsakesTabRoute, newMemoryRoute, yearFilmRoute } from '@/lib/routes';
 
 // `newMemoryRoute` gained an optional `source` param
 // (docs/plans/analytics-implementation.md WP3 item 1) so `memory_saved`
@@ -35,5 +35,24 @@ describe('year film routes', () => {
 
   it('builds the recaps grid route from a year', () => {
     expect(keepsakeRecapsRoute(2026)).toBe('/(app)/keepsakes/recaps/2026');
+  });
+});
+
+describe('keepsake product routes', () => {
+  it('builds the holiday card page route', () => {
+    expect(keepsakeProductRoute('holiday-card')).toBe('/(app)/keepsakes/holiday-card');
+  });
+
+  it('builds the memory book page route, with an optional child', () => {
+    expect(keepsakeProductRoute('memory-book')).toBe('/(app)/keepsakes/memory-book');
+    expect(keepsakeProductRoute('memory-book', 'child 1')).toBe('/(app)/keepsakes/memory-book?memberId=child%201');
+  });
+
+  it('ignores a member id on the holiday card page', () => {
+    expect(keepsakeProductRoute('holiday-card', 'child-1')).toBe('/(app)/keepsakes/holiday-card');
+  });
+
+  it('exposes the tab route used as the cold-start fallback', () => {
+    expect(keepsakesTabRoute).toBe('/(app)/(tabs)/keepsakes');
   });
 });

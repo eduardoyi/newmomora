@@ -12,7 +12,7 @@ import {
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { calendarMemoriesQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { calendarMemoriesQueryKeyBase, keepsakesOverviewQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { trackEvent } from '@/services/analytics';
 import {
   patchMemoryInCaches,
@@ -245,6 +245,8 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
 
         queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase], refetchType: 'none' });
         queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
+        // A new media/audio memory changes the Keepsakes overview (stale only; refetched on focus).
+        queryClient.invalidateQueries({ queryKey: [keepsakesOverviewQueryKeyBase], refetchType: 'none' });
       } catch (error) {
         patchUpload(input.memoryId, {
           status: 'failed',

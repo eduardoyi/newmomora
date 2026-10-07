@@ -16,6 +16,28 @@ appId: com.memora.app
     timeout: 15000
 - extendedWaitUntil:
     visible:
+      id: "keepsakes-library"
+    timeout: 20000
+# Past years are folded: when this year's shelf has no film on it, open the
+# first folded year (a year holding only books may need a second toggle).
+- runFlow:
+    when:
+      notVisible:
+        id: "keepsakes-film-.*"
+    commands:
+      - tapOn:
+          id: "keepsakes-year-toggle-.*"
+          index: 0
+- runFlow:
+    when:
+      notVisible:
+        id: "keepsakes-film-.*"
+    commands:
+      - tapOn:
+          id: "keepsakes-year-toggle-.*"
+          index: 1
+- extendedWaitUntil:
+    visible:
       id: "keepsakes-film-.*"
     timeout: 20000
 - tapOn:

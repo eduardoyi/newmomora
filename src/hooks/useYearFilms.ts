@@ -7,14 +7,12 @@ import { useAuth } from '@/hooks/use-auth';
 import {
   yearFilmEditOptionsQueryKey,
   yearFilmPosterQueryKey,
-  yearFilmsEnabledQueryKey,
   yearFilmsQueryKey,
   yearFilmsQueryKeyBase,
   yearFilmViewsQueryKey,
 } from '@/hooks/queryKeys';
 import {
   fetchFamilyYearFilms,
-  fetchYearFilmsEnabled,
   fetchYearFilmViews,
   getYearFilmEditOptions,
   getYearFilmPosters,
@@ -180,22 +178,6 @@ export function useMarkYearFilmCompleted() {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: yearFilmViewsQueryKey(user?.id) }),
   });
-}
-
-/** Whether to show the upcoming next-month recap card (server-decided). */
-export function useYearFilmsEnabled(familyId: string | null | undefined) {
-  const query = useQuery({
-    queryKey: yearFilmsEnabledQueryKey(familyId),
-    queryFn: async (): Promise<boolean> => {
-      const { data, error } = await fetchYearFilmsEnabled(familyId!);
-      if (error) throw toError(error, 'Could not load film settings');
-      return data === true;
-    },
-    enabled: Boolean(familyId),
-    staleTime: 10 * 60 * 1000,
-  });
-
-  return { enabled: query.data === true, isLoading: query.isLoading, isError: query.isError };
 }
 
 // --- posters -------------------------------------------------------------

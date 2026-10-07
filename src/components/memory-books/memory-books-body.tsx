@@ -1,18 +1,18 @@
-// Keepsakes body -- Memory Books and Year Films in ONE scroll, shared by the
-// Keepsakes tab (year sections: family films + a shelf per child) and the
-// per-child route `keepsakes/[memberId]` (birthday films above one child's
-// books, opened from the child profile's "See {name}'s keepsakes" link).
+// Keepsakes body -- one child's Memory Books and birthday films in ONE scroll,
+// the per-child route `keepsakes/[memberId]` (opened from the child profile's
+// "See {name}'s keepsakes" link). The Keepsakes TAB no longer renders this: it
+// moved to `KeepsakesTab` (docs/plans/keepsakes-redesign.md D2), which reuses
+// `MemoryBookFlowHost` below for its failed-book retry.
 // docs/plans/timeline-calendar-keepsakes.md C2-C5 and
 // docs/plans/year-film-p2.md Step 7; supersedes the single-child screen at family/[id]/memory-books
 // (owner-approved picker-redesign brief, 2026-09-17). See
 // docs/features/keepsakes.md for the contract.
 //
-// Data: ONE family-wide books query (useFamilyMemoryBooks) drives every
-// shelf, so shelf membership and contents can't disagree. The per-child
-// create/retry flow (useMemoryBooks: eligibility counts, example cover, the
-// generate call) only mounts once a flow starts, for that one child.
+// Data: ONE family-wide books query (useFamilyMemoryBooks) drives the shelf.
+// The per-child create/retry flow (useMemoryBooks: eligibility counts,
+// example cover, the generate call) only mounts once a flow starts.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
@@ -20,24 +20,20 @@ import { useQuery } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BookCoverTile, type BookCoverTileStatus } from '@/components/memory-books/book-cover-tile';
-import { HolidayCardTile } from '@/components/keepsakes/holiday-card-tile';
 import { KeepsakeFilmTile } from '@/components/keepsakes/keepsake-film-tile';
-import { KeepsakeYearSection } from '@/components/keepsakes/keepsake-year-section';
 import { BookToast } from '@/components/memory-books/book-toast';
-import { ChildPickerSheet } from '@/components/memory-books/child-picker-sheet';
 import { CreateBookSheet } from '@/components/memory-books/create-book-sheet';
 import { RetryBookSheet } from '@/components/memory-books/retry-book-sheet';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
-import { useFamilyYearFilms, useYearFilmsEnabled } from '@/hooks/useYearFilms';
+import { useFamilyYearFilms } from '@/hooks/useYearFilms';
 import {
   buildMemoryBookRows,
   useFamilyMemoryBooks,
   useMemoryBooks,
   type MemoryBookScopeRow,
 } from '@/hooks/useMemoryBooks';
-import { trackEvent } from '@/services/analytics';
 import type { FamilyMember } from '@/services/family-members';
 import { fetchExampleCoverAssetKey, memoryBookWebUrl } from '@/services/memory-books';
 import { openShopUrl } from '@/services/web-handoff';
@@ -54,14 +50,8 @@ import {
 } from '@/utils/memory-book-scope';
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { canEditFamilyContent } from '@/utils/roles';
-import { buildKeepsakeYears } from '@/utils/year-films';
 
 const CTA_HEIGHT = 54;
-// The floating tab bar sits max(28, insets.bottom + 8) above the screen
-// bottom on Android (28 on iOS) and is ~50pt tall -- the same geometry
-// MemoryFab clears. On the tab, the CTA sits just above it.
-const TAB_BAR_HEIGHT = 50;
-const TAB_BAR_GAP = 12;
 
 function calendarYearRangeLabel(year: number): string {
   return `Jan – Dec ${year}`;
@@ -139,7 +129,7 @@ interface Shelf {
   shelfRows: MemoryBookScopeRow[];
 }
 
-type BookFlow =
+export type BookFlow =
   | { memberId: string; mode: 'create'; visible: boolean }
   | { memberId: string; mode: 'retry'; option: MemoryBookScopeOption; visible: boolean };
 
@@ -149,7 +139,7 @@ type BookFlow =
  * finish and refresh the shelves). Eligibility counts and the example cover
  * therefore load per sheet-open, not per shelf.
  */
-function MemoryBookFlowHost({
+export function MemoryBookFlowHost({
   flow,
   member,
   todayIso,
@@ -221,39 +211,29 @@ function MemoryBookFlowHost({
   );
 }
 
-const SHELF_BOOK_TILE_WIDTH = 150;
-const SHELF_FIRST_BOOK_TILE_WIDTH = 190;
 const CHILD_FILM_TILE_WIDTH = 112;
 
 export interface KeepsakesBodyProps {
-  variant: 'tab' | 'stack';
-  // Stack variant: the one child whose shelf this is.
+  /** Only the one-child stack route renders this body now (the tab moved to `KeepsakesTab`). */
+  variant?: 'stack';
+  // The one child whose shelf this is.
   memberId?: string;
   todayIso: string;
   isFocused: boolean;
 }
 
-export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: KeepsakesBodyProps) {
+export function KeepsakesBody({ memberId, todayIso, isFocused }: KeepsakesBodyProps) {
   const { familyId, role } = useFamily();
   const canGenerate = canEditFamilyContent(role);
   const insets = useSafeAreaInsets();
   const { members, isLoading: isLoadingMembers } = useFamilyMembers();
-  // Viewers never see books on the tab (owner decision 2026-09-15), so the
-  // tab doesn't even fetch them; the stack route still shows existing books
-  // read-only.
-  const { booksByChild, isLoading, isError, refetch } = useFamilyMemoryBooks({
-    familyId: variant === 'tab' && !canGenerate ? null : familyId,
-    isFocused,
-  });
-  // Films arrive by push, the drawer or this focus refetch (tab screens never
-  // unmount); only while one is remaking/updating does the hook poll (every
-  // 20 s, and only while this screen is focused).
+  // The stack route shows existing books read-only to viewers.
+  const { booksByChild, isLoading, isError, refetch } = useFamilyMemoryBooks({ familyId, isFocused });
   const {
     films,
     isLoading: isLoadingFilms,
     refetch: refetchFilms,
   } = useFamilyYearFilms(familyId, { isFocused });
-  const { enabled: upcomingEnabled } = useYearFilmsEnabled(variant === 'tab' ? familyId : null);
   useEffect(() => {
     if (isFocused) void refetchFilms({ cancelRefetch: false });
   }, [isFocused, refetchFilms]);
@@ -286,23 +266,7 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
         : [],
     [films, memberId],
   );
-  const hasFilms = variant === 'tab' ? films.length > 0 : childFilms.length > 0;
-
-  const currentYear = Number(todayIso.slice(0, 4));
-  const keepsakeYears = useMemo(() => {
-    if (variant !== 'tab') return [];
-    const books = canGenerate ? [...booksByChild.values()].flat() : [];
-    return buildKeepsakeYears(films, books, members, todayIso);
-  }, [booksByChild, canGenerate, films, members, todayIso, variant]);
-
-  // Tab tiles come from the year sections' books, so map each book back to
-  // the scope row the shelf tile needs (pickRelevantBook may drop a
-  // superseded duplicate for the same scope).
-  const bookRowsById = useMemo(() => {
-    const map = new Map<string, MemoryBookScopeRow>();
-    for (const shelf of shelves) for (const row of shelf.shelfRows) map.set(row.book!.id, row);
-    return map;
-  }, [shelves]);
+  const hasFilms = childFilms.length > 0;
 
   // The example cover: one real photo of the (first) child -- the pitch's
   // personalized touch. Loaded only while the pitch is on screen.
@@ -324,24 +288,10 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
       : null);
 
   const [flow, setFlow] = useState<BookFlow | null>(null);
-  const [isChildPickerVisible, setIsChildPickerVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const flowMember = flow ? members.find((member) => member.id === flow.memberId) ?? null : null;
 
   const startCreate = (forMemberId: string) => setFlow({ memberId: forMemberId, mode: 'create', visible: true });
-
-  const handleCreatePress = () => {
-    trackEvent('keepsakes_create_book_tapped', { children_count: shelves.length });
-    if (shelves.length === 0) {
-      router.navigate(familyRosterRoute);
-      return;
-    }
-    if (shelves.length === 1) {
-      startCreate(shelves[0]!.member.id);
-      return;
-    }
-    setIsChildPickerVisible(true);
-  };
 
   const handleTilePress = (shelf: Shelf, row: MemoryBookScopeRow) => {
     if (row.status === 'ready' && row.book) {
@@ -354,63 +304,30 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
     // 'in_progress' -- no-op, the tile Pressable is disabled for it anyway.
   };
 
-  const tabBarBottom = Platform.OS === 'android' ? Math.max(28, insets.bottom + 8) : 28;
-  const ctaBottom = variant === 'tab' ? tabBarBottom + TAB_BAR_HEIGHT + TAB_BAR_GAP : 20 + insets.bottom;
-  const contentBottomPadding = canGenerate ? ctaBottom + CTA_HEIGHT + 24 : variant === 'tab' ? 130 : 40;
+  const ctaBottom = 20 + insets.bottom;
+  const contentBottomPadding = canGenerate ? ctaBottom + CTA_HEIGHT + 24 : 40;
 
-  const singleShelf = variant === 'stack' ? shelves[0] : undefined;
-  const ctaLabel = variant === 'tab' && shelves.length === 0 ? 'Go to Family' : 'Create a book';
+  const singleShelf = shelves[0];
+  const ctaLabel = singleShelf ? 'Create a book' : 'Go to Family';
 
   // "Create {name}'s first book": owners/managers, for a child with no book
   // at all -- and only once there's something else on screen (a family with
   // no books and no films gets the one family pitch instead).
-  const canShowFirstBookTile = (member: FamilyMember) =>
-    canGenerate &&
-    (hasBooks || hasFilms) &&
-    (booksByChild.get(member.id)?.length ?? 0) === 0 &&
-    shelves.some((shelf) => shelf.member.id === member.id);
-
-  const renderFirstBookTile = (member: FamilyMember, inRow: boolean) => (
+  const renderFirstBookTile = (member: FamilyMember) => (
     <Pressable
       accessibilityRole="button"
       key={`first-book-${member.id}`}
       onPress={() => startCreate(member.id)}
-      style={({ pressed }) => [
-        styles.firstBookTile,
-        inRow && { width: SHELF_FIRST_BOOK_TILE_WIDTH },
-        pressed && styles.firstBookTilePressed,
-      ]}
+      style={({ pressed }) => [styles.firstBookTile, pressed && styles.firstBookTilePressed]}
       testID={`memory-books-first-book-${member.id}`}
     >
       <Text style={styles.firstBookText}>Create {member.name}’s first book</Text>
     </Pressable>
   );
 
-  // The tab holds films too (2026-10-02). Once films are really coming
-  // (`year_films_enabled`: 10+ moments this month and a kid with a birthday)
-  // the current year's section already shows the dated upcoming-recap card;
-  // before that -- every brand-new family -- this pitch is the whole tab, so
-  // it says what makes a film instead of promising one. The Family-page
-  // stack variant stays books-only.
-  const hasKidBirthday = members.some((member) => isOwnChild(member) && Boolean(member.date_of_birth));
-  const filmsIntro =
-    variant === 'tab' && !upcomingEnabled ? (
-      <View style={[styles.emptyState, styles.filmsIntro]} testID="keepsakes-films-intro">
-        <Text style={styles.emptyEyebrow}>FILMS</Text>
-        <Text style={styles.emptyHeadline}>A little film of your month.</Text>
-        <Text style={styles.emptyBody}>
-          Any month with 10 or more moments becomes a short film on the 1st.{' '}
-          {hasKidBirthday
-            ? 'Birthdays get their own film too.'
-            : 'Birthdays get their own film too, once your kids’ birthdays are in Family.'}
-        </Text>
-      </View>
-    ) : null;
-
   const pitch = (
     <View style={styles.emptyState} testID="memory-books-empty">
-      {filmsIntro}
-      <Text style={styles.emptyEyebrow}>{filmsIntro ? 'BOOKS' : 'KEEPSAKES'}</Text>
+      <Text style={styles.emptyEyebrow}>KEEPSAKES</Text>
       <Text style={styles.emptyHeadline}>
         {singleShelf
           ? `A year of ${singleShelf.member.name}, printed and bound.`
@@ -456,60 +373,8 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
           </Text>
         </View>
       </View>
-
-      {variant === 'tab' && shelves.length === 0 ? (
-        <Text style={styles.noChildHint} testID="memory-books-no-child-hint">
-          Books start from your child’s profile. Add them (with their birthday) in Family.
-        </Text>
-      ) : null}
     </View>
   );
-
-  const renderTab = (): ReactNode => {
-    // Viewers see films only -- no book UI (owner decision 2026-09-15 keeps
-    // books manager-only). Nothing to show yet: the gentle line.
-    if (!canGenerate && !hasFilms) {
-      return (
-        <View style={styles.viewerEmpty} testID="keepsakes-viewer-empty">
-          <Text style={styles.viewerEmptyText}>Books and films your family makes will show up here.</Text>
-        </View>
-      );
-    }
-    return (
-      <>
-        {/* Own block above the year sections: an empty year renders nothing,
-            which must never hide the holiday-card entry. */}
-        <HolidayCardTile canEdit={canGenerate} familyId={familyId} isFocused={isFocused} todayIso={todayIso} />
-        {keepsakeYears.map((year) => (
-          <KeepsakeYearSection
-            key={year.year}
-            members={members}
-            renderBookTile={(book, member) => {
-              const row = bookRowsById.get(book.id);
-              const shelf = shelves.find((candidate) => candidate.member.id === member.id);
-              if (!row || !shelf) return null;
-              return (
-                <ShelfTile
-                  childFirstName={member.name}
-                  key={row.key}
-                  onPress={() => handleTilePress(shelf, row)}
-                  row={row}
-                  width={SHELF_BOOK_TILE_WIDTH}
-                />
-              );
-            }}
-            renderShelfExtra={(member) =>
-              year.year === currentYear && canShowFirstBookTile(member) ? renderFirstBookTile(member, true) : null
-            }
-            showUpcoming={upcomingEnabled && year.year === currentYear}
-            todayIso={todayIso}
-            year={year}
-          />
-        ))}
-        {!hasBooks && !hasFilms ? pitch : null}
-      </>
-    );
-  };
 
   const renderStack = (): ReactNode => (
     <>
@@ -558,7 +423,7 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
           </View>
         ))
       ) : hasFilms ? (
-        singleShelf && canGenerate ? renderFirstBookTile(singleShelf.member, false) : null
+        singleShelf && canGenerate ? renderFirstBookTile(singleShelf.member) : null
       ) : (
         pitch
       )}
@@ -580,8 +445,6 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
           </View>
         ) : isLoading || isLoadingMembers || isLoadingFilms ? (
           <ActivityIndicator color={colors.primary} style={styles.loading} testID="memory-books-loading" />
-        ) : variant === 'tab' ? (
-          renderTab()
         ) : (
           renderStack()
         )}
@@ -603,11 +466,14 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
           <Pressable
             accessibilityLabel={ctaLabel}
             accessibilityRole="button"
-            onPress={variant === 'stack' && singleShelf ? () => startCreate(singleShelf.member.id) : handleCreatePress}
+            onPress={() => {
+              if (singleShelf) startCreate(singleShelf.member.id);
+              else router.navigate(familyRosterRoute);
+            }}
             style={({ pressed }) => [styles.ctaButton, pressed && styles.ctaButtonPressed]}
             testID="memory-books-create"
           >
-            {ctaLabel === 'Create a book' ? (
+            {singleShelf ? (
               <SymbolView
                 fallback={<Text style={styles.ctaIconFallback}>+</Text>}
                 name={{ ios: 'plus', android: 'add' }}
@@ -619,16 +485,6 @@ export function KeepsakesBody({ variant, memberId, todayIso, isFocused }: Keepsa
           </Pressable>
         </View>
       ) : null}
-
-      <ChildPickerSheet
-        onClose={() => setIsChildPickerVisible(false)}
-        onSelect={(selectedId) => {
-          setIsChildPickerVisible(false);
-          startCreate(selectedId);
-        }}
-        options={shelves.map((shelf) => ({ id: shelf.member.id, name: shelf.member.name }))}
-        visible={isChildPickerVisible}
-      />
 
       {flow && flowMember ? (
         <MemoryBookFlowHost
@@ -730,7 +586,6 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   emptyState: { gap: 20 },
-  filmsIntro: { marginBottom: 16 },
   emptyEyebrow: {
     fontFamily: fonts.sansBold,
     fontSize: 13,
@@ -784,13 +639,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansMedium,
     color: colors.ink,
   },
-  noChildHint: {
-    color: colors.ink2,
-    fontFamily: fonts.sansMedium,
-    fontSize: 13,
-    lineHeight: 19,
-    textAlign: 'center',
-  },
   loading: { marginTop: 48 },
   errorState: { gap: 8, alignItems: 'flex-start' },
   errorStateText: {
@@ -802,17 +650,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansBold,
     fontSize: 13.5,
     color: colors.primary,
-  },
-  viewerEmpty: {
-    flex: 1,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-  },
-  viewerEmptyText: {
-    color: colors.ink3,
-    fontFamily: fonts.sans,
-    fontSize: 14.5,
-    lineHeight: 22,
   },
   ctaOverlay: {
     position: 'absolute',

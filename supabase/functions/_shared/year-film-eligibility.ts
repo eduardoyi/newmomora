@@ -221,6 +221,12 @@ export function isFilmChild(member: FilmMemberInput, today: string): boolean {
 
 // ── Per-memory classification ────────────────────────────────────────────
 
+// NOTE: `hasVideoClip` / `visualKind` below and `holidayPool` further down are
+// mirrored in SQL by public.keepsake_pool (supabase/migrations/
+// 20261009120000_keepsakes_overview.sql), which feeds the Keepsakes tab's
+// recap progress. Change a rule here => change the SQL (a new migration) and
+// supabase/tests/keepsakes_overview_test.sql too.
+
 export type VisualKind = 'illustration' | 'photo' | 'video';
 
 /** A video long enough to cut in as a moving clip (plan §5: videos are

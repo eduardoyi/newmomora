@@ -1,22 +1,19 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { KeepsakesBody } from '@/components/memory-books/memory-books-body';
-import { colors, fonts, spacing } from '@/constants/theme';
+import { KeepsakesTab } from '@/components/keepsakes/keepsakes-tab';
 import { trackEvent } from '@/services/analytics';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 /**
- * Keepsakes tab (docs/plans/timeline-calendar-keepsakes.md C4, replaces the
- * Calendar tab): one section per year -- the family's films, then a shelf per
- * child with birthday films and Memory Books (docs/plans/year-film-p2.md
- * Step 7). See docs/features/keepsakes.md.
+ * Keepsakes tab (docs/plans/keepsakes-redesign.md D1): the header, the
+ * "needs you" line, the "Make something" storefront and "Your keepsakes"
+ * library all live in `KeepsakesTab`. See docs/features/keepsakes.md.
  *
  * Tab screens never unmount, so "today" (which decides the books' scope
- * options and the upcoming-recap card) is recomputed on every focus, and the
- * books poll and films refetch only run while this tab is focused.
+ * options and what a previous-year holiday card means) is recomputed on every
+ * focus, and the books poll and films refetch only run while this tab is
+ * focused.
  */
 export default function KeepsakesScreen() {
   const [todayIso, setTodayIso] = useState(() => getLocalTodayIso());
@@ -34,41 +31,5 @@ export default function KeepsakesScreen() {
     }, []),
   );
 
-  return (
-    <View style={styles.container}>
-      <SafeAreaView edges={['top']}>
-        <View style={styles.header} testID="keepsakes-header">
-          <Text style={styles.eyebrow}>Keepsakes</Text>
-          <Text style={styles.title}>Made from your moments.</Text>
-        </View>
-      </SafeAreaView>
-      <KeepsakesBody isFocused={isFocused} todayIso={todayIso} variant="tab" />
-    </View>
-  );
+  return <KeepsakesTab isFocused={isFocused} todayIso={todayIso} />;
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
-  header: {
-    paddingTop: 16,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.lg,
-    gap: 8,
-  },
-  eyebrow: {
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
-    letterSpacing: 0.14 * 11,
-    textTransform: 'uppercase',
-    color: colors.ink3,
-  },
-  title: {
-    fontFamily: fonts.display,
-    fontSize: 42,
-    lineHeight: 42,
-    color: colors.ink,
-  },
-});

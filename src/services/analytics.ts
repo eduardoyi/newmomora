@@ -163,6 +163,21 @@ export interface AnalyticsEventMap {
   keepsakes_create_book_tapped: {
     children_count: number;
   };
+  /** Keepsakes storefront card tapped (docs/plans/keepsakes-redesign.md C5). */
+  keepsakes_product_opened: {
+    product: 'holiday-card' | 'memory-book';
+  };
+  /** Keepsakes filter sheet applied (the sheet's Apply, not each chip). */
+  keepsakes_filter_applied: {
+    type: 'all' | 'films' | 'books' | 'cards';
+    has_year: boolean;
+    has_child: boolean;
+  };
+  /** A past year on the Keepsakes shelf was opened or folded. */
+  keepsakes_year_toggled: {
+    year: number;
+    open: boolean;
+  };
   invite_created: {
     role: 'manager' | 'viewer';
     family_id: string;

@@ -235,19 +235,6 @@ export async function getYearFilmPosters(
   return { data: posters, error: null };
 }
 
-/** Whether the family should see the "upcoming recap" card (server-side
- * rollout, billing, own-child and memory-count gates). */
-export async function fetchYearFilmsEnabled(
-  familyId: string,
-): Promise<{ data: boolean | null; error: ServiceError | null }> {
-  const { data, error } = await supabase.rpc('year_films_enabled', { p_family_id: familyId });
-
-  if (error) {
-    return { data: null, error: mapSupabaseError(error) };
-  }
-  return { data: data === true, error: null };
-}
-
 // --- edit sheet (docs/plans/year-film-p2.md Step 11) ------------------------
 
 /** One moment the film shows (or a removed one, so it can be restored). */

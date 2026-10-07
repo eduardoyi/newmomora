@@ -2,7 +2,6 @@ import { supabase } from '@/lib/supabase';
 import { invokeEdgeFunction } from '@/services/ai';
 import {
   fetchFamilyYearFilms,
-  fetchYearFilmsEnabled,
   fetchYearFilmViews,
   getYearFilmEditOptions,
   getYearFilmPlayback,
@@ -283,22 +282,6 @@ describe('year-films service', () => {
     });
   });
 
-  describe('fetchYearFilmsEnabled', () => {
-    it('calls the RPC and returns the boolean', async () => {
-      mockedSupabase.rpc.mockResolvedValue({ data: true, error: null });
-
-      const result = await fetchYearFilmsEnabled('family-1');
-
-      expect(mockedSupabase.rpc).toHaveBeenCalledWith('year_films_enabled', { p_family_id: 'family-1' });
-      expect(result).toEqual({ data: true, error: null });
-    });
-
-    it('maps an error', async () => {
-      mockedSupabase.rpc.mockResolvedValue({ data: null, error: { message: 'x', code: 'P0001' } });
-
-      expect(await fetchYearFilmsEnabled('family-1')).toEqual({ data: null, error: { message: 'x', code: 'P0001' } });
-    });
-  });
   describe('getYearFilmEditOptions', () => {
     const rpcPayload = {
       editable: true,
