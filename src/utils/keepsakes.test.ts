@@ -1,5 +1,11 @@
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesCardFront, KeepsakesOrder, KeepsakesOverview } from '@/services/keepsakes';
+import type {
+  KeepsakesCard,
+  KeepsakesCardFront,
+  KeepsakesOrder,
+  KeepsakesOverview,
+  KeepsakesUpcomingFilm,
+} from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import { buildMemoryBookRows } from '@/hooks/useMemoryBooks';
@@ -15,6 +21,13 @@ import {
   cardFrontFor,
   formatMonthDay,
   groupShelfByYear,
+  isUpcomingFilmLocked,
+  pastCardBadge,
+  shelfCardFront,
+  upcomingFilmCaptionMeta,
+  upcomingFilmCaptionTitle,
+  upcomingFilmHint,
+  upcomingFilmTitle,
   monthNameOf,
   pickNeedsYou,
   reconcileKeepsakesFilter,
@@ -118,6 +131,8 @@ function overview(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview
     book_preview_keys: {},
     orders: [],
     card_front: null,
+    cards: [],
+    upcoming_films: [],
     ...overrides,
   };
 }
@@ -141,12 +156,72 @@ const order = (overrides: Partial<KeepsakesOrder> = {}): KeepsakesOrder => ({
   ...overrides,
 });
 
+const pastFront = (cardId: string, year: number): KeepsakesCardFront => ({
+  card_id: cardId,
+  year,
+  image_key: `family/${cardId}.jpg`,
+  width: 4000,
+  height: 3000,
+  layout: 'bordered',
+  orientation: 'landscape',
+  focal: null,
+  greeting: 'holidays',
+  language: 'en',
+  greeting_text: null,
+  subline_text: null,
+  greeting_position: 'bottom-left',
+});
+
+const cardEntry = (cardId: string, year: number, overrides: Partial<KeepsakesCard> = {}): KeepsakesCard => ({
+  card_id: cardId,
+  year,
+  status: 'ready',
+  ordered: false,
+  front: pastFront(cardId, year),
+  ...overrides,
+});
+
+const upcomingFilm = (overrides: Partial<KeepsakesUpcomingFilm> = {}): KeepsakesUpcomingFilm => ({
+  kind: 'birthday',
+  member_id: 'tomas',
+  age_year: 4,
+  film_date: '2026-11-20',
+  scope_start: '2025-11-20',
+  scope_end_excl: '2026-11-20',
+  moments: 12,
+  visuals: 7,
+  min_moments: 15,
+  min_visuals: 8,
+  quarters: null,
+  min_quarters: null,
+  picture_key: null,
+  ...overrides,
+});
+
+const yearUpcoming = (overrides: Partial<KeepsakesUpcomingFilm> = {}) =>
+  upcomingFilm({
+    kind: 'family_year',
+    member_id: null,
+    age_year: null,
+    film_date: '2027-01-01',
+    scope_start: '2026-01-01',
+    scope_end_excl: '2027-01-01',
+    quarters: 3,
+    min_quarters: 3,
+    moments: 40,
+    visuals: 20,
+    min_moments: 30,
+    min_visuals: 15,
+    ...overrides,
+  });
+
 function build(overrides: Partial<Parameters<typeof buildShelfItems>[0]> = {}) {
   return buildShelfItems({
     films: [],
     bookRows: [],
     cardSummary: null,
     overview: null,
+    members: [tomas, lucia],
     role: 'owner',
     todayIso: TODAY,
     ...overrides,
@@ -550,6 +625,233 @@ describe('pickNeedsYou', () => {
 
   it('never for viewers', () => {
     expect(pick({ role: 'viewer', cardSummary: card(), bookRows: failedBook() })).toBeNull();
+  });
+});
+
+describe('past-year holiday cards on their shelves', () => {
+  it('files every ready card of the overview on its own year, newest first', () => {
+    const items = build({
+      cardSummary: card({ cardId: 'card-26', year: 2026 }),
+      overview: overview({ cards: [cardEntry('card-26', 2026), cardEntry('card-25', 2025, { ordered: true }), cardEntry('card-24', 2024)] }),
+    });
+    expect(items.filter((i) => i.kind === 'card').map((i) => [i.id, i.year])).toEqual([
+      ['card:card-26', 2026],
+      ['card:card-25', 2025],
+      ['card:card-24', 2024],
+    ]);
+  });
+
+  it('keeps the current card on today’s logic and lists it once', () => {
+    const items = build({
+      cardSummary: card({ cardId: 'card-26', year: 2026, readiness: 'ready' }),
+      overview: overview({ cards: [cardEntry('card-26', 2026)], card_front: pastFront('card-26', 2026) }),
+    });
+    const cards = items.filter((i) => i.kind === 'card');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ isPast: false, cardState: 'ready', badge: { label: 'Ready to order', tone: 'needsYou' } });
+  });
+
+  it('falls back to today’s behaviour when cards is empty (old server)', () => {
+    const items = build({ cardSummary: card(), overview: overview({ cards: [] }) });
+    expect(items.filter((i) => i.kind === 'card').map((i) => i.id)).toEqual(['card:card-1']);
+    expect(build({ overview: overview({ cards: [] }) }).filter((i) => i.kind === 'card')).toEqual([]);
+  });
+
+  it('hides generating and failed past cards', () => {
+    const items = build({
+      overview: overview({
+        cards: [cardEntry('g', 2025, { status: 'generating' }), cardEntry('f', 2024, { status: 'failed' }), cardEntry('r', 2023)],
+      }),
+    });
+    expect(items.filter((i) => i.kind === 'card').map((i) => i.id)).toEqual(['card:r']);
+  });
+
+  it('badges a past card from the orders only: Shipped with a date, Ordered, or nothing', () => {
+    const items = build({
+      overview: overview({
+        cards: [cardEntry('shipped', 2025), cardEntry('ordered', 2024), cardEntry('plain', 2023)],
+        orders: [
+          order({ product: 'card', item_id: 'shipped', status: 'shipped', shipped_at: '2025-12-12T18:00:00+00:00' }),
+          order({ product: 'card', item_id: 'ordered', status: 'in_production' }),
+        ],
+      }),
+    });
+    const badge = (id: string) => items.find((i) => i.id === id)!.badge;
+    expect(badge('card:shipped')).toMatchObject({ tone: 'progress' });
+    expect(badge('card:shipped')!.label).toMatch(/^Shipped · Dec \d{1,2}$/);
+    expect(badge('card:ordered')).toEqual({ label: 'Ordered', tone: 'progress' });
+    expect(badge('card:plain')).toBeNull(); // never "Ready to order"
+    expect(items.find((i) => i.id === 'card:plain')).toMatchObject({ isPast: true, cardState: 'ready' });
+    expect(items.find((i) => i.id === 'card:ordered')).toMatchObject({ cardState: 'ordered' });
+  });
+
+  it('pastCardBadge trusts the ordered flag when no order row came back', () => {
+    expect(pastCardBadge({ card_id: 'x', ordered: true }, overview())).toEqual({ label: 'Ordered', tone: 'progress' });
+    expect(pastCardBadge({ card_id: 'x', ordered: false }, null)).toBeNull();
+  });
+
+  it('a past card draws its own front; the current one keeps the matching card_front', () => {
+    const items = build({
+      cardSummary: card({ cardId: 'card-26', year: 2026 }),
+      overview: overview({
+        cards: [cardEntry('card-26', 2026), cardEntry('card-25', 2025)],
+        card_front: pastFront('card-26', 2026),
+      }),
+    });
+    const ov = overview({ card_front: pastFront('card-26', 2026) });
+    const past = items.find((i) => i.id === 'card:card-25')!;
+    const current = items.find((i) => i.id === 'card:card-26')!;
+    expect(past.kind === 'card' && shelfCardFront(past, ov)?.card_id).toBe('card-25');
+    expect(current.kind === 'card' && shelfCardFront(current, ov)?.card_id).toBe('card-26');
+  });
+
+  it('never reaches the needs-you banner and is not a current card', () => {
+    const summary = card({ cardId: 'card-26', year: 2026, readiness: 'generating' });
+    const items = build({ cardSummary: summary, overview: overview({ cards: [cardEntry('card-25', 2025)] }) });
+    expect(items.find((i) => i.id === 'card:card-25')).toMatchObject({ isPast: true });
+    expect(pickNeedsYou({ cardSummary: summary, bookRows: [], members: [tomas], role: 'owner', todayIso: TODAY })).toBeNull();
+  });
+
+  it('a stale summary card (season over, unordered) shows as a ready past card, once', () => {
+    // Summary still returns last year's unordered card; the tile state is "make" (not on the shelf as current).
+    const items = build({
+      cardSummary: card({ cardId: 'card-25', year: 2025, ordered: false }),
+      overview: overview({ cards: [cardEntry('card-25', 2025)] }),
+    });
+    expect(items.filter((i) => i.kind === 'card')).toEqual([expect.objectContaining({ id: 'card:card-25', isPast: true })]);
+  });
+
+  it('viewers never get cards', () => {
+    expect(build({ role: 'viewer', overview: overview({ cards: [cardEntry('card-25', 2025)] }) }).filter((i) => i.kind === 'card')).toEqual([]);
+  });
+
+  it('past cards take part in the Holiday cards type filter, the year filter, chips and the year summary', () => {
+    const items = build({ overview: overview({ cards: [cardEntry('card-25', 2025), cardEntry('card-24', 2024)] }), films: [film({ id: 'f', placement_date: '2025-03-01' })] });
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, type: 'cards' }).map((i) => i.id)).toEqual(['card:card-25', 'card:card-24']);
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, year: 2024 }).map((i) => i.id)).toEqual(['card:card-24']);
+    expect(availableYears(items)).toEqual([2025, 2024]);
+    const years = groupShelfByYear(items, TODAY);
+    expect(years.map((y) => [y.year, yearSummaryLabel(y.items, 'owner')])).toEqual([
+      [2025, '2 keepsakes'],
+      [2024, '1 keepsake'],
+    ]);
+  });
+});
+
+describe('upcoming birthday and year-end films', () => {
+  it('files each tile by film_date’s year, with the child’s memberId (year-end is family-wide)', () => {
+    const items = build({ overview: overview({ upcoming_films: [upcomingFilm(), yearUpcoming()] }) });
+    expect(items.map((i) => [i.id, i.year, i.memberId])).toEqual([
+      ['upcoming-film:family_year:family:2027-01-01', 2027, null],
+      ['upcoming-film:birthday:tomas:2026-11-20', 2026, 'tomas'],
+    ]);
+  });
+
+  it('orders a shelf: upcoming recap, birthdays by film_date, upcoming year-end, year-end film, then date descending', () => {
+    const items = build({
+      films: [monthFilm('m-sep', '2026-09-30'), yearEndFilm('y-2026', 2026), monthFilm('m-aug', '2026-08-31')],
+      overview: overview({
+        recap: recap(),
+        upcoming_films: [
+          yearUpcoming({ film_date: '2026-12-31', scope_start: '2026-01-01' }),
+          upcomingFilm({ member_id: 'lucia', film_date: '2026-12-10', age_year: 6 }),
+          upcomingFilm({ member_id: 'tomas', film_date: '2026-11-20' }),
+        ],
+      }),
+    });
+    expect(items.map((i) => i.id)).toEqual([
+      'upcoming-recap',
+      'upcoming-film:birthday:tomas:2026-11-20',
+      'upcoming-film:birthday:lucia:2026-12-10',
+      'upcoming-film:family_year:family:2026-12-31',
+      'film:y-2026',
+      'film:m-sep',
+      'film:m-aug',
+    ]);
+  });
+
+  it('skips a birthday tile whose child is gone, but not the year-end tile', () => {
+    const items = build({
+      members: [lucia],
+      overview: overview({ upcoming_films: [upcomingFilm({ member_id: 'tomas' }), yearUpcoming()] }),
+    });
+    expect(items.map((i) => i.kind)).toEqual(['upcoming-film']);
+    expect(items[0]).toMatchObject({ memberId: null });
+  });
+
+  it('viewers see the tiles too', () => {
+    const items = build({ role: 'viewer', overview: overview({ upcoming_films: [upcomingFilm(), yearUpcoming()] }) });
+    expect(items).toHaveLength(2);
+  });
+
+  it('no badge, forced-open year, and not counted in the year summary', () => {
+    const items = build({ overview: overview({ upcoming_films: [yearUpcoming()] }), films: [film({ id: 'old', placement_date: '2024-03-14' })] });
+    expect(items.every((i) => i.badge === null)).toBe(true);
+    const years = groupShelfByYear(items, TODAY);
+    expect(years.map((y) => [y.year, y.isAlwaysOpen])).toEqual([
+      [2027, true],
+      [2024, false],
+    ]);
+    expect(yearSummaryLabel(years[0]!.items, 'owner')).toBe('0 keepsakes');
+    expect(yearSummaryLabel(years[0]!.items, 'viewer')).toBe('0 films');
+  });
+
+  it('child chip shows the child’s birthday tile; year-end shows only under All; Films includes both', () => {
+    const items = build({ overview: overview({ upcoming_films: [upcomingFilm(), yearUpcoming()] }) });
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, memberId: 'tomas' }).map((i) => i.kind)).toEqual(['upcoming-film']);
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, memberId: 'lucia' })).toEqual([]);
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, type: 'films' })).toHaveLength(2);
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, type: 'cards' })).toEqual([]);
+    expect(applyKeepsakesFilter(items, { ...DEFAULT_KEEPSAKES_FILTER, type: 'books' })).toEqual([]);
+  });
+
+  describe('locked / unlocked and the hint priority', () => {
+    it('unlocked when every floor is met', () => {
+      expect(isUpcomingFilmLocked(upcomingFilm({ moments: 15, visuals: 8 }))).toBe(false);
+      expect(isUpcomingFilmLocked(yearUpcoming())).toBe(false);
+    });
+
+    it('moments short wins over pictures and seasons', () => {
+      const f = upcomingFilm({ moments: 12, visuals: 2, quarters: 1, min_quarters: 3 });
+      expect(isUpcomingFilmLocked(f)).toBe(true);
+      expect(upcomingFilmHint(f)).toBe('3 more moments');
+      expect(upcomingFilmHint({ ...f, moments: 14 })).toBe('1 more moment');
+    });
+
+    it('then pictures, then seasons', () => {
+      expect(upcomingFilmHint(upcomingFilm({ moments: 20, visuals: 5, quarters: 1, min_quarters: 3 }))).toBe('3 more with a picture');
+      const seasons = yearUpcoming({ quarters: 1, min_quarters: 3 });
+      expect(isUpcomingFilmLocked(seasons)).toBe(true);
+      expect(upcomingFilmHint(seasons)).toBe('2 more seasons');
+      expect(upcomingFilmHint({ ...seasons, quarters: 2 })).toBe('Needs moments from one more season');
+    });
+
+    it('seasons only count when both numbers exist', () => {
+      expect(isUpcomingFilmLocked(upcomingFilm({ moments: 15, visuals: 8, quarters: 0, min_quarters: null }))).toBe(false);
+      expect(isUpcomingFilmLocked(upcomingFilm({ moments: 15, visuals: 8, quarters: null, min_quarters: 2 }))).toBe(false);
+    });
+  });
+
+  describe('titles and captions', () => {
+    const members = [tomas, { id: 'jesus', name: 'Jesus' }];
+
+    it('birthday: "{Name} turns {age}" on the tile, "{Name}’s birthday film" in the caption', () => {
+      expect(upcomingFilmTitle(upcomingFilm(), members)).toBe('Teo turns 4');
+      expect(upcomingFilmCaptionTitle(upcomingFilm(), members)).toBe('Teo’s birthday film');
+      expect(upcomingFilmCaptionTitle(upcomingFilm({ member_id: 'jesus' }), members)).toBe('Jesus’ birthday film');
+      expect(upcomingFilmTitle(upcomingFilm({ member_id: 'gone' }), members)).toBeNull();
+    });
+
+    it('year-end: "Your {year}" from the window’s start year, like the finished film', () => {
+      expect(upcomingFilmTitle(yearUpcoming(), members)).toBe('Your 2026');
+      expect(upcomingFilmCaptionTitle(yearUpcoming(), members)).toBe('Your 2026');
+    });
+
+    it('caption meta: progress while locked, the date once unlocked', () => {
+      expect(upcomingFilmCaptionMeta(upcomingFilm())).toBe('12 of 15 moments');
+      expect(upcomingFilmCaptionMeta(upcomingFilm({ moments: 16, visuals: 9 }))).toBe('arrives Nov 20 · 16 moments');
+      expect(upcomingFilmCaptionMeta(yearUpcoming())).toBe('arrives Jan 1 · 40 moments');
+    });
   });
 });
 

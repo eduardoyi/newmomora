@@ -15,6 +15,7 @@ import {
   applyKeepsakesFilter,
   availableYears,
   DEFAULT_KEEPSAKES_FILTER,
+  isUpcomingItem,
   type KeepsakesFilter,
   type KeepsakesTypeFilter,
   type ShelfItem,
@@ -74,7 +75,7 @@ export function KeepsakesFilterSheet({
   const matchCount = useMemo(
     () =>
       applyKeepsakesFilter(items, { ...draft, memberId: filter.memberId }).filter(
-        (item) => item.kind !== 'upcoming-recap',
+        (item) => !isUpcomingItem(item),
       ).length,
     [draft, filter.memberId, items],
   );

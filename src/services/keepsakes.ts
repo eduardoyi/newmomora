@@ -78,6 +78,50 @@ export interface KeepsakesCardFront {
   greeting_position: KeepsakesCardGreetingPosition;
 }
 
+export type KeepsakesCardStatus = 'generating' | 'ready' | 'failed';
+
+/**
+ * One of the family's holiday cards, any season (owner/manager; `[]` for
+ * viewers), newest year first. `front` is what that card looked like when the
+ * family designed it; `card_id` / `year` are filled in from the entry itself.
+ */
+export interface KeepsakesCard {
+  card_id: string;
+  year: number;
+  status: KeepsakesCardStatus;
+  ordered: boolean;
+  /** Null when the server sent no usable front: the shelf draws the generic preview. */
+  front: KeepsakesCardFront | null;
+}
+
+export type KeepsakesUpcomingFilmKind = 'birthday' | 'family_year';
+
+/**
+ * A birthday or year-end film still being collected, with its progress toward
+ * the film floors. All dates are owner-local `YYYY-MM-DD`.
+ */
+export interface KeepsakesUpcomingFilm {
+  kind: KeepsakesUpcomingFilmKind;
+  /** The child (birthday); null for the family-wide year-end film. */
+  member_id: string | null;
+  /** The age the birthday film is for ("turns {age_year}"); null for year-end. */
+  age_year: number | null;
+  /** The day the film is due (it lives on this date's year shelf). */
+  film_date: string;
+  scope_start: string;
+  /** Exclusive end of the collected window. */
+  scope_end_excl: string;
+  moments: number;
+  visuals: number;
+  min_moments: number;
+  min_visuals: number;
+  /** Seasons (quarters) with moments so far, and the minimum needed; both null when the film has no season rule. */
+  quarters: number | null;
+  min_quarters: number | null;
+  /** Storage key of a picture from the window, or null. */
+  picture_key: string | null;
+}
+
 export interface KeepsakesOverview {
   recap: KeepsakesRecap | null;
   /** Owner/manager only (null for viewers): does the family have a viewer member. */
@@ -94,6 +138,10 @@ export interface KeepsakesOverview {
   orders: KeepsakesOrder[];
   /** The newest card's front (owner/manager, and only when a card exists). */
   card_front: KeepsakesCardFront | null;
+  /** Every holiday card, newest year first. `[]` for viewers and for an older server. */
+  cards: KeepsakesCard[];
+  /** Birthday / year-end films still being collected (viewers too). `[]` for an older server. */
+  upcoming_films: KeepsakesUpcomingFilm[];
 }
 
 const DEFAULT_MIN_MOMENTS = 10;
@@ -206,6 +254,67 @@ function parseCardFront(raw: unknown): KeepsakesCardFront | null {
   };
 }
 
+function parseCards(raw: unknown): KeepsakesCard[] {
+  if (!Array.isArray(raw)) return [];
+  const cards: KeepsakesCard[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const cardId = toNonEmptyString(entry.card_id);
+    const year = toCount(entry.year);
+    const status = entry.status;
+    if (!cardId || year === null || seen.has(cardId)) continue;
+    if (status !== 'generating' && status !== 'ready' && status !== 'failed') continue;
+    seen.add(cardId);
+    cards.push({
+      card_id: cardId,
+      year,
+      status,
+      ordered: entry.ordered === true,
+      front: isRecord(entry.front) ? parseCardFront({ ...entry.front, card_id: cardId, year }) : null,
+    });
+  }
+  return cards;
+}
+
+function parseUpcomingFilms(raw: unknown): KeepsakesUpcomingFilm[] {
+  if (!Array.isArray(raw)) return [];
+  const films: KeepsakesUpcomingFilm[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const kind = entry.kind;
+    if (kind !== 'birthday' && kind !== 'family_year') continue;
+    const memberId = toNonEmptyString(entry.member_id);
+    const filmDate = toDateString(entry.film_date);
+    const scopeStart = toDateString(entry.scope_start);
+    const scopeEnd = toDateString(entry.scope_end_excl);
+    const minMoments = toCount(entry.min_moments);
+    const minVisuals = toCount(entry.min_visuals);
+    // A tile without its dates, floors or (birthday) child cannot place or label itself.
+    if (!filmDate || !scopeStart || !scopeEnd || minMoments === null || minVisuals === null) continue;
+    if (kind === 'birthday' && !memberId) continue;
+    const quarters = toCount(entry.quarters);
+    const minQuarters = toCount(entry.min_quarters);
+    const hasSeasonRule = quarters !== null && minQuarters !== null;
+    films.push({
+      kind,
+      member_id: kind === 'birthday' ? memberId : null,
+      age_year: toPositiveInt(entry.age_year),
+      film_date: filmDate,
+      scope_start: scopeStart,
+      scope_end_excl: scopeEnd,
+      moments: Math.max(0, toCount(entry.moments) ?? 0),
+      visuals: Math.max(0, toCount(entry.visuals) ?? 0),
+      min_moments: minMoments,
+      min_visuals: minVisuals,
+      quarters: hasSeasonRule ? Math.max(0, quarters) : null,
+      min_quarters: hasSeasonRule ? minQuarters : null,
+      picture_key: toNonEmptyString(entry.picture_key),
+    });
+  }
+  return films;
+}
+
 /**
  * Defensive parse of the RPC payload: anything unknown or missing becomes
  * null / `[]` / `{}`; never throws on shape. A non-object payload yields an
@@ -224,6 +333,8 @@ export function parseKeepsakesOverview(raw: unknown): KeepsakesOverview {
     book_preview_keys: parsePreviewKeys(row.book_preview_keys),
     orders: parseOrders(row.orders),
     card_front: parseCardFront(row.card_front),
+    cards: parseCards(row.cards),
+    upcoming_films: parseUpcomingFilms(row.upcoming_films),
   };
 }
 

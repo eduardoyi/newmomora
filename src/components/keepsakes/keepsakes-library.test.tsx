@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react';
 import { StyleSheet } from 'react-native';
 
 import { KeepsakesLibrary } from '@/components/keepsakes/keepsakes-library';
-import type { KeepsakesCardFront, KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOverview, KeepsakesUpcomingFilm } from '@/services/keepsakes';
 import type { YearFilm } from '@/services/year-films';
 import { DEFAULT_KEEPSAKES_FILTER, type ShelfItem } from '@/utils/keepsakes';
 
@@ -73,6 +73,7 @@ function bookItem(id: string, year: number, memberId: string): ShelfItem {
 function cardItem(cardId: string, year: number): ShelfItem {
   return {
     kind: 'card',
+    isPast: false,
     id: `card:${cardId}`,
     year,
     date: `${year}-12-01`,
@@ -105,6 +106,7 @@ const cardFront: KeepsakesCardFront = {
 const overview: KeepsakesOverview = {
   recap: null, has_viewers: true, year_moments: null, holiday_pool: null, holiday_min_pool: null,
   holiday_ship_by_note: null, preview_key: null, book_preview_keys: {}, orders: [], card_front: null,
+  cards: [], upcoming_films: [],
 };
 
 function renderLibrary(overrides: Partial<ComponentProps<typeof KeepsakesLibrary>> = {}) {
@@ -135,6 +137,38 @@ function renderLibrary(overrides: Partial<ComponentProps<typeof KeepsakesLibrary
         <KeepsakesLibrary {...props} />
       </QueryClientProvider>,
     ),
+  };
+}
+
+function pastCardItem(cardId: string, year: number, front: KeepsakesCardFront | null, badge: ShelfItem['badge'] = null): ShelfItem {
+  return {
+    kind: 'card',
+    isPast: true,
+    id: `card:${cardId}`,
+    year,
+    date: `${year}-12-01`,
+    memberId: null,
+    badge,
+    cardId,
+    cardState: badge ? 'ordered' : 'ready',
+    front,
+  };
+}
+
+function upcomingFilmItem(overrides: Partial<KeepsakesUpcomingFilm> = {}): ShelfItem {
+  const upcoming: KeepsakesUpcomingFilm = {
+    kind: 'birthday', member_id: 'c1', age_year: 4, film_date: '2026-11-20', scope_start: '2025-11-20',
+    scope_end_excl: '2026-11-20', moments: 12, visuals: 9, min_moments: 15, min_visuals: 8,
+    quarters: null, min_quarters: null, picture_key: null, ...overrides,
+  };
+  return {
+    kind: 'upcoming-film',
+    id: `upcoming-film:${upcoming.kind}:${upcoming.member_id ?? 'family'}:${upcoming.film_date}`,
+    year: Number(upcoming.film_date.slice(0, 4)),
+    date: upcoming.film_date,
+    memberId: upcoming.kind === 'birthday' ? upcoming.member_id : null,
+    badge: null,
+    upcoming,
   };
 }
 
@@ -299,6 +333,59 @@ describe('KeepsakesLibrary', () => {
       expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 132 });
       expect(getByText('Felices fiestas')).toBeTruthy();
       expect(within(getByTestId('keepsakes-card-card-1-object')).getByText('2026')).toBeTruthy();
+    });
+  });
+  describe('past-year holiday cards', () => {
+    it('a folded past year counts its card; opened, the card draws its own front with its badge', () => {
+      const items = [
+        filmItem('jun26', 2026, 6),
+        pastCardItem('card-25', 2025, { ...cardFront, card_id: 'card-25', year: 2025 }, { label: 'Shipped · Dec 12', tone: 'progress' }),
+      ];
+      const folded = renderLibrary({ items });
+      expect(folded.getByText(' · 1 keepsake')).toBeTruthy();
+      expect(folded.queryByTestId('keepsakes-card-card-25')).toBeNull();
+      folded.unmount();
+
+      const open = renderLibrary({ items, openYears: new Set([2025]) });
+      expect(open.getByTestId('keepsakes-item-card:card-25').props.style).toEqual({ width: 179 });
+      expect(open.getByTestId('keepsakes-card-card-25-object-front')).toBeTruthy();
+      expect(within(open.getByTestId('keepsakes-card-card-25-object-front')).getByText('2025')).toBeTruthy();
+      expect(open.getByTestId('keepsakes-badge-card:card-25')).toHaveTextContent('Shipped · Dec 12');
+    });
+
+    it('an unordered past card has no badge; without a front it falls back to the generic preview', () => {
+      const { getByTestId, queryByTestId } = renderLibrary({
+        items: [pastCardItem('card-25', 2025, null)],
+        openYears: new Set([2025]),
+      });
+      expect(queryByTestId('keepsakes-badge-card:card-25')).toBeNull();
+      expect(queryByTestId('keepsakes-card-card-25-object-front')).toBeNull();
+      expect(getByTestId('keepsakes-item-card:card-25').props.style).toEqual({ width: 132 });
+    });
+  });
+
+  describe('upcoming birthday and year-end tiles', () => {
+    it('render first on their year’s shelf, forced open, with a caption and no badge or count', () => {
+      const { getByTestId, getByText, queryByTestId } = renderLibrary({
+        items: [upcomingFilmItem({ film_date: '2027-01-15', scope_start: '2026-01-15' })],
+        members: [lila, theo] as never,
+      });
+      expect(getByTestId('keepsakes-year-2027')).toBeTruthy();
+      expect(queryByTestId('keepsakes-year-toggle-2027')).toBeNull();
+      expect(getByTestId('keepsakes-upcoming-birthday-c1')).toBeTruthy();
+      expect(getByText('Lila Park turns 4')).toBeTruthy();
+      expect(getByText('Lila Park’s birthday film')).toBeTruthy();
+      expect(getByText('12 of 15 moments')).toBeTruthy();
+      expect(queryByTestId('keepsakes-badge-upcoming-film:birthday:c1:2027-01-15')).toBeNull();
+      expect(within(getByTestId('keepsakes-year-2027')).queryByText(/keepsake/)).toBeNull();
+    });
+
+    it('year-end tile: "Your {year}" caption, no children chip needed', () => {
+      const { getByTestId, getAllByText } = renderLibrary({
+        items: [upcomingFilmItem({ kind: 'family_year', member_id: null, age_year: null, film_date: '2027-01-01', scope_start: '2026-01-01', quarters: 1, min_quarters: 3, moments: 40, visuals: 20, min_moments: 30, min_visuals: 15 })],
+      });
+      expect(getByTestId('keepsakes-upcoming-year-2026')).toBeTruthy();
+      expect(getAllByText('Your 2026')).toHaveLength(2);
     });
   });
 });

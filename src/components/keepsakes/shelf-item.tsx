@@ -7,6 +7,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { KeepsakeBadge } from '@/components/keepsakes/keepsake-badge';
 import { KeepsakeFilmTile, shelfFilmDurationLabel } from '@/components/keepsakes/keepsake-film-tile';
 import { ShelfHolidayCard, shelfHolidayCardSize } from '@/components/keepsakes/shelf-holiday-card';
+import { UpcomingFilmTile } from '@/components/keepsakes/upcoming-film-tile';
 import {
   UpcomingRecapTile,
   upcomingRecapCaptionMeta,
@@ -16,7 +17,15 @@ import { BookCoverTile, type BookCoverTileStatus } from '@/components/memory-boo
 import { colors, fonts } from '@/constants/theme';
 import { formatYearRange } from '@/utils/memory-book-scope';
 import type { KeepsakesOverview } from '@/services/keepsakes';
-import { cardFrontFor, type BookShelfItem, type CardShelfItem, type FilmShelfItem, type ShelfItem } from '@/utils/keepsakes';
+import {
+  shelfCardFront,
+  upcomingFilmCaptionMeta,
+  upcomingFilmCaptionTitle,
+  type BookShelfItem,
+  type CardShelfItem,
+  type FilmShelfItem,
+  type ShelfItem,
+} from '@/utils/keepsakes';
 import { filmTitle, type YearFilmMember } from '@/utils/year-films';
 
 /** The shared baseline: every object is bottom-aligned inside this zone. */
@@ -49,7 +58,7 @@ function itemWidth(item: ShelfItem, overview: KeepsakesOverview | null): number 
       return SHELF_BOOK_ITEM_WIDTH;
     case 'card':
       // A landscape card is wider than a portrait one; the caption follows it.
-      return shelfHolidayCardSize(cardFrontFor(overview, item.cardId)).width;
+      return shelfHolidayCardSize(shelfCardFront(item, overview)).width;
     default:
       return SHELF_FILM_ITEM_WIDTH;
   }
@@ -87,6 +96,8 @@ export function shelfCaption(
   switch (item.kind) {
     case 'upcoming-recap':
       return { title: upcomingRecapTitle(item.recap), meta: upcomingRecapCaptionMeta(item.recap) };
+    case 'upcoming-film':
+      return { title: upcomingFilmCaptionTitle(item.upcoming, members), meta: upcomingFilmCaptionMeta(item.upcoming) };
     case 'film':
       return { title: filmTitle(item.film, members), meta: shelfFilmDurationLabel(item.film.duration_ms) };
     case 'book': {
@@ -107,6 +118,9 @@ export function ShelfItemView({ item, members, overview, onBookPress }: ShelfIte
     case 'upcoming-recap':
       object = <UpcomingRecapTile recap={item.recap} />;
       break;
+    case 'upcoming-film':
+      object = <UpcomingFilmTile film={item.upcoming} members={members} />;
+      break;
     case 'film':
       object = <KeepsakeFilmTile film={(item as FilmShelfItem).film} members={members} variant="shelf" width={SHELF_FILM_ITEM_WIDTH} />;
       break;
@@ -115,17 +129,20 @@ export function ShelfItemView({ item, members, overview, onBookPress }: ShelfIte
       object = <BookObject childName={member?.name ?? ''} item={item} onPress={() => onBookPress(item)} />;
       break;
     }
-    case 'card':
+    case 'card': {
+      const card: CardShelfItem = item;
+      const front = shelfCardFront(card, overview);
       object = (
         <ShelfHolidayCard
-          cardId={(item as CardShelfItem).cardId}
-          front={cardFrontFor(overview, (item as CardShelfItem).cardId)}
+          cardId={card.cardId}
+          front={front}
           imageKey={overview?.preview_key ?? null}
-          language={(item as CardShelfItem).summary.language}
+          language={card.isPast ? (front?.language ?? 'en') : card.summary.language}
           year={item.year}
         />
       );
       break;
+    }
   }
 
   return (

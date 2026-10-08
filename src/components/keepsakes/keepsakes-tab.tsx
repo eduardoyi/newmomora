@@ -39,6 +39,7 @@ import {
   buildRelevantBookRows,
   buildShelfItems,
   DEFAULT_KEEPSAKES_FILTER,
+  isUpcomingItem,
   pickNeedsYou,
   reconcileKeepsakesFilter,
   type BookShelfItem,
@@ -112,8 +113,8 @@ export function KeepsakesTab({ isFocused, todayIso }: KeepsakesTabProps) {
     [books.booksByChild, canEdit, members, todayIso],
   );
   const items = useMemo(
-    () => buildShelfItems({ films: films.films, bookRows, cardSummary, overview, role, todayIso }),
-    [bookRows, cardSummary, films.films, overview, role, todayIso],
+    () => buildShelfItems({ films: films.films, bookRows, cardSummary, overview, members, role, todayIso }),
+    [bookRows, cardSummary, films.films, members, overview, role, todayIso],
   );
   const needsYou = useMemo(
     () => pickNeedsYou({ cardSummary, bookRows, members, role, todayIso }),
@@ -135,7 +136,7 @@ export function KeepsakesTab({ isFocused, todayIso }: KeepsakesTabProps) {
     [isLoading, items, rawFilter],
   );
 
-  const hasRealItems = items.some((item) => item.kind !== 'upcoming-recap');
+  const hasRealItems = items.some((item) => !isUpcomingItem(item));
 
   const handleBookPress = useCallback(
     (item: BookShelfItem) => {

@@ -8,7 +8,7 @@ begin;
 -- current month / year (the owner's timezone is far from UTC on purpose), and
 -- the holiday fixtures live in a family of their own so they never overlap
 -- the month fixtures.
-select plan(110);
+select plan(176);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -901,6 +901,511 @@ insert into ov select 'cf-deleted', public.keepsakes_overview('ce100000-0000-400
 set local role postgres;
 select is((select doc->'card_front' from ov where label = 'cf-deleted'), 'null'::jsonb,
   'every card soft-deleted: card_front is JSON null');
+
+-- ---------------------------------------------------------------------------
+-- 10. cards + upcoming_films (20261011120000_keepsakes_overview_cards_upcoming.sql).
+--     Families of their own; every date is relative to the owner-local today
+--     (or to the current year for the year-end film), so the file passes on
+--     any day. Internal helpers are called directly as postgres with a pinned
+--     p_today.
+-- ---------------------------------------------------------------------------
+
+select ok(
+  not has_function_privilege('authenticated', 'public.keepsake_card_front(uuid)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.keepsake_card_front(uuid)', 'EXECUTE'),
+  'keepsake_card_front is internal: neither authenticated nor anon can execute it'
+);
+select ok(
+  not has_function_privilege('authenticated', 'public.keepsake_upcoming_films(uuid, uuid, date)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.keepsake_upcoming_films(uuid, uuid, date)', 'EXECUTE'),
+  'keepsake_upcoming_films is internal: neither authenticated nor anon can execute it'
+);
+
+insert into auth.users (id, email, is_anonymous) values
+  ('ce000000-0000-4000-8000-00000000000b', 'ko-up-owner@example.test', false),
+  ('ce000000-0000-4000-8000-00000000000c', 'ko-up-viewer@example.test', false),
+  ('ce000000-0000-4000-8000-00000000000d', 'ko-up-manager@example.test', false),
+  ('ce000000-0000-4000-8000-00000000000e', 'ko-up-hidden@example.test', false),
+  ('ce000000-0000-4000-8000-00000000000f', 'ko-yr-owner@example.test', false);
+update public.user_profiles set timezone = 'Pacific/Kiritimati'
+where id in ('ce000000-0000-4000-8000-00000000000b', 'ce000000-0000-4000-8000-00000000000f');
+
+insert into public.families (id, name, owner_id) values
+  ('ce100000-0000-4000-8000-000000000005', 'Upcoming family', 'ce000000-0000-4000-8000-00000000000b'),
+  ('ce100000-0000-4000-8000-000000000006', 'Year-end family', 'ce000000-0000-4000-8000-00000000000f');
+insert into public.family_memberships (family_id, user_id, role) values
+  ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', 'owner'),
+  ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000c', 'viewer'),
+  ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000d', 'manager'),
+  ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000e', 'viewer'),
+  ('ce100000-0000-4000-8000-000000000006', 'ce000000-0000-4000-8000-00000000000f', 'owner');
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+) values
+  ('ce000000-0000-4000-8000-00000000000b', 'ce000000-0000-4000-8000-00000000000b',
+   'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annual', 'active',
+   transaction_timestamp() + interval '400 days', true),
+  ('ce000000-0000-4000-8000-00000000000f', 'ce000000-0000-4000-8000-00000000000f',
+   'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annual', 'active',
+   transaction_timestamp() + interval '400 days', true);
+
+-- Rollout to every family; launch long ago.
+update public.year_film_settings set mode = 'all', launch_date = date '2020-01-01';
+
+-- Members. Each child's age-N birthday falls at `today + k` (so the film, due
+-- birthday + 2, is `today + k + 2`):
+--   Ada  child, age 4, birthday today+8   -> film today+10   (the pool tests)
+--   Bo   cousin (tag target only; never an own child)
+--   Cy   child, age 3, birthday today+28  -> film today+30   (last day in)
+--   Di   child, age 2, birthday today+29  -> film today+31   (one day out)
+--   Ed   child, age 5, birthday today-2   -> film today      (due today: in)
+--   Fay  child, age 6, birthday today-3   -> film yesterday  (out)
+--   Gus  child, age 13, birthday today+3  -> age 13 is outside 1..12
+--   Ivy  cousin, age 4, birthday today+8  -> not an own child
+--   Jo   unsorted (null role), age 7, birthday today+13 -> DOB rule: in
+--   Kai  child, age 3, birthday today+10  -> film today+12   (film-row tests)
+insert into public.family_members (id, family_id, name, date_of_birth, relationship)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000005', v.name,
+       case when v.age is null then null else ((cur.today + v.k) - make_interval(years => v.age))::date end,
+       v.rel
+from cur,
+(values
+  ('ce200000-0000-4000-8000-00000000000a', 'Ada', 4, 8, 'child'),
+  ('ce200000-0000-4000-8000-00000000000b', 'Bo', null, null, 'cousin'),
+  ('ce200000-0000-4000-8000-00000000000c', 'Cy', 3, 28, 'child'),
+  ('ce200000-0000-4000-8000-00000000000d', 'Di', 2, 29, 'child'),
+  ('ce200000-0000-4000-8000-00000000000e', 'Ed', 5, -2, 'child'),
+  ('ce200000-0000-4000-8000-00000000000f', 'Fay', 6, -3, 'child'),
+  ('ce200000-0000-4000-8000-000000000010', 'Gus', 13, 3, 'child'),
+  ('ce200000-0000-4000-8000-000000000011', 'Ivy', 4, 8, 'cousin'),
+  ('ce200000-0000-4000-8000-000000000012', 'Jo', 7, 13, null),
+  ('ce200000-0000-4000-8000-000000000013', 'Kai', 3, 10, 'child')
+) as v(id, name, age, k, rel);
+
+-- Ada's film window, and the month-index dates the quarters are read from.
+-- Quarter = floor(months since the MONTH of scope_start / 3), clamped to 3.
+create temp table ad on commit drop as
+select cur.today,
+       ((cur.today + 8) - interval '1 year')::date as sc,        -- scope_start (age-3 birthday)
+       cur.today + 10 as se,                                      -- scope_end_excl = film date
+       date_trunc('month', ((cur.today + 8) - interval '1 year'))::date as m0
+from cur;
+
+create or replace function pg_temp.entry(p_doc jsonb, p_member uuid)
+returns jsonb language sql as $$
+  select e from jsonb_array_elements(p_doc) e where e ->> 'member_id' = p_member::text
+$$;
+-- In December the owner-local "today" also announces the year-end film: the
+-- birthday assertions look at the birthday entries only.
+create or replace function pg_temp.births(p_doc jsonb)
+returns jsonb language sql as $$
+  select coalesce(jsonb_agg(e), '[]'::jsonb) from jsonb_array_elements(p_doc) e where e ->> 'kind' = 'birthday'
+$$;
+create or replace function pg_temp.kinds(p_doc jsonb, p_kind text)
+returns jsonb language sql as $$
+  select e from jsonb_array_elements(p_doc) e where e ->> 'kind' = p_kind
+$$;
+
+create temp table uf (label text primary key, doc jsonb);
+
+-- ---- Window: which birthdays are announced --------------------------------
+insert into uf select 'window', public.keepsake_upcoming_films(
+  'ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+
+select is(
+  (select array_agg(e ->> 'member_id' order by ord) from uf, jsonb_array_elements(pg_temp.births(doc)) with ordinality as x(e, ord) where label = 'window'),
+  array['ce200000-0000-4000-8000-00000000000e', 'ce200000-0000-4000-8000-00000000000a',
+        'ce200000-0000-4000-8000-000000000013', 'ce200000-0000-4000-8000-000000000012',
+        'ce200000-0000-4000-8000-00000000000c'],
+  'announced, soonest first: Ed (today), Ada (+10), Kai (+12), Jo (+15, unsorted role by the DOB rule), Cy (+30)');
+select is((select (pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000c') ->> 'film_date')::date - (select today from cur) from uf where label = 'window'),
+  30, 'a film date 30 days out is announced');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000d') from uf where label = 'window'), null,
+  'a film date 31 days out is not');
+select is((select (pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000e') ->> 'film_date')::date - (select today from cur) from uf where label = 'window'),
+  0, 'a film due today is announced (inclusive of today)');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000f') from uf where label = 'window'), null,
+  'a film date yesterday is not');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000010') from uf where label = 'window'), null,
+  'age 13 is outside the 1-12 birthday films');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000011') from uf where label = 'window'), null,
+  'a cousin (explicit non-child role) is not an own child');
+
+-- ---- Ada's envelope --------------------------------------------------------
+select is(
+  (select row(e ->> 'kind', (e ->> 'age_year')::int, (e ->> 'film_date')::date, (e ->> 'scope_end_excl')::date)::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
+  (select row('birthday', 4, se, se)::text from ad),
+  'Ada: a birthday film, age 4, film date = scope_end_excl = birthday + 2 days');
+select is(
+  (select (e ->> 'scope_start')::date from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
+  (select sc from ad), 'scope_start is the previous birthday (the age-year start)');
+select is(
+  (select row(e -> 'min_moments', e -> 'min_visuals', e -> 'min_quarters')::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
+  '(60,40,3)', 'the birthday floors ride along: 60 moments, 40 visuals, 3 quarters');
+select is(
+  (select (select array_agg(k order by k) from jsonb_object_keys(e) k)::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
+  '{age_year,film_date,kind,member_id,min_moments,min_quarters,min_visuals,moments,picture_key,quarters,scope_end_excl,scope_start,visuals}',
+  'an upcoming film has exactly the documented keys');
+
+-- ---- Ada's pool: tagged to the child only, in the film's scope -------------
+-- Stage 1. Counted: t1 (text, scope_start), t2 (illustration, month 3),
+-- t3 (illustration, SAD, month 6). Not counted: t5 untagged, t6 tagged to a
+-- sibling only, t8 under an open report, t9a the day before the scope, t9b ON
+-- scope_end_excl.
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, emotion, memory_date)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', v.content,
+       case when v.ill then 'text_illustration' else 'text_only' end,
+       case when v.ill then 'ready' else 'none' end,
+       case when v.ill then 'up-key/' || v.tag || '.png' end, v.emotion, v.d
+from (values
+  ('ce3b0000-0000-4000-8000-000000000001', 'Ada t1', false, 't1', null, (select sc from ad)),
+  ('ce3b0000-0000-4000-8000-000000000002', 'Ada t2', true, 't2', null, (select (m0 + make_interval(months => 3))::date + 10 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000003', 'Ada t3 sad', true, 't3', 'sad', (select (m0 + make_interval(months => 6))::date + 10 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000005', 'Untagged', true, 't5', null, (select sc + 1 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000006', 'Sibling only', true, 't6', null, (select sc + 1 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000008', 'Reported', true, 't8', null, (select sc + 2 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000009', 'Day before scope', true, 't9a', null, (select sc - 1 from ad)),
+  ('ce3b0000-0000-4000-8000-00000000000a', 'On scope end', true, 't9b', null, (select se from ad))
+) as v(id, content, ill, tag, emotion, d);
+insert into public.memory_family_members (memory_id, family_member_id) values
+  ('ce3b0000-0000-4000-8000-000000000001', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000002', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000003', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000006', 'ce200000-0000-4000-8000-00000000000b'),
+  ('ce3b0000-0000-4000-8000-000000000008', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000009', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-00000000000a', 'ce200000-0000-4000-8000-00000000000a');
+insert into public.content_reports (family_id, reporter_user_id, target_type, target_id, reason)
+values ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000c', 'memory',
+        'ce3b0000-0000-4000-8000-000000000008', 'other');
+
+insert into uf select 's1', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from ad));
+select is(
+  (select row(e -> 'moments', e -> 'visuals', e -> 'quarters')::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 's1'),
+  '(3,2,1)',
+  'stage 1: only memories TAGGED to the child, inside scope_start..scope_end_excl, unreported, count (untagged, sibling-only, reported, the day before and the scope end are out); a SAD visual is a visual but covers no quarter');
+
+-- Stage 2. t4: illustration, WEARY, month 9 (weary still covers its quarter);
+-- t7: illustration tagged to Ada AND Bo, on scope_start (quarter 0).
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, emotion, memory_date)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', v.content,
+       'text_illustration', 'ready', 'up-key/' || v.tag || '.png', v.emotion, v.d
+from (values
+  ('ce3b0000-0000-4000-8000-000000000004', 'Ada t4 weary', 't4', 'weary', (select (m0 + make_interval(months => 9))::date + 10 from ad)),
+  ('ce3b0000-0000-4000-8000-000000000007', 'Ada and Bo', 't7', null, (select sc from ad))
+) as v(id, content, tag, emotion, d);
+insert into public.memory_family_members (memory_id, family_member_id) values
+  ('ce3b0000-0000-4000-8000-000000000004', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000007', 'ce200000-0000-4000-8000-00000000000a'),
+  ('ce3b0000-0000-4000-8000-000000000007', 'ce200000-0000-4000-8000-00000000000b');
+insert into uf select 's2', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from ad));
+select is(
+  (select row(e -> 'moments', e -> 'visuals', e -> 'quarters')::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 's2'),
+  '(5,4,3)',
+  'stage 2: a weary visual and a memory tagged to the child plus a sibling count; quarters 0, 1 and 3 are covered (the sad one still covers nothing)');
+
+-- Stage 3. t10: a visual on the day AFTER the birthday (scope_end_excl - 1),
+-- by an author the viewer hid. Its month index is >= 12, which clamps to
+-- quarter 3 instead of opening a fourth quarter.
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, memory_date)
+values ('ce3b0000-0000-4000-8000-000000000010', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000e',
+        'The day after the party', 'text_illustration', 'ready', 'up-key/t10.png', (select se - 1 from ad));
+insert into public.memory_family_members (memory_id, family_member_id)
+values ('ce3b0000-0000-4000-8000-000000000010', 'ce200000-0000-4000-8000-00000000000a');
+insert into public.blocked_family_accounts (family_id, blocker_user_id, blocked_user_id)
+values ('ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000c', 'ce000000-0000-4000-8000-00000000000e');
+insert into uf select 's3', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from ad));
+select is(
+  (select row(e -> 'moments', e -> 'visuals', e -> 'quarters')::text
+   from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 's3'),
+  '(6,5,3)',
+  'stage 3: the two days after the birthday are in scope, and a month index past 11 clamps into quarter 3');
+
+-- ---- RPC level: viewers see films, not cards; personal blocks hide pictures -
+insert into public.holiday_cards (id, family_id, created_by, year, greeting, language, status, front_candidates, edits, created_at, deleted_at) values
+  ('ce520000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+   2025, 'new-year', 'es', 'generating', null, '{}', now() - interval '2 days', null),
+  ('ce520000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+   2024, 'christmas', 'en', 'ready', null, '{}', now() - interval '3 days', null),
+  ('ce520000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+   2023, 'holidays', 'en', 'failed', null, '{}', now() - interval '1 hour', null),
+  ('ce520000-0000-4000-8000-000000000004', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+   2022, 'holidays', 'en', 'ready', '[]', '{}', now() - interval '4 days', null),
+  ('ce520000-0000-4000-8000-000000000005', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+   2026, 'holidays', 'en', 'ready', null, '{}', now(), now());
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000b', true);
+insert into ov select 'up-owner', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000c', true);
+insert into ov select 'up-viewer', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+set local role postgres;
+
+select ok(
+  (select doc ?& array['recap', 'has_viewers', 'year_moments', 'holiday_pool', 'holiday_min_pool', 'holiday_ship_by_note',
+                       'preview_key', 'book_preview_keys', 'orders', 'card_front', 'cards', 'upcoming_films']
+          and (select count(*) from jsonb_object_keys(doc)) = 12
+   from ov where label = 'up-owner'),
+  'the payload keeps every existing key and adds cards + upcoming_films (12 keys)');
+select is((select doc -> 'cards' from ov where label = 'up-viewer'), '[]'::jsonb, 'a viewer gets cards = []');
+select is((select jsonb_typeof(doc -> 'upcoming_films') from ov where label = 'up-viewer'), 'array', 'a viewer gets upcoming_films');
+select is(
+  (select jsonb_agg(e - 'picture_key') from ov, jsonb_array_elements(doc -> 'upcoming_films') e where label = 'up-viewer'),
+  (select jsonb_agg(e - 'picture_key') from ov, jsonb_array_elements(doc -> 'upcoming_films') e where label = 'up-owner'),
+  'a viewer sees the same upcoming films (and counts) as the owner');
+select is(
+  (select jsonb_array_length(pg_temp.births(doc -> 'upcoming_films')) from ov where label = 'up-viewer'), 5,
+  'five birthday films are announced');
+select is((select pg_temp.entry(doc -> 'upcoming_films', 'ce200000-0000-4000-8000-00000000000a') ->> 'picture_key' from ov where label = 'up-owner'),
+  'up-key/t10.png', 'picture_key: the newest pooled picture in the scope');
+select is((select pg_temp.entry(doc -> 'upcoming_films', 'ce200000-0000-4000-8000-00000000000a') ->> 'picture_key' from ov where label = 'up-viewer'),
+  'up-key/t4.png', 'picture_key skips an author the CALLER hid (counts do not)');
+select is((select pg_temp.entry(doc -> 'upcoming_films', 'ce200000-0000-4000-8000-00000000000c') -> 'picture_key' from ov where label = 'up-owner'),
+  'null'::jsonb, 'a child with no pictures in the scope: picture_key is JSON null');
+
+-- ---- Film rows: which tiles the real film takes over ----------------------
+-- Kai's film key (the scheduler's): family, kind, member, scope_start_date.
+create temp table kai as
+select ((cur.today + 10) - interval '1 year')::date as sc, cur.today + 12 as se from cur;
+insert into public.year_films (id, family_id, kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at, status)
+select 'ce530000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000005', 'birthday',
+       'ce200000-0000-4000-8000-000000000013', 3, sc, se, now() + interval '2 days', 'queued'
+from kai;
+insert into uf select 'kai-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'failed' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-failed', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'rendering' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-rendering', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-ready', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000001';
+insert into public.year_films (id, family_id, kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at, status, forced)
+select 'ce530000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000005', 'birthday',
+       'ce200000-0000-4000-8000-000000000013', 3, sc, se, now() + interval '2 days', 'ready', true
+from kai;
+insert into uf select 'kai-forced', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000002';
+
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-queued'), null,
+  'a queued film row takes the tile away (the film is on its way)');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-skipped'), null,
+  'a skipped film row keeps the tile (terminal, invisible to clients)');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-failed'), null,
+  'a failed film row keeps the tile');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-rendering'), null,
+  'a rendering film row takes the tile away');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-ready'), null,
+  'a ready film row takes the tile away');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-forced'), null,
+  'a forced (operator / canary) film row never takes a real film''s slot');
+select is((select jsonb_array_length(pg_temp.births(doc)) from uf where label = 'kai-ready'), 4,
+  'a film row of one child leaves the other tiles alone');
+
+-- ---- cards ----------------------------------------------------------------
+-- One photo memory in the family (m1 jpeg with a preview, m2 png).
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, media_key, media_content_type, memory_date)
+values ('ce3c0000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b',
+        'Card photos', 'media', 'none', 'uc-key/m1.jpg', 'image/jpeg', date '2020-06-01');
+insert into public.memory_media (id, memory_id, object_key, preview_object_key, content_type, aspect_ratio, position) values
+  ('ce3d0000-0000-4000-8000-000000000001', 'ce3c0000-0000-4000-8000-000000000001', 'uc-key/m1.jpg', 'uc-key/m1-prev.jpg', 'image/jpeg', null, 0),
+  ('ce3d0000-0000-4000-8000-000000000002', 'ce3c0000-0000-4000-8000-000000000001', 'uc-key/m2.png', null, 'image/png', 0.5, 1);
+update public.holiday_cards set
+  front_candidates = '[{"mediaId":"ce3d0000-0000-4000-8000-000000000001","width":4000,"height":3000}]',
+  edits = '{"choices":{"layout":"full-bleed","greetingPosition":"top-center"},"text":{"front.greeting":"Hi there"}}'
+where id = 'ce520000-0000-4000-8000-000000000001';
+update public.holiday_cards set front_candidates = '[{"mediaId":"ce3d0000-0000-4000-8000-000000000002"}]'
+where id = 'ce520000-0000-4000-8000-000000000003';
+
+-- 2025: no order. 2024: shipped. 2023: paid but REFUNDED (holiday_card_summary
+-- still calls that ordered). 2022: only a draft.
+insert into public.holiday_card_orders
+  (id, card_id, family_id, requested_by, status, failure_reason, refunded_at, shipped_at, price_cents, packs, shipping_address, card_snapshot, snapshot_hash, created_at) values
+  ('ce540000-0000-4000-8000-000000000001', 'ce520000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', 'shipped', null, null, '2026-01-05 12:00:00+00', 2490, 1, '{"country":"US"}', '{}', 'u1', now() - interval '2 days'),
+  ('ce540000-0000-4000-8000-000000000002', 'ce520000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', 'paid', null, now(), null, 2490, 1, '{"country":"US"}', '{}', 'u2', now() - interval '2 days'),
+  ('ce540000-0000-4000-8000-000000000003', 'ce520000-0000-4000-8000-000000000004', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', 'draft', null, null, null, null, null, null, null, null, now() - interval '2 days');
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000b', true);
+insert into ov select 'cards-owner', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000d', true);
+insert into ov select 'cards-manager', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000c', true);
+insert into ov select 'cards-viewer', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+set local role postgres;
+
+select is((select array_agg((e ->> 'year')::int order by ord) from ov, jsonb_array_elements(doc -> 'cards') with ordinality as x(e, ord) where label = 'cards-owner'),
+  array[2025, 2024, 2023, 2022], 'cards: every non-deleted card, newest year first (the soft-deleted 2026 card is out)');
+select is((select array_agg(e ->> 'status' order by ord) from ov, jsonb_array_elements(doc -> 'cards') with ordinality as x(e, ord) where label = 'cards-owner'),
+  array['generating', 'ready', 'failed', 'ready'], 'cards carry their status');
+select is((select array_agg((e ->> 'ordered')::boolean order by ord) from ov, jsonb_array_elements(doc -> 'cards') with ordinality as x(e, ord) where label = 'cards-owner'),
+  array[false, true, true, false],
+  'ordered follows holiday_card_summary: any paid / submitted / in_production / shipped order (a refund does not undo it, a draft is not an order)');
+select is((select doc -> 'cards' from ov where label = 'cards-manager'), (select doc -> 'cards' from ov where label = 'cards-owner'),
+  'a manager sees the same cards as the owner');
+select is((select doc -> 'cards' from ov where label = 'cards-viewer'), '[]'::jsonb, 'a viewer gets no cards');
+select ok((select doc::text !~ 'uc-key/' from ov where label = 'cards-viewer'), 'a viewer''s payload carries no card photo key');
+select is(
+  (select (select array_agg(k order by k) from jsonb_object_keys(doc -> 'cards' -> 0) k)::text from ov where label = 'cards-owner'),
+  '{card_id,front,ordered,status,year}', 'a card entry has exactly the documented keys');
+select is(
+  (select (select array_agg(k order by k) from jsonb_object_keys(doc -> 'cards' -> 0 -> 'front') k)::text from ov where label = 'cards-owner'),
+  '{focal,greeting,greeting_position,greeting_text,height,image_key,language,layout,orientation,subline_text,width}',
+  'a card front has the card_front keys minus card_id and year');
+select ok(
+  (select bool_and((e -> 'front') = (public.keepsake_card_front((e ->> 'card_id')::uuid) - 'card_id' - 'year'))
+   from ov, jsonb_array_elements(doc -> 'cards') e where label = 'cards-owner'),
+  'every cards[].front equals keepsake_card_front for that card');
+select is((select doc -> 'card_front' ->> 'card_id' from ov where label = 'cards-owner'), 'ce520000-0000-4000-8000-000000000003',
+  'card_front is unchanged: the newest card by created_at (2023), not the newest year');
+select is(
+  (select (doc -> 'card_front') - 'card_id' - 'year' from ov where label = 'cards-owner'),
+  (select e -> 'front' from ov, jsonb_array_elements(doc -> 'cards') e where label = 'cards-owner' and e ->> 'year' = '2023'),
+  'card_front and the matching cards[].front are the same front');
+select is(
+  (select row(e -> 'front' ->> 'image_key', (e -> 'front' ->> 'width')::int, (e -> 'front' ->> 'height')::int,
+              e -> 'front' ->> 'layout', e -> 'front' ->> 'greeting_position', e -> 'front' ->> 'greeting_text',
+              e -> 'front' ->> 'greeting', e -> 'front' ->> 'language')::text
+   from ov, jsonb_array_elements(doc -> 'cards') e where label = 'cards-owner' and e ->> 'year' = '2025'),
+  '(uc-key/m1-prev.jpg,4000,3000,full-bleed,top-center,"Hi there",new-year,es)',
+  'the 2025 front: the candidate''s preview key and size, the saved layout, position and caption, the row''s greeting and language');
+select is(
+  (select e -> 'front' -> 'image_key' from ov, jsonb_array_elements(doc -> 'cards') e where label = 'cards-owner' and e ->> 'year' = '2024'),
+  'null'::jsonb, 'a card with no candidates still lists, with image_key null');
+select is(public.keepsake_card_front('ce520000-0000-4000-8000-000000000005'), null,
+  'keepsake_card_front is null for a soft-deleted card');
+select is(public.keepsake_card_front(gen_random_uuid()), null, 'keepsake_card_front is null for an unknown card');
+
+update public.holiday_cards set deleted_at = now() where family_id = 'ce100000-0000-4000-8000-000000000005';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000b', true);
+insert into ov select 'cards-none', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+set local role postgres;
+select ok((select doc -> 'cards' = '[]'::jsonb and doc -> 'card_front' = 'null'::jsonb from ov where label = 'cards-none'),
+  'every card soft-deleted: cards is [] and card_front is null');
+
+-- ---- Gates ----------------------------------------------------------------
+update public.year_film_settings set mode = 'canary', canary_family_ids = '{}';
+insert into uf select 'g-rollout', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_film_settings set mode = 'all';
+update public.year_film_settings set launch_date = null;
+insert into uf select 'g-launch-null', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_film_settings set launch_date = (select se from ad);        -- Ada's film date exactly
+insert into uf select 'g-launch-edge', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_film_settings set launch_date = (select se + 1 from ad);    -- the day after
+insert into uf select 'g-launch-late', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_film_settings set launch_date = date '2020-01-01';
+delete from public.owner_entitlements where owner_user_id = 'ce000000-0000-4000-8000-00000000000b';
+insert into uf select 'g-billing', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000c', true);
+insert into ov select 'g-billing-viewer', public.keepsakes_overview('ce100000-0000-4000-8000-000000000005');
+set local role postgres;
+
+select is((select doc from uf where label = 'g-rollout'), '[]'::jsonb, 'upcoming films are [] when the rollout excludes the family');
+select is((select doc from uf where label = 'g-launch-null'), '[]'::jsonb, 'upcoming films are [] without a launch_date');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') from uf where label = 'g-launch-edge'), null,
+  'a film due exactly on launch_date is announced (year_film_due: due_date >= launch_date)');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') from uf where label = 'g-launch-late'), null,
+  'a film due before launch_date is never scheduled, so it is not announced (the later ones still are)');
+select is((select jsonb_array_length(pg_temp.births(doc)) from uf where label = 'g-launch-late'), 3,
+  'with launch_date the day after Ada''s film, only the films due after it remain (Kai, Jo, Cy)');
+select is((select doc from uf where label = 'g-billing'), '[]'::jsonb, 'upcoming films are [] when billing does not allow films');
+select is((select doc -> 'upcoming_films' from ov where label = 'g-billing-viewer'), '[]'::jsonb,
+  'the RPC reports [] to a viewer too when billing lapses');
+
+-- ---- Year-end family film (a family of its own) ----------------------------
+-- Everything is in the CURRENT year Y: a pinned p_today in December of Y.
+-- Scope Jan 1 -> Dec 28 (exclusive); film date Dec 30.
+create temp table yr on commit drop as
+select extract(year from today)::integer as y from cur;
+insert into public.family_members (id, family_id, name, date_of_birth, relationship)
+select 'ce200000-0000-4000-8000-000000000014', 'ce100000-0000-4000-8000-000000000006', 'Baby',
+       (make_date(y, 1, 1) - interval '200 days')::date, 'child'
+from yr;
+
+-- Stage 1: Jan 10 text; Feb illustration (Q0); May illustration (Q1); Aug
+-- illustration SAD (visual, covers no quarter); Dec 27 illustration (Q3, the
+-- last in-scope day); Dec 28 illustration (the scope end: out). The family
+-- pool does not care about tags: one is tagged to nobody, one to the child.
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, emotion, memory_date)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000006', 'ce000000-0000-4000-8000-00000000000f', v.content,
+       case when v.ill then 'text_illustration' else 'text_only' end,
+       case when v.ill then 'ready' else 'none' end,
+       case when v.ill then 'yr-key/' || v.tag || '.png' end, v.emotion, make_date(yr.y, v.mo, v.d)
+from yr,
+(values
+  ('ce3e0000-0000-4000-8000-000000000001', 'January', false, 'jan', null, 1, 10),
+  ('ce3e0000-0000-4000-8000-000000000002', 'February', true, 'feb', null, 2, 1),
+  ('ce3e0000-0000-4000-8000-000000000003', 'May', true, 'may', null, 5, 5),
+  ('ce3e0000-0000-4000-8000-000000000004', 'August sad', true, 'aug', 'sad', 8, 8),
+  ('ce3e0000-0000-4000-8000-000000000005', 'December 27', true, 'dec27', null, 12, 27),
+  ('ce3e0000-0000-4000-8000-000000000006', 'December 28', true, 'dec28', null, 12, 28)
+) as v(id, content, ill, tag, emotion, mo, d);
+insert into public.memory_family_members (memory_id, family_member_id)
+values ('ce3e0000-0000-4000-8000-000000000002', 'ce200000-0000-4000-8000-000000000014');
+
+insert into uf select 'y-nov30', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 11, 30) from yr));
+insert into uf select 'y-dec1', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', 'ce000000-0000-4000-8000-00000000000f', (select make_date(y, 12, 1) from yr));
+insert into uf select 'y-dec30', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 30) from yr));
+insert into uf select 'y-dec31', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 31) from yr));
+
+select is((select doc from uf where label = 'y-nov30'), '[]'::jsonb, 'no year-end tile before December');
+select is((select doc from uf where label = 'y-dec31'), '[]'::jsonb, 'no year-end tile after the film date (Dec 30) has passed');
+select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-dec30'), null, 'the year-end tile is there on Dec 30');
+select is(
+  (select row(e ->> 'kind', e -> 'member_id', e -> 'age_year', e ->> 'film_date', e ->> 'scope_start', e ->> 'scope_end_excl')::text
+   from uf, pg_temp.kinds(doc, 'family_year') e where label = 'y-dec1'),
+  (select row('family_year', 'null'::jsonb, 'null'::jsonb, make_date(y, 12, 30)::text, make_date(y, 1, 1)::text, make_date(y, 12, 28)::text)::text from yr),
+  'from Dec 1: a family_year film, no member / age, surfacing Dec 30, scope Jan 1 -> Dec 28 (exclusive)');
+select is(
+  (select row(e -> 'moments', e -> 'visuals', e -> 'quarters', e -> 'min_moments', e -> 'min_visuals', e -> 'min_quarters', e ->> 'picture_key')::text
+   from uf, pg_temp.kinds(doc, 'family_year') e where label = 'y-dec1'),
+  '(5,4,3,60,40,3,yr-key/dec27.png)',
+  'year pool: every pooled memory Jan 1..Dec 27 (Dec 28 is out), tagged or not; a SAD visual covers no quarter (Q0, Q1, Q3 here); floors 60 / 40 / 3; the picture is the newest');
+
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, emotion, memory_date)
+select 'ce3e0000-0000-4000-8000-000000000007', 'ce100000-0000-4000-8000-000000000006', 'ce000000-0000-4000-8000-00000000000f',
+       'September weary', 'text_illustration', 'ready', 'yr-key/sep.png', 'weary', make_date(y, 9, 9) from yr;
+insert into uf select 'y-weary', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+select is(
+  (select row(e -> 'moments', e -> 'visuals', e -> 'quarters')::text from uf, pg_temp.kinds(doc, 'family_year') e where label = 'y-weary'),
+  '(6,5,4)', 'a weary visual covers its quarter: all four quarters');
+
+-- Film rows of the year-end film (family_member_id null, scope Jan 1).
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status)
+select 'ce530000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-000000000006', 'family_year',
+       make_date(y, 1, 1), make_date(y, 12, 28), now() + interval '1 day', 'queued' from yr;
+insert into uf select 'y-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000003';
+insert into uf select 'y-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.year_films set status = 'ready', scope_start_date = make_date((select y from yr) - 1, 1, 1),
+       scope_end_exclusive = make_date((select y from yr) - 1, 12, 28)
+where id = 'ce530000-0000-4000-8000-000000000003';
+insert into uf select 'y-lastyear', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+select is((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-queued'), null, 'a queued year-end film row takes the tile away');
+select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-skipped'), null, 'a skipped year-end film row keeps the tile');
+select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-lastyear'), null, 'last year''s film row does not take this year''s tile');
+delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000003';
+
+-- Year-end gates: launch after Dec 28, and an own child under 13 on Dec 28.
+update public.year_film_settings set launch_date = (select make_date(y, 12, 29) from yr);
+insert into uf select 'y-launch', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.year_film_settings set launch_date = date '2020-01-01';
+update public.family_members set date_of_birth = (select make_date(y - 14, 6, 1) from yr) where id = 'ce200000-0000-4000-8000-000000000014';
+insert into uf select 'y-teen', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.family_members set date_of_birth = null where id = 'ce200000-0000-4000-8000-000000000014';
+insert into uf select 'y-nodob', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+select is((select doc from uf where label = 'y-launch'), '[]'::jsonb, 'no year-end tile when its due date (Dec 28) is before launch_date');
+select is((select doc from uf where label = 'y-teen'), '[]'::jsonb, 'no year-end tile when the only child is over 12 on Dec 28');
+select is((select doc from uf where label = 'y-nodob'), '[]'::jsonb, 'no year-end tile without an own child that has a date of birth');
 
 select * from finish();
 rollback;

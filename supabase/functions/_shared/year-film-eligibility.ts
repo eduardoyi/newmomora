@@ -225,7 +225,11 @@ export function isFilmChild(member: FilmMemberInput, today: string): boolean {
 // mirrored in SQL by public.keepsake_pool (supabase/migrations/
 // 20261009120000_keepsakes_overview.sql), which feeds the Keepsakes tab's
 // recap progress. Change a rule here => change the SQL (a new migration) and
-// supabase/tests/keepsakes_overview_test.sql too.
+// supabase/tests/keepsakes_overview_test.sql too. The same goes for the floors
+// (BIRTHDAY_/FAMILY_MIN_POOL, _MIN_VISUALS, YEAR_MIN_QUARTERS), birthdayPool /
+// familyPool, the birthday/family scopes and the quarter rule in evaluateMontage,
+// which public.keepsake_upcoming_films (20261011120000_keepsakes_overview_cards_
+// upcoming.sql) mirrors for the Keepsakes "coming up" tiles.
 
 export type VisualKind = 'illustration' | 'photo' | 'video';
 

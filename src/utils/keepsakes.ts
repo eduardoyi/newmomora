@@ -11,7 +11,13 @@
 //   years            = groupShelfByYear(visible, todayIso)
 import { buildMemoryBookRows, type MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesCardFront, KeepsakesOverview, KeepsakesRecap } from '@/services/keepsakes';
+import type {
+  KeepsakesCard,
+  KeepsakesCardFront,
+  KeepsakesOverview,
+  KeepsakesRecap,
+  KeepsakesUpcomingFilm,
+} from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import { isOwnChild } from '@/utils/family-relationships';
@@ -68,7 +74,7 @@ function yearOf(date: string): number {
   return Number(date.slice(0, 4));
 }
 
-function possessive(name: string): string {
+export function possessive(name: string): string {
   const trimmed = name.trim();
   return /s$/i.test(trimmed) ? `${trimmed}’` : `${trimmed}’s`;
 }
@@ -127,10 +133,10 @@ export interface KeepsakeBadgeData {
   tone: KeepsakeBadgeTone;
 }
 
-export type ShelfItemKind = 'upcoming-recap' | 'film' | 'book' | 'card';
+export type ShelfItemKind = 'upcoming-recap' | 'upcoming-film' | 'film' | 'book' | 'card';
 
 interface ShelfItemBase {
-  /** Stable React key: `upcoming-recap`, `film:{id}`, `book:{id}`, `card:{id}`. */
+  /** Stable React key: `upcoming-recap`, `upcoming-film:{kind}:{member|family}:{date}`, `film:{id}`, `book:{id}`, `card:{id}`. */
   id: string;
   /** The shelf (calendar year) the item lives on. */
   year: number;
@@ -146,6 +152,12 @@ export interface UpcomingRecapShelfItem extends ShelfItemBase {
   recap: KeepsakesRecap;
 }
 
+/** A birthday or year-end film still being collected (the overview's `upcoming_films`). */
+export interface UpcomingFilmShelfItem extends ShelfItemBase {
+  kind: 'upcoming-film';
+  upcoming: KeepsakesUpcomingFilm;
+}
+
 export interface FilmShelfItem extends ShelfItemBase {
   kind: 'film';
   film: YearFilm;
@@ -159,15 +171,44 @@ export interface BookShelfItem extends ShelfItemBase {
   row: BookRow;
 }
 
-export interface CardShelfItem extends ShelfItemBase {
+interface CardShelfItemBase extends ShelfItemBase {
   kind: 'card';
   cardId: string;
+}
+
+/** THIS season's card (the one `holiday_card_summary` returns): drives the state, badge and banner. */
+export interface CurrentCardShelfItem extends CardShelfItemBase {
+  isPast: false;
   /** Never `make` (a card that does not exist is not a shelf item). */
   cardState: Exclude<HolidayCardTileState, 'make'>;
   summary: HolidayCardSummary;
 }
 
-export type ShelfItem = UpcomingRecapShelfItem | FilmShelfItem | BookShelfItem | CardShelfItem;
+/**
+ * A card from an earlier season (the overview's `cards`): ready only, its own
+ * front, a badge from the orders only (a past season is no longer orderable,
+ * so never "Ready to order"), never part of the needs-you banner.
+ */
+export interface PastCardShelfItem extends CardShelfItemBase {
+  isPast: true;
+  cardState: 'ready' | 'ordered';
+  /** Null when the server sent no front: the generic preview is drawn. */
+  front: KeepsakesCardFront | null;
+}
+
+export type CardShelfItem = CurrentCardShelfItem | PastCardShelfItem;
+
+export type ShelfItem =
+  | UpcomingRecapShelfItem
+  | UpcomingFilmShelfItem
+  | FilmShelfItem
+  | BookShelfItem
+  | CardShelfItem;
+
+/** The upcoming recap and the upcoming birthday / year-end films: not "real" keepsakes yet. */
+export function isUpcomingItem(item: ShelfItem): item is UpcomingRecapShelfItem | UpcomingFilmShelfItem {
+  return item.kind === 'upcoming-recap' || item.kind === 'upcoming-film';
+}
 
 /** A book/card order lookup key from the overview. */
 function findOrder(overview: KeepsakesOverview | null, product: 'book' | 'card', itemId: string) {
@@ -261,21 +302,107 @@ export function activeCardFront(
   return cardFrontFor(overview, summary.cardId);
 }
 
-const KIND_RANK: Record<ShelfItemKind, number> = { 'upcoming-recap': 0, card: 1, film: 2, book: 3 };
+/**
+ * Badge for a card from an earlier season: only what the orders say. Shipped ->
+ * "Shipped · {date}", ordered but not shipped -> "Ordered", otherwise none.
+ */
+export function pastCardBadge(card: Pick<KeepsakesCard, 'card_id' | 'ordered'>, overview: KeepsakesOverview | null): KeepsakeBadgeData | null {
+  const order = findOrder(overview, 'card', card.card_id);
+  if (order?.status === 'shipped') return { label: shippedLabel(order.shipped_at), tone: 'progress' };
+  if (order || card.ordered) return { label: KEEPSAKE_BADGE_COPY.ordered, tone: 'progress' };
+  return null;
+}
+
+/** The front a card shelf item draws: a past card's own, else the overview's matching `card_front`. */
+export function shelfCardFront(item: CardShelfItem, overview: KeepsakesOverview | null): KeepsakesCardFront | null {
+  return item.isPast ? item.front : cardFrontFor(overview, item.cardId);
+}
+
+// ---------------------------------------------------------------------------
+// Upcoming birthday / year-end films
+// ---------------------------------------------------------------------------
+
+/** Locked until the window has enough moments, enough pictures and (year-end) enough seasons. */
+export function isUpcomingFilmLocked(
+  film: Pick<KeepsakesUpcomingFilm, 'moments' | 'visuals' | 'min_moments' | 'min_visuals' | 'quarters' | 'min_quarters'>,
+): boolean {
+  return (
+    film.moments < film.min_moments ||
+    film.visuals < film.min_visuals ||
+    (film.quarters !== null && film.min_quarters !== null && film.quarters < film.min_quarters)
+  );
+}
+
+/** What a locked tile still needs: moments first, then pictures, then seasons. */
+export function upcomingFilmHint(film: KeepsakesUpcomingFilm): string {
+  if (film.moments < film.min_moments) {
+    const missing = film.min_moments - film.moments;
+    return `${missing} more ${missing === 1 ? 'moment' : 'moments'}`;
+  }
+  if (film.visuals < film.min_visuals) return `${film.min_visuals - film.visuals} more with a picture`;
+  if (film.quarters !== null && film.min_quarters !== null && film.quarters < film.min_quarters) {
+    const missing = film.min_quarters - film.quarters;
+    return missing === 1 ? 'Needs moments from one more season' : `${missing} more seasons`;
+  }
+  return '';
+}
+
+/** The year-end film's year: the year its window starts in. */
+function upcomingFilmYear(film: KeepsakesUpcomingFilm): number {
+  return yearOf(film.scope_start);
+}
+
+/** The child's name, or null when the member is gone (the tile is skipped). */
+function upcomingFilmMemberName(film: KeepsakesUpcomingFilm, members: readonly { id: string; name: string }[]): string | null {
+  return members.find((member) => member.id === film.member_id)?.name ?? null;
+}
+
+/** On-tile title: "{Name} turns 4" (birthday) or "Your 2026" (year-end). Null for a birthday whose member is gone. */
+export function upcomingFilmTitle(film: KeepsakesUpcomingFilm, members: readonly { id: string; name: string }[]): string | null {
+  if (film.kind === 'family_year') return `Your ${upcomingFilmYear(film)}`;
+  const name = upcomingFilmMemberName(film, members);
+  if (name === null) return null;
+  const first = name.trim();
+  return film.age_year ? `${first} turns ${film.age_year}` : `${possessive(first)} birthday`;
+}
+
+/** Caption title under the tile: "{Name}’s birthday film" or, like the finished film (`filmTitle`), "Your 2026". */
+export function upcomingFilmCaptionTitle(film: KeepsakesUpcomingFilm, members: readonly { id: string; name: string }[]): string {
+  if (film.kind === 'family_year') return `Your ${upcomingFilmYear(film)}`;
+  const name = upcomingFilmMemberName(film, members);
+  return name === null ? 'A birthday film' : `${possessive(name)} birthday film`;
+}
+
+/** Caption meta: progress while locked, the date and count once unlocked. */
+export function upcomingFilmCaptionMeta(film: KeepsakesUpcomingFilm): string {
+  if (isUpcomingFilmLocked(film)) return `${film.moments} of ${film.min_moments} moments`;
+  return `arrives ${formatMonthDay(film.film_date)} · ${film.moments} ${film.moments === 1 ? 'moment' : 'moments'}`;
+}
+
+const KIND_RANK: Record<ShelfItemKind, number> = { 'upcoming-recap': 0, 'upcoming-film': 0, card: 1, film: 2, book: 3 };
+
+/** 0 upcoming recap, 1 upcoming birthdays, 2 upcoming year-end, 3 everything else. */
+function upcomingRank(item: ShelfItem): number {
+  if (item.kind === 'upcoming-recap') return 0;
+  if (item.kind === 'upcoming-film') return item.upcoming.kind === 'birthday' ? 1 : 2;
+  return 3;
+}
 
 function isYearEndFilm(item: ShelfItem): boolean {
   return item.kind === 'film' && item.film.kind === 'family_year';
 }
 
 /**
- * Upcoming recap first, then the year-end film (it is the year's headline: it
- * leads whatever its date says, e.g. ahead of the December recap), then newest
- * date, then kind, then id (stable).
+ * Upcoming recap, then upcoming birthday tiles (soonest first), then the
+ * upcoming year-end tile, then the year-end film (it is the year's headline:
+ * it leads whatever its date says, e.g. ahead of the December recap), then
+ * newest date, then kind, then id (stable).
  */
 function compareWithinYear(a: ShelfItem, b: ShelfItem): number {
-  const aUpcoming = a.kind === 'upcoming-recap';
-  const bUpcoming = b.kind === 'upcoming-recap';
-  if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+  const aRank = upcomingRank(a);
+  const bRank = upcomingRank(b);
+  if (aRank !== bRank) return aRank - bRank;
+  if (aRank === 1 && a.date !== b.date) return a.date < b.date ? -1 : 1;
   const aYearEnd = isYearEndFilm(a);
   const bYearEnd = isYearEndFilm(b);
   if (aYearEnd !== bYearEnd) return aYearEnd ? -1 : 1;
@@ -290,8 +417,10 @@ export interface BuildShelfItemsInput {
   bookRows: readonly BookRow[];
   /** `useHolidayCard().summary` (null while loading / for viewers). */
   cardSummary: HolidayCardSummary | null;
-  /** `useKeepsakesOverview().overview` (null: degrade -- no upcoming tile, no order badges). */
+  /** `useKeepsakesOverview().overview` (null: degrade -- no upcoming tiles, no past cards, no order badges). */
   overview: KeepsakesOverview | null;
+  /** The family's members, for the upcoming birthday tiles' names (a tile whose child is gone is skipped). */
+  members?: readonly { id: string; name: string }[];
   role: string | null | undefined;
   /** The screen's local "today" (`YYYY-MM-DD`); decides what a previous-year card means. */
   todayIso: string;
@@ -299,22 +428,28 @@ export interface BuildShelfItemsInput {
 
 /**
  * Every shelf item of the library, flat, ordered year descending and, within a
- * year, the upcoming recap first, then the year-end film, then newest `date` first.
+ * year, the upcoming recap, the upcoming birthday tiles, the upcoming year-end
+ * tile, then the year-end film, then newest `date` first.
  *
  * - Films: `hidden` ones dropped (`filmDisplayState`); filed by `placement_date`'s year.
  * - Books (owner/manager only): filed by `scope_end_date`'s year, falling back
  *   to `created_at` (an unbounded "everything" book has none).
  * - Card (owner/manager only): on a shelf only while `holidayCardTileState` is
  *   non-null and not `make`; its year is `summary.year`, its date Dec 1 of it.
+ * - Past cards (owner/manager only): every other READY card of `overview.cards`
+ *   on its own year's shelf (generating / failed past cards are hidden); the
+ *   current card is never listed twice. An empty `cards` (old server) adds nothing.
  * - Upcoming recap (everyone): filed by the OWNER-LOCAL year of
  *   `overview.recap.month_start`, never the device clock.
- * Viewers get films and the upcoming recap only.
+ * - Upcoming birthday / year-end films (everyone): filed by `film_date`'s year.
+ * Viewers get films and the upcoming tiles only.
  */
 export function buildShelfItems({
   films,
   bookRows,
   cardSummary,
   overview,
+  members = [],
   role,
   todayIso,
 }: BuildShelfItemsInput): ShelfItem[] {
@@ -351,10 +486,13 @@ export function buildShelfItems({
     }
 
     const cardState = holidayCardTileState(cardSummary, todayIso);
+    let currentCardId: string | null = null;
     if (cardSummary && cardSummary.cardId && cardState && cardState !== 'make') {
       const year = cardSummary.year ?? yearOf(todayIso);
+      currentCardId = cardSummary.cardId;
       items.push({
         kind: 'card',
+        isPast: false,
         id: `card:${cardSummary.cardId}`,
         year,
         date: `${String(year).padStart(4, '0')}-12-01`,
@@ -363,6 +501,22 @@ export function buildShelfItems({
         cardId: cardSummary.cardId,
         cardState,
         summary: cardSummary,
+      });
+    }
+
+    for (const card of overview?.cards ?? []) {
+      if (card.card_id === currentCardId || card.status !== 'ready') continue;
+      items.push({
+        kind: 'card',
+        isPast: true,
+        id: `card:${card.card_id}`,
+        year: card.year,
+        date: `${String(card.year).padStart(4, '0')}-12-01`,
+        memberId: null,
+        badge: pastCardBadge(card, overview),
+        cardId: card.card_id,
+        cardState: card.ordered || findOrder(overview, 'card', card.card_id) ? 'ordered' : 'ready',
+        front: card.front,
       });
     }
   }
@@ -379,6 +533,20 @@ export function buildShelfItems({
     });
   }
 
+  for (const upcoming of overview?.upcoming_films ?? []) {
+    // A birthday tile is titled with the child's name; without the child there is nothing to show.
+    if (upcomingFilmTitle(upcoming, members) === null) continue;
+    items.push({
+      kind: 'upcoming-film',
+      id: `upcoming-film:${upcoming.kind}:${upcoming.member_id ?? 'family'}:${upcoming.film_date}`,
+      year: yearOf(upcoming.film_date),
+      date: upcoming.film_date,
+      memberId: upcoming.kind === 'birthday' ? upcoming.member_id : null,
+      badge: null,
+      upcoming,
+    });
+  }
+
   return items.sort((a, b) => (a.year !== b.year ? b.year - a.year : compareWithinYear(a, b)));
 }
 
@@ -388,12 +556,12 @@ export function buildShelfItems({
 
 export interface ShelfYear {
   year: number;
-  /** Ordered: the upcoming recap first, then the year-end film, then newest first. */
+  /** Ordered: the upcoming tiles first, then the year-end film, then newest first. */
   items: ShelfItem[];
   /** The device's current year. */
   isCurrent: boolean;
   /** True when the year must render open: the current year, or the year holding
-   * the upcoming recap (so it never lands in a folded or wrong year when the
+   * an upcoming tile (so it never lands in a folded or wrong year when the
    * device and owner time zones straddle New Year). */
   isAlwaysOpen: boolean;
   /** Monthly recap films on this shelf. */
@@ -423,16 +591,16 @@ export function groupShelfByYear(items: readonly ShelfItem[], todayIso: string):
         year,
         items: yearItems,
         isCurrent: year === currentYear,
-        isAlwaysOpen: year === currentYear || yearItems.some((item) => item.kind === 'upcoming-recap'),
+        isAlwaysOpen: year === currentYear || yearItems.some(isUpcomingItem),
         recapCount,
         showAllRecapsTile: recapCount > ALL_RECAPS_TILE_THRESHOLD,
       };
     });
 }
 
-/** "14 keepsakes" for owners and managers, "12 films" for viewers. The upcoming recap is not counted. */
+/** "14 keepsakes" for owners and managers, "12 films" for viewers. The upcoming tiles are not counted. */
 export function yearSummaryLabel(items: readonly ShelfItem[], role: string | null | undefined): string {
-  const real = items.filter((item) => item.kind !== 'upcoming-recap');
+  const real = items.filter((item) => !isUpcomingItem(item));
   if (canEditFamilyContent(role)) {
     return `${real.length} ${real.length === 1 ? 'keepsake' : 'keepsakes'}`;
   }
@@ -528,7 +696,7 @@ function matchesType(item: ShelfItem, type: KeepsakesTypeFilter): boolean {
     case 'all':
       return true;
     case 'films':
-      return item.kind === 'film' || item.kind === 'upcoming-recap'; // the upcoming recap is a film-to-be
+      return item.kind === 'film' || isUpcomingItem(item); // the upcoming tiles are films-to-be
     case 'books':
       return item.kind === 'book';
     case 'cards':
@@ -538,8 +706,8 @@ function matchesType(item: ShelfItem, type: KeepsakesTypeFilter): boolean {
 
 /**
  * Child chip: only items of that child (books, birthday films); family-wide
- * items (recaps, year-end, card, upcoming recap) show only under "All".
- * Type filters by kind (the upcoming recap counts as Films). Year shows only
+ * items (recaps, year-end, card, upcoming recap and year-end) show only under "All".
+ * Type filters by kind (the upcoming tiles count as Films). Year shows only
  * that year. Order is preserved.
  */
 export function applyKeepsakesFilter(items: readonly ShelfItem[], filter: KeepsakesFilter): ShelfItem[] {

@@ -16,7 +16,7 @@ import { useFamilyYearFilms } from '@/hooks/useYearFilms';
 import { setPendingKeepsakesToast } from '@/lib/keepsakes-toast';
 import { invokeEdgeFunction } from '@/services/ai';
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesCardFront, KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCard, KeepsakesCardFront, KeepsakesOverview, KeepsakesUpcomingFilm } from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import { resetWebHandoffForTests } from '@/services/web-handoff';
 import type { YearFilm } from '@/services/year-films';
@@ -195,6 +195,8 @@ function overviewOf(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOvervi
     book_preview_keys: {},
     orders: [],
     card_front: null,
+    cards: [],
+    upcoming_films: [],
     ...overrides,
   };
 }
@@ -805,6 +807,184 @@ describe('Keepsakes tab', () => {
       mockBooks([]);
       const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
       expect(queryByTestId('keepsakes-upcoming-recap')).toBeNull();
+    });
+  });
+
+  describe('past-year holiday cards and upcoming films', () => {
+    const cardOf = (cardId: string, year: number, overrides: Partial<KeepsakesCard> = {}): KeepsakesCard => ({
+      card_id: cardId,
+      year,
+      status: 'ready',
+      ordered: false,
+      front: { ...landscapeFullBleedFront, card_id: cardId, year },
+      ...overrides,
+    });
+
+    const birthdayOf = (memberId: string, ageYear: number, overrides: Partial<KeepsakesUpcomingFilm> = {}): KeepsakesUpcomingFilm => ({
+      kind: 'birthday',
+      member_id: memberId,
+      age_year: ageYear,
+      film_date: '2026-11-20',
+      scope_start: '2025-11-20',
+      scope_end_excl: '2026-11-20',
+      moments: 12,
+      visuals: 9,
+      min_moments: 15,
+      min_visuals: 8,
+      quarters: null,
+      min_quarters: null,
+      picture_key: null,
+      ...overrides,
+    });
+
+    const decemberYearEnd: KeepsakesUpcomingFilm = {
+      kind: 'family_year',
+      member_id: null,
+      age_year: null,
+      film_date: '2027-01-01',
+      scope_start: '2026-01-01',
+      scope_end_excl: '2027-01-01',
+      moments: 40,
+      visuals: 20,
+      min_moments: 30,
+      min_visuals: 15,
+      quarters: 2,
+      min_quarters: 3,
+      picture_key: null,
+    };
+
+    beforeEach(() => {
+      mockedUseFamilyMembers.mockReturnValue({ members: [lila, theo], isLoading: false } as unknown as ReturnType<typeof useFamilyMembers>);
+      mockBooks([]);
+    });
+
+    it('puts each past card on its own year’s shelf: shipped, ordered, and an unordered one with no badge', async () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-26', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockOverview(overviewOf({
+        card_front: { ...landscapeFullBleedFront, card_id: 'card-26', year: 2026 },
+        cards: [
+          cardOf('card-26', 2026),
+          cardOf('card-25', 2025, { ordered: true }),
+          cardOf('card-24', 2024, { ordered: true }),
+          cardOf('card-23', 2023),
+          cardOf('card-22', 2022, { status: 'failed' }),
+          cardOf('card-21', 2021, { status: 'generating' }),
+        ],
+        orders: [
+          { product: 'card', item_id: 'card-25', status: 'shipped', shipped_at: '2025-12-12T12:00:00.000Z' },
+          { product: 'card', item_id: 'card-24', status: 'in_production', shipped_at: null },
+        ],
+      }));
+      const { getByTestId, getAllByTestId, queryByTestId, getByText } = renderWithQuery(<KeepsakesScreen />);
+
+      // This season's card keeps its state: one tile, "Ready to order", and the needs-you line.
+      expect(getAllByTestId('keepsakes-card-card-26')).toHaveLength(1);
+      expect(getByTestId('keepsakes-badge-card:card-26')).toHaveTextContent('Ready to order');
+      expect(getByTestId('keepsakes-needs-you')).toBeTruthy();
+
+      // Past shelves fold with the card counted.
+      expect(queryByTestId('keepsakes-card-card-25')).toBeNull();
+      expect(within(getByTestId('keepsakes-year-2025')).getByText(' · 1 keepsake')).toBeTruthy();
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2025'));
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2024'));
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2023'));
+      expect(getByTestId('keepsakes-badge-card:card-25')).toHaveTextContent('Shipped · Dec 12');
+      expect(getByTestId('keepsakes-badge-card:card-24')).toHaveTextContent('Ordered');
+      expect(getByTestId('keepsakes-card-card-23')).toBeTruthy();
+      expect(queryByTestId('keepsakes-badge-card:card-23')).toBeNull(); // never "Ready to order"
+      // Generating and failed past cards are hidden; their years have no shelf.
+      expect(queryByTestId('keepsakes-year-2022')).toBeNull();
+      expect(queryByTestId('keepsakes-year-2021')).toBeNull();
+
+      // A past card opens its own page in the shop.
+      fireEvent.press(getByTestId('keepsakes-card-card-25'));
+      await waitFor(() =>
+        expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-25#h=${HANDOFF_CODE}`),
+      );
+    });
+
+    it('the Holiday cards type filter and the year filter include past cards', () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-26', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockFilms([recap(9)]);
+      mockOverview(overviewOf({ cards: [cardOf('card-26', 2026), cardOf('card-25', 2025)] }));
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-filter-button'));
+      fireEvent.press(getByTestId('keepsakes-filter-type-cards'));
+      fireEvent.press(getByTestId('keepsakes-filter-year-2025'));
+      fireEvent.press(getByTestId('keepsakes-filter-apply'));
+      expect(getByTestId('keepsakes-card-card-25')).toBeTruthy();
+      expect(queryByTestId('keepsakes-card-card-26')).toBeNull();
+      expect(queryByTestId('keepsakes-film-recap-09')).toBeNull();
+    });
+
+    it('an old server (no cards) still shows this season’s card from the summary', () => {
+      mockHolidayCard(holidaySummary({ cardId: 'card-26', year: 2026, status: 'ready', readiness: 'ready' }));
+      mockOverview(overviewOf({ cards: [] }));
+      const { getAllByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getAllByTestId('keepsakes-card-card-26')).toHaveLength(1);
+    });
+
+    it('shows a locked and an unlocked birthday tile, and a December year-end tile on next year’s open shelf', () => {
+      mockOverview(overviewOf({
+        upcoming_films: [birthdayOf('child-1', 4), birthdayOf('child-2', 2, { film_date: '2026-12-02', moments: 20 }), decemberYearEnd],
+      }));
+      const { getByTestId, getByText, getAllByText, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+      // Locked: dashed tile, progress and the moments hint; titles and captions.
+      expect(getByTestId('keepsakes-upcoming-birthday-child-1')).toBeTruthy();
+      expect(getByTestId('keepsakes-upcoming-birthday-child-1-progress')).toBeTruthy();
+      expect(getByText('Lila turns 4')).toBeTruthy();
+      expect(getByText('Lila’s birthday film')).toBeTruthy();
+      expect(getByText('3 more moments')).toBeTruthy();
+      expect(getByText('12 of 15 moments')).toBeTruthy();
+
+      // Unlocked: "arrives" and the date in handwriting.
+      expect(getByTestId('keepsakes-upcoming-birthday-child-2')).toBeTruthy();
+      expect(queryByTestId('keepsakes-upcoming-birthday-child-2-progress')).toBeNull();
+      expect(getByText('Theo turns 2')).toBeTruthy();
+      expect(getByText('Dec 2')).toBeTruthy();
+      expect(getByText('arrives Dec 2 · 20 moments')).toBeTruthy();
+
+      // Year-end: titled from the window's year, filed under the film_date year (open).
+      expect(getByTestId('keepsakes-upcoming-year-2026')).toBeTruthy();
+      expect(getAllByText('Your 2026')).toHaveLength(2);
+      expect(getByText('Needs moments from one more season')).toBeTruthy();
+      expect(getByTestId('keepsakes-year-2027')).toBeTruthy();
+      expect(queryByTestId('keepsakes-year-toggle-2027')).toBeNull();
+    });
+
+    it('a child chip keeps only that child’s birthday tile; the year-end tile shows under All', () => {
+      mockOverview(overviewOf({ upcoming_films: [birthdayOf('child-1', 4), birthdayOf('child-2', 2), decemberYearEnd] }));
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-chip-child-1'));
+      expect(getByTestId('keepsakes-upcoming-birthday-child-1')).toBeTruthy();
+      expect(queryByTestId('keepsakes-upcoming-birthday-child-2')).toBeNull();
+      expect(queryByTestId('keepsakes-upcoming-year-2026')).toBeNull();
+    });
+
+    it('skips a birthday tile whose child is gone and never badges or counts the tiles', () => {
+      mockOverview(overviewOf({ upcoming_films: [birthdayOf('ghost', 4), decemberYearEnd] }));
+      const { queryByTestId, getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(queryByTestId('keepsakes-upcoming-birthday-ghost')).toBeNull();
+      expect(getByTestId('keepsakes-upcoming-year-2026')).toBeTruthy();
+      expect(queryByTestId(/^keepsakes-badge-upcoming-film/)).toBeNull();
+      // 2027 holds only an upcoming tile: no keepsake count in its header.
+      expect(within(getByTestId('keepsakes-year-2027')).queryByText(/keepsake/)).toBeNull();
+    });
+
+    it('a viewer sees the upcoming film tiles but no cards', () => {
+      mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
+      mockOverview(overviewOf({
+        has_viewers: null,
+        cards: [cardOf('card-25', 2025)],
+        upcoming_films: [birthdayOf('child-1', 4), decemberYearEnd],
+      }));
+      mockFilms([recap(9)]);
+      const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+      expect(getByTestId('keepsakes-upcoming-birthday-child-1')).toBeTruthy();
+      expect(getByTestId('keepsakes-upcoming-year-2026')).toBeTruthy();
+      expect(queryByTestId('keepsakes-card-card-25')).toBeNull();
+      expect(queryByTestId('keepsakes-year-2025')).toBeNull();
     });
   });
 

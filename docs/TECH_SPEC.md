@@ -1272,11 +1272,14 @@ editable/orderable until its film is done; meanwhile the app and shop show "Prep
   grant) gains a trailing **`readiness text`** column (null when no card).
 
 **Keepsakes overview** (migrations `20261009120000_keepsakes_overview.sql` +
-`20261010120000_keepsakes_overview_card_front.sql` (adds `card_front`), pgTAP
+`20261010120000_keepsakes_overview_card_front.sql` (adds `card_front`) +
+`20261011120000_keepsakes_overview_cards_upcoming.sql` (adds `cards` and
+`upcoming_films`, moves the card-front logic into `keepsake_card_front`), pgTAP
 `supabase/tests/keepsakes_overview_test.sql`, rollbacks
 `supabase/rollbacks/20261009120000_keepsakes_overview_down.sql` (drops the RPC and pool
-helper) and `20261010120000_keepsakes_overview_card_front_down.sql` (restores the
-pre-`card_front` function), applied by hand; plan
+helper), `20261010120000_keepsakes_overview_card_front_down.sql` (restores the
+pre-`card_front` function) and `20261011120000_keepsakes_overview_cards_upcoming_down.sql`
+(restores the `card_front` function, drops the two new helpers), applied by hand; plan
 [keepsakes-redesign.md](plans/keepsakes-redesign.md) A1). One member RPC feeds the
 whole Keepsakes tab.
 
@@ -1295,7 +1298,16 @@ whole Keepsakes tab.
                          height: int|null, layout: 'bordered'|'full-bleed',
                          orientation: 'landscape'|'portrait', focal: {x, y}|null,
                          greeting: text, language: text, greeting_text: text|null,
-                         subline_text: text|null, greeting_position: text } }
+                         subline_text: text|null, greeting_position: text },
+    cards: [ { card_id: uuid, year: int, status: 'generating'|'ready'|'failed',
+               ordered: bool,
+               front: { image_key, width, height, layout, orientation, focal, greeting,
+                        language, greeting_text, subline_text, greeting_position } } ],
+    upcoming_films: [ { kind: 'birthday'|'family_year', member_id: uuid|null,
+                        age_year: int|null, film_date: 'YYYY-MM-DD',
+                        scope_start: 'YYYY-MM-DD', scope_end_excl: 'YYYY-MM-DD',
+                        moments: int, visuals: int, min_moments: 60, min_visuals: 40,
+                        quarters: int, min_quarters: 3, picture_key: text|null } ] }
   ```
   - **`recap`** (all members): null unless the family passes `year_films_enabled`'s gates
     **minus the ≥ 10 memories check** (rollout includes the family, `launch_date <=` the
@@ -1338,6 +1350,55 @@ whole Keepsakes tab.
     they are strings, else null; `""` is preserved (the parent hid the subline). **To extend:**
     any new front-affecting edit must be added here, in `normalizeCardEdits` and in the
     renderer together; the pgTAP test pins every rule.
+  - **`cards`** (owner/manager only; `[]` for viewers): every non-deleted card of a live
+    family, newest `year` first (one card per family per year, so the `created_at`
+    tie-break never fires). `status` is the card row's. `ordered` is
+    `holiday_card_summary`'s rule verbatim: any `holiday_card_orders` row for the card in
+    `paid | submitted | in_production | shipped` — refunds are **not** excluded there, so
+    they are not here (unlike `orders`, which drops refunded rows). `front` is
+    `keepsake_card_front(card_id)` minus `card_id` / `year`: the exact `card_front` rule set
+    above, one implementation for both (`card_front` is the same helper applied to the
+    newest card by `created_at`, which need not be the newest year).
+  - **`upcoming_films`** (ALL members, viewers included; `[]` when the family fails the
+    gates): the Year Films the scheduler is about to make, with pool progress toward the
+    worker's floors, soonest `film_date` first (birthdays before the year-end film on a tie).
+    Computed by the internal `keepsake_upcoming_films(p_family_id, p_caller, p_today)`.
+    - **Gates**: `year_film_family_enabled`, `launch_date` not null, `billing_write_allowed`
+      for the owner, live family. The recap's `launch_date <=` next 1st gate is replaced by
+      the exact per-film rule *due date >= launch_date* (`year_film_due`: no backfill).
+      "Own child" is per film (below), not family-wide.
+    - **Birthday** (`kind: 'birthday'`): for each member with a date of birth and each
+      `age_year` 1..12 (`year_film_due`'s own-child rule `year_film_is_own_child` at the
+      birthday): `birthday = dob + age_year years`, **`film_date` = `scope_end_excl` =
+      birthday + 2 days** (the day the film appears; `surface_at` is 09:00 owner-local that
+      day, TS twin `BIRTHDAY_FILM_DAYS_AFTER`), `scope_start = dob + (age_year-1) years`.
+      Listed when `film_date` is within `[today, today + 30]` owner-local.
+    - **Year-end** (`kind: 'family_year'`, `member_id`/`age_year` null): December 1..30 of
+      the owner-local year; `scope_start` Jan 1, `scope_end_excl` Dec 28 (the pool is Jan 1
+      to Dec 27, `FAMILY_FILM_CUTOFF`), `film_date` Dec 30 (it renders Dec 28, surfaces Dec
+      30 09:00). Needs an own child who is under 13 on Dec 28 (the scheduler's rule plus the
+      worker's `isFilmChild`) and Dec 28 >= `launch_date`.
+    - **Exclusion**: a tile is dropped as soon as a non-`forced` `year_films` row with the
+      scheduler's key (family, kind, member, `scope_start_date`) exists in any status
+      **except `skipped` / `failed`** (queued … ready: the film is made or being made and the
+      real film UI takes over; the unique key means no second row will ever be inserted).
+      A `skipped`/`failed` row is terminal and invisible to clients, so the tile stays until
+      its film date passes. Known edge: from 00:30 on the due day (row created) until the
+      09:00 surface a viewer sees neither the tile nor the film (owners/managers see a ready
+      film early).
+    - **Counts** use `keepsake_pool` over `[scope_start, scope_end_excl)`: birthday →
+      `p_member_id` = the child (= the worker's `birthdayPool(.., 'exclude')`: memories
+      *tagged to the child*; untagged and sibling-only memories do not count); year-end →
+      every pooled memory. `visuals` = `is_visual` rows. **`quarters`** = distinct quarters
+      covered by *visual* memories whose emotion is not `worry`/`sad` (`weary` counts),
+      quarter = `floor(months since the scope start's month / 3)` clamped to 0..3
+      (`evaluateMontage` / `quarterOf`, month granularity). Floors (`min_*`): 60 / 40 / 3
+      (`BIRTHDAY_MIN_POOL`, `BIRTHDAY_MIN_VISUALS`, `FAMILY_MIN_POOL`,
+      `FAMILY_MIN_VISUALS`, `YEAR_MIN_QUARTERS`); **both kinds** carry `quarters` because
+      `evaluateBirthdayFilm` requires them too.
+    - **`picture_key`**: the newest pooled picture in the scope (same pool, so a birthday's
+      picture is a memory tagged to that child), excluding authors **the caller** hid; null
+      when none. Counts never take the caller (they must equal the worker's).
   - **`orders`**: per item, the single latest row (`created_at desc, id desc`) among
     **paid-or-later, non-refunded** rows. Books: `paid | rendering | submitted |
     in_production | shipped | delivered` (`shipped_at` is always null: the table has
@@ -1346,10 +1407,17 @@ whole Keepsakes tab.
     reorder in progress never displaces a shipped row. Family-wide on purpose (the shelf
     shows family keepsakes whoever paid; `memory_book_orders`' own RLS is buyer-only).
     Status only: never addresses, prices or tracking.
+- **`keepsake_card_front(p_card_id) → jsonb`** and **`keepsake_upcoming_films(p_family_id,
+  p_caller, p_today) → jsonb`** — **internal helpers, no client grant** (`revoke all` from
+  `public`, `anon`, `authenticated`; only `keepsakes_overview` calls them, after its own
+  membership / role checks). The first returns the `card_front` object (or null for an
+  unknown / soft-deleted card); the second takes `p_today` so pgTAP can pin dates. **To
+  extend:** a change to a floor, scope or scheduling rule in `year-film-eligibility.ts` /
+  `year_film_due` must change `keepsake_upcoming_films` in a new migration (and the test).
 - **`keepsake_pool(p_family_id, p_start, p_end_excl, p_caller, p_member_id,
   p_picture_only, p_limit, p_with_holiday)`** — **internal helper, no client grant**
-  (`revoke all` from `public`, `anon`, `authenticated`; only `keepsakes_overview` calls
-  it). Returns one row per pooled memory with `is_visual`, `picture_key` and
+  (`revoke all` from `public`, `anon`, `authenticated`; only `keepsakes_overview` and
+  `keepsake_upcoming_films` call it). Returns one row per pooled memory with `is_visual`, `picture_key` and
   `in_holiday_pool`. It **mirrors the Year Film worker's pool**: `mapFamilyRows`
   (`year-film-context.ts`) and `rows.ts` for the exclusions (open/reviewing
   `content_reports` on the memory; `onboarding_media_pending` — the boolean alone;

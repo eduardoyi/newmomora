@@ -21,6 +21,7 @@ import {
   applyKeepsakesFilter,
   buildChildChips,
   groupShelfByYear,
+  isUpcomingItem,
   yearSummaryLabel,
   type BookShelfItem,
   type KeepsakesFilter,
@@ -84,7 +85,7 @@ function YearShelf({
   onToggle: () => void;
   onBookPress: (item: BookShelfItem) => void;
 }) {
-  const hasRealItems = year.items.some((item) => item.kind !== 'upcoming-recap');
+  const hasRealItems = year.items.some((item) => !isUpcomingItem(item));
   const summary = hasRealItems ? yearSummaryLabel(year.items, role) : null;
 
   if (!isOpen) {
@@ -172,7 +173,7 @@ export function KeepsakesLibrary({
   onBookPress,
 }: KeepsakesLibraryProps) {
   const canEdit = canEditFamilyContent(role);
-  const hasRealItems = items.some((item) => item.kind !== 'upcoming-recap');
+  const hasRealItems = items.some((item) => !isUpcomingItem(item));
 
   if (items.length === 0) {
     if (!canEdit) {

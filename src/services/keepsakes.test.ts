@@ -25,6 +25,45 @@ const cardFront = {
   greeting_position: 'top-center',
 };
 
+const { card_id: _cardId, year: _year, ...pastFront } = { ...cardFront, card_id: 'card-0', year: 2025, greeting: 'holidays', language: 'en' };
+
+const upcomingBirthday = {
+  kind: 'birthday',
+  member_id: 'child-1',
+  age_year: 4,
+  film_date: '2026-11-20',
+  scope_start: '2025-11-20',
+  scope_end_excl: '2026-11-20',
+  moments: 12,
+  visuals: 7,
+  min_moments: 15,
+  min_visuals: 8,
+  quarters: null,
+  min_quarters: null,
+  picture_key: 'family/b.jpg',
+};
+
+const upcomingYear = {
+  kind: 'family_year',
+  member_id: null,
+  age_year: null,
+  film_date: '2027-01-01',
+  scope_start: '2026-01-01',
+  scope_end_excl: '2027-01-01',
+  moments: 40,
+  visuals: 20,
+  min_moments: 30,
+  min_visuals: 15,
+  quarters: 3,
+  min_quarters: 3,
+  picture_key: null,
+};
+
+const rawCards = [
+  { card_id: 'card-1', year: 2026, status: 'ready', ordered: false, front: pastFront },
+  { card_id: 'card-0', year: 2025, status: 'ready', ordered: true, front: pastFront },
+];
+
 const full = {
   recap: {
     month_start: '2026-10-01',
@@ -47,11 +86,19 @@ const full = {
     { product: 'card', item_id: 'card-1', status: 'shipped', shipped_at: '2026-12-12T10:00:00+00:00' },
   ],
   card_front: cardFront,
+  cards: rawCards,
+  upcoming_films: [upcomingBirthday, upcomingYear],
+};
+
+// What the parser makes of `full`: each card's front gets the entry's own id and year.
+const parsedFull = {
+  ...full,
+  cards: rawCards.map((entry) => ({ ...entry, front: { ...entry.front, card_id: entry.card_id, year: entry.year } })),
 };
 
 describe('parseKeepsakesOverview', () => {
   it('passes a well-formed payload through', () => {
-    expect(parseKeepsakesOverview(full)).toEqual(full);
+    expect(parseKeepsakesOverview(full)).toEqual(parsedFull);
   });
 
   it('turns a viewer payload (nulls and empties) into nulls and empties', () => {
@@ -67,6 +114,8 @@ describe('parseKeepsakesOverview', () => {
         book_preview_keys: null,
         orders: [],
         card_front: null,
+        cards: [],
+        upcoming_films: [upcomingYear],
       }),
     ).toEqual({
       recap: full.recap,
@@ -79,6 +128,8 @@ describe('parseKeepsakesOverview', () => {
       book_preview_keys: {},
       orders: [],
       card_front: null,
+      cards: [],
+      upcoming_films: [upcomingYear],
     });
   });
 
@@ -94,6 +145,8 @@ describe('parseKeepsakesOverview', () => {
       book_preview_keys: {},
       orders: [],
       card_front: null,
+      cards: [],
+      upcoming_films: [],
     });
   });
 
@@ -182,10 +235,88 @@ describe('parseKeepsakesOverview card_front', () => {
   });
 });
 
+describe('parseKeepsakesOverview cards', () => {
+  const parse = (raw: unknown) => parseKeepsakesOverview({ cards: raw }).cards;
+
+  it('is [] when the server has no cards key (old server) or it is not an array', () => {
+    expect(parseKeepsakesOverview({}).cards).toEqual([]);
+    expect(parse(null)).toEqual([]);
+    expect(parse({})).toEqual([]);
+  });
+
+  it('keeps the server order and fills each front with the entry id and year', () => {
+    const cards = parse(rawCards);
+    expect(cards.map((c) => [c.card_id, c.year, c.status, c.ordered])).toEqual([
+      ['card-1', 2026, 'ready', false],
+      ['card-0', 2025, 'ready', true],
+    ]);
+    expect(cards[1].front).toMatchObject({ card_id: 'card-0', year: 2025, layout: 'full-bleed', image_key: 'family/front.jpg' });
+  });
+
+  it('skips entries without an id, a year or a known status, and repeated ids', () => {
+    const base = rawCards[0];
+    expect(
+      parse([
+        'junk',
+        { ...base, card_id: '' },
+        { ...base, year: '2026' },
+        { ...base, status: 'queued' },
+        { ...base, card_id: 'ok' },
+        { ...base, card_id: 'ok', year: 2024 },
+      ]).map((c) => [c.card_id, c.year]),
+    ).toEqual([['ok', 2026]]);
+  });
+
+  it('keeps a card without a usable front (front null) and reads ordered strictly', () => {
+    const [card] = parse([{ card_id: 'c', year: 2025, status: 'generating', ordered: 'yes', front: 'nope' }]);
+    expect(card).toEqual({ card_id: 'c', year: 2025, status: 'generating', ordered: false, front: null });
+  });
+});
+
+describe('parseKeepsakesOverview upcoming_films', () => {
+  const parse = (raw: unknown) => parseKeepsakesOverview({ upcoming_films: raw }).upcoming_films;
+
+  it('is [] without the key (old server) or for a non-array', () => {
+    expect(parseKeepsakesOverview({}).upcoming_films).toEqual([]);
+    expect(parse('x')).toEqual([]);
+    expect(parse(null)).toEqual([]);
+  });
+
+  it('passes well-formed birthday and year-end entries through', () => {
+    expect(parse([upcomingBirthday, upcomingYear])).toEqual([upcomingBirthday, upcomingYear]);
+  });
+
+  it('skips unknown kinds, bad dates, missing floors and a birthday without its child', () => {
+    expect(
+      parse([
+        { ...upcomingBirthday, kind: 'family_month' },
+        { ...upcomingBirthday, film_date: 'soon' },
+        { ...upcomingBirthday, scope_start: null },
+        { ...upcomingBirthday, scope_end_excl: '2026-13' },
+        { ...upcomingBirthday, min_moments: undefined },
+        { ...upcomingBirthday, min_visuals: '8' },
+        { ...upcomingBirthday, member_id: null },
+        'junk',
+        upcomingYear,
+      ]),
+    ).toEqual([upcomingYear]);
+  });
+
+  it('keeps quarters only when both numbers are there, and clamps negative counts', () => {
+    expect(parse([{ ...upcomingYear, quarters: 2, min_quarters: null }])[0]).toMatchObject({ quarters: null, min_quarters: null });
+    expect(parse([{ ...upcomingYear, quarters: 1, min_quarters: 3 }])[0]).toMatchObject({ quarters: 1, min_quarters: 3 });
+    expect(parse([{ ...upcomingYear, moments: -4, visuals: 'x' }])[0]).toMatchObject({ moments: 0, visuals: 0 });
+  });
+
+  it('drops a year-end entry member id and a non-positive age', () => {
+    expect(parse([{ ...upcomingYear, member_id: 'child-1', age_year: 0 }])[0]).toMatchObject({ member_id: null, age_year: null });
+  });
+});
+
 describe('fetchKeepsakesOverview', () => {
   it('calls the RPC with the family id and parses the result', async () => {
     mockedRpc.mockResolvedValue({ data: full, error: null });
-    await expect(fetchKeepsakesOverview('family-1')).resolves.toEqual(full);
+    await expect(fetchKeepsakesOverview('family-1')).resolves.toEqual(parsedFull);
     expect(mockedRpc).toHaveBeenCalledWith('keepsakes_overview', { p_family_id: 'family-1' });
   });
 
