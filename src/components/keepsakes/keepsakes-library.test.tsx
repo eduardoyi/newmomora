@@ -104,7 +104,7 @@ const cardFront: KeepsakesCardFront = {
 };
 
 const overview: KeepsakesOverview = {
-  recap: null, has_viewers: true, year_moments: null, holiday_pool: null, holiday_min_pool: null,
+  recap: null, previous_recap: null, has_viewers: true, year_moments: null, holiday_pool: null, holiday_min_pool: null,
   holiday_ship_by_note: null, preview_key: null, book_preview_keys: {}, orders: [], card_front: null,
   cards: [], upcoming_films: [],
 };

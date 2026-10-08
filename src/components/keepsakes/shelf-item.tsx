@@ -36,6 +36,8 @@ export const SHELF_BOOK_ITEM_WIDTH = 146;
 export interface ShelfItemViewProps {
   item: ShelfItem;
   members: readonly YearFilmMember[];
+  /** The shelf's today (`YYYY-MM-DD`), for "arrives today" on the upcoming tiles. */
+  todayIso: string;
   /** The overview, for the holiday card's real front (`card_front`) and the fallback picture (`preview_key`). */
   overview: KeepsakesOverview | null;
   onBookPress: (item: BookShelfItem) => void;
@@ -92,12 +94,13 @@ function BookObject({ item, childName, onPress }: { item: BookShelfItem; childNa
 export function shelfCaption(
   item: ShelfItem,
   members: readonly YearFilmMember[],
+  todayIso: string,
 ): { title: string; meta: string | null } {
   switch (item.kind) {
     case 'upcoming-recap':
-      return { title: upcomingRecapTitle(item.recap), meta: upcomingRecapCaptionMeta(item.recap) };
+      return { title: upcomingRecapTitle(item.recap), meta: upcomingRecapCaptionMeta(item.recap, todayIso, item.isPrevious) };
     case 'upcoming-film':
-      return { title: upcomingFilmCaptionTitle(item.upcoming, members), meta: upcomingFilmCaptionMeta(item.upcoming) };
+      return { title: upcomingFilmCaptionTitle(item.upcoming, members), meta: upcomingFilmCaptionMeta(item.upcoming, todayIso) };
     case 'film':
       return { title: filmTitle(item.film, members), meta: shelfFilmDurationLabel(item.film.duration_ms) };
     case 'book': {
@@ -109,17 +112,17 @@ export function shelfCaption(
   }
 }
 
-export function ShelfItemView({ item, members, overview, onBookPress }: ShelfItemViewProps) {
-  const { title, meta } = shelfCaption(item, members);
+export function ShelfItemView({ item, members, todayIso, overview, onBookPress }: ShelfItemViewProps) {
+  const { title, meta } = shelfCaption(item, members, todayIso);
   const width = itemWidth(item, overview);
 
   let object;
   switch (item.kind) {
     case 'upcoming-recap':
-      object = <UpcomingRecapTile recap={item.recap} />;
+      object = <UpcomingRecapTile previous={item.isPrevious} recap={item.recap} todayIso={todayIso} />;
       break;
     case 'upcoming-film':
-      object = <UpcomingFilmTile film={item.upcoming} members={members} />;
+      object = <UpcomingFilmTile film={item.upcoming} members={members} todayIso={todayIso} />;
       break;
     case 'film':
       object = <KeepsakeFilmTile film={(item as FilmShelfItem).film} members={members} variant="shelf" width={SHELF_FILM_ITEM_WIDTH} />;

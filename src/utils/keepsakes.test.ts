@@ -19,6 +19,7 @@ import {
   buildRelevantBookRows,
   buildShelfItems,
   cardFrontFor,
+  formatArrival,
   formatMonthDay,
   groupShelfByYear,
   isUpcomingFilmLocked,
@@ -122,6 +123,7 @@ function card(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummary {
 function overview(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview {
   return {
     recap: null,
+    previous_recap: null,
     has_viewers: false,
     year_moments: 40,
     holiday_pool: 30,
@@ -233,6 +235,12 @@ describe('date helpers', () => {
     expect(monthNameOf('2026-10-01')).toBe('October');
     expect(formatMonthDay('2026-11-01')).toBe('Nov 1');
     expect(formatMonthDay('2026-12-10')).toBe('Dec 10');
+  });
+
+  it('formatArrival says "today" on the day itself, else the month and day', () => {
+    expect(formatArrival('2026-10-07', '2026-10-07')).toBe('today');
+    expect(formatArrival('2026-10-08', '2026-10-07')).toBe('Oct 8');
+    expect(formatArrival('2026-11-01', '2026-10-07')).toBe('Nov 1');
   });
 });
 
@@ -399,6 +407,118 @@ describe('buildShelfItems', () => {
     const years = groupShelfByYear(items, '2027-01-01');
     expect(years.find((y) => y.year === 2026)).toMatchObject({ isCurrent: false, isAlwaysOpen: true });
     expect(years.find((y) => y.year === 2027)).toMatchObject({ isCurrent: true, isAlwaysOpen: true });
+  });
+
+  describe('previous recap (last month’s, kept on the 1st until its film appears)', () => {
+    const previous = (overrides: Partial<NonNullable<KeepsakesOverview['previous_recap']>> = {}) =>
+      recap({ month_start: '2026-09-01', delivers_on: '2026-10-01', moments: 23, visuals: 9, ...overrides });
+
+    it('is an upcoming-recap item filed on its own month’s shelf, flagged isPrevious', () => {
+      const items = build({
+        todayIso: '2026-10-01',
+        overview: overview({ recap: recap({ delivers_on: '2026-11-01' }), previous_recap: previous() }),
+      });
+      const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+      expect(byId['upcoming-previous-recap']).toMatchObject({
+        kind: 'upcoming-recap',
+        isPrevious: true,
+        year: 2026,
+        date: '2026-10-01',
+        memberId: null,
+        badge: null,
+      });
+      expect(byId['upcoming-recap']).toMatchObject({ kind: 'upcoming-recap', isPrevious: false });
+    });
+
+    it('sorts BEFORE the current month’s recap tile on the same shelf', () => {
+      const items = build({
+        todayIso: '2026-10-01',
+        films: [monthFilm('m-aug', '2026-08-31')],
+        cardSummary: card({ year: 2026 }),
+        overview: overview({ recap: recap({ delivers_on: '2026-11-01' }), previous_recap: previous() }),
+      });
+      expect(items.map((i) => i.id)).toEqual(['upcoming-previous-recap', 'upcoming-recap', 'card:card-1', 'film:m-aug']);
+      const shelf = groupShelfByYear(items.slice().reverse(), '2026-10-01')[0]!;
+      expect(shelf.items.map((i) => i.id).slice(0, 2)).toEqual(['upcoming-previous-recap', 'upcoming-recap']);
+    });
+
+    it('on Jan 1 December’s recap sits on last year’s shelf, which is forced open', () => {
+      const items = build({
+        todayIso: '2027-01-01',
+        films: [film({ id: 'f27', placement_date: '2027-01-01' }), monthFilm('m-nov', '2026-11-30')],
+        overview: overview({
+          recap: recap({ month_start: '2027-01-01', delivers_on: '2027-02-01', moments: 0, visuals: 0 }),
+          previous_recap: previous({ month_start: '2026-12-01', delivers_on: '2027-01-01' }),
+        }),
+      });
+      expect(items.find((i) => i.id === 'upcoming-previous-recap')!.year).toBe(2026);
+      expect(items.find((i) => i.id === 'upcoming-recap')!.year).toBe(2027);
+      const years = groupShelfByYear(items, '2027-01-01');
+      expect(years.find((y) => y.year === 2026)).toMatchObject({ isCurrent: false, isAlwaysOpen: true });
+      expect(years.find((y) => y.year === 2026)!.items[0]!.id).toBe('upcoming-previous-recap');
+      expect(years.find((y) => y.year === 2027)!.items[0]!.id).toBe('upcoming-recap');
+    });
+
+    it('viewers get it too, an absent previous_recap adds nothing, and it counts as Films', () => {
+      const viewerItems = build({ role: 'viewer', overview: overview({ previous_recap: previous() }) });
+      expect(viewerItems.map((i) => i.id)).toEqual(['upcoming-previous-recap']);
+      expect(build({ overview: overview({ recap: recap() }) }).map((i) => i.id)).toEqual(['upcoming-recap']);
+      expect(
+        applyKeepsakesFilter(viewerItems, { ...DEFAULT_KEEPSAKES_FILTER, type: 'films' }).map((i) => i.id),
+      ).toEqual(['upcoming-previous-recap']);
+    });
+  });
+
+  describe('hands over to the real film (a stale overview never shows both)', () => {
+    const prev = recap({ month_start: '2026-09-01', delivers_on: '2026-10-01', moments: 23, visuals: 9 });
+    const ids = (items: ShelfItem[]) => items.map((i) => i.id);
+
+    it('previous recap: present without the film, gone with the film of the same scope month', () => {
+      const ov = overview({ previous_recap: prev });
+      expect(ids(build({ todayIso: '2026-10-01', overview: ov }))).toEqual(['upcoming-previous-recap']);
+      expect(ids(build({ todayIso: '2026-10-01', overview: ov, films: [monthFilm('m-aug', '2026-08-31', { scope_start_date: '2026-08-01' })] }))).toEqual([
+        'upcoming-previous-recap',
+        'film:m-aug',
+      ]);
+      expect(
+        ids(build({ todayIso: '2026-10-01', overview: ov, films: [monthFilm('m-sep', '2026-09-30', { scope_start_date: '2026-09-01' })] })),
+      ).toEqual(['film:m-sep']);
+    });
+
+    it('previous recap: a hidden film does not hand over, and the current recap is untouched', () => {
+      const hidden = monthFilm('m-sep', '2026-09-30', { scope_start_date: '2026-09-01', blocked: true, status: 'failed' });
+      expect(ids(build({ todayIso: '2026-10-01', overview: overview({ previous_recap: prev }), films: [hidden] }))).toEqual([
+        'upcoming-previous-recap',
+      ]);
+      const sep = monthFilm('m-sep', '2026-09-30', { scope_start_date: '2026-09-01' });
+      expect(ids(build({ todayIso: '2026-10-01', overview: overview({ recap: recap({ delivers_on: '2026-11-01' }), previous_recap: prev }), films: [sep] }))).toEqual([
+        'upcoming-recap',
+        'film:m-sep',
+      ]);
+    });
+
+    it('birthday: gone once a visible birthday film of the same child and age is there', () => {
+      const ov = overview({ upcoming_films: [upcomingFilm()] });
+      const same = film({ id: 'b4', kind: 'birthday', family_member_id: 'tomas', age_year: 4 });
+      const otherAge = film({ id: 'b3', kind: 'birthday', family_member_id: 'tomas', age_year: 3 });
+      const otherChild = film({ id: 'l4', kind: 'birthday', family_member_id: 'lucia', age_year: 4 });
+      expect(ids(build({ overview: ov }))).toEqual(['upcoming-film:birthday:tomas:2026-11-20']);
+      expect(ids(build({ overview: ov, films: [same] }))).toEqual(['film:b4']);
+      expect(ids(build({ overview: ov, films: [otherAge, otherChild] })).sort()).toEqual([
+        'film:b3',
+        'film:l4',
+        'upcoming-film:birthday:tomas:2026-11-20',
+      ]);
+    });
+
+    it('year-end: gone once a visible year-end film of that scope year is there', () => {
+      const ov = overview({ upcoming_films: [yearUpcoming()] });
+      const y2026 = film({ id: 'y26', kind: 'family_year', family_member_id: null, age_year: null, scope_start_date: '2026-01-01' });
+      const y2025 = film({ id: 'y25', kind: 'family_year', family_member_id: null, age_year: null, scope_start_date: '2025-01-01' });
+      expect(ids(build({ overview: ov }))).toEqual(['upcoming-film:family_year:family:2027-01-01']);
+      expect(ids(build({ overview: ov, films: [y2026] }))).toEqual(['film:y26']);
+      expect(ids(build({ overview: ov, films: [y2025] })).sort()).toEqual(['film:y25', 'upcoming-film:family_year:family:2027-01-01']);
+    });
   });
 
   it('degrades with no overview: no upcoming tile and no order badges', () => {
@@ -848,9 +968,17 @@ describe('upcoming birthday and year-end films', () => {
     });
 
     it('caption meta: progress while locked, the date once unlocked', () => {
-      expect(upcomingFilmCaptionMeta(upcomingFilm())).toBe('12 of 15 moments');
-      expect(upcomingFilmCaptionMeta(upcomingFilm({ moments: 16, visuals: 9 }))).toBe('arrives Nov 20 · 16 moments');
-      expect(upcomingFilmCaptionMeta(yearUpcoming())).toBe('arrives Jan 1 · 40 moments');
+      expect(upcomingFilmCaptionMeta(upcomingFilm(), TODAY)).toBe('12 of 15 moments');
+      expect(upcomingFilmCaptionMeta(upcomingFilm({ moments: 16, visuals: 9 }), TODAY)).toBe('arrives Nov 20 · 16 moments');
+      expect(upcomingFilmCaptionMeta(yearUpcoming(), TODAY)).toBe('arrives Jan 1 · 40 moments');
+    });
+
+    it('caption meta: "arrives today" on the film date (the row exists, the reveal is later)', () => {
+      expect(upcomingFilmCaptionMeta(upcomingFilm({ moments: 16, visuals: 9 }), '2026-11-20')).toBe('arrives today · 16 moments');
+      expect(upcomingFilmCaptionMeta(upcomingFilm({ moments: 61, visuals: 41, min_moments: 60, min_visuals: 40 }), '2026-11-20')).toBe('arrives today · 61 moments');
+      expect(upcomingFilmCaptionMeta(yearUpcoming({ film_date: '2026-12-30' }), '2026-12-30')).toBe('arrives today · 40 moments');
+      // A locked tile still shows its progress, not a date.
+      expect(upcomingFilmCaptionMeta(upcomingFilm(), '2026-11-20')).toBe('12 of 15 moments');
     });
   });
 });

@@ -186,6 +186,7 @@ function mockFilms(films: YearFilm[], { isLoading = false, isError = false } = {
 function overviewOf(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview {
   return {
     recap: null,
+    previous_recap: null,
     has_viewers: false,
     year_moments: 40,
     holiday_pool: 30,
@@ -807,6 +808,64 @@ describe('Keepsakes tab', () => {
       mockBooks([]);
       const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
       expect(queryByTestId('keepsakes-upcoming-recap')).toBeNull();
+      expect(queryByTestId('keepsakes-upcoming-previous-recap')).toBeNull();
+    });
+
+    describe('previous recap (last month’s, kept on the 1st until its film appears)', () => {
+      const previous = {
+        month_start: '2026-09-01', delivers_on: '2026-10-15', moments: 23, visuals: 9,
+        min_moments: 10, min_visuals: 6, picture_key: null,
+      };
+
+      it('is an unlocked "arrives today" tile placed BEFORE the current month’s recap tile', () => {
+        mockOverview(overviewOf({ recap: lockedRecap, previous_recap: previous }));
+        mockBooks([]);
+        const { getByTestId, getByText, getAllByTestId, getAllByText } = renderWithQuery(<KeepsakesScreen />);
+        expect(getByTestId('keepsakes-upcoming-previous-recap')).toBeTruthy();
+        expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+        // Tile + caption, "today" instead of a date, and the current month keeps its own progress.
+        expect(getAllByText('September recap')).toHaveLength(2);
+        expect(getByText('arrives today · 23 moments')).toBeTruthy();
+        expect(getByText('today')).toBeTruthy();
+        expect(getByText('6 of 10 moments')).toBeTruthy();
+        const order = getAllByTestId(/^keepsakes-item-upcoming-/).map((node) => node.props.testID);
+        expect(order).toEqual(['keepsakes-item-upcoming-previous-recap', 'keepsakes-item-upcoming-recap']);
+      });
+
+      it('on Jan 1 December’s recap sits on last year’s shelf, which stays open', () => {
+        mockOverview(overviewOf({
+          recap: { ...lockedRecap, month_start: '2026-10-01' },
+          previous_recap: { ...previous, month_start: '2025-12-01', delivers_on: '2026-01-01' },
+        }));
+        mockBooks([]);
+        const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+        const shelf2025 = getByTestId('keepsakes-year-2025');
+        expect(within(shelf2025).getByTestId('keepsakes-upcoming-previous-recap')).toBeTruthy();
+        expect(within(shelf2025).getByText('arrives today · 23 moments')).toBeTruthy();
+        expect(within(shelf2025).queryByText(/keepsake/)).toBeNull();
+        expect(queryByTestId('keepsakes-year-toggle-2025')).toBeNull();
+        expect(within(getByTestId('keepsakes-year-2026')).getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+        expect(within(shelf2025).getAllByText('December recap')).toHaveLength(2);
+      });
+
+      it('hands over to the real September recap film once it is on the shelf', () => {
+        mockOverview(overviewOf({ recap: lockedRecap, previous_recap: previous }));
+        mockFilms([recap(9)]);
+        mockBooks([]);
+        const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+        expect(queryByTestId('keepsakes-upcoming-previous-recap')).toBeNull();
+        expect(getByTestId('keepsakes-film-recap-09')).toBeTruthy();
+        expect(getByTestId('keepsakes-upcoming-recap')).toBeTruthy();
+      });
+
+      it('a viewer sees it too', () => {
+        mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
+        mockOverview(overviewOf({ has_viewers: null, previous_recap: previous }));
+        mockFilms([recap(8)]);
+        mockBooks([]);
+        const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+        expect(getByTestId('keepsakes-upcoming-previous-recap')).toBeTruthy();
+      });
     });
   });
 
@@ -951,6 +1010,22 @@ describe('Keepsakes tab', () => {
       expect(getByText('Needs moments from one more season')).toBeTruthy();
       expect(getByTestId('keepsakes-year-2027')).toBeTruthy();
       expect(queryByTestId('keepsakes-year-toggle-2027')).toBeNull();
+    });
+
+    it('on the film date an unlocked tile says "arrives today", on the tile and in the caption', () => {
+      mockOverview(overviewOf({
+        upcoming_films: [birthdayOf('child-2', 2, { film_date: '2026-10-15', moments: 20 }), birthdayOf('child-1', 4, { film_date: '2026-10-16', moments: 20 })],
+      }));
+      const { getByTestId, getByText, getAllByText } = renderWithQuery(<KeepsakesScreen />);
+      const today = getByTestId('keepsakes-upcoming-birthday-child-2');
+      expect(within(today).getByText('arrives')).toBeTruthy();
+      expect(within(today).getByText('today')).toBeTruthy();
+      expect(getByText('arrives today · 20 moments')).toBeTruthy();
+      // Tomorrow's keeps its date.
+      const tomorrow = getByTestId('keepsakes-upcoming-birthday-child-1');
+      expect(within(tomorrow).getByText('Oct 16')).toBeTruthy();
+      expect(getByText('arrives Oct 16 · 20 moments')).toBeTruthy();
+      expect(getAllByText('today')).toHaveLength(1);
     });
 
     it('a child chip keeps only that child’s birthday tile; the year-end tile shows under All', () => {

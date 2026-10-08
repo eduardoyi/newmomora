@@ -70,6 +70,16 @@ export function formatMonthDay(dateStr: string): string {
   return `${MONTH_ABBR[month - 1]} ${day}`;
 }
 
+/**
+ * Where an upcoming tile says when its film arrives: "today" on the day itself
+ * (the film's row exists but it only appears at its reveal time, so the tile
+ * stays until then), else "Nov 1". `todayIso` is the caller's today (the
+ * same value the shelf already uses), never read from the clock here.
+ */
+export function formatArrival(dateStr: string, todayIso: string): string {
+  return dateStr === todayIso ? 'today' : formatMonthDay(dateStr);
+}
+
 function yearOf(date: string): number {
   return Number(date.slice(0, 4));
 }
@@ -136,7 +146,7 @@ export interface KeepsakeBadgeData {
 export type ShelfItemKind = 'upcoming-recap' | 'upcoming-film' | 'film' | 'book' | 'card';
 
 interface ShelfItemBase {
-  /** Stable React key: `upcoming-recap`, `upcoming-film:{kind}:{member|family}:{date}`, `film:{id}`, `book:{id}`, `card:{id}`. */
+  /** Stable React key: `upcoming-recap`, `upcoming-previous-recap`, `upcoming-film:{kind}:{member|family}:{date}`, `film:{id}`, `book:{id}`, `card:{id}`. */
   id: string;
   /** The shelf (calendar year) the item lives on. */
   year: number;
@@ -150,6 +160,12 @@ interface ShelfItemBase {
 export interface UpcomingRecapShelfItem extends ShelfItemBase {
   kind: 'upcoming-recap';
   recap: KeepsakesRecap;
+  /**
+   * True for the overview's `previous_recap`: LAST month's recap, kept on the
+   * 1st until the film appears (it arrives today, always unlocked). Its id is
+   * `upcoming-previous-recap`; the current month's is `upcoming-recap`.
+   */
+  isPrevious: boolean;
 }
 
 /** A birthday or year-end film still being collected (the overview's `upcoming_films`). */
@@ -373,19 +389,22 @@ export function upcomingFilmCaptionTitle(film: KeepsakesUpcomingFilm, members: r
   return name === null ? 'A birthday film' : `${possessive(name)} birthday film`;
 }
 
-/** Caption meta: progress while locked, the date and count once unlocked. */
-export function upcomingFilmCaptionMeta(film: KeepsakesUpcomingFilm): string {
+/** Caption meta: progress while locked, the date ("today" on the day) and count once unlocked. */
+export function upcomingFilmCaptionMeta(film: KeepsakesUpcomingFilm, todayIso: string): string {
   if (isUpcomingFilmLocked(film)) return `${film.moments} of ${film.min_moments} moments`;
-  return `arrives ${formatMonthDay(film.film_date)} · ${film.moments} ${film.moments === 1 ? 'moment' : 'moments'}`;
+  return `arrives ${formatArrival(film.film_date, todayIso)} · ${film.moments} ${film.moments === 1 ? 'moment' : 'moments'}`;
 }
 
 const KIND_RANK: Record<ShelfItemKind, number> = { 'upcoming-recap': 0, 'upcoming-film': 0, card: 1, film: 2, book: 3 };
 
-/** 0 upcoming recap, 1 upcoming birthdays, 2 upcoming year-end, 3 everything else. */
+/**
+ * 0 previous recap (last month's, kept on the 1st), 1 upcoming recap, 2 upcoming
+ * birthdays, 3 upcoming year-end, 4 everything else.
+ */
 function upcomingRank(item: ShelfItem): number {
-  if (item.kind === 'upcoming-recap') return 0;
-  if (item.kind === 'upcoming-film') return item.upcoming.kind === 'birthday' ? 1 : 2;
-  return 3;
+  if (item.kind === 'upcoming-recap') return item.isPrevious ? 0 : 1;
+  if (item.kind === 'upcoming-film') return item.upcoming.kind === 'birthday' ? 2 : 3;
+  return 4;
 }
 
 function isYearEndFilm(item: ShelfItem): boolean {
@@ -393,7 +412,7 @@ function isYearEndFilm(item: ShelfItem): boolean {
 }
 
 /**
- * Upcoming recap, then upcoming birthday tiles (soonest first), then the
+ * Previous recap (last month's, on the 1st), then the upcoming recap, then upcoming birthday tiles (soonest first), then the
  * upcoming year-end tile, then the year-end film (it is the year's headline:
  * it leads whatever its date says, e.g. ahead of the December recap), then
  * newest date, then kind, then id (stable).
@@ -402,13 +421,30 @@ function compareWithinYear(a: ShelfItem, b: ShelfItem): number {
   const aRank = upcomingRank(a);
   const bRank = upcomingRank(b);
   if (aRank !== bRank) return aRank - bRank;
-  if (aRank === 1 && a.date !== b.date) return a.date < b.date ? -1 : 1;
+  if (aRank === 2 && a.date !== b.date) return a.date < b.date ? -1 : 1;
   const aYearEnd = isYearEndFilm(a);
   const bYearEnd = isYearEndFilm(b);
   if (aYearEnd !== bYearEnd) return aYearEnd ? -1 : 1;
   if (a.date !== b.date) return a.date < b.date ? 1 : -1;
   if (a.kind !== b.kind) return KIND_RANK[a.kind] - KIND_RANK[b.kind];
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * The identity a real film and its upcoming tile share: a monthly recap is the
+ * month its scope starts in, a birthday film is the child + age, the year-end
+ * film is the year its scope starts in.
+ */
+function shownFilmKey(film: Pick<YearFilm, 'kind' | 'scope_start_date' | 'family_member_id' | 'age_year'>): string {
+  if (film.kind === 'family_month') return `family_month:${film.scope_start_date.slice(0, 7)}`;
+  if (film.kind === 'family_year') return `family_year:${film.scope_start_date.slice(0, 4)}`;
+  return `birthday:${film.family_member_id}:${film.age_year}`;
+}
+
+function upcomingShownFilmKey(upcoming: KeepsakesUpcomingFilm): string {
+  return upcoming.kind === 'family_year'
+    ? `family_year:${upcoming.scope_start.slice(0, 4)}`
+    : `birthday:${upcoming.member_id}:${upcoming.age_year}`;
 }
 
 export interface BuildShelfItemsInput {
@@ -440,8 +476,13 @@ export interface BuildShelfItemsInput {
  *   on its own year's shelf (generating / failed past cards are hidden); the
  *   current card is never listed twice. An empty `cards` (old server) adds nothing.
  * - Upcoming recap (everyone): filed by the OWNER-LOCAL year of
- *   `overview.recap.month_start`, never the device clock.
+ *   `overview.recap.month_start`, never the device clock. The previous recap
+ *   (everyone; last month's, only on the 1st until it appears) is filed by the
+ *   year of its own `month_start` and sorts before the upcoming recap.
  * - Upcoming birthday / year-end films (everyone): filed by `film_date`'s year.
+ * - An upcoming tile (previous recap, birthday, year-end) is dropped once `films`
+ *   holds its visible film (recap: same scope month; birthday: same child and
+ *   age; year-end: same scope year), so a stale overview never shows both.
  * Viewers get films and the upcoming tiles only.
  */
 export function buildShelfItems({
@@ -455,10 +496,15 @@ export function buildShelfItems({
 }: BuildShelfItemsInput): ShelfItem[] {
   const canEdit = canEditFamilyContent(role);
   const items: ShelfItem[] = [];
+  // What the shelf already shows as a real film: an upcoming tile whose film is
+  // here would double it (the server drops the tile at the same reveal instant,
+  // but a stale overview can still carry it until it refetches).
+  const shownFilmKeys = new Set<string>();
 
   for (const film of films) {
     const displayState = filmDisplayState(film);
     if (displayState === 'hidden') continue;
+    shownFilmKeys.add(shownFilmKey(film));
     items.push({
       kind: 'film',
       id: `film:${film.id}`,
@@ -521,6 +567,22 @@ export function buildShelfItems({
     }
   }
 
+  // Last month's recap, kept on the 1st until the film appears: filed on the
+  // shelf of ITS month's year (December on last year's shelf on Jan 1), which
+  // `groupShelfByYear` forces open because it holds an upcoming tile.
+  if (overview?.previous_recap && !shownFilmKeys.has(`family_month:${overview.previous_recap.month_start.slice(0, 7)}`)) {
+    items.push({
+      kind: 'upcoming-recap',
+      id: 'upcoming-previous-recap',
+      year: yearOf(overview.previous_recap.month_start),
+      date: overview.previous_recap.delivers_on,
+      memberId: null,
+      badge: null,
+      recap: overview.previous_recap,
+      isPrevious: true,
+    });
+  }
+
   if (overview?.recap) {
     items.push({
       kind: 'upcoming-recap',
@@ -530,12 +592,14 @@ export function buildShelfItems({
       memberId: null,
       badge: null,
       recap: overview.recap,
+      isPrevious: false,
     });
   }
 
   for (const upcoming of overview?.upcoming_films ?? []) {
     // A birthday tile is titled with the child's name; without the child there is nothing to show.
     if (upcomingFilmTitle(upcoming, members) === null) continue;
+    if (shownFilmKeys.has(upcomingShownFilmKey(upcoming))) continue;
     items.push({
       kind: 'upcoming-film',
       id: `upcoming-film:${upcoming.kind}:${upcoming.member_id ?? 'family'}:${upcoming.film_date}`,
@@ -556,7 +620,7 @@ export function buildShelfItems({
 
 export interface ShelfYear {
   year: number;
-  /** Ordered: the upcoming tiles first, then the year-end film, then newest first. */
+  /** Ordered: the upcoming tiles first (previous recap before the upcoming recap), then the year-end film, then newest first. */
   items: ShelfItem[];
   /** The device's current year. */
   isCurrent: boolean;

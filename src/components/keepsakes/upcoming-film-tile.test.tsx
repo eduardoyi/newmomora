@@ -50,6 +50,7 @@ function yearEnd(overrides: Partial<KeepsakesUpcomingFilm> = {}): KeepsakesUpcom
   });
 }
 
+const TODAY = '2026-10-07';
 const dashed = expect.arrayContaining([expect.objectContaining({ borderStyle: 'dashed' })]);
 
 describe('UpcomingFilmTile', () => {
@@ -63,7 +64,7 @@ describe('UpcomingFilmTile', () => {
   });
 
   it('birthday, locked on moments: dashed tile, "{Name} turns {age}", progress bar and the moments hint', () => {
-    const { getByTestId, getByText, queryByText } = render(<UpcomingFilmTile film={birthday()} members={members} />);
+    const { getByTestId, getByText, queryByText } = render(<UpcomingFilmTile film={birthday()} members={members} todayIso={TODAY} />);
     const tile = getByTestId('keepsakes-upcoming-birthday-c1');
     expect(tile.props.style).toEqual(dashed);
     expect(tile.props.accessibilityLabel).toBe('Lila turns 4, 12 of 15 moments');
@@ -76,11 +77,11 @@ describe('UpcomingFilmTile', () => {
   });
 
   it('hint priority: moments, then pictures, then seasons', () => {
-    const moments = render(<UpcomingFilmTile film={birthday({ visuals: 1, moments: 14 })} members={members} />);
+    const moments = render(<UpcomingFilmTile film={birthday({ visuals: 1, moments: 14 })} members={members} todayIso={TODAY} />);
     expect(moments.getByText('1 more moment')).toBeTruthy();
     moments.unmount();
 
-    const pictures = render(<UpcomingFilmTile film={birthday({ moments: 20, visuals: 5 })} members={members} />);
+    const pictures = render(<UpcomingFilmTile film={birthday({ moments: 20, visuals: 5 })} members={members} todayIso={TODAY} />);
     expect(pictures.getByText('3 more with a picture')).toBeTruthy();
     // The bar is capped at full once the moments are there.
     expect(pictures.getByTestId('keepsakes-upcoming-birthday-c1-progress').props.style).toEqual(
@@ -88,23 +89,23 @@ describe('UpcomingFilmTile', () => {
     );
     pictures.unmount();
 
-    const oneSeason = render(<UpcomingFilmTile film={yearEnd({ quarters: 2 })} members={members} />);
+    const oneSeason = render(<UpcomingFilmTile film={yearEnd({ quarters: 2 })} members={members} todayIso={TODAY} />);
     expect(oneSeason.getByText('Needs moments from one more season')).toBeTruthy();
     oneSeason.unmount();
 
-    const manySeasons = render(<UpcomingFilmTile film={yearEnd({ quarters: 1 })} members={members} />);
+    const manySeasons = render(<UpcomingFilmTile film={yearEnd({ quarters: 1 })} members={members} todayIso={TODAY} />);
     expect(manySeasons.getByText('2 more seasons')).toBeTruthy();
   });
 
   it('year-end: "Your {year}" from the window start, locked by seasons even with enough moments', () => {
-    const { getByTestId, getByText } = render(<UpcomingFilmTile film={yearEnd({ quarters: 2 })} members={members} />);
+    const { getByTestId, getByText } = render(<UpcomingFilmTile film={yearEnd({ quarters: 2 })} members={members} todayIso={TODAY} />);
     expect(getByTestId('keepsakes-upcoming-year-2026').props.style).toEqual(dashed);
     expect(getByText('Your 2026')).toBeTruthy();
   });
 
   it('unlocked: solid tile with "arrives" and the film date, no bar', () => {
     const { getByTestId, getByText, queryByTestId } = render(
-      <UpcomingFilmTile film={birthday({ moments: 16 })} members={members} />,
+      <UpcomingFilmTile film={birthday({ moments: 16 })} members={members} todayIso={TODAY} />,
     );
     const tile = getByTestId('keepsakes-upcoming-birthday-c1');
     expect(tile.props.style).not.toEqual(dashed);
@@ -114,17 +115,46 @@ describe('UpcomingFilmTile', () => {
     expect(queryByTestId('keepsakes-upcoming-birthday-c1-progress')).toBeNull();
   });
 
+  it('arrives today: "arrives" + "today" on the tile and in the caption (birthday and year-end)', () => {
+    const bday = render(
+      <UpcomingFilmTile film={birthday({ moments: 16 })} members={members} todayIso="2026-11-20" />,
+    );
+    expect(bday.getByText('arrives')).toBeTruthy();
+    expect(bday.getByText('today')).toBeTruthy();
+    expect(bday.queryByText('Nov 20')).toBeNull();
+    expect(bday.getByTestId('keepsakes-upcoming-birthday-c1').props.accessibilityLabel).toBe(
+      'Lila turns 4, arrives today · 16 moments',
+    );
+    bday.unmount();
+
+    const year = render(
+      <UpcomingFilmTile film={yearEnd({ film_date: '2026-12-30' })} members={members} todayIso="2026-12-30" />,
+    );
+    expect(year.getByText('today')).toBeTruthy();
+    expect(year.getByTestId('keepsakes-upcoming-year-2026').props.accessibilityLabel).toBe(
+      'Your 2026, arrives today · 40 moments',
+    );
+  });
+
+  it('a locked tile never shows a date, even on the film date', () => {
+    const { queryByText, getByText } = render(
+      <UpcomingFilmTile film={birthday()} members={members} todayIso="2026-11-20" />,
+    );
+    expect(queryByText('today')).toBeNull();
+    expect(getByText('3 more moments')).toBeTruthy();
+  });
+
   it('shows the faded picture only when a key resolves; otherwise a flat tile', () => {
-    const flat = render(<UpcomingFilmTile film={birthday({ picture_key: 'pics/a.webp' })} members={members} />);
+    const flat = render(<UpcomingFilmTile film={birthday({ picture_key: 'pics/a.webp' })} members={members} todayIso={TODAY} />);
     expect(flat.queryByTestId('keepsakes-upcoming-birthday-c1-picture')).toBeNull();
     flat.unmount();
 
     mockUrl = 'https://r2/a.webp';
-    const withPicture = render(<UpcomingFilmTile film={birthday({ picture_key: 'pics/a.webp' })} members={members} />);
+    const withPicture = render(<UpcomingFilmTile film={birthday({ picture_key: 'pics/a.webp' })} members={members} todayIso={TODAY} />);
     expect(withPicture.getByTestId('keepsakes-upcoming-birthday-c1-picture')).toBeTruthy();
     withPicture.unmount();
 
-    const noKey = render(<UpcomingFilmTile film={yearEnd({ picture_key: null })} members={members} />);
+    const noKey = render(<UpcomingFilmTile film={yearEnd({ picture_key: null })} members={members} todayIso={TODAY} />);
     expect(noKey.queryByTestId('keepsakes-upcoming-year-2026-picture')).toBeNull();
   });
 });

@@ -73,6 +73,7 @@ function YearShelf({
   members,
   role,
   overview,
+  todayIso,
   onToggle,
   onBookPress,
 }: {
@@ -82,6 +83,7 @@ function YearShelf({
   members: readonly FamilyMember[];
   role: string | null | undefined;
   overview: KeepsakesOverview | null;
+  todayIso: string;
   onToggle: () => void;
   onBookPress: (item: BookShelfItem) => void;
 }) {
@@ -150,6 +152,7 @@ function YearShelf({
             members={members}
             onBookPress={onBookPress}
             overview={overview}
+            todayIso={todayIso}
           />
         ))}
         {year.showAllRecapsTile ? <AllRecapsTile year={year.year} /> : null}
@@ -279,6 +282,7 @@ export function KeepsakesLibrary({
               onToggle={() => onToggleYear(year.year, !isOpen)}
               overview={overview}
               role={role}
+              todayIso={todayIso}
               year={year}
             />
           );

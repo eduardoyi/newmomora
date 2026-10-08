@@ -5,7 +5,7 @@
 import { UpcomingTile } from '@/components/keepsakes/upcoming-tile';
 import type { KeepsakesUpcomingFilm } from '@/services/keepsakes';
 import {
-  formatMonthDay,
+  formatArrival,
   isUpcomingFilmLocked,
   upcomingFilmCaptionMeta,
   upcomingFilmHint,
@@ -15,6 +15,8 @@ import {
 export interface UpcomingFilmTileProps {
   film: KeepsakesUpcomingFilm;
   members: readonly { id: string; name: string }[];
+  /** The shelf's today, for "arrives today". */
+  todayIso: string;
 }
 
 /** `keepsakes-upcoming-birthday-{memberId}` / `keepsakes-upcoming-year-{year}`. */
@@ -24,12 +26,12 @@ export function upcomingFilmTestID(film: KeepsakesUpcomingFilm): string {
     : `keepsakes-upcoming-year-${film.scope_start.slice(0, 4)}`;
 }
 
-export function UpcomingFilmTile({ film, members }: UpcomingFilmTileProps) {
+export function UpcomingFilmTile({ film, members, todayIso }: UpcomingFilmTileProps) {
   const title = upcomingFilmTitle(film, members) ?? 'Birthday film';
   return (
     <UpcomingTile
-      accessibilityLabel={`${title}, ${upcomingFilmCaptionMeta(film)}`}
-      arrivesOn={formatMonthDay(film.film_date)}
+      accessibilityLabel={`${title}, ${upcomingFilmCaptionMeta(film, todayIso)}`}
+      arrivesOn={formatArrival(film.film_date, todayIso)}
       hint={upcomingFilmHint(film)}
       locked={isUpcomingFilmLocked(film)}
       pictureKey={film.picture_key}

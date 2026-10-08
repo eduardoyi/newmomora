@@ -74,6 +74,16 @@ const full = {
     min_visuals: 6,
     picture_key: 'family/pic.jpg',
   },
+  // Last month's recap, kept on the 1st until its film appears.
+  previous_recap: {
+    month_start: '2026-09-01',
+    delivers_on: '2026-10-01',
+    moments: 23,
+    visuals: 9,
+    min_moments: 10,
+    min_visuals: 6,
+    picture_key: null,
+  },
   has_viewers: true,
   year_moments: 42,
   holiday_pool: 30,
@@ -105,6 +115,7 @@ describe('parseKeepsakesOverview', () => {
     expect(
       parseKeepsakesOverview({
         recap: full.recap,
+        previous_recap: full.previous_recap,
         has_viewers: null,
         year_moments: null,
         holiday_pool: null,
@@ -119,6 +130,7 @@ describe('parseKeepsakesOverview', () => {
       }),
     ).toEqual({
       recap: full.recap,
+      previous_recap: full.previous_recap,
       has_viewers: null,
       year_moments: null,
       holiday_pool: null,
@@ -136,6 +148,7 @@ describe('parseKeepsakesOverview', () => {
   it.each([null, undefined, 'nope', 42, [], {}])('never throws on a non-conforming payload (%p)', (raw) => {
     expect(parseKeepsakesOverview(raw)).toEqual({
       recap: null,
+      previous_recap: null,
       has_viewers: null,
       year_moments: null,
       holiday_pool: null,
@@ -154,6 +167,15 @@ describe('parseKeepsakesOverview', () => {
     expect(parseKeepsakesOverview({ recap: { ...full.recap, month_start: 'October' } }).recap).toBeNull();
     expect(parseKeepsakesOverview({ recap: { ...full.recap, delivers_on: null } }).recap).toBeNull();
     expect(parseKeepsakesOverview({ recap: 'x' }).recap).toBeNull();
+  });
+
+  it('previous_recap: absent (an older server) or malformed is null; valid dates are required', () => {
+    expect(parseKeepsakesOverview({ recap: full.recap }).previous_recap).toBeNull();
+    expect(parseKeepsakesOverview({ previous_recap: null }).previous_recap).toBeNull();
+    expect(parseKeepsakesOverview({ previous_recap: 'x' }).previous_recap).toBeNull();
+    expect(parseKeepsakesOverview({ previous_recap: { ...full.previous_recap, month_start: 'September' } }).previous_recap).toBeNull();
+    expect(parseKeepsakesOverview({ previous_recap: { ...full.previous_recap, delivers_on: null } }).previous_recap).toBeNull();
+    expect(parseKeepsakesOverview({ previous_recap: full.previous_recap }).previous_recap).toEqual(full.previous_recap);
   });
 
   it('defaults missing recap numbers (floors fall back to 10 / 6)', () => {

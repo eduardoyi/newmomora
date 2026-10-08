@@ -8,7 +8,7 @@ begin;
 -- current month / year (the owner's timezone is far from UTC on purpose), and
 -- the holiday fixtures live in a family of their own so they never overlap
 -- the month fixtures.
-select plan(176);
+select plan(217);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -1149,10 +1149,11 @@ set local role postgres;
 
 select ok(
   (select doc ?& array['recap', 'has_viewers', 'year_moments', 'holiday_pool', 'holiday_min_pool', 'holiday_ship_by_note',
-                       'preview_key', 'book_preview_keys', 'orders', 'card_front', 'cards', 'upcoming_films']
-          and (select count(*) from jsonb_object_keys(doc)) = 12
+                       'preview_key', 'book_preview_keys', 'orders', 'card_front', 'cards', 'upcoming_films',
+                       'previous_recap']
+          and (select count(*) from jsonb_object_keys(doc)) = 13
    from ov where label = 'up-owner'),
-  'the payload keeps every existing key and adds cards + upcoming_films (12 keys)');
+  'the payload keeps every existing key and adds cards + upcoming_films + previous_recap (13 keys)');
 select is((select doc -> 'cards' from ov where label = 'up-viewer'), '[]'::jsonb, 'a viewer gets cards = []');
 select is((select jsonb_typeof(doc -> 'upcoming_films') from ov where label = 'up-viewer'), 'array', 'a viewer gets upcoming_films');
 select is(
@@ -1173,39 +1174,69 @@ select is((select pg_temp.entry(doc -> 'upcoming_films', 'ce200000-0000-4000-800
 -- Kai's film key (the scheduler's): family, kind, member, scope_start_date.
 create temp table kai as
 select ((cur.today + 10) - interval '1 year')::date as sc, cur.today + 12 as se from cur;
+-- A row that exists but has NOT surfaced (surface_at in the future) keeps the
+-- tile: the real film is hidden from everyone until surface_at, so the slot
+-- must not go empty (reveal gap, 20261012120000).
 insert into public.year_films (id, family_id, kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at, status)
 select 'ce530000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000005', 'birthday',
        'ce200000-0000-4000-8000-000000000013', 3, sc, se, now() + interval '2 days', 'queued'
 from kai;
+insert into uf select 'kai-p-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'rendering' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-p-rendering', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-p-ready', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'queued', ready_at = null, surface_at = now() + interval '1 second'
+where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-edge-after', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set surface_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-edge-at', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+
+-- SURFACED rows (surface_at <= now()): the real film UI takes over.
+update public.year_films set surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 update public.year_films set status = 'failed' where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-failed', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
-update public.year_films set status = 'rendering' where id = 'ce530000-0000-4000-8000-000000000001';
+update public.year_films set status = 'skipped', surface_at = now() + interval '2 days' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-p-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+update public.year_films set status = 'rendering', surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-rendering', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-ready', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000001';
 insert into public.year_films (id, family_id, kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at, status, forced)
 select 'ce530000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000005', 'birthday',
-       'ce200000-0000-4000-8000-000000000013', 3, sc, se, now() + interval '2 days', 'ready', true
+       'ce200000-0000-4000-8000-000000000013', 3, sc, se, now() - interval '1 hour', 'ready', true
 from kai;
 insert into uf select 'kai-forced', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000002';
 
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-p-queued'), null,
+  'a queued film row that has not surfaced yet KEEPS the tile (the film is hidden until surface_at)');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-p-rendering'), null,
+  'a rendering film row that has not surfaced yet keeps the tile');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-p-ready'), null,
+  'a ready film row that has not surfaced yet keeps the tile (surfaces at surface_at, not at ready_at)');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-edge-after'), null,
+  'surface_at one second away: the tile is still there');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-edge-at'), null,
+  'surface_at = now(): the film has surfaced, the tile hands over');
 select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-queued'), null,
-  'a queued film row takes the tile away (the film is on its way)');
+  'a surfaced queued film row takes the tile away (the film is on its way)');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-skipped'), null,
   'a skipped film row keeps the tile (terminal, invisible to clients)');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-failed'), null,
   'a failed film row keeps the tile');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-p-skipped'), null,
+  'a skipped film row that has not surfaced keeps the tile too');
 select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-rendering'), null,
-  'a rendering film row takes the tile away');
+  'a surfaced rendering film row takes the tile away');
 select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-ready'), null,
-  'a ready film row takes the tile away');
+  'a surfaced ready film row takes the tile away');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-forced'), null,
-  'a forced (operator / canary) film row never takes a real film''s slot');
+  'a forced (operator / canary) film row never takes a real film''s slot, surfaced or not');
 select is((select jsonb_array_length(pg_temp.births(doc)) from uf where label = 'kai-ready'), 4,
   'a film row of one child leaves the other tiles alone');
 
@@ -1383,6 +1414,8 @@ select is(
 insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status)
 select 'ce530000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-000000000006', 'family_year',
        make_date(y, 1, 1), make_date(y, 12, 28), now() + interval '1 day', 'queued' from yr;
+insert into uf select 'y-p-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.year_films set surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
 update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
@@ -1390,7 +1423,8 @@ update public.year_films set status = 'ready', scope_start_date = make_date((sel
        scope_end_exclusive = make_date((select y from yr) - 1, 12, 28)
 where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-lastyear', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
-select is((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-queued'), null, 'a queued year-end film row takes the tile away');
+select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-p-queued'), null, 'a queued year-end film row that has not surfaced keeps the tile');
+select is((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-queued'), null, 'a surfaced queued year-end film row takes the tile away');
 select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-skipped'), null, 'a skipped year-end film row keeps the tile');
 select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-lastyear'), null, 'last year''s film row does not take this year''s tile');
 delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000003';
@@ -1406,6 +1440,244 @@ insert into uf select 'y-nodob', public.keepsake_upcoming_films('ce100000-0000-4
 select is((select doc from uf where label = 'y-launch'), '[]'::jsonb, 'no year-end tile when its due date (Dec 28) is before launch_date');
 select is((select doc from uf where label = 'y-teen'), '[]'::jsonb, 'no year-end tile when the only child is over 12 on Dec 28');
 select is((select doc from uf where label = 'y-nodob'), '[]'::jsonb, 'no year-end tile without an own child that has a date of birth');
+
+-- ---------------------------------------------------------------------------
+-- 11. previous_recap (20261012120000_keepsakes_overview_reveal_gap.sql): last
+--     month's recap tile on the 1st, until it surfaces (19:00 owner-local).
+--     keepsake_previous_recap(family, caller, p_today, p_now) is called as
+--     postgres with a PINNED 1st (2027-03-01, so the previous month is
+--     February 2027); film rows' surface_at is relative to now(), which is
+--     what p_now carries. A family of its own.
+-- ---------------------------------------------------------------------------
+
+select ok(
+  not has_function_privilege('authenticated', 'public.keepsake_previous_recap(uuid, uuid, date, timestamptz)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.keepsake_previous_recap(uuid, uuid, date, timestamptz)', 'EXECUTE'),
+  'keepsake_previous_recap is internal: neither authenticated nor anon can execute it'
+);
+
+insert into auth.users (id, email, is_anonymous) values
+  ('ce000000-0000-4000-8000-000000000010', 'ko-pr-owner@example.test', false);
+insert into public.families (id, name, owner_id) values
+  ('ce100000-0000-4000-8000-000000000007', 'Previous recap family', 'ce000000-0000-4000-8000-000000000010');
+insert into public.family_memberships (family_id, user_id, role) values
+  ('ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-000000000010', 'owner'),
+  ('ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-00000000000c', 'viewer'),
+  ('ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-00000000000e', 'viewer');
+insert into public.owner_entitlements (
+  owner_user_id, app_user_id, environment, store, product_id, entitlement_id,
+  period_type, status, expires_at, will_renew
+) values (
+  'ce000000-0000-4000-8000-000000000010', 'ce000000-0000-4000-8000-000000000010',
+  'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annual', 'active',
+  transaction_timestamp() + interval '400 days', true
+);
+insert into public.family_members (id, family_id, name, date_of_birth, relationship) values
+  ('ce200000-0000-4000-8000-000000000015', 'ce100000-0000-4000-8000-000000000007', 'Lou', '2024-02-02', 'child');
+update public.year_film_settings set mode = 'all', launch_date = date '2020-01-01';
+
+create temp table pr (label text primary key, doc jsonb);
+
+-- Stage 1: February 2027 holds 1 text + 2 illustrations (3 moments, 2 visuals);
+-- January 31 and March 1 hold illustrations that are OUT of the pool (the
+-- previous month is [Feb 1, Mar 1)).
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, memory_date)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-000000000010', v.content,
+       case when v.ill then 'text_illustration' else 'text_only' end,
+       case when v.ill then 'ready' else 'none' end,
+       case when v.ill then 'pr-key/' || v.tag || '.png' end, v.d
+from (values
+  ('ce3f0000-0000-4000-8000-000000000001', 'Feb 1', false, 'f1', date '2027-02-01'),
+  ('ce3f0000-0000-4000-8000-000000000002', 'Feb 2', true, 'f2', date '2027-02-02'),
+  ('ce3f0000-0000-4000-8000-000000000003', 'Feb 3', true, 'f3', date '2027-02-03'),
+  ('ce3f0000-0000-4000-8000-000000000004', 'Jan 31', true, 'jan31', date '2027-01-31'),
+  ('ce3f0000-0000-4000-8000-000000000005', 'Mar 1', true, 'mar1', date '2027-03-01')
+) as v(id, content, ill, tag, d);
+
+insert into pr select 'no-row-below', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+select is((select doc from pr where label = 'no-row-below'), null::jsonb,
+  'no row yet and the previous month is below the floors (3 moments / 2 visuals): no previous_recap');
+
+-- A pending family_month row (the scheduler's key: no member, scope_start =
+-- the previous month's 1st), created 00:30 and surfacing at 19:00 -- later.
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status)
+values ('ce530000-0000-4000-8000-000000000004', 'ce100000-0000-4000-8000-000000000007', 'family_month',
+        date '2027-02-01', date '2027-03-01', now() + interval '6 hours', 'queued');
+insert into pr select 'pending-below', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+select is((select row(doc ->> 'month_start', doc ->> 'delivers_on', doc -> 'moments', doc -> 'visuals')::text from pr where label = 'pending-below'),
+  '(2027-02-01,2027-03-01,3,2)',
+  'a pending (unsurfaced) row promises the tile even below the floors: previous month, arrives today, the previous month''s pool counts');
+select is(
+  (select (select array_agg(k order by k) from jsonb_object_keys(doc) k)::text from pr where label = 'pending-below'),
+  '{delivers_on,min_moments,min_visuals,moments,month_start,picture_key,visuals}',
+  'previous_recap has the same keys as recap');
+select is((select row(doc -> 'min_moments', doc -> 'min_visuals', doc ->> 'picture_key')::text from pr where label = 'pending-below'),
+  '(10,6,pr-key/f3.png)', 'the monthly floors ride along (10 / 6) and the picture is the newest in the previous month (not Jan 31 / Mar 1)');
+
+-- Stage 2: no row, floors met. Add 7 more February memories (4 illustrated,
+-- 3 text): 10 moments, 6 visuals -- exactly the floors.
+delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000004';
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, memory_date)
+select v.id::uuid, 'ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-000000000010', v.content,
+       case when v.ill then 'text_illustration' else 'text_only' end,
+       case when v.ill then 'ready' else 'none' end,
+       case when v.ill then 'pr-key/' || v.tag || '.png' end, v.d
+from (values
+  ('ce3f0000-0000-4000-8000-000000000011', 'Feb 4', true, 'x4', date '2027-02-04'),
+  ('ce3f0000-0000-4000-8000-000000000012', 'Feb 5', true, 'x5', date '2027-02-05'),
+  ('ce3f0000-0000-4000-8000-000000000013', 'Feb 6', true, 'x6', date '2027-02-06'),
+  ('ce3f0000-0000-4000-8000-000000000014', 'Feb 7', true, 'x7', date '2027-02-07'),
+  ('ce3f0000-0000-4000-8000-000000000015', 'Feb 8', false, 'x8', date '2027-02-08'),
+  ('ce3f0000-0000-4000-8000-000000000016', 'Feb 9', false, 'x9', date '2027-02-09'),
+  ('ce3f0000-0000-4000-8000-000000000017', 'Feb 10', false, 'x10', date '2027-02-10')
+) as v(id, content, ill, tag, d);
+insert into pr select 'no-row-met', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+select is((select row(doc ->> 'month_start', doc ->> 'delivers_on', doc -> 'moments', doc -> 'visuals', doc ->> 'picture_key')::text from pr where label = 'no-row-met'),
+  '(2027-02-01,2027-03-01,10,6,pr-key/x7.png)',
+  'no row yet (00:00-00:30) and the floors met (10 moments, 6 visuals): previous_recap is present');
+
+-- Floors: one moment short, then one visual short.
+update public.memories set memory_date = date '2027-03-05' where id = 'ce3f0000-0000-4000-8000-000000000017';
+insert into pr select 'no-row-9', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.memories set memory_date = date '2027-02-10' where id = 'ce3f0000-0000-4000-8000-000000000017';
+update public.memories set illustration_status = 'none', illustration_key = null, memory_type = 'text_only'
+where id = 'ce3f0000-0000-4000-8000-000000000014';
+insert into pr select 'no-row-5v', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.memories set illustration_status = 'ready', illustration_key = 'pr-key/x7.png', memory_type = 'text_illustration'
+where id = 'ce3f0000-0000-4000-8000-000000000014';
+select is((select doc from pr where label = 'no-row-9'), null::jsonb, 'no row and 9 moments: below the floor, no previous_recap');
+select is((select doc from pr where label = 'no-row-5v'), null::jsonb, 'no row and 5 visuals: below the floor, no previous_recap');
+
+-- Not the 1st.
+insert into pr select 'second', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-02', now());
+insert into pr select 'last-day', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-02-28', now());
+insert into public.year_films (id, family_id, kind, scope_start_date, scope_end_exclusive, surface_at, status)
+values ('ce530000-0000-4000-8000-000000000004', 'ce100000-0000-4000-8000-000000000007', 'family_month',
+        date '2027-02-01', date '2027-03-01', now() + interval '6 hours', 'queued');
+insert into pr select 'second-pending', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-02', now());
+select is((select doc from pr where label = 'second'), null::jsonb, 'the 2nd of the month: no previous_recap');
+select is((select doc from pr where label = 'last-day'), null::jsonb, 'the last day of the month: no previous_recap');
+select is((select doc from pr where label = 'second-pending'), null::jsonb, 'the 2nd with a pending row: still no previous_recap (only the 1st)');
+
+-- Row states (floors met, so the row alone decides).
+insert into pr select 'row-pending', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'rendering' where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-pending-rendering', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-pending-ready', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'queued', ready_at = null, surface_at = now() + interval '1 second'
+where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-edge-after', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set surface_at = now() where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-edge-at', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-surfaced-queued', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-surfaced-ready', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'skipped', surface_at = now() + interval '6 hours' where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-skipped', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set status = 'failed' where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-failed', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+-- A forced (operator / canary) surfaced row never takes the slot; nor does the
+-- row of another month.
+update public.year_films set status = 'queued', surface_at = now() - interval '1 hour', forced = true
+where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-forced', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_films set forced = false, scope_start_date = date '2027-01-01', scope_end_exclusive = date '2027-02-01'
+where id = 'ce530000-0000-4000-8000-000000000004';
+insert into pr select 'row-other-month', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000004';
+
+select isnt((select doc from pr where label = 'row-pending'), null::jsonb, 'present: a queued row that has not surfaced');
+select isnt((select doc from pr where label = 'row-pending-rendering'), null::jsonb, 'present: a rendering row that has not surfaced');
+select isnt((select doc from pr where label = 'row-pending-ready'), null::jsonb, 'present: a ready row that has not surfaced (it appears at surface_at)');
+select isnt((select doc from pr where label = 'row-edge-after'), null::jsonb, 'present: surface_at one second away');
+select is((select doc from pr where label = 'row-edge-at'), null::jsonb, 'absent: surface_at = now() has surfaced, the real film takes over');
+select is((select doc from pr where label = 'row-surfaced-queued'), null::jsonb, 'absent: a surfaced queued row (the real film UI shows it)');
+select is((select doc from pr where label = 'row-surfaced-ready'), null::jsonb, 'absent: a surfaced ready row');
+select is((select doc from pr where label = 'row-skipped'), null::jsonb, 'absent: a skipped row (the recap is not coming)');
+select is((select doc from pr where label = 'row-failed'), null::jsonb, 'absent: a failed row');
+select isnt((select doc from pr where label = 'row-forced'), null::jsonb, 'present: a forced surfaced row never takes the real recap''s slot');
+select isnt((select doc from pr where label = 'row-other-month'), null::jsonb, 'present: another month''s row does not count');
+
+-- The picture skips an author the CALLER hid; counts never take the caller.
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, memory_date)
+values ('ce3f0000-0000-4000-8000-000000000020', 'ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-00000000000e',
+        'Hidden author', 'text_illustration', 'ready', 'pr-key/hid.png', date '2027-02-28');
+insert into public.blocked_family_accounts (family_id, blocker_user_id, blocked_user_id)
+values ('ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-00000000000c', 'ce000000-0000-4000-8000-00000000000e');
+insert into pr select 'caller-none', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+insert into pr select 'caller-viewer', public.keepsake_previous_recap(
+  'ce100000-0000-4000-8000-000000000007', 'ce000000-0000-4000-8000-00000000000c', date '2027-03-01', now());
+select is((select row(doc ->> 'picture_key', doc -> 'moments', doc -> 'visuals')::text from pr where label = 'caller-none'),
+  '(pr-key/hid.png,11,7)', 'no caller: the newest picture, whoever authored it');
+select is((select row(doc ->> 'picture_key', doc -> 'moments', doc -> 'visuals')::text from pr where label = 'caller-viewer'),
+  '(pr-key/x7.png,11,7)', 'the picture skips an author the caller hid; the counts are the same');
+
+-- RPC level. The overview's own clock is the owner-local today, which a test
+-- cannot pin, so these assert the shape and the viewer = owner parity on
+-- whatever day it is (previous_recap is null except on the 1st, and then both
+-- roles see the same object up to the picture).
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000010', true);
+insert into ov select 'pr-owner', public.keepsakes_overview('ce100000-0000-4000-8000-000000000007');
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000c', true);
+insert into ov select 'pr-viewer', public.keepsakes_overview('ce100000-0000-4000-8000-000000000007');
+set local role postgres;
+select ok((select doc ? 'previous_recap' from ov where label = 'pr-owner'), 'the owner payload carries previous_recap (null or an object)');
+select ok((select doc ? 'previous_recap' from ov where label = 'pr-viewer'), 'the viewer payload carries previous_recap too');
+select is((select case when jsonb_typeof(doc -> 'previous_recap') = 'object' then (doc -> 'previous_recap') - 'picture_key' else doc -> 'previous_recap' end
+           from ov where label = 'pr-viewer'),
+          (select case when jsonb_typeof(doc -> 'previous_recap') = 'object' then (doc -> 'previous_recap') - 'picture_key' else doc -> 'previous_recap' end
+           from ov where label = 'pr-owner'),
+  'a viewer sees the same previous_recap as the owner');
+
+-- Gates (the family passes the recap gates): each failing gate -> null.
+update public.year_film_settings set mode = 'canary', canary_family_ids = '{}';
+insert into pr select 'g-rollout', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_film_settings set mode = 'all', launch_date = null;
+insert into pr select 'g-launch-null', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_film_settings set launch_date = date '2027-03-02';
+insert into pr select 'g-launch-late', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_film_settings set launch_date = date '2027-03-01';
+insert into pr select 'g-launch-edge', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.year_film_settings set launch_date = date '2020-01-01';
+update public.family_members set relationship = 'cousin' where id = 'ce200000-0000-4000-8000-000000000015';
+insert into pr select 'g-nochild', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.family_members set relationship = 'child', date_of_birth = null where id = 'ce200000-0000-4000-8000-000000000015';
+insert into pr select 'g-nodob', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+update public.family_members set date_of_birth = date '2024-02-02' where id = 'ce200000-0000-4000-8000-000000000015';
+delete from public.owner_entitlements where owner_user_id = 'ce000000-0000-4000-8000-000000000010';
+insert into pr select 'g-billing', public.keepsake_previous_recap('ce100000-0000-4000-8000-000000000007', null, date '2027-03-01', now());
+
+select is((select doc from pr where label = 'g-rollout'), null::jsonb, 'previous_recap is null when the rollout excludes the family');
+select is((select doc from pr where label = 'g-launch-null'), null::jsonb, 'previous_recap is null without a launch_date');
+select is((select doc from pr where label = 'g-launch-late'), null::jsonb,
+  'previous_recap is null when the 1st is before launch_date (the scheduler never makes that recap)');
+select isnt((select doc from pr where label = 'g-launch-edge'), null::jsonb, 'a launch_date on the 1st itself still promises the recap');
+select is((select doc from pr where label = 'g-nochild'), null::jsonb, 'previous_recap is null without an own child');
+select is((select doc from pr where label = 'g-nodob'), null::jsonb, 'previous_recap is null when the child has no date of birth');
+select is((select doc from pr where label = 'g-billing'), null::jsonb, 'previous_recap is null when billing does not allow films');
 
 select * from finish();
 rollback;

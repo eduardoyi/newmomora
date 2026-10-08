@@ -1274,12 +1274,16 @@ editable/orderable until its film is done; meanwhile the app and shop show "Prep
 **Keepsakes overview** (migrations `20261009120000_keepsakes_overview.sql` +
 `20261010120000_keepsakes_overview_card_front.sql` (adds `card_front`) +
 `20261011120000_keepsakes_overview_cards_upcoming.sql` (adds `cards` and
-`upcoming_films`, moves the card-front logic into `keepsake_card_front`), pgTAP
+`upcoming_films`, moves the card-front logic into `keepsake_card_front`) +
+`20261012120000_keepsakes_overview_reveal_gap.sql` (tiles stay until the film surfaces;
+adds `previous_recap` and the `keepsake_previous_recap` helper), pgTAP
 `supabase/tests/keepsakes_overview_test.sql`, rollbacks
 `supabase/rollbacks/20261009120000_keepsakes_overview_down.sql` (drops the RPC and pool
 helper), `20261010120000_keepsakes_overview_card_front_down.sql` (restores the
 pre-`card_front` function) and `20261011120000_keepsakes_overview_cards_upcoming_down.sql`
-(restores the `card_front` function, drops the two new helpers), applied by hand; plan
+(restores the `card_front` function, drops the two new helpers) and
+`20261012120000_keepsakes_overview_reveal_gap_down.sql` (restores the 20261011 bodies,
+drops `keepsake_previous_recap`), applied by hand; plan
 [keepsakes-redesign.md](plans/keepsakes-redesign.md) A1). One member RPC feeds the
 whole Keepsakes tab.
 
@@ -1290,6 +1294,8 @@ whole Keepsakes tab.
   ```
   { recap: null | { month_start, delivers_on (YYYY-MM-DD, owner-local), moments, visuals,
                     min_moments: 10, min_visuals: 6, picture_key: text|null },
+    previous_recap: null | { month_start, delivers_on, moments, visuals, min_moments: 10,
+                             min_visuals: 6, picture_key: text|null },   // same shape as recap
     has_viewers: bool|null, year_moments: int|null, holiday_pool: int|null,
     holiday_min_pool: 20|null, holiday_ship_by_note: text|null, preview_key: text|null,
     book_preview_keys: { "<family_member_id>": "<key>" }|null,
@@ -1315,6 +1321,25 @@ whole Keepsakes tab.
     `visuals` count the current owner-local month's pool; `picture_key` is the newest
     pooled memory with a resolvable picture, excluding authors **the caller** hid
     (`blocked_family_accounts` by blocker, the timeline's personal-block rule).
+  - **`previous_recap`** (all members; added by `20261012120000`): last month's recap tile
+    on the 1st, until that recap surfaces. The recap's `year_films` row is created ~00:30
+    owner-local on the 1st but the film only appears at `surface_at` (19:00), and the app
+    hides an unsurfaced film from everyone, while `recap` has already restarted for the
+    new month ("0 of 10"). `previous_recap` keeps last month's tile in that gap:
+    `month_start` = the previous month's 1st, `delivers_on` = **today** (owner-local; it
+    arrives today), counts / `picture_key` over the previous month's pool (same
+    `keepsake_pool` rules as `recap`; the picture skips authors the caller hid). Computed by
+    the internal `keepsake_previous_recap(p_family_id, p_caller, p_today, p_now)`; non-null
+    only when ALL hold: the recap gates (rollout, billing, live family, an own child with
+    a date of birth; plus `launch_date <= today`, the scheduler's `due_date >= launch_date`,
+    which is stricter than `recap`'s `<=` next 1st); today is the **1st**; the previous
+    month's `family_month` key (family, no member, `scope_start_date` = previous month's
+    1st, non-`forced`) has **no surfaced row** (`surface_at <= now()`) and **no `skipped` /
+    `failed` row**; and EITHER a not-yet-surfaced row exists OR (no row yet, 00:00-00:30)
+    the previous month's pool already meets both floors (10 moments, 6 visuals). Otherwise
+    JSON `null`. Example (Mar 1, with a pending row): `{"month_start":"2027-02-01",
+    "delivers_on":"2027-03-01","moments":10,"visuals":6,"min_moments":10,"min_visuals":6,
+    "picture_key":"pr-key/x7.png"}`.
   - **Owner/manager only** (`has_family_role(.., ['owner','manager'])`; otherwise the
     field is `null`, `orders` is `[]`): `has_viewers` (any `viewer` membership);
     `year_moments` (pooled count for the owner-local calendar year); `holiday_pool`
@@ -1378,14 +1403,16 @@ whole Keepsakes tab.
       to Dec 27, `FAMILY_FILM_CUTOFF`), `film_date` Dec 30 (it renders Dec 28, surfaces Dec
       30 09:00). Needs an own child who is under 13 on Dec 28 (the scheduler's rule plus the
       worker's `isFilmChild`) and Dec 28 >= `launch_date`.
-    - **Exclusion**: a tile is dropped as soon as a non-`forced` `year_films` row with the
-      scheduler's key (family, kind, member, `scope_start_date`) exists in any status
-      **except `skipped` / `failed`** (queued … ready: the film is made or being made and the
-      real film UI takes over; the unique key means no second row will ever be inserted).
-      A `skipped`/`failed` row is terminal and invisible to clients, so the tile stays until
-      its film date passes. Known edge: from 00:30 on the due day (row created) until the
-      09:00 surface a viewer sees neither the tile nor the film (owners/managers see a ready
-      film early).
+    - **Exclusion**: a tile is dropped only when a non-`forced` `year_films` row with the
+      scheduler's key (family, kind, member, `scope_start_date`) exists in a status
+      **other than `skipped` / `failed`** AND it has **surfaced** (`surface_at <= now()`,
+      the instant the app starts listing the film; queued … ready: the real film UI takes
+      over, the unique key means no second row will ever be inserted). A row that exists
+      but has not surfaced (created ~00:30 on the due day, surfaces 09:00) **keeps the
+      tile**, so the slot never goes empty ("arrives today", then the real film). A
+      `skipped`/`failed` row is terminal and invisible to clients, so the tile stays until
+      its film date passes. The due day is inside both windows (30-day birthday, Dec
+      1..30 year-end).
     - **Counts** use `keepsake_pool` over `[scope_start, scope_end_excl)`: birthday →
       `p_member_id` = the child (= the worker's `birthdayPool(.., 'exclude')`: memories
       *tagged to the child*; untagged and sibling-only memories do not count); year-end →
@@ -1407,11 +1434,13 @@ whole Keepsakes tab.
     reorder in progress never displaces a shipped row. Family-wide on purpose (the shelf
     shows family keepsakes whoever paid; `memory_book_orders`' own RLS is buyer-only).
     Status only: never addresses, prices or tracking.
-- **`keepsake_card_front(p_card_id) → jsonb`** and **`keepsake_upcoming_films(p_family_id,
-  p_caller, p_today) → jsonb`** — **internal helpers, no client grant** (`revoke all` from
+- **`keepsake_card_front(p_card_id) → jsonb`**, **`keepsake_upcoming_films(p_family_id,
+  p_caller, p_today) → jsonb`** and **`keepsake_previous_recap(p_family_id, p_caller,
+  p_today, p_now) → jsonb`** — **internal helpers, no client grant** (`revoke all` from
   `public`, `anon`, `authenticated`; only `keepsakes_overview` calls them, after its own
   membership / role checks). The first returns the `card_front` object (or null for an
-  unknown / soft-deleted card); the second takes `p_today` so pgTAP can pin dates. **To
+  unknown / soft-deleted card); the second and third take `p_today` (and `p_now`) so pgTAP
+  can pin dates. **To
   extend:** a change to a floor, scope or scheduling rule in `year-film-eligibility.ts` /
   `year_film_due` must change `keepsake_upcoming_films` in a new migration (and the test).
 - **`keepsake_pool(p_family_id, p_start, p_end_excl, p_caller, p_member_id,

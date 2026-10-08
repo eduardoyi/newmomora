@@ -26,7 +26,7 @@ export interface UpcomingTileProps {
   progress: number;
   /** What is still missing (locked tiles). */
   hint: string;
-  /** "Nov 1" (unlocked tiles). */
+  /** "Nov 1", or "today" on the day itself (unlocked tiles). */
   arrivesOn: string;
   testID: string;
 }

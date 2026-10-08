@@ -124,6 +124,13 @@ export interface KeepsakesUpcomingFilm {
 
 export interface KeepsakesOverview {
   recap: KeepsakesRecap | null;
+  /**
+   * LAST month's recap, kept on the 1st until its film appears (the film is
+   * created at night but only shows from 19:00, while `recap` has already
+   * restarted for the new month). Same shape as `recap`; its `delivers_on` is
+   * today. Null any other time, and for an older server.
+   */
+  previous_recap: KeepsakesRecap | null;
   /** Owner/manager only (null for viewers): does the family have a viewer member. */
   has_viewers: boolean | null;
   year_moments: number | null;
@@ -324,6 +331,7 @@ export function parseKeepsakesOverview(raw: unknown): KeepsakesOverview {
   const row = isRecord(raw) ? raw : {};
   return {
     recap: parseRecap(row.recap),
+    previous_recap: parseRecap(row.previous_recap),
     has_viewers: typeof row.has_viewers === 'boolean' ? row.has_viewers : null,
     year_moments: toCount(row.year_moments),
     holiday_pool: toCount(row.holiday_pool),

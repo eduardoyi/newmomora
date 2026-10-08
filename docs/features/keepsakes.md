@@ -119,12 +119,14 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
   (`BookCoverTile`), the real holiday card front with an envelope peeking out
   behind it (`shelf-holiday-card.tsx`; portrait 104 wide, landscape 150 wide, same
   baseline, the caption follows the object's width), and the **upcoming tiles**
-  (next-up recap `keepsakes-upcoming-recap`, upcoming birthday
+  (next-up recap `keepsakes-upcoming-recap`, previous recap
+  `keepsakes-upcoming-previous-recap`, upcoming birthday
   `keepsakes-upcoming-birthday-{memberId}`, upcoming year-end
   `keepsakes-upcoming-year-{year}`; all built on `upcoming-tile.tsx`). A year with more than 3
   monthly recaps ends its row with an "All {year} recaps" tile
   (`keepsakes-recaps-{year}`, `keepsakeRecapsRoute(year)`).
-- **Order within a year:** the upcoming-recap tile, then the upcoming birthday tiles
+- **Order within a year:** the **previous-recap** tile (last month's, only on the 1st),
+  then the upcoming-recap tile, then the upcoming birthday tiles
   (soonest `film_date` first), then the upcoming year-end tile, then the **year-end
   film** (`kind: 'family_year'`, whatever its date says), then everything else newest
   date first (`compareWithinYear` in `src/utils/keepsakes.ts`, used by `buildShelfItems`
@@ -134,8 +136,31 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
   visuals), solid with "arrives {Mon d}" in Caveat after. The faded picture is the
   newest moment of the month that has one (`recap.picture_key`); a flat tile when
   none. The month and dates come from the owner-local `recap.month_start` /
-  `delivers_on`, never the device clock. Known gap: from 00:00 to ~19:00 on the
-  1st it restarts for the new month before the last film surfaces.
+  `delivers_on`, never the device clock.
+- **Previous-recap tile** (`overview.previous_recap`, everyone incl. viewers; shelf item
+  `upcoming-previous-recap`, `isPrevious: true`): a film's `year_films` row is created
+  ~00:30 owner-local on its due day but the film only appears at `surface_at` (19:00
+  on the 1st for monthly recaps, 09:00 for birthday / year-end films), and the film list
+  hides an unsurfaced film from everyone. So on the 1st the new month's recap tile
+  restarts ("0 of 10") while last month's recap is not there yet. The server keeps last
+  month's tile (`previous_recap`, same shape as `recap`) until that film surfaces; the
+  app files it on the shelf of its own `month_start` year (December on last year's
+  shelf on Jan 1, which is forced open like any shelf holding an upcoming tile), sorts it
+  BEFORE the current month's recap tile, and always draws it unlocked: "September
+  recap", "arrives" + "today", caption "arrives today · 23 moments". Once the film
+  surfaces the server returns null and the real film tile takes the slot. Even with a stale
+  overview the app never shows both: `buildShelfItems` drops an upcoming tile whose film is
+  already in the visible films list (previous recap by scope month, birthday by child +
+  age, year-end by scope year). Absent on an older server (parsed as null).
+- **"Arrives today":** wherever an upcoming tile shows an arrival date (recap, previous
+  recap, birthday, year-end), the date equal to the shelf's `todayIso` is shown as
+  "today" instead of "Oct 18", both on the tile ("arrives" + "today" in Caveat) and in
+  the caption meta ("arrives today · 23 moments"; `formatArrival` in
+  `src/utils/keepsakes.ts`). The birthday / year-end tiles now stay all the way to the
+  reveal (09:00): the server drops them only once the film row has SURFACED
+  (`surface_at <= now()`), so the slot never goes empty between the row's creation and the
+  film appearing, then hands straight over to the real film. A locked tile still shows
+  its progress, never a date.
 - **Upcoming birthday and year-end tiles** (`upcoming-film-tile.tsx`, from
   `overview.upcoming_films`, everyone incl. viewers): same look as the recap tile
   (`UpcomingTile`), filed on the shelf of `film_date`'s year (forced open, like the
@@ -148,8 +173,8 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
   (`isUpcomingFilmLocked`): dashed, a bar of `min(1, moments / min_moments)` and
   one hint by priority (`upcomingFilmHint`): "{n} more moments", else "{n} more with
   a picture", else "Needs moments from one more season" / "{k} more seasons".
-  Unlocked: solid, "arrives" + the film date in Caveat; caption meta "arrives
-  {Mon d} · {n} moments" (locked: "{n} of {min} moments"). A birthday tile carries
+  Unlocked: solid, "arrives" + the film date ("today" on the day) in Caveat; caption meta
+  "arrives {Mon d | today} · {n} moments" (locked: "{n} of {min} moments"). A birthday tile carries
   the child's `memberId` (child chip + "Films" filter match it); the year-end tile
   is family-wide. The pure rules live in `src/utils/keepsakes.ts`.
 - **Badges** (`keepsake-badge.tsx`): a pill with a dot on the item. Raspberry
@@ -413,6 +438,7 @@ crashes). Contract: [TECH_SPEC.md](../TECH_SPEC.md) next to the holiday-card RPC
 | Field | Who | Used for |
 |-------|-----|----------|
 | `recap` (`month_start`, `delivers_on`, `moments`, `visuals`, `min_*`, `picture_key`) | everyone | the next-up recap tile (null unless the family passes the `year_films_enabled` gates except the >=10 check) |
+| `previous_recap` (same shape as `recap`) | everyone | last month's recap tile on the 1st until its film surfaces (null otherwise; absent on an older server, parsed as null) |
 | `has_viewers` | owner/manager | the privacy cue |
 | `year_moments`, `holiday_pool`, `holiday_min_pool` (20) | owner/manager | the card page's eligibility line and QR promise |
 | `holiday_ship_by_note` | owner/manager | the ship-by pill (null out of season) |
@@ -503,3 +529,4 @@ The overview RPC is read-only. Otherwise the tab reads `memory_books`
 | 2026-10-08 | Tab redesign ([plan](../plans/keepsakes-redesign.md)): needs-you line, "Make something" storefront, "Your keepsakes" library with filter/badges/folded years, next-up recap tile, viewer "Family films" page; native Holiday card and Memory Book product pages (no prices, "Free to make"); `keepsakes_overview` RPC; old tab-only body, `HolidayCardTile`, `UpcomingRecapCard`, `KeepsakeYearSection` and `ChildPickerSheet` removed |
 | 2026-10-08 | Real holiday card front on the shelf, the storefront tile and the card page (`card_front`, landscape and portrait, full-bleed and bordered); the generic preview now says the language's default greeting and just the year; the year-end film leads its year; `keepsakes_create_book_tapped` fires from the Memory Book page and the stack screen; dead code removed (`buildKeepsakeYears`, `keepsakesFilterCount`, `holidayCardFamilyLine`, `yearFilmsEnabledQueryKey`) |
 | 2026-10-09 | Past-year holiday cards on their own shelves (`overview.cards`; ready only, order badge, no "Ready to order"); upcoming birthday and year-end film tiles (`overview.upcoming_films`) built on a shared `UpcomingTile` with the recap tile |
+| 2026-10-12 | Reveal gap closed (migration `20261012120000`): birthday / year-end tiles stay until their film surfaces, new `overview.previous_recap` keeps last month's recap tile on the 1st, upcoming tiles say "arrives today" on the day |
