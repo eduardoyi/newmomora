@@ -1,4 +1,5 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
 import HolidayCardProductScreen from '../../app/(app)/keepsakes/holiday-card';
 import { MODAL_DISMISS_DELAY_MS } from '@/hooks/useLeaveKeepsakesPage';
@@ -7,7 +8,7 @@ import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useHolidayCard } from '@/hooks/useHolidayCard';
 import { useKeepsakesOverview } from '@/hooks/useKeepsakesOverview';
 import { holidayCardWebUrl, type HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOverview } from '@/services/keepsakes';
 import { openShopUrl } from '@/services/web-handoff';
 
 // Holiday card product page (docs/plans/keepsakes-redesign.md D3). "Today" is
@@ -20,6 +21,7 @@ jest.mock('expo-router', () => ({
     return mockRouter;
   },
 }));
+jest.mock('@/lib/supabase', () => ({ supabase: { rpc: jest.fn() } }));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
@@ -55,9 +57,25 @@ function summary(overrides: Partial<HolidayCardSummary> = {}): HolidayCardSummar
 function overview(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview {
   return {
     recap: null, has_viewers: false, year_moments: 34, holiday_pool: 28, holiday_min_pool: 20, holiday_ship_by_note: null,
-    preview_key: 'family/preview.jpg', book_preview_keys: {}, orders: [], ...overrides,
+    preview_key: 'family/preview.jpg', book_preview_keys: {}, orders: [], card_front: null, ...overrides,
   };
 }
+
+const cardFront: KeepsakesCardFront = {
+  card_id: 'card-1',
+  year: 2026,
+  image_key: 'family/front.jpg',
+  width: 4000,
+  height: 3000,
+  layout: 'full-bleed',
+  orientation: 'landscape',
+  focal: { x: 0.4, y: 0.5 },
+  greeting: 'christmas',
+  language: 'en',
+  greeting_text: 'Merry Christmas from the Parks',
+  subline_text: 'Lila & Theo',
+  greeting_position: 'top-left',
+};
 
 const lila = { id: 'child-1', family_id: 'family-1', name: 'Lila Park', date_of_birth: '2023-06-01', relationship: 'child' };
 const theo = { id: 'child-2', family_id: 'family-1', name: 'Theo', date_of_birth: '2025-02-01', relationship: 'child' };
@@ -99,6 +117,61 @@ async function pickGreetingAndConfirm(api: ReturnType<typeof render>) {
 }
 
 describe('holiday card product page', () => {
+  it('shows the card the family created: the real front, landscape full-bleed, with its texts', () => {
+    mockHooks({
+      card: summary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }),
+      ov: overview({ card_front: cardFront }),
+    });
+    const { getByTestId, getByText, queryByText } = render(<HolidayCardProductScreen />);
+    expect(getByTestId('holiday-card-product-object-front')).toBeTruthy();
+    expect(getByText('Merry Christmas from the Parks')).toBeTruthy();
+    expect(getByText('Lila & Theo')).toBeTruthy();
+    expect(queryByText('Happy Holidays')).toBeNull();
+    expect(getByText('Open your card')).toBeTruthy();
+    // Landscape 5R inside the ~300-high stage: 280 wide at most, envelope included.
+    const { width, height } = StyleSheet.flatten(getByTestId('holiday-card-product-object').props.style);
+    expect(width).toBeLessThanOrEqual(280);
+    expect(height).toBeLessThan(width);
+  });
+
+  it('a portrait bordered card keeps the portrait shape and hides an empty small line', () => {
+    mockHooks({
+      card: summary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }),
+      ov: overview({ card_front: { ...cardFront, orientation: 'portrait', layout: 'bordered', subline_text: '', greeting_text: null, language: 'es' } }),
+    });
+    const { getByTestId, getByText, queryByTestId } = render(<HolidayCardProductScreen />);
+    expect(getByText('Feliz Navidad')).toBeTruthy();
+    expect(queryByTestId('holiday-card-product-object-front-subline')).toBeNull();
+    const { width, height } = StyleSheet.flatten(getByTestId('holiday-card-product-object').props.style);
+    expect(height).toBeGreaterThan(width);
+  });
+
+  it('falls back to the generic preview when the overview has no front or a different card’s', () => {
+    mockHooks({ card: summary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }), ov: overview() });
+    const noFront = render(<HolidayCardProductScreen />);
+    expect(noFront.queryByTestId('holiday-card-product-object-front')).toBeNull();
+    expect(noFront.getByText('Happy Holidays')).toBeTruthy();
+    noFront.unmount();
+
+    mockHooks({
+      card: summary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }),
+      ov: overview({ card_front: { ...cardFront, card_id: 'other-card' } }),
+    });
+    const other = render(<HolidayCardProductScreen />);
+    expect(other.queryByTestId('holiday-card-product-object-front')).toBeNull();
+  });
+
+  it('a previous-year card (offer "make") keeps the generic preview, in the family language', () => {
+    mockHooks({
+      card: summary({ cardId: 'card-0', year: 2025, status: 'ready', readiness: 'ready', language: 'es' }),
+      ov: overview({ card_front: { ...cardFront, card_id: 'card-0', year: 2025 } }),
+    });
+    const { queryByTestId, getByText } = render(<HolidayCardProductScreen />);
+    expect(queryByTestId('holiday-card-product-object-front')).toBeNull();
+    expect(getByText('Felices fiestas')).toBeTruthy();
+    expect(getByText('Make our 2026 card')).toBeTruthy();
+  });
+
   it('renders the layout for a family that can make a card, with no prices', () => {
     mockHooks({ ov: overview({ holiday_ship_by_note: 'Order by Dec 10 for Christmas delivery in the US.', has_viewers: true }) });
     const { getByTestId, getByText, queryByText, toJSON } = render(<HolidayCardProductScreen />);
@@ -111,8 +184,9 @@ describe('holiday card product page', () => {
     expect(getByText('Viewers in your family won’t see this card. Your surprise is safe.')).toBeTruthy();
     expect(getByText('Order by Dec 10 for Christmas delivery in the US.')).toBeTruthy();
     expect(getByText('Pick a greeting, then make it your own in the app.')).toBeTruthy();
-    // Own children's first names only, never the grandparent.
-    expect(getByText('LILA & THEO · 2026')).toBeTruthy();
+    // No card yet: the generic preview, with the real default greeting and just the year.
+    expect(getByText('Happy Holidays')).toBeTruthy();
+    expect(within(getByTestId('holiday-card-product-object')).getByText('2026')).toBeTruthy();
     expect(queryByText(/Mirian/)).toBeNull();
     expect(getByText('Make our 2026 card')).toBeTruthy();
     expect(JSON.stringify(toJSON())).not.toMatch(/\$\d/);

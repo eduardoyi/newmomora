@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { FreeToMake } from '@/components/keepsakes/free-to-make';
-import { HolidayCardObject, holidayCardFamilyLine } from '@/components/keepsakes/holiday-card-object';
+import { HolidayCardObject } from '@/components/keepsakes/holiday-card-object';
 import { HolidayGreetingSheet } from '@/components/keepsakes/holiday-greeting-sheet';
 import {
   EligibilityBox,
@@ -22,18 +22,22 @@ import {
   type ProductFact,
 } from '@/components/keepsakes/product-page';
 import { useFamily } from '@/hooks/use-family';
-import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useHolidayCard, type CreateHolidayCardOutcome } from '@/hooks/useHolidayCard';
 import { useKeepsakesOverview } from '@/hooks/useKeepsakesOverview';
 import { useLeaveKeepsakesPage } from '@/hooks/useLeaveKeepsakesPage';
 import { holidayCardWebUrl, type HolidayCardGreeting } from '@/services/holiday-cards';
 import { openShopUrl } from '@/services/web-handoff';
-import { isOwnChild } from '@/utils/family-relationships';
 import { holidayCardTileState, type HolidayCardTileState } from '@/utils/holiday-card-state';
+import { defaultGreetingText, holidayCardWidthToFit } from '@/utils/holiday-card-front';
 import { holidayCardEligibility } from '@/utils/keepsake-product-pages';
+import { activeCardFront } from '@/utils/keepsakes';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 import { canEditFamilyContent } from '@/utils/roles';
 
+// The stage is a ~300-high box; the real card (landscape or portrait) is sized
+// to fit it, envelope included, with room for the tilt and shadow.
+const STAGE_CARD_MAX_WIDTH = 280;
+const STAGE_CARD_MAX_HEIGHT = 260;
 const HOLIDAY_CARD_PAGE_TITLE = 'Your family, on this year’s card.';
 const HOLIDAY_CARD_PAGE_BODY =
   'A printed holiday card with your family’s own picture on the front and a letter from your year on the back.';
@@ -46,7 +50,6 @@ function ctaLabel(state: HolidayCardTileState, year: number): string {
 export default function HolidayCardProductScreen() {
   const { familyId, role, isLoading: isFamilyLoading } = useFamily();
   const canEdit = canEditFamilyContent(role);
-  const { members } = useFamilyMembers();
   const { summary, create, isLoading: isSummaryLoading } = useHolidayCard(familyId, { enabled: canEdit });
   const { overview } = useKeepsakesOverview(familyId, { enabled: canEdit });
   const { leave, leaveAfterModalDismiss } = useLeaveKeepsakesPage();
@@ -104,10 +107,8 @@ export default function HolidayCardProductScreen() {
 
   // The card's year: this year while there is nothing to open yet, else the card's own.
   const year = shownState === 'make' || !summary?.year ? currentYear : summary.year;
-  const childNames = members
-    .filter((member) => isOwnChild(member, new Date(`${todayIso}T12:00:00`)))
-    .map((member) => member.name.trim().split(/\s+/)[0] ?? '')
-    .filter((name) => name.length > 0);
+  // The family's real card once one exists for this season; else the generic preview.
+  const cardFront = activeCardFront(overview, summary, todayIso);
   const eligibility = holidayCardEligibility(overview, year);
 
   const facts: ProductFact[] = [{ lead: '5×7, printed on both sides.', rest: 'Shipped to your door.' }];
@@ -142,10 +143,12 @@ export default function HolidayCardProductScreen() {
       >
         <ProductStage testID="holiday-card-product-stage">
           <HolidayCardObject
-            familyLine={holidayCardFamilyLine(childNames, year)}
+            front={cardFront}
+            greeting={defaultGreetingText(summary?.language ?? 'en', 'holidays')}
             imageKey={overview?.preview_key ?? null}
+            subline={String(year)}
             testID="holiday-card-product-object"
-            width={154}
+            width={cardFront ? holidayCardWidthToFit(cardFront.orientation, STAGE_CARD_MAX_WIDTH, STAGE_CARD_MAX_HEIGHT) : 154}
           />
         </ProductStage>
         <ProductHeading

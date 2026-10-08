@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import { Linking } from 'react-native';
 
@@ -16,7 +16,7 @@ import { useFamilyYearFilms } from '@/hooks/useYearFilms';
 import { setPendingKeepsakesToast } from '@/lib/keepsakes-toast';
 import { invokeEdgeFunction } from '@/services/ai';
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOverview } from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import { resetWebHandoffForTests } from '@/services/web-handoff';
 import type { YearFilm } from '@/services/year-films';
@@ -194,6 +194,7 @@ function overviewOf(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOvervi
     preview_key: null,
     book_preview_keys: {},
     orders: [],
+    card_front: null,
     ...overrides,
   };
 }
@@ -323,7 +324,10 @@ describe('One child\'s keepsakes (keepsakes/[memberId])', () => {
   it('creates a book from the CTA, with a toast', async () => {
     mockBooks([yearOneReady]);
     const { getByTestId, getByText } = renderWithQuery(<MemberKeepsakesScreen />);
+    expect(mockTrackEvent).not.toHaveBeenCalledWith('keepsakes_create_book_tapped', expect.anything());
     fireEvent.press(getByTestId('memory-books-create'));
+    expect(mockTrackEvent).toHaveBeenCalledTimes(1);
+    expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_create_book_tapped', { children_count: 1 });
 
     const suggestion = await waitFor(() => getByTestId('create-book-suggestion-age_year:2022-06-01:2023-05-31'));
     fireEvent.press(suggestion);
@@ -398,6 +402,32 @@ const freshFailedYearThree = book({
   scope_label: 'Year Three', failure_reason: 'Outline generation failed',
   created_at: '2026-10-09T00:00:00.000Z', updated_at: '2026-10-10T00:00:00.000Z',
 });
+
+const landscapeFullBleedFront: KeepsakesCardFront = {
+  card_id: 'card-1',
+  year: 2026,
+  image_key: 'family/front.jpg',
+  width: 4000,
+  height: 3000,
+  layout: 'full-bleed',
+  orientation: 'landscape',
+  focal: { x: 0.3, y: 0.6 },
+  greeting: 'christmas',
+  language: 'en',
+  greeting_text: 'Merry Christmas from the Parks',
+  subline_text: 'Lila & Theo',
+  greeting_position: 'top-center',
+};
+const portraitBorderedFront: KeepsakesCardFront = {
+  ...landscapeFullBleedFront,
+  layout: 'bordered',
+  orientation: 'portrait',
+  width: 3000,
+  height: 4000,
+  greeting_text: null,
+  subline_text: null,
+  greeting_position: 'bottom-left',
+};
 
 describe('Keepsakes tab', () => {
   describe('owner, full library', () => {
@@ -535,6 +565,99 @@ describe('Keepsakes tab', () => {
       await waitFor(() =>
         expect(Linking.openURL).toHaveBeenCalledWith(`https://shop.usemomora.com/c/card-1#h=${HANDOFF_CODE}`),
       );
+    });
+
+    describe('the family\'s real card front', () => {
+      it('landscape full-bleed: the shelf and the storefront both show the card as designed', () => {
+        mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+        mockOverview(overviewOf({ card_front: landscapeFullBleedFront }));
+        mockFilms([recap(9)]);
+        mockBooks([]);
+        const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+        const shelf = within(getByTestId('keepsakes-card-card-1-object-front'));
+        expect(shelf.getByText('Merry Christmas from the Parks')).toBeTruthy();
+        expect(shelf.getByText('Lila & Theo')).toBeTruthy();
+        // A landscape card is a wider shelf item (150-wide card + the envelope's peek).
+        expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 179 });
+
+        const store = within(getByTestId('keepsakes-store-holiday-card-object-front'));
+        expect(store.getByText('Merry Christmas from the Parks')).toBeTruthy();
+        expect(store.getByText('Lila & Theo')).toBeTruthy();
+      });
+
+      it('portrait bordered with the default texts: the language greeting and just the year', () => {
+        mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+        mockOverview(overviewOf({ card_front: { ...portraitBorderedFront, language: 'es', greeting: 'holidays' } }));
+        mockFilms([recap(9)]);
+        mockBooks([]);
+        const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+
+        const shelf = within(getByTestId('keepsakes-card-card-1-object-front'));
+        expect(shelf.getByText('Felices fiestas')).toBeTruthy();
+        expect(shelf.getByText('2026')).toBeTruthy();
+        expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 132 });
+        expect(getByTestId('keepsakes-store-holiday-card-object-front')).toBeTruthy();
+      });
+
+      it('with no card yet the storefront shows the generic preview ("Happy Holidays", just the year)', () => {
+        mockHolidayCard(holidaySummary({ enabled: true }));
+        mockOverview(overviewOf({ card_front: null }));
+        const { getByTestId, queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+        const store = within(getByTestId('keepsakes-store-holiday-card-object'));
+        expect(store.getByText('Happy Holidays')).toBeTruthy();
+        expect(store.getByText('2026')).toBeTruthy();
+        expect(queryByTestId('keepsakes-store-holiday-card-object-front')).toBeNull();
+      });
+
+      it('falls back to the generic preview on the shelf when the overview failed (null) or is an old server', () => {
+        mockHolidayCard(holidaySummary({ cardId: 'card-1', year: 2026, status: 'ready', readiness: 'ready' }));
+        mockOverview(null);
+        mockFilms([recap(9)]);
+        mockBooks([]);
+        const failed = renderWithQuery(<KeepsakesScreen />);
+        expect(failed.getByTestId('keepsakes-card-card-1')).toBeTruthy();
+        expect(failed.queryByTestId('keepsakes-card-card-1-object-front')).toBeNull();
+        expect(within(failed.getByTestId('keepsakes-card-card-1-object')).getByText('Happy Holidays')).toBeTruthy();
+        failed.unmount();
+
+        mockOverview(overviewOf({ card_front: null }));
+        const old = renderWithQuery(<KeepsakesScreen />);
+        expect(old.queryByTestId('keepsakes-card-card-1-object-front')).toBeNull();
+        expect(old.getByTestId('keepsakes-card-card-1-object')).toBeTruthy();
+      });
+
+      it('a viewer never sees the card (no front, no storefront)', () => {
+        mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as ReturnType<typeof useFamily>);
+        mockOverview(overviewOf({ card_front: landscapeFullBleedFront }));
+        mockFilms([recap(9)]);
+        const { queryByTestId } = renderWithQuery(<KeepsakesScreen />);
+        expect(queryByTestId('keepsakes-card-card-1-object-front')).toBeNull();
+        expect(queryByTestId('keepsakes-store-holiday-card')).toBeNull();
+      });
+    });
+
+    it('puts the year-end film first in its year, ahead of the December recap', () => {
+      mockHolidayCard(holidaySummary({ enabled: false }));
+      // Same placement date as the year film, and "film:recap…" sorts before "film:year-end…" by id.
+      const decemberRecap = film({
+        id: 'recap-2025-12', kind: 'family_month', scope_start_date: '2025-12-01', placement_date: '2025-12-31',
+      });
+      const novemberRecap = film({
+        id: 'recap-2025-11', kind: 'family_month', scope_start_date: '2025-11-01', placement_date: '2025-11-30',
+      });
+      mockFilms([novemberRecap, decemberRecap, yearEndFilm, recap(9)]);
+      mockBooks([]);
+      const { getByTestId } = renderWithQuery(<KeepsakesScreen />);
+      fireEvent.press(getByTestId('keepsakes-year-toggle-2025'));
+      const order = within(getByTestId('keepsakes-year-2025'))
+        .getAllByTestId(/^keepsakes-item-film:/)
+        .map((node) => node.props.testID);
+      expect(order).toEqual([
+        'keepsakes-item-film:year-end-2025',
+        'keepsakes-item-film:recap-2025-12',
+        'keepsakes-item-film:recap-2025-11',
+      ]);
     });
 
     it('a shipped card reads "Shipped · {date}"', () => {

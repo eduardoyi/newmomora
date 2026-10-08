@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, within } from '@testing-library/react-native';
 import type { ComponentProps } from 'react';
+import { StyleSheet } from 'react-native';
 
 import { KeepsakesLibrary } from '@/components/keepsakes/keepsakes-library';
-import type { KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOverview } from '@/services/keepsakes';
 import type { YearFilm } from '@/services/year-films';
 import { DEFAULT_KEEPSAKES_FILTER, type ShelfItem } from '@/utils/keepsakes';
 
@@ -13,6 +14,7 @@ jest.mock('expo-router', () => ({
     return mockRouter;
   },
 }));
+jest.mock('@/lib/supabase', () => ({ supabase: { rpc: jest.fn() } }));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
 jest.mock('@/components/family-member-avatar', () => ({ FamilyMemberAvatar: () => null }));
@@ -68,9 +70,41 @@ function bookItem(id: string, year: number, memberId: string): ShelfItem {
   } as unknown as ShelfItem;
 }
 
+function cardItem(cardId: string, year: number): ShelfItem {
+  return {
+    kind: 'card',
+    id: `card:${cardId}`,
+    year,
+    date: `${year}-12-01`,
+    memberId: null,
+    badge: { label: 'Ready to order', tone: 'needsYou' },
+    cardId,
+    cardState: 'ready',
+    summary: {
+      enabled: true, cardId, year, status: 'ready', readiness: 'ready', lastFailureCode: null, ordered: false, language: 'es',
+    },
+  };
+}
+
+const cardFront: KeepsakesCardFront = {
+  card_id: 'card-1',
+  year: 2026,
+  image_key: 'family/front.jpg',
+  width: 4000,
+  height: 3000,
+  layout: 'full-bleed',
+  orientation: 'landscape',
+  focal: null,
+  greeting: 'christmas',
+  language: 'en',
+  greeting_text: 'Merry Everything',
+  subline_text: null,
+  greeting_position: 'top-left',
+};
+
 const overview: KeepsakesOverview = {
   recap: null, has_viewers: true, year_moments: null, holiday_pool: null, holiday_min_pool: null,
-  holiday_ship_by_note: null, preview_key: null, book_preview_keys: {}, orders: [],
+  holiday_ship_by_note: null, preview_key: null, book_preview_keys: {}, orders: [], card_front: null,
 };
 
 function renderLibrary(overrides: Partial<ComponentProps<typeof KeepsakesLibrary>> = {}) {
@@ -90,7 +124,6 @@ function renderLibrary(overrides: Partial<ComponentProps<typeof KeepsakesLibrary
     onResetFilter: jest.fn(),
     openYears: new Set<number>(),
     onToggleYear: jest.fn(),
-    cardNames: ['Lila'],
     onBookPress: jest.fn(),
     ...overrides,
   };
@@ -232,5 +265,40 @@ describe('KeepsakesLibrary', () => {
     expect(getByTestId('memory-book-tile-age_year:b1')).toBeTruthy();
     expect(props.onBookPress).not.toHaveBeenCalled();
     expect(JSON.stringify(toJSON())).not.toMatch(/\$\d/);
+  });
+
+  describe('the holiday card on the shelf', () => {
+    it('shows the family’s real card front, landscape: a 179-wide item with a 150-wide card', () => {
+      const { getByTestId, getByText } = renderLibrary({
+        items: [cardItem('card-1', 2026)],
+        overview: { ...overview, card_front: cardFront },
+      });
+      expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 179 });
+      expect(StyleSheet.flatten(getByTestId('keepsakes-card-card-1').props.style)).toMatchObject({ width: 179, height: 122 });
+      expect(getByTestId('keepsakes-card-card-1-object-front')).toBeTruthy();
+      expect(getByText('Merry Everything')).toBeTruthy();
+      expect(within(getByTestId('keepsakes-card-card-1-object-front')).getByText('2026')).toBeTruthy();
+    });
+
+    it('a portrait card is 104 wide in a 132-wide item', () => {
+      const { getByTestId } = renderLibrary({
+        items: [cardItem('card-1', 2026)],
+        overview: { ...overview, card_front: { ...cardFront, orientation: 'portrait', layout: 'bordered' } },
+      });
+      expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 132 });
+      expect(StyleSheet.flatten(getByTestId('keepsakes-card-card-1').props.style)).toMatchObject({ width: 132, height: 161 });
+    });
+
+    it.each([
+      ['no overview', null],
+      ['no card_front (old server)', overview],
+      ['a different card’s front', { ...overview, card_front: { ...cardFront, card_id: 'other-card' } }],
+    ])('falls back to the generic preview with %s (greeting in the summary language, just the year)', (_label, ov) => {
+      const { getByTestId, getByText, queryByTestId } = renderLibrary({ items: [cardItem('card-1', 2026)], overview: ov });
+      expect(queryByTestId('keepsakes-card-card-1-object-front')).toBeNull();
+      expect(getByTestId('keepsakes-item-card:card-1').props.style).toEqual({ width: 132 });
+      expect(getByText('Felices fiestas')).toBeTruthy();
+      expect(within(getByTestId('keepsakes-card-card-1-object')).getByText('2026')).toBeTruthy();
+    });
   });
 });

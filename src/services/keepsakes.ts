@@ -5,6 +5,7 @@
 // flag, the holiday-card eligibility numbers and the order statuses. Fields
 // that are owner/manager-only come back null / [] for viewers.
 import { supabase } from '@/lib/supabase';
+import type { HolidayCardGreeting, HolidayCardLanguage } from '@/services/holiday-cards';
 
 /** The next monthly recap, with its progress toward the film floors. */
 export interface KeepsakesRecap {
@@ -31,6 +32,52 @@ export interface KeepsakesOrder {
   shipped_at: string | null;
 }
 
+export type KeepsakesCardLayout = 'bordered' | 'full-bleed';
+export type KeepsakesCardOrientation = 'landscape' | 'portrait';
+export type KeepsakesCardGreetingPosition =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
+
+const CARD_GREETINGS: readonly HolidayCardGreeting[] = ['christmas', 'holidays', 'new-year'];
+const CARD_GREETING_POSITIONS: readonly KeepsakesCardGreetingPosition[] = [
+  'top-left',
+  'top-center',
+  'top-right',
+  'bottom-left',
+  'bottom-center',
+  'bottom-right',
+];
+
+/**
+ * What the real card's FRONT looks like, as the family chose it in the shop
+ * editor (the newest card; null for viewers or when there is no card). Drives
+ * `HolidayCardFront`, the app's port of the print layout.
+ */
+export interface KeepsakesCardFront {
+  card_id: string;
+  year: number;
+  /** R2 key of the chosen front picture; null renders a warm wash. */
+  image_key: string | null;
+  /** The picture's pixel size; both null when unknown (the card's own aspect is assumed). */
+  width: number | null;
+  height: number | null;
+  layout: KeepsakesCardLayout;
+  orientation: KeepsakesCardOrientation;
+  /** Where the visible window sits in the crop slack (0..1 each), or null for the centre. */
+  focal: { x: number; y: number } | null;
+  greeting: HolidayCardGreeting;
+  language: HolidayCardLanguage;
+  /** The edited greeting text, or null for the language's default. */
+  greeting_text: string | null;
+  /** The edited small line; null = the year; "" = hidden. */
+  subline_text: string | null;
+  greeting_position: KeepsakesCardGreetingPosition;
+}
+
 export interface KeepsakesOverview {
   recap: KeepsakesRecap | null;
   /** Owner/manager only (null for viewers): does the family have a viewer member. */
@@ -45,6 +92,8 @@ export interface KeepsakesOverview {
   book_preview_keys: Record<string, string>;
   /** Always an array; empty for viewers. */
   orders: KeepsakesOrder[];
+  /** The newest card's front (owner/manager, and only when a card exists). */
+  card_front: KeepsakesCardFront | null;
 }
 
 const DEFAULT_MIN_MOMENTS = 10;
@@ -108,6 +157,55 @@ function parsePreviewKeys(raw: unknown): Record<string, string> {
   return keys;
 }
 
+function toPositiveInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+function toUnit(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : null;
+}
+
+function parseCardFront(raw: unknown): KeepsakesCardFront | null {
+  if (!isRecord(raw)) return null;
+  const cardId = toNonEmptyString(raw.card_id);
+  const year = toCount(raw.year);
+  // Without an id and a year there is no card to draw.
+  if (!cardId || year === null) return null;
+
+  // Both sides or neither: half a size cannot give an aspect.
+  const width = toPositiveInt(raw.width);
+  const height = toPositiveInt(raw.height);
+  const hasSize = width !== null && height !== null;
+
+  const focalX = isRecord(raw.focal) ? toUnit(raw.focal.x) : null;
+  const focalY = isRecord(raw.focal) ? toUnit(raw.focal.y) : null;
+
+  const orientation: KeepsakesCardOrientation =
+    raw.orientation === 'portrait' || raw.orientation === 'landscape'
+      ? raw.orientation
+      : hasSize && height > width
+        ? 'portrait'
+        : 'landscape';
+
+  return {
+    card_id: cardId,
+    year,
+    image_key: toNonEmptyString(raw.image_key),
+    width: hasSize ? width : null,
+    height: hasSize ? height : null,
+    // The print editor's third layout ("illustrated") is a band layout too.
+    layout: raw.layout === 'full-bleed' ? 'full-bleed' : 'bordered',
+    orientation,
+    focal: focalX !== null && focalY !== null ? { x: focalX, y: focalY } : null,
+    greeting: CARD_GREETINGS.find((key) => key === raw.greeting) ?? 'holidays',
+    language: raw.language === 'es' ? 'es' : 'en',
+    greeting_text: typeof raw.greeting_text === 'string' ? raw.greeting_text : null,
+    // "" is meaningful (hidden), so only a non-string becomes null.
+    subline_text: typeof raw.subline_text === 'string' ? raw.subline_text : null,
+    greeting_position: CARD_GREETING_POSITIONS.find((key) => key === raw.greeting_position) ?? 'bottom-left',
+  };
+}
+
 /**
  * Defensive parse of the RPC payload: anything unknown or missing becomes
  * null / `[]` / `{}`; never throws on shape. A non-object payload yields an
@@ -125,6 +223,7 @@ export function parseKeepsakesOverview(raw: unknown): KeepsakesOverview {
     preview_key: toNonEmptyString(row.preview_key),
     book_preview_keys: parsePreviewKeys(row.book_preview_keys),
     orders: parseOrders(row.orders),
+    card_front: parseCardFront(row.card_front),
   };
 }
 

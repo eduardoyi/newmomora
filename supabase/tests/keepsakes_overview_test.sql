@@ -1,13 +1,14 @@
 begin;
 
--- Keepsakes tab overview (20261009120000_keepsakes_overview.sql,
+-- Keepsakes tab overview (20261009120000_keepsakes_overview.sql +
+-- 20261010120000_keepsakes_overview_card_front.sql,
 -- docs/plans/keepsakes-redesign.md A1): public.keepsakes_overview and the
 -- internal pool helper public.keepsake_pool. FICTIONAL data only (public
 -- repo). DATE-INDEPENDENT: every memory is placed relative to the owner-local
 -- current month / year (the owner's timezone is far from UTC on purpose), and
 -- the holiday fixtures live in a family of their own so they never overlap
 -- the month fixtures.
-select plan(72);
+select plan(110);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -669,6 +670,237 @@ set local role postgres;
 select is((select doc->'recap' from ov where label = 'gate-billing'), 'null'::jsonb, 'recap is null when billing does not allow films');
 select isnt((select doc->>'preview_key' from ov where label = 'gate-billing'), null,
   'the owner extras do not depend on the recap gates');
+
+-- ---------------------------------------------------------------------------
+-- 9. card_front (20261010120000_keepsakes_overview_card_front.sql): the newest
+--    non-deleted holiday card's actual front, owner/manager only. A family of
+--    its own so the pool / order fixtures above never overlap.
+-- ---------------------------------------------------------------------------
+
+insert into auth.users (id, email, is_anonymous) values
+  ('ce000000-0000-4000-8000-000000000009', 'ko-card-owner@example.test', false),
+  ('ce000000-0000-4000-8000-00000000000a', 'ko-card-viewer@example.test', false);
+insert into public.families (id, name, owner_id) values
+  ('ce100000-0000-4000-8000-000000000004', 'Card front family', 'ce000000-0000-4000-8000-000000000009');
+insert into public.family_memberships (family_id, user_id, role) values
+  ('ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-000000000009', 'owner'),
+  ('ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-00000000000a', 'viewer');
+
+-- One media memory in the family (m1 jpeg with a preview, m2 heic, m3 png,
+-- m4 webp with a 1:2 aspect ratio, m5 video) and one in ANOTHER family (a
+-- foreign jpeg, id ...ff).
+insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, media_key, media_content_type, memory_date) values
+  ('ce390000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-000000000009',
+   'Card photos', 'media', 'none', 'cf-key/m1.jpg', 'image/jpeg', date '2020-06-01'),
+  ('ce390000-0000-4000-8000-0000000000ff', 'ce100000-0000-4000-8000-000000000002', 'ce000000-0000-4000-8000-000000000004',
+   'Foreign photo', 'media', 'none', 'cf-key/foreign.jpg', 'image/jpeg', date '2020-06-01');
+insert into public.memory_media (id, memory_id, object_key, preview_object_key, content_type, aspect_ratio, position) values
+  ('ce3a0000-0000-4000-8000-000000000001', 'ce390000-0000-4000-8000-000000000001', 'cf-key/m1.jpg', 'cf-key/m1-prev.jpg', 'image/jpeg', null, 0),
+  ('ce3a0000-0000-4000-8000-000000000002', 'ce390000-0000-4000-8000-000000000001', 'cf-key/m2.heic', null, 'image/heic', null, 1),
+  ('ce3a0000-0000-4000-8000-000000000003', 'ce390000-0000-4000-8000-000000000001', 'cf-key/m3.png', null, 'image/png', null, 2),
+  ('ce3a0000-0000-4000-8000-000000000004', 'ce390000-0000-4000-8000-000000000001', 'cf-key/m4.webp', null, 'image/webp', 0.5, 3),
+  ('ce3a0000-0000-4000-8000-000000000005', 'ce390000-0000-4000-8000-000000000001', 'cf-key/m5.mp4', 'cf-key/m5-poster.jpg', 'video/mp4', null, 4),
+  ('ce3a0000-0000-4000-8000-0000000000ff', 'ce390000-0000-4000-8000-0000000000ff', 'cf-key/foreign.jpg', null, 'image/jpeg', null, 0);
+
+-- No card yet.
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-none', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front' from ov where label = 'cf-none'), 'null'::jsonb,
+  'no card: card_front is JSON null');
+
+-- Two live cards (the newer one is the answer) and a NEWER soft-deleted one.
+-- Candidates in stored order: a legacy id, a heic, a foreign photo, a
+-- non-uuid, a video, a bare string (ignored by readFrontCandidates), then the
+-- png (m3, no size) and the jpeg (m1, 4000x3000).
+insert into public.holiday_cards (id, family_id, created_by, year, greeting, language, status, front_candidates, edits, created_at) values
+  ('ce510000-0000-4000-8000-000000000001', 'ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-000000000009', 2024, 'christmas', 'en', 'ready',
+   '[{"mediaId":"ce3a0000-0000-4000-8000-000000000001"}]', '{}', now() - interval '2 days'),
+  ('ce510000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-000000000009', 2025, 'new-year', 'es', 'ready',
+   '[{"mediaId":"legacy:ce390000-0000-4000-8000-000000000001"},
+     {"mediaId":"ce3a0000-0000-4000-8000-000000000002","rank":1},
+     {"mediaId":"ce3a0000-0000-4000-8000-0000000000ff","rank":2},
+     {"mediaId":"not-a-uuid","rank":3},
+     {"mediaId":"ce3a0000-0000-4000-8000-000000000005","rank":4},
+     "ce3a0000-0000-4000-8000-000000000001",
+     {"mediaId":"ce3a0000-0000-4000-8000-000000000003","rank":6},
+     {"mediaId":"ce3a0000-0000-4000-8000-000000000001","rank":7,"width":4000,"height":3000}]',
+   '{}', now() - interval '1 day');
+insert into public.holiday_cards (id, family_id, created_by, year, greeting, language, status, front_candidates, edits, created_at, deleted_at) values
+  ('ce510000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-000000000004', 'ce000000-0000-4000-8000-000000000009', 2026, 'holidays', 'en', 'ready',
+   '[{"mediaId":"ce3a0000-0000-4000-8000-000000000001"}]', '{}', now(), now());
+
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-default', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-00000000000a', true);
+insert into ov select 'cf-viewer', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+
+select is((select doc->'card_front'->>'card_id' from ov where label = 'cf-default'), 'ce510000-0000-4000-8000-000000000002',
+  'card_front is the newest NON-DELETED card (an older card and a newer soft-deleted one are skipped)');
+select is((select (doc->'card_front'->>'year')::int from ov where label = 'cf-default'), 2025,
+  'card_front carries the card''s year');
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-default'), 'cf-key/m3.png',
+  'default front: the first USABLE candidate in stored order (legacy, heic, foreign, non-uuid, video and bare-string entries skipped); no preview falls back to the original');
+select is((select doc->'card_front'->'width' from ov where label = 'cf-default'), 'null'::jsonb,
+  'no pixel size known for the default front: width is JSON null');
+select is((select doc->'card_front'->'height' from ov where label = 'cf-default'), 'null'::jsonb,
+  'no pixel size known for the default front: height is JSON null');
+select is((select doc->'card_front'->>'layout' from ov where label = 'cf-default'), 'bordered',
+  'layout defaults to bordered');
+select is((select doc->'card_front'->>'orientation' from ov where label = 'cf-default'), 'landscape',
+  'orientation defaults to landscape when the size is unknown');
+select is((select doc->'card_front'->>'greeting_position' from ov where label = 'cf-default'), 'bottom-left',
+  'greeting_position defaults to bottom-left');
+select is((select doc->'card_front'->'focal' from ov where label = 'cf-default'), 'null'::jsonb,
+  'no saved focal point: focal is JSON null');
+select is((select doc->'card_front'->'greeting_text' from ov where label = 'cf-default'), 'null'::jsonb,
+  'no text override: greeting_text is JSON null');
+select is((select doc->'card_front'->'subline_text' from ov where label = 'cf-default'), 'null'::jsonb,
+  'no text override: subline_text is JSON null');
+select is((select row(doc->'card_front'->>'greeting', doc->'card_front'->>'language')::text from ov where label = 'cf-default'),
+  '(new-year,es)', 'greeting and language come from the card row');
+select is((select (select array_agg(k order by k) from jsonb_object_keys(doc->'card_front') k)::text from ov where label = 'cf-default'),
+  '{card_id,focal,greeting,greeting_position,greeting_text,height,image_key,language,layout,orientation,subline_text,width,year}',
+  'card_front has exactly the documented keys');
+select is((select doc->'card_front' from ov where label = 'cf-viewer'), 'null'::jsonb,
+  'a viewer gets card_front null even when a card exists');
+select ok((select doc::text !~ 'cf-key/' from ov where label = 'cf-viewer'),
+  'a viewer''s payload carries no card photo key');
+
+-- A saved pick wins (a usable one, even when ranked below others): the
+-- preview key is preferred, the candidate entry supplies the pixel size.
+update public.holiday_cards set edits = '{"frontImage":"ce3a0000-0000-4000-8000-000000000001"}'
+where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick'), 'cf-key/m1-prev.jpg',
+  'a usable saved pick wins over the default and uses its preview key');
+select is((select row((doc->'card_front'->>'width')::int, (doc->'card_front'->>'height')::int)::text from ov where label = 'cf-pick'),
+  '(4000,3000)', 'the pick''s size comes from its front_candidates entry');
+select is((select doc->'card_front'->>'orientation' from ov where label = 'cf-pick'), 'landscape',
+  'wider than tall: landscape');
+
+-- An unusable pick (heic, foreign family, not a uuid, a video, a legacy id,
+-- an id that does not exist) falls back to the default front.
+update public.holiday_cards set edits = '{"frontImage":"ce3a0000-0000-4000-8000-000000000002"}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick-heic', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+update public.holiday_cards set edits = '{"frontImage":"ce3a0000-0000-4000-8000-0000000000ff"}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick-foreign', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+update public.holiday_cards set edits = '{"frontImage":"nope"}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick-junk', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+update public.holiday_cards set edits = '{"frontImage":"ce3a0000-0000-4000-8000-000000000005"}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick-video', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick-heic'), 'cf-key/m3.png',
+  'a heic pick is not printable: the default front is used');
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick-foreign'), 'cf-key/m3.png',
+  'another family''s photo as the pick is ignored: the default front is used');
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick-junk'), 'cf-key/m3.png',
+  'a non-uuid pick is ignored (and never errors): the default front is used');
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick-video'), 'cf-key/m3.png',
+  'a video pick is not a photo: the default front is used');
+
+-- A pick that is NOT a candidate still resolves; with only an aspect ratio
+-- the size is the editor's placeholder (3000 px long side) and a tall picture
+-- is a portrait card.
+update public.holiday_cards set edits = '{"frontImage":"ce3a0000-0000-4000-8000-000000000004"}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-pick-ratio', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-pick-ratio'), 'cf-key/m4.webp',
+  'a printable photo of the family resolves as the pick even when it is not a ranked candidate');
+select is((select row((doc->'card_front'->>'width')::int, (doc->'card_front'->>'height')::int)::text from ov where label = 'cf-pick-ratio'),
+  '(1500,3000)', 'no candidate entry: the size is a placeholder from the aspect ratio (3000 px long side)');
+select is((select doc->'card_front'->>'orientation' from ov where label = 'cf-pick-ratio'), 'portrait',
+  'taller than wide: portrait');
+
+-- Edits overrides. The choices.greeting in edits is ignored (the row wins);
+-- the focal point is read for the CHOSEN photo and clamped; "" survives.
+update public.holiday_cards set edits = '{
+  "frontImage": "ce3a0000-0000-4000-8000-000000000004",
+  "choices": {"layout": "full-bleed", "orientation": "landscape", "greeting": "christmas", "greetingPosition": "top-center"},
+  "focalPoints": {"ce3a0000-0000-4000-8000-000000000004": {"x": 1.7, "y": -0.2},
+                  "ce3a0000-0000-4000-8000-000000000001": {"x": 0.1, "y": 0.2}},
+  "text": {"front.greeting": "Happy everything!", "front.subline": "", "back.heading": "ignored"}
+}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-edits', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front'->>'layout' from ov where label = 'cf-edits'), 'full-bleed', 'edits.choices.layout full-bleed is honoured');
+select is((select doc->'card_front'->>'orientation' from ov where label = 'cf-edits'), 'landscape',
+  'edits.choices.orientation overrides the picture''s own (a tall picture forced to landscape)');
+select is((select doc->'card_front'->>'greeting_position' from ov where label = 'cf-edits'), 'top-center', 'edits.choices.greetingPosition is honoured');
+select is((select doc->'card_front'->'focal' from ov where label = 'cf-edits'), '{"x": 1, "y": 0}'::jsonb,
+  'the focal point of the chosen photo is returned, clamped to 0..1');
+select is((select doc->'card_front'->>'greeting_text' from ov where label = 'cf-edits'), 'Happy everything!', 'front.greeting override is returned');
+select is((select doc->'card_front'->'subline_text' from ov where label = 'cf-edits'), '""'::jsonb,
+  'an empty front.subline override ("hidden") is preserved as "", not null');
+select is((select doc->'card_front'->>'greeting' from ov where label = 'cf-edits'), 'new-year',
+  'the card row''s greeting is authoritative: edits.choices.greeting is ignored');
+
+-- Invalid values degrade to the defaults (normalizeCardEdits).
+update public.holiday_cards set edits = '{
+  "choices": {"layout": "weird", "orientation": "diagonal", "greetingPosition": "middle"},
+  "focalPoints": {"ce3a0000-0000-4000-8000-000000000003": {"x": "a", "y": 0.5}},
+  "text": {"front.greeting": 5, "front.subline": null}
+}' where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-invalid', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select row(doc->'card_front'->>'layout', doc->'card_front'->>'orientation', doc->'card_front'->>'greeting_position')::text
+           from ov where label = 'cf-invalid'),
+  '(bordered,landscape,bottom-left)', 'invalid layout / orientation / greetingPosition fall back to the defaults');
+select is((select row(doc->'card_front'->'focal', doc->'card_front'->'greeting_text', doc->'card_front'->'subline_text')::text
+           from ov where label = 'cf-invalid'),
+  '(null,null,null)', 'a malformed focal point and non-string text overrides are null');
+
+-- No usable photo at all: the rest of the card still comes back. The object
+-- form of front_candidates ({ candidates: [...] }) is read like the array.
+update public.holiday_cards set edits = '{}', front_candidates = '[{"mediaId":"ce3a0000-0000-4000-8000-000000000002"}]'
+where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-nophoto', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+update public.holiday_cards set front_candidates = '{"candidates":[{"mediaId":"ce3a0000-0000-4000-8000-000000000002"},{"mediaId":"ce3a0000-0000-4000-8000-000000000003"}]}'
+where id = 'ce510000-0000-4000-8000-000000000002';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-object', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select row(doc->'card_front'->'image_key', doc->'card_front'->>'greeting', doc->'card_front'->>'layout')::text
+           from ov where label = 'cf-nophoto'),
+  '(null,new-year,bordered)', 'no usable photo: image_key is null but the card, greeting and layout still come back');
+select is((select doc->'card_front'->>'image_key' from ov where label = 'cf-object'), 'cf-key/m3.png',
+  'front_candidates in the { candidates: [...] } form is read like the array');
+
+-- All cards soft-deleted: back to null.
+update public.holiday_cards set deleted_at = now() where family_id = 'ce100000-0000-4000-8000-000000000004';
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'ce000000-0000-4000-8000-000000000009', true);
+insert into ov select 'cf-deleted', public.keepsakes_overview('ce100000-0000-4000-8000-000000000004');
+set local role postgres;
+select is((select doc->'card_front' from ov where label = 'cf-deleted'), 'null'::jsonb,
+  'every card soft-deleted: card_front is JSON null');
 
 select * from finish();
 rollback;

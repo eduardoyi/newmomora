@@ -6,8 +6,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { KeepsakeBadge } from '@/components/keepsakes/keepsake-badge';
 import { KeepsakeFilmTile, shelfFilmDurationLabel } from '@/components/keepsakes/keepsake-film-tile';
-import { holidayCardObjectSize } from '@/components/keepsakes/holiday-card-object';
-import { SHELF_CARD_WIDTH, ShelfHolidayCard } from '@/components/keepsakes/shelf-holiday-card';
+import { ShelfHolidayCard, shelfHolidayCardSize } from '@/components/keepsakes/shelf-holiday-card';
 import {
   UpcomingRecapTile,
   upcomingRecapCaptionMeta,
@@ -16,7 +15,8 @@ import {
 import { BookCoverTile, type BookCoverTileStatus } from '@/components/memory-books/book-cover-tile';
 import { colors, fonts } from '@/constants/theme';
 import { formatYearRange } from '@/utils/memory-book-scope';
-import type { BookShelfItem, CardShelfItem, FilmShelfItem, ShelfItem } from '@/utils/keepsakes';
+import type { KeepsakesOverview } from '@/services/keepsakes';
+import { cardFrontFor, type BookShelfItem, type CardShelfItem, type FilmShelfItem, type ShelfItem } from '@/utils/keepsakes';
 import { filmTitle, type YearFilmMember } from '@/utils/year-films';
 
 /** The shared baseline: every object is bottom-aligned inside this zone. */
@@ -27,10 +27,8 @@ export const SHELF_BOOK_ITEM_WIDTH = 146;
 export interface ShelfItemViewProps {
   item: ShelfItem;
   members: readonly YearFilmMember[];
-  /** Names on the card front's tiny family line. */
-  cardNames: string[];
-  /** `overview.preview_key`, for the card's picture. */
-  cardImageKey: string | null;
+  /** The overview, for the holiday card's real front (`card_front`) and the fallback picture (`preview_key`). */
+  overview: KeepsakesOverview | null;
   onBookPress: (item: BookShelfItem) => void;
 }
 
@@ -45,12 +43,13 @@ function bookYearRangeLabel(book: BookShelfItem['row']['book']): string | null {
   return formatYearRange(book.scope_start_date, book.scope_end_date);
 }
 
-function itemWidth(item: ShelfItem): number {
+function itemWidth(item: ShelfItem, overview: KeepsakesOverview | null): number {
   switch (item.kind) {
     case 'book':
       return SHELF_BOOK_ITEM_WIDTH;
     case 'card':
-      return holidayCardObjectSize(SHELF_CARD_WIDTH).width;
+      // A landscape card is wider than a portrait one; the caption follows it.
+      return shelfHolidayCardSize(cardFrontFor(overview, item.cardId)).width;
     default:
       return SHELF_FILM_ITEM_WIDTH;
   }
@@ -99,9 +98,9 @@ export function shelfCaption(
   }
 }
 
-export function ShelfItemView({ item, members, cardNames, cardImageKey, onBookPress }: ShelfItemViewProps) {
+export function ShelfItemView({ item, members, overview, onBookPress }: ShelfItemViewProps) {
   const { title, meta } = shelfCaption(item, members);
-  const width = itemWidth(item);
+  const width = itemWidth(item, overview);
 
   let object;
   switch (item.kind) {
@@ -120,8 +119,9 @@ export function ShelfItemView({ item, members, cardNames, cardImageKey, onBookPr
       object = (
         <ShelfHolidayCard
           cardId={(item as CardShelfItem).cardId}
-          imageKey={cardImageKey}
-          names={cardNames}
+          front={cardFrontFor(overview, (item as CardShelfItem).cardId)}
+          imageKey={overview?.preview_key ?? null}
+          language={(item as CardShelfItem).summary.language}
           year={item.year}
         />
       );

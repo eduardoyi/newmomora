@@ -1271,9 +1271,12 @@ editable/orderable until its film is done; meanwhile the app and shop show "Prep
 - **`holiday_card_summary`** (dropped and recreated; same args, zero-row rules, fields and
   grant) gains a trailing **`readiness text`** column (null when no card).
 
-**Keepsakes overview** (migration `20261009120000_keepsakes_overview.sql`, pgTAP
-`supabase/tests/keepsakes_overview_test.sql`, rollback
-`supabase/rollbacks/20261009120000_keepsakes_overview_down.sql`, applied by hand; plan
+**Keepsakes overview** (migrations `20261009120000_keepsakes_overview.sql` +
+`20261010120000_keepsakes_overview_card_front.sql` (adds `card_front`), pgTAP
+`supabase/tests/keepsakes_overview_test.sql`, rollbacks
+`supabase/rollbacks/20261009120000_keepsakes_overview_down.sql` (drops the RPC and pool
+helper) and `20261010120000_keepsakes_overview_card_front_down.sql` (restores the
+pre-`card_front` function), applied by hand; plan
 [keepsakes-redesign.md](plans/keepsakes-redesign.md) A1). One member RPC feeds the
 whole Keepsakes tab.
 
@@ -1287,7 +1290,12 @@ whole Keepsakes tab.
     has_viewers: bool|null, year_moments: int|null, holiday_pool: int|null,
     holiday_min_pool: 20|null, holiday_ship_by_note: text|null, preview_key: text|null,
     book_preview_keys: { "<family_member_id>": "<key>" }|null,
-    orders: [ { product: 'book'|'card', item_id: uuid, status: text, shipped_at: timestamptz|null } ] }
+    orders: [ { product: 'book'|'card', item_id: uuid, status: text, shipped_at: timestamptz|null } ],
+    card_front: null | { card_id: uuid, year: int, image_key: text|null, width: int|null,
+                         height: int|null, layout: 'bordered'|'full-bleed',
+                         orientation: 'landscape'|'portrait', focal: {x, y}|null,
+                         greeting: text, language: text, greeting_text: text|null,
+                         subline_text: text|null, greeting_position: text } }
   ```
   - **`recap`** (all members): null unless the family passes `year_films_enabled`'s gates
     **minus the ≥ 10 memories check** (rollout includes the family, `launch_date <=` the
@@ -1305,6 +1313,31 @@ whole Keepsakes tab.
     one-year lookback); `book_preview_keys` (the same, per **own child** by
     `year_film_is_own_child`, memories tagged via `memory_family_members`; children with
     no picture are omitted); `orders`.
+  - **`card_front`** (owner/manager only; JSON `null` for viewers and when the family
+    has no card): the family's actual holiday card front, for the Keepsakes tile. The card
+    is the one `holiday_card_summary` returns (newest non-deleted card by `created_at desc,
+    id desc`, live family). `image_key` is the chosen front's
+    `memory_media.preview_object_key ?? object_key` (the app signs it). The chosen front
+    mirrors the editor (`resolveFrontId` / `buildEditorView` in
+    `_shared/holiday-card-snapshot.ts`, `readFrontCandidates` / `resolveFamilyPhotos` in
+    `holiday-cards/index.ts`): a saved `edits.frontImage` wins when it is a printable
+    (`jpeg | png | webp`) `memory_media` photo of THIS family (it need not be a ranked
+    candidate); otherwise the first such candidate in the stored `front_candidates` order
+    (array or `{ candidates: [...] }`; objects with a string `mediaId`, first 100; `legacy:`,
+    non-uuid, foreign-family, HEIC and video ids are skipped). Nothing resolvable →
+    `image_key`, `width`, `height` and `focal` are null, the rest is still returned.
+    `width`/`height`: the candidate entry's size when both are > 0, else a placeholder from
+    `memory_media.aspect_ratio` on a 3000 px long side (the editor's `sizeOf`), else null.
+    `layout` / `orientation` / `greeting_position` come from `edits.choices` only when they
+    are valid enum values (`normalizeCardEdits`), else `bordered` / `landscape` unless the
+    size is taller than wide (`portrait`; a square or unknown size is landscape,
+    `orientationFromImage`) / `bottom-left`. `focal` is `edits.focalPoints[<chosen id>]`
+    clamped to 0..1 (null when absent or malformed). `greeting` and `language` are the
+    card row's (authoritative; `edits.choices.greeting` is ignored). `greeting_text` /
+    `subline_text` are the `edits.text['front.greeting' | 'front.subline']` overrides when
+    they are strings, else null; `""` is preserved (the parent hid the subline). **To extend:**
+    any new front-affecting edit must be added here, in `normalizeCardEdits` and in the
+    renderer together; the pgTAP test pins every rule.
   - **`orders`**: per item, the single latest row (`created_at desc, id desc`) among
     **paid-or-later, non-refunded** rows. Books: `paid | rendering | submitted |
     in_production | shipped | delivered` (`shipped_at` is always null: the table has

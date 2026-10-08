@@ -1,8 +1,6 @@
-import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import {
   YEAR_FILMS_POLL_INTERVAL_MS,
-  buildKeepsakeYears,
   filmDisplayState,
   filmSubtitle,
   filmTitle,
@@ -242,124 +240,6 @@ describe('isNewFilm', () => {
 
   it('is not new before it has surfaced', () => {
     expect(isNewFilm(film({ surface_at: surfaced(-1) }), new Set(), now)).toBe(false);
-  });
-});
-
-function book(overrides: Partial<MemoryBookListRow> = {}): MemoryBookListRow {
-  return {
-    id: 'book-1',
-    family_id: 'family-1',
-    child_id: 'tomas',
-    status: 'ready',
-    scope_kind: 'age_year',
-    scope_start_date: '2025-06-01',
-    scope_end_date: '2026-05-31',
-    scope_label: 'Year Three',
-    failure_reason: null,
-    cover_asset_key: null,
-    created_at: '2026-06-02T00:00:00.000Z',
-    updated_at: '2026-06-02T00:00:00.000Z',
-    ...overrides,
-  };
-}
-
-describe('buildKeepsakeYears', () => {
-  const kids = [
-    { id: 'tomas', name: 'Tomás', relationship: 'child', date_of_birth: '2022-10-14' },
-    { id: 'mia', name: 'Mia', relationship: 'child', date_of_birth: '2024-02-02' },
-    { id: 'mom', name: 'Mom', relationship: 'parent', date_of_birth: '1990-01-01' },
-  ];
-  const today = '2026-09-29';
-
-  it('always includes the current year, with a shelf per own child', () => {
-    const years = buildKeepsakeYears([], [], kids, today);
-    expect(years).toHaveLength(1);
-    expect(years[0].year).toBe(2026);
-    expect(years[0].familyFilms).toEqual({ yearEnd: null, recaps: [] });
-    expect(years[0].children.map((c) => c.member.id)).toEqual(['tomas', 'mia']);
-  });
-
-  it('files films under the year of their placement date, newest year first', () => {
-    const films = [
-      film({ id: 'b26', placement_date: '2026-10-14' }),
-      yearFilm('y25', 2025),
-      monthFilm('m-sep', '2026-09-30'),
-      monthFilm('m-aug', '2026-08-31'),
-      monthFilm('m-dec25', '2025-12-31'),
-    ];
-    const years = buildKeepsakeYears(films, [], kids, today);
-    expect(years.map((y) => y.year)).toEqual([2026, 2025]);
-    const y26 = years[0];
-    expect(y26.familyFilms.yearEnd).toBeNull();
-    expect(y26.familyFilms.recaps.map((f) => f.id)).toEqual(['m-sep', 'm-aug']);
-    expect(y26.children.find((c) => c.member.id === 'tomas')!.films.map((f) => f.id)).toEqual(['b26']);
-    const y25 = years[1];
-    expect(y25.familyFilms.yearEnd?.id).toBe('y25');
-    expect(y25.familyFilms.recaps.map((f) => f.id)).toEqual(['m-dec25']);
-  });
-
-  it('sorts recaps newest first and birthday films newest first per child', () => {
-    const films = [
-      monthFilm('jan', '2026-01-31'),
-      monthFilm('mar', '2026-03-31'),
-      monthFilm('feb', '2026-02-28'),
-      film({ id: 'b-early', placement_date: '2026-01-10' }),
-      film({ id: 'b-late', placement_date: '2026-06-10' }),
-    ];
-    const [y26] = buildKeepsakeYears(films, [], kids, today);
-    expect(y26.familyFilms.recaps.map((f) => f.id)).toEqual(['mar', 'feb', 'jan']);
-    expect(y26.children.find((c) => c.member.id === 'tomas')!.films.map((f) => f.id)).toEqual(['b-late', 'b-early']);
-  });
-
-  it('files a book under the year its scope ends, else its creation year', () => {
-    const books = [
-      book({ id: 'ends-2026', scope_end_date: '2026-05-31', created_at: '2026-06-02T00:00:00.000Z' }),
-      book({ id: 'ends-2025', scope_end_date: '2025-05-31', created_at: '2026-06-03T00:00:00.000Z' }),
-      book({ id: 'everything', scope_kind: 'everything', scope_start_date: null, scope_end_date: null, created_at: '2024-04-01T00:00:00.000Z' }),
-    ];
-    const years = buildKeepsakeYears([], books, kids, today);
-    expect(years.map((y) => y.year)).toEqual([2026, 2025, 2024]);
-    expect(years[0].children.find((c) => c.member.id === 'tomas')!.books.map((b) => b.id)).toEqual(['ends-2026']);
-    expect(years[1].children.map((c) => c.books.map((b) => b.id))).toEqual([['ends-2025']]);
-    expect(years[2].children.map((c) => c.books.map((b) => b.id))).toEqual([['everything']]);
-  });
-
-  it('lists a past year\'s children only when they have something that year', () => {
-    const films = [film({ id: 'b25', placement_date: '2025-10-14' })];
-    const years = buildKeepsakeYears(films, [], kids, today);
-    const y25 = years.find((y) => y.year === 2025)!;
-    expect(y25.children.map((c) => c.member.id)).toEqual(['tomas']);
-  });
-
-  it('applies the shelf rule: own children or anyone with a book', () => {
-    const books = [book({ child_id: 'mom', scope_end_date: '2026-05-31' })];
-    const [y26] = buildKeepsakeYears([], books, kids, today);
-    expect(y26.children.map((c) => c.member.id)).toEqual(['tomas', 'mia', 'mom']);
-    expect(y26.children.find((c) => c.member.id === 'mom')!.books).toHaveLength(1);
-  });
-
-  it('treats an unsorted member under 13 as a child, and an adult as not', () => {
-    const unsorted = [
-      { id: 'kid', name: 'Kid', relationship: null, date_of_birth: '2020-01-01' },
-      { id: 'adult', name: 'Adult', relationship: null, date_of_birth: '1985-01-01' },
-    ];
-    const [y26] = buildKeepsakeYears([], [], unsorted, today);
-    expect(y26.children.map((c) => c.member.id)).toEqual(['kid']);
-  });
-
-  it('omits birthday films whose member is gone', () => {
-    const films = [film({ id: 'orphan', family_member_id: 'ghost', placement_date: '2025-10-14' })];
-    const years = buildKeepsakeYears(films, [], kids, today);
-    expect(years.flatMap((y) => y.children.flatMap((c) => c.films))).toEqual([]);
-  });
-
-  it('sorts a child\'s books newest created first', () => {
-    const books = [
-      book({ id: 'old', created_at: '2026-01-02T00:00:00.000Z' }),
-      book({ id: 'new', created_at: '2026-06-02T00:00:00.000Z' }),
-    ];
-    const [y26] = buildKeepsakeYears([], books, kids, today);
-    expect(y26.children.find((c) => c.member.id === 'tomas')!.books.map((b) => b.id)).toEqual(['new', 'old']);
   });
 });
 

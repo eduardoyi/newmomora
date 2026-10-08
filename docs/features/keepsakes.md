@@ -81,10 +81,15 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
 `keepsakes_product_opened { product }`.
 - **Holiday card** (`keepsakes-store-holiday-card`): only in season
   (`holiday_card_summary.enabled`, the server switch) and for owners/managers.
-  It leads the row, wider, with the card object (`HolidayCardObject`) on the
-  family's newest picture (`overview.preview_key`), the subtitle "Your card
-  could look like this, with a letter from your year." and a pill with
-  `overview.holiday_ship_by_note` verbatim (hidden when null).
+  It leads the row, wider, with the card object (`HolidayCardObject`), the
+  subtitle "Your card could look like this, with a letter from your year." and a
+  pill with `overview.holiday_ship_by_note` verbatim (hidden when null). The
+  object is the family's **real card front** once a card exists this season
+  (see "The real card front" below), sized to fit the 178-high tile whether
+  the card is landscape or portrait; before that, the generic "could look
+  like this" preview on the family's newest picture (`overview.preview_key`),
+  with the language's default greeting (`holiday_card_summary.language`:
+  "Happy Holidays" / "Felices fiestas") and just the year.
 - **Memory Book** (`keepsakes-store-memory-book`): always for owners/managers.
   The `BookCoverTile` uses `overview.book_preview_keys[firstOwnChildId]` (a wash
   when none).
@@ -110,11 +115,16 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
   films") that open in place and fold again from the year header
   (`keepsakes-year-toggle-{year}`; logs `keepsakes_year_toggled`). Items:
   film poster (`keepsake-film-tile.tsx`, `variant: 'shelf'`), book hardcover
-  (`BookCoverTile`), holiday card front with an envelope peeking out behind it
-  (`shelf-holiday-card.tsx`), and the **next-up recap tile**
+  (`BookCoverTile`), the real holiday card front with an envelope peeking out
+  behind it (`shelf-holiday-card.tsx`; portrait 104 wide, landscape 150 wide, same
+  baseline, the caption follows the object's width), and the **next-up recap tile**
   (`upcoming-recap-tile.tsx`, `keepsakes-upcoming-recap`). A year with more than 3
   monthly recaps ends its row with an "All {year} recaps" tile
   (`keepsakes-recaps-{year}`, `keepsakeRecapsRoute(year)`).
+- **Order within a year:** the upcoming-recap tile first, then the **year-end film**
+  (`kind: 'family_year'`, whatever its date says), then everything else newest date
+  first (`compareWithinYear` in `src/utils/keepsakes.ts`, used by `buildShelfItems`
+  and `groupShelfByYear`).
 - **Next-up recap tile:** dashed with a progress bar and "{N} more moments this
   month" (or "{n} more with a picture") before the floors (10 moments, 6
   visuals), solid with "arrives {Mon d}" in Caveat after. The faded picture is the
@@ -176,8 +186,11 @@ when there is no history (a cold-start deep link); `leaveAfterModalDismiss` wait
 
 - Testids: `keepsakes-product-holiday-card`, `holiday-card-product-cta`,
   `keepsakes-product-back`, `holiday-card-product-stage`.
-- Stage: `HolidayCardObject` (width 154) on `overview.preview_key`; the family
-  line is `holidayCardFamilyLine(own children's first names, year)`.
+- Stage: `HolidayCardObject`. With a card this season (`activeCardFront`) it is
+  the real front fitted into the stage (landscape up to 280 wide / 260 high with
+  the envelope, portrait height-bound); otherwise the generic 154-wide preview on
+  `overview.preview_key` ("Happy Holidays" / "Felices fiestas" per the summary
+  language, and the year).
 - Eyebrow "HOLIDAY CARDS · {year}", title "Your family, on this year's card.", the
   facts "5×7, printed on both sides. Shipped to your door." / the QR fact /
   "One card per family each year. Order more copies anytime.", and the ship-by pill
@@ -252,6 +265,50 @@ when there is no history (a cold-start deep link); `leaveAfterModalDismiss` wait
   the tab never unmounts, so a route param could re-show it on every focus);
   `KeepsakesTab` consumes it on focus and shows `BookToast`.
 
+#### The real card front (`holiday-card-front.tsx`)
+
+`keepsakes_overview.card_front` (owner/manager, null without a card) describes the
+front the family designed in the shop editor: `card_id`, `year`, `image_key`, the
+picture's `width`/`height`, `layout` (`bordered` | `full-bleed`), `orientation`,
+`focal`, `greeting` + `language`, the edited `greeting_text` / `subline_text`
+(`""` = hidden) and `greeting_position`. `parseKeepsakesOverview` parses it into
+`KeepsakesCardFront | null` defensively (unknown layout -> bordered, unknown
+greeting -> holidays, a size only when both sides are valid, focal clamped).
+
+`HolidayCardFront` is a React Native port of the **print layout** (source of truth:
+`book-renderer/src/card/document.ts` `buildFront`, `geometry.ts`, `CardFront.tsx`,
+`fromData.ts`, `greetings.ts`). All geometry is pure and unit-tested in
+`src/utils/holiday-card-front.ts` (`buildHolidayCardFrontLayout`); the component only
+draws it. It renders the 5R **trim** (177.8 x 127 mm, rotated for portrait; the 4 mm
+bleed is dropped) at `width` px, so 1 mm = `width / trimW` px:
+- **Full-bleed:** the picture covers the trim (focal -> expo-image `contentPosition`
+  percentages, the same semantics as the print crop), a top or bottom scrim (42% of
+  the PAGE height, gradient `rgba(24,20,40,.36)` -> `.15` at 45% -> 0), the stacked
+  greeting (27pt landscape / 24pt portrait, Newsreader italic) and the 7pt small line
+  (Plus Jakarta Sans bold, uppercase, 0.32em tracking), 12 mm from the trim, 2 mm
+  apart, white / 88% white, aligned by `greeting_position`.
+- **Bordered:** paper `#FAF8FC`, a picture box = `fitBoxToImage` (an exact port) in
+  the area left by an 8 mm margin and a 21 mm band, square corners, then one centred
+  baseline row (greeting 20pt landscape / 21pt portrait, 4 mm gap, small line) whose
+  text sits 8.5 mm above the trim bottom, in `accentInk` / `accent`.
+- Texts: greeting = `greeting_text` else the language default (`HOLIDAY_CARD_GREETING_TEXT`,
+  mirroring `greetings.ts`); small line = `subline_text` else the year, hidden when empty.
+- Unknown picture size -> the card's own aspect is assumed. The format is always 5R
+  (the overview does not say 5R vs A5; they differ by ~1.4% in aspect).
+
+`HolidayCardObject` wraps the front (or the generic preview) with the tilted kraft
+envelope; `holidayCardObjectLayout(w, h)` gives its geometry for any aspect (the
+envelope peeks by the card's shorter side) and `holidayCardWidthToFit` sizes a card
+into a box. The tab shows the real front only when `card_front.card_id` matches the
+summary's card (`cardFrontFor` / `activeCardFront`): the two queries can briefly
+disagree after a create, and the wrong picture must not sit under another card's
+badge. With no `card_front` (viewer, overview failed, old server) everything falls
+back to the generic preview.
+
+To change the print layout: change `book-renderer/src/card/document.ts` first, then
+mirror the constants in `src/utils/holiday-card-front.ts` (they carry pointers to the
+source lines) and the tests, whose expected numbers come from running `geometry.ts`.
+
 ### One child's keepsakes (stack, unchanged)
 
 `app/(app)/keepsakes/[memberId].tsx` (`memoryBooksRoute(memberId)`), opened from
@@ -303,7 +360,8 @@ flowchart LR
 - **Pure helpers** (`src/utils/keepsakes.ts`, no React, "today" passed in):
   `buildRelevantBookRows` (books deduplicated through the per-child row logic first),
   `buildShelfItems`, the badge mapping, `groupShelfByYear`, `yearSummaryLabel`,
-  `pickNeedsYou`, `applyKeepsakesFilter`, `splitScopeOptions`.
+  `pickNeedsYou`, `applyKeepsakesFilter`, `splitScopeOptions`, `cardFrontFor`,
+  `activeCardFront`.
   `holidayCardTileState` lives in `src/utils/holiday-card-state.ts`.
 - **"Today"** decides scope options and what a previous-year card means. The tab
   recomputes it on every focus; a stack page fixes it for the visit.
@@ -324,7 +382,8 @@ crashes). Contract: [TECH_SPEC.md](../TECH_SPEC.md) next to the holiday-card RPC
 | `has_viewers` | owner/manager | the privacy cue |
 | `year_moments`, `holiday_pool`, `holiday_min_pool` (20) | owner/manager | the card page's eligibility line and QR promise |
 | `holiday_ship_by_note` | owner/manager | the ship-by pill (null out of season) |
-| `preview_key` | owner/manager | the card object (storefront + card page) |
+| `preview_key` | owner/manager | the generic card preview (storefront + card page, before a card exists) |
+| `card_front` | owner/manager | the real card front on the shelf, the storefront and the card page (see "The real card front") |
 | `book_preview_keys` (`childId -> key`) | owner/manager | the book cover on the storefront and the book page |
 | `orders` (status only, never address or price) | owner/manager | order badges; latest paid-or-later row per item, refunds excluded |
 
@@ -388,7 +447,9 @@ The overview RPC is read-only. Otherwise the tab reads `memory_books`
 - Units: `src/utils/keepsakes.test.ts`, `src/utils/keepsake-product-pages.test.ts`,
   `src/utils/holiday-card-state.test.ts`, `src/lib/routes.test.ts`,
   `src/lib/keepsakes-toast.test.ts`, `src/hooks/useLeaveKeepsakesPage.test.ts`,
-  `src/components/keepsakes/holiday-card-object.test.tsx`, plus the tab components'
+  `src/components/keepsakes/holiday-card-object.test.tsx`,
+  `holiday-card-front.test.tsx`, `src/utils/holiday-card-front.test.ts` (print
+  geometry), plus the tab components'
   own tests and `src/hooks/useKeepsakesOverview.integration.test.tsx`,
   `src/services/keepsakes.test.ts`.
 - Maestro: `keepsakes/open-keepsakes.yaml` (header, library, store -> Memory Book
@@ -404,3 +465,4 @@ The overview RPC is read-only. Otherwise the tab reads `memory_books`
 | 2026-10-02 | Example book cover uses illustrations; new-family films intro; "not enough memories yet" create sheet |
 | 2026-10-06 | Holiday card tile + greeting sheet (Holiday Cards P2 Step 6) |
 | 2026-10-08 | Tab redesign ([plan](../plans/keepsakes-redesign.md)): needs-you line, "Make something" storefront, "Your keepsakes" library with filter/badges/folded years, next-up recap tile, viewer "Family films" page; native Holiday card and Memory Book product pages (no prices, "Free to make"); `keepsakes_overview` RPC; old tab-only body, `HolidayCardTile`, `UpcomingRecapCard`, `KeepsakeYearSection` and `ChildPickerSheet` removed |
+| 2026-10-08 | Real holiday card front on the shelf, the storefront tile and the card page (`card_front`, landscape and portrait, full-bleed and bordered); the generic preview now says the language's default greeting and just the year; the year-end film leads its year; `keepsakes_create_book_tapped` fires from the Memory Book page and the stack screen; dead code removed (`buildKeepsakeYears`, `keepsakesFilterCount`, `holidayCardFamilyLine`, `yearFilmsEnabledQueryKey`) |

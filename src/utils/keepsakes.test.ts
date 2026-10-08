@@ -1,19 +1,20 @@
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesOrder, KeepsakesOverview } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOrder, KeepsakesOverview } from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import { buildMemoryBookRows } from '@/hooks/useMemoryBooks';
 import {
   DEFAULT_KEEPSAKES_FILTER,
+  activeCardFront,
   applyKeepsakesFilter,
   availableYears,
   bookBadge,
   buildChildChips,
   buildRelevantBookRows,
   buildShelfItems,
+  cardFrontFor,
   formatMonthDay,
   groupShelfByYear,
-  keepsakesFilterCount,
   monthNameOf,
   pickNeedsYou,
   reconcileKeepsakesFilter,
@@ -116,6 +117,7 @@ function overview(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview
     preview_key: null,
     book_preview_keys: {},
     orders: [],
+    card_front: null,
     ...overrides,
   };
 }
@@ -331,6 +333,75 @@ describe('buildShelfItems', () => {
   });
 });
 
+describe('the year-end film leads its year', () => {
+  it('sits before the December recap even when the recap is newer or ties on date (and by id)', () => {
+    const films = [
+      monthFilm('a-nov', '2025-11-30'),
+      monthFilm('a-dec', '2025-12-31'), // ties with the year film's date, and sorts before it by id
+      yearEndFilm('z-year', 2025),
+      monthFilm('b-newer', '2025-12-31', { scope_start_date: '2025-12-01' }),
+    ];
+    const items = build({ films });
+    expect(items.map((i) => i.id)).toEqual(['film:z-year', 'film:a-dec', 'film:b-newer', 'film:a-nov']);
+    // Same through the year grouping the library renders.
+    expect(groupShelfByYear(items.slice().reverse(), TODAY)[0]!.items.map((i) => i.id)).toEqual([
+      'film:z-year',
+      'film:a-dec',
+      'film:b-newer',
+      'film:a-nov',
+    ]);
+  });
+
+  it('still comes after the upcoming-recap tile and ahead of the card and books of its year', () => {
+    const items = build({
+      films: [monthFilm('m-dec', '2026-12-31'), yearEndFilm('y-2026', 2026)],
+      bookRows: rowsFor([book({ id: 'b-26', scope_kind: 'everything', scope_start_date: null, scope_end_date: null, scope_label: 'Everything', created_at: '2026-05-31T10:00:00.000Z' })]),
+      cardSummary: card({ year: 2026 }),
+      overview: overview({ recap: recap() }),
+    });
+    expect(items.map((i) => i.id)).toEqual(['upcoming-recap', 'film:y-2026', 'film:m-dec', 'card:card-1', 'book:b-26']);
+  });
+});
+
+const front: KeepsakesCardFront = {
+  card_id: 'card-1',
+  year: 2026,
+  image_key: 'k',
+  width: 4000,
+  height: 3000,
+  layout: 'bordered',
+  orientation: 'landscape',
+  focal: null,
+  greeting: 'holidays',
+  language: 'en',
+  greeting_text: null,
+  subline_text: null,
+  greeting_position: 'bottom-left',
+};
+
+describe('cardFrontFor / activeCardFront', () => {
+  it('returns the front only for the card it belongs to', () => {
+    expect(cardFrontFor(overview({ card_front: front }), 'card-1')).toBe(front);
+    expect(cardFrontFor(overview({ card_front: front }), 'card-2')).toBeNull();
+    expect(cardFrontFor(overview({ card_front: front }), null)).toBeNull();
+    expect(cardFrontFor(overview(), 'card-1')).toBeNull();
+    expect(cardFrontFor(null, 'card-1')).toBeNull();
+  });
+
+  it('is active only while this season has a card (not "make", not hidden)', () => {
+    const ov = overview({ card_front: front });
+    expect(activeCardFront(ov, card(), TODAY)).toBe(front);
+    expect(activeCardFront(ov, card({ ordered: true }), TODAY)).toBe(front);
+    // No card yet.
+    expect(activeCardFront(ov, card({ cardId: null, year: null }), TODAY)).toBeNull();
+    // A card from a previous year that was never ordered counts as no card ("make").
+    expect(activeCardFront(overview({ card_front: { ...front, year: 2025 } }), card({ year: 2025 }), TODAY)).toBeNull();
+    // Out of season with no card: hidden.
+    expect(activeCardFront(ov, card({ enabled: false, cardId: null, year: null }), TODAY)).toBeNull();
+    expect(activeCardFront(ov, null, TODAY)).toBeNull();
+  });
+});
+
 describe('badges', () => {
   const ready = () => rowsFor([book()])[0]!;
 
@@ -496,7 +567,6 @@ describe('applyKeepsakesFilter and friends', () => {
 
   it('defaults to everything', () => {
     expect(applyKeepsakesFilter(items, DEFAULT_KEEPSAKES_FILTER)).toEqual(items);
-    expect(keepsakesFilterCount(DEFAULT_KEEPSAKES_FILTER)).toBe(0);
   });
 
   it('a child chip keeps only that child’s items; family-wide items show only under All', () => {
@@ -518,7 +588,6 @@ describe('applyKeepsakesFilter and friends', () => {
       applyKeepsakesFilter(items, { memberId: 'tomas', type: 'films', year: 2026 }).map((i) => i.id),
     ).toEqual(['film:bday-tomas']);
     expect(applyKeepsakesFilter(items, { memberId: 'lucia', type: 'books', year: null })).toEqual([]);
-    expect(keepsakesFilterCount({ memberId: 'tomas', type: 'films', year: 2026 })).toBe(3);
   });
 
   it('lists the years that have items, newest first', () => {

@@ -59,7 +59,6 @@ export const memoryBookEligibilityQueryKeyBase = 'memory-book-eligibility' as co
 export const yearFilmsQueryKeyBase = 'year-films' as const;
 export const yearFilmViewsQueryKeyBase = 'year-film-views' as const;
 export const yearFilmPosterQueryKeyBase = 'year-film-poster' as const;
-export const yearFilmsEnabledQueryKeyBase = 'year-films-enabled' as const;
 export const holidayCardQueryKeyBase = 'holiday-card' as const;
 // Keepsakes tab `keepsakes_overview` RPC (docs/plans/keepsakes-redesign.md B2).
 // Not on the query-persistence allow-list: it carries storage keys for pictures.
@@ -226,10 +225,6 @@ export function yearFilmViewsQueryKey(userId: string | null | undefined) {
  * not re-sign everything. */
 export function yearFilmPosterQueryKey(filmId: string) {
   return [yearFilmPosterQueryKeyBase, filmId] as const;
-}
-
-export function yearFilmsEnabledQueryKey(familyId: string | null | undefined) {
-  return [yearFilmsEnabledQueryKeyBase, familyId] as const;
 }
 
 /** The Keepsakes holiday-card tile's `holiday_card_summary` row. */

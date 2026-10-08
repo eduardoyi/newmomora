@@ -48,8 +48,6 @@ export interface KeepsakesLibraryProps {
   /** Past years the user opened; the current year (and a filtered year) is always open. */
   openYears: ReadonlySet<number>;
   onToggleYear: (year: number, nextOpen: boolean) => void;
-  /** Names on the holiday card object's tiny family line. */
-  cardNames: string[];
   onBookPress: (item: BookShelfItem) => void;
 }
 
@@ -74,7 +72,6 @@ function YearShelf({
   members,
   role,
   overview,
-  cardNames,
   onToggle,
   onBookPress,
 }: {
@@ -84,7 +81,6 @@ function YearShelf({
   members: readonly FamilyMember[];
   role: string | null | undefined;
   overview: KeepsakesOverview | null;
-  cardNames: string[];
   onToggle: () => void;
   onBookPress: (item: BookShelfItem) => void;
 }) {
@@ -148,12 +144,11 @@ function YearShelf({
       >
         {year.items.map((item) => (
           <ShelfItemView
-            cardImageKey={overview?.preview_key ?? null}
-            cardNames={cardNames}
             item={item}
             key={item.id}
             members={members}
             onBookPress={onBookPress}
+            overview={overview}
           />
         ))}
         {year.showAllRecapsTile ? <AllRecapsTile year={year.year} /> : null}
@@ -174,7 +169,6 @@ export function KeepsakesLibrary({
   onResetFilter,
   openYears,
   onToggleYear,
-  cardNames,
   onBookPress,
 }: KeepsakesLibraryProps) {
   const canEdit = canEditFamilyContent(role);
@@ -277,7 +271,6 @@ export function KeepsakesLibrary({
           return (
             <YearShelf
               canToggle={!forcedOpen}
-              cardNames={cardNames}
               isOpen={isOpen}
               key={year.year}
               members={members}

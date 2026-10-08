@@ -36,6 +36,7 @@ jest.mock('@/utils/gallery-import-flags', () => ({
     return mockGalleryImportEnabled;
   },
 }));
+jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('expo-symbols', () => ({ SymbolView: () => null }));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: () => null }));
 jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
@@ -57,6 +58,8 @@ jest.mock('react-native-safe-area-context', () => {
   return { ...actual, useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }) };
 });
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { trackEvent: mockTrackEvent } = require('@/services/analytics') as { trackEvent: jest.Mock };
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedUseFamilyMembers = useFamilyMembers as jest.MockedFunction<typeof useFamilyMembers>;
 const mockedUseFamilyMemoryBooks = useFamilyMemoryBooks as jest.MockedFunction<typeof useFamilyMemoryBooks>;
@@ -106,7 +109,7 @@ let childSetups: Record<string, ChildSetup> = {};
 function overview(overrides: Partial<KeepsakesOverview> = {}): KeepsakesOverview {
   return {
     recap: null, has_viewers: false, year_moments: 34, holiday_pool: 28, holiday_min_pool: 20, holiday_ship_by_note: null,
-    preview_key: null, book_preview_keys: {}, orders: [], ...overrides,
+    preview_key: null, book_preview_keys: {}, orders: [], card_front: null, ...overrides,
   };
 }
 
@@ -255,6 +258,40 @@ describe('memory book product page', () => {
       expect(generate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'age_year', label: 'Year Six' }));
       expect(consumePendingKeepsakesToast()).toBe('We’re making your Year Six book…');
       expect(mockRouter.back).toHaveBeenCalledTimes(1);
+    });
+
+    it('tracks keepsakes_create_book_tapped once per "Make" tap, with the number of children it can make for', async () => {
+      setup(); // Lila and Theo are own children; the grandparent is not one
+      generate.mockResolvedValue('exists');
+      const { getByTestId } = render(<MemoryBookProductScreen />);
+      expect(mockTrackEvent).not.toHaveBeenCalledWith('keepsakes_create_book_tapped', expect.anything());
+      await act(async () => {
+        fireEvent.press(getByTestId('memory-book-product-cta'));
+      });
+      expect(mockTrackEvent).toHaveBeenCalledTimes(1);
+      expect(mockTrackEvent).toHaveBeenCalledWith('keepsakes_create_book_tapped', { children_count: 2 });
+    });
+
+    it('does not track "Try again" or "Open" taps', async () => {
+      childSetups['child-1'] = {
+        books: [
+          book({ id: 'book-5', status: 'failed', scope_start_date: '2024-03-01', scope_end_date: '2025-02-28', scope_label: 'Year Five' }),
+          book(),
+        ],
+      };
+      setup();
+      generate.mockResolvedValue('exists');
+      const { getByTestId } = render(<MemoryBookProductScreen />);
+      fireEvent.press(getByTestId(`memory-book-scope-${YEAR_FIVE}`)); // failed -> "Try again"
+      await act(async () => {
+        fireEvent.press(getByTestId('memory-book-product-cta'));
+      });
+      fireEvent.press(getByTestId(`memory-book-scope-${YEAR_SIX}`)); // ready -> "Open"
+      await act(async () => {
+        fireEvent.press(getByTestId('memory-book-product-cta'));
+      });
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(mockTrackEvent).not.toHaveBeenCalledWith('keepsakes_create_book_tapped', expect.anything());
     });
 
     it('started with no history falls back to the Keepsakes tab', async () => {

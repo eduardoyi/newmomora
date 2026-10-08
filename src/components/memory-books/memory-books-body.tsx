@@ -35,6 +35,7 @@ import {
   type MemoryBookScopeRow,
 } from '@/hooks/useMemoryBooks';
 import type { FamilyMember } from '@/services/family-members';
+import { trackEvent } from '@/services/analytics';
 import { fetchExampleCoverAssetKey, memoryBookWebUrl } from '@/services/memory-books';
 import { openShopUrl } from '@/services/web-handoff';
 import { familyRosterRoute } from '@/lib/routes';
@@ -467,8 +468,10 @@ export function KeepsakesBody({ memberId, todayIso, isFocused }: KeepsakesBodyPr
             accessibilityLabel={ctaLabel}
             accessibilityRole="button"
             onPress={() => {
-              if (singleShelf) startCreate(singleShelf.member.id);
-              else router.navigate(familyRosterRoute);
+              if (singleShelf) {
+                trackEvent('keepsakes_create_book_tapped', { children_count: shelves.length });
+                startCreate(singleShelf.member.id);
+              } else router.navigate(familyRosterRoute);
             }}
             style={({ pressed }) => [styles.ctaButton, pressed && styles.ctaButtonPressed]}
             testID="memory-books-create"

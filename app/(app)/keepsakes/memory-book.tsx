@@ -36,6 +36,7 @@ import { useFamilyMemoryBooks, useMemoryBooks } from '@/hooks/useMemoryBooks';
 import { setPendingKeepsakesToast } from '@/lib/keepsakes-toast';
 import { familyRosterRoute } from '@/lib/routes';
 import type { FamilyMember } from '@/services/family-members';
+import { trackEvent } from '@/services/analytics';
 import type { KeepsakesOverview } from '@/services/keepsakes';
 import { memoryBookWebUrl } from '@/services/memory-books';
 import { openShopUrl } from '@/services/web-handoff';
@@ -175,6 +176,8 @@ function ChildBookPage({ child, siblings: childList, onSelectChild, overview, to
         return;
       }
       if (cta.kind === 'make' || cta.kind === 'retry') {
+        // Only the first "Make {name}'s … book" tap counts as a create intent.
+        if (cta.kind === 'make') trackEvent('keepsakes_create_book_tapped', { children_count: childList.length });
         const result = await generate(option);
         if (result === 'started') {
           setPendingKeepsakesToast(`We’re making your ${option.label} book…`);
@@ -186,7 +189,7 @@ function ChildBookPage({ child, siblings: childList, onSelectChild, overview, to
     } finally {
       inFlightRef.current = false;
     }
-  }, [selected, cta, generate, retryDispatch, leave]);
+  }, [selected, cta, generate, retryDispatch, leave, childList.length]);
 
   const renderChoice = (choice: ScopeChoice) => (
     <OptionRow

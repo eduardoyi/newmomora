@@ -35,6 +35,7 @@ import { memoryBookWebUrl } from '@/services/memory-books';
 import { openShopUrl } from '@/services/web-handoff';
 import { isOwnChild } from '@/utils/family-relationships';
 import {
+  activeCardFront,
   buildRelevantBookRows,
   buildShelfItems,
   DEFAULT_KEEPSAKES_FILTER,
@@ -190,7 +191,11 @@ export function KeepsakesTab({ isFocused, todayIso }: KeepsakesTabProps) {
   const flowMember = flow ? members.find((member) => member.id === flow.memberId) ?? null : null;
   const tabBarBottom = Platform.OS === 'android' ? Math.max(28, insets.bottom + 8) : 28;
   const toastBottom = tabBarBottom + TAB_BAR_HEIGHT + TAB_BAR_GAP;
-  const cardNames = ownChildren.map((member) => member.name);
+  // The storefront shows the family's real card once one exists for this season.
+  const cardFront = useMemo(
+    () => activeCardFront(overview, cardSummary, todayIso),
+    [cardSummary, overview, todayIso],
+  );
   const firstChild = ownChildren[0] ? { id: ownChildren[0].id, name: ownChildren[0].name } : null;
 
   return (
@@ -235,16 +240,16 @@ export function KeepsakesTab({ isFocused, todayIso }: KeepsakesTabProps) {
             {canEdit ? (
               <MakeSomethingRow
                 canEdit={canEdit}
-                childNames={cardNames}
+                cardFront={cardFront}
                 firstChild={firstChild}
                 holidayCardEnabled={cardSummary?.enabled === true}
+                language={cardSummary?.language ?? 'en'}
                 onOpenProduct={handleOpenProduct}
                 overview={overview}
                 year={Number(todayIso.slice(0, 4))}
               />
             ) : null}
             <KeepsakesLibrary
-              cardNames={cardNames}
               filter={filter}
               items={items}
               members={members}

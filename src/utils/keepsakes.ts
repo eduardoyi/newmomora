@@ -11,7 +11,7 @@
 //   years            = groupShelfByYear(visible, todayIso)
 import { buildMemoryBookRows, type MemoryBookScopeRow } from '@/hooks/useMemoryBooks';
 import type { HolidayCardSummary } from '@/services/holiday-cards';
-import type { KeepsakesOverview, KeepsakesRecap } from '@/services/keepsakes';
+import type { KeepsakesCardFront, KeepsakesOverview, KeepsakesRecap } from '@/services/keepsakes';
 import type { MemoryBookListRow } from '@/services/memory-books';
 import type { YearFilm } from '@/services/year-films';
 import { isOwnChild } from '@/utils/family-relationships';
@@ -235,13 +235,50 @@ export function cardBadge(
   }
 }
 
+/**
+ * The overview's real card front, only when it is THE card at hand: the
+ * overview and the card summary are separate queries, so right after a create
+ * (or a stale refetch) they can briefly disagree, and the wrong card's picture
+ * must never be drawn under another card's badge.
+ */
+export function cardFrontFor(overview: KeepsakesOverview | null, cardId: string | null): KeepsakesCardFront | null {
+  const front = overview?.card_front ?? null;
+  return front && cardId !== null && front.card_id === cardId ? front : null;
+}
+
+/**
+ * The real card front for the card the tile / product page treats as THIS
+ * season's (a card exists per `holidayCardTileState`, not "make") and that
+ * matches the overview's `card_front`; null otherwise (the generic preview).
+ */
+export function activeCardFront(
+  overview: KeepsakesOverview | null,
+  summary: HolidayCardSummary | null,
+  todayIso: string,
+): KeepsakesCardFront | null {
+  const state = holidayCardTileState(summary, todayIso);
+  if (!summary || state === null || state === 'make') return null;
+  return cardFrontFor(overview, summary.cardId);
+}
+
 const KIND_RANK: Record<ShelfItemKind, number> = { 'upcoming-recap': 0, card: 1, film: 2, book: 3 };
 
-/** Upcoming first, then newest date, then kind, then id (stable). */
+function isYearEndFilm(item: ShelfItem): boolean {
+  return item.kind === 'film' && item.film.kind === 'family_year';
+}
+
+/**
+ * Upcoming recap first, then the year-end film (it is the year's headline: it
+ * leads whatever its date says, e.g. ahead of the December recap), then newest
+ * date, then kind, then id (stable).
+ */
 function compareWithinYear(a: ShelfItem, b: ShelfItem): number {
   const aUpcoming = a.kind === 'upcoming-recap';
   const bUpcoming = b.kind === 'upcoming-recap';
   if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+  const aYearEnd = isYearEndFilm(a);
+  const bYearEnd = isYearEndFilm(b);
+  if (aYearEnd !== bYearEnd) return aYearEnd ? -1 : 1;
   if (a.date !== b.date) return a.date < b.date ? 1 : -1;
   if (a.kind !== b.kind) return KIND_RANK[a.kind] - KIND_RANK[b.kind];
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
@@ -262,7 +299,7 @@ export interface BuildShelfItemsInput {
 
 /**
  * Every shelf item of the library, flat, ordered year descending and, within a
- * year, the upcoming recap first, then newest `date` first.
+ * year, the upcoming recap first, then the year-end film, then newest `date` first.
  *
  * - Films: `hidden` ones dropped (`filmDisplayState`); filed by `placement_date`'s year.
  * - Books (owner/manager only): filed by `scope_end_date`'s year, falling back
@@ -351,7 +388,7 @@ export function buildShelfItems({
 
 export interface ShelfYear {
   year: number;
-  /** Ordered: the upcoming recap first, then newest first. */
+  /** Ordered: the upcoming recap first, then the year-end film, then newest first. */
   items: ShelfItem[];
   /** The device's current year. */
   isCurrent: boolean;
@@ -485,11 +522,6 @@ export interface KeepsakesFilter {
 }
 
 export const DEFAULT_KEEPSAKES_FILTER: KeepsakesFilter = { memberId: null, type: 'all', year: null };
-
-/** How many of the filter's fields are set (the filter button's active-dot). */
-export function keepsakesFilterCount(filter: KeepsakesFilter): number {
-  return (filter.memberId !== null ? 1 : 0) + (filter.type !== 'all' ? 1 : 0) + (filter.year !== null ? 1 : 0);
-}
 
 function matchesType(item: ShelfItem, type: KeepsakesTypeFilter): boolean {
   switch (type) {

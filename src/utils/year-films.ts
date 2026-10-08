@@ -1,9 +1,7 @@
 // Pure Year Film helpers (docs/plans/year-film-p2.md Step 4): titles and
-// subtitles, Timeline placement, the "New" marker and the Keepsakes year
-// grouping. No React, no I/O -- unit-tested in year-films.test.ts.
-import type { MemoryBookListRow } from '@/services/memory-books';
+// subtitles, Timeline placement and the "New" marker. No React, no I/O --
+// unit-tested in year-films.test.ts.
 import type { YearFilm } from '@/services/year-films';
-import { isOwnChild } from '@/utils/family-relationships';
 import { ageYearLabel, formatMonthYear, parseDateParts } from '@/utils/memory-book-scope';
 
 /** The slice of a family member the titles and Keepsakes grouping need. */
@@ -216,96 +214,4 @@ export function isNewFilm(film: Pick<YearFilm, 'id' | 'surface_at'>, viewedIds: 
   if (viewedIds.has(film.id)) return false;
   const age = now.getTime() - new Date(film.surface_at).getTime();
   return age >= 0 && age <= NEW_FILM_WINDOW_DAYS * MS_PER_DAY;
-}
-
-export interface KeepsakeYearChild<M> {
-  member: M;
-  /** That child's birthday films ending this year, newest first. */
-  films: YearFilm[];
-  /** That child's books ending this year, newest created first. */
-  books: MemoryBookListRow[];
-}
-
-export interface KeepsakeYear<M> {
-  year: number;
-  familyFilms: {
-    /** The year-end film ("Your 2026"), if it exists. */
-    yearEnd: YearFilm | null;
-    /** Every monthly recap of the year, newest first. */
-    recaps: YearFilm[];
-  };
-  children: KeepsakeYearChild<M>[];
-}
-
-function yearOf(date: string): number {
-  return Number(date.slice(0, 4));
-}
-
-/**
- * The Keepsakes tab's year sections, newest year first. Items file under the
- * year they END: a film by `placement_date`, a book by `scope_end_date`
- * (an unbounded "everything" book, which has none, by `created_at`). The
- * current year always exists so the create tiles and the upcoming-recap card
- * have a home.
- *
- * Children follow the existing shelf rule (an own child, or anyone with a
- * book) plus anyone with a birthday film. A shelf child appears in the
- * current year always, and in an earlier year only when they have a film or
- * book that year. Members are returned in the order given. Films whose
- * member is gone have no shelf and are omitted.
- */
-export function buildKeepsakeYears<M extends { id: string; relationship?: string | null; date_of_birth?: string | null }>(
-  films: readonly YearFilm[],
-  books: readonly MemoryBookListRow[],
-  members: readonly M[],
-  todayIso: string,
-): KeepsakeYear<M>[] {
-  const currentYear = yearOf(todayIso);
-  const referenceDate = new Date(`${todayIso}T12:00:00`);
-
-  const filmsByYear = new Map<number, YearFilm[]>();
-  for (const film of [...films].sort(compareFilmsNewestFirst)) {
-    const year = yearOf(film.placement_date);
-    const list = filmsByYear.get(year);
-    if (list) list.push(film);
-    else filmsByYear.set(year, [film]);
-  }
-
-  const booksByYear = new Map<number, MemoryBookListRow[]>();
-  for (const book of [...books].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))) {
-    const year = yearOf(book.scope_end_date ?? book.created_at);
-    const list = booksByYear.get(year);
-    if (list) list.push(book);
-    else booksByYear.set(year, [book]);
-  }
-
-  const shelfMemberIds = new Set<string>();
-  for (const book of books) if (book.child_id) shelfMemberIds.add(book.child_id);
-  for (const film of films) if (film.kind === 'birthday' && film.family_member_id) shelfMemberIds.add(film.family_member_id);
-  const shelfMembers = members.filter((member) => shelfMemberIds.has(member.id) || isOwnChild(member, referenceDate));
-
-  const years = new Set<number>([currentYear, ...filmsByYear.keys(), ...booksByYear.keys()]);
-
-  return [...years]
-    .sort((a, b) => b - a)
-    .map((year) => {
-      const yearFilms = filmsByYear.get(year) ?? [];
-      const yearBooks = booksByYear.get(year) ?? [];
-      const children: KeepsakeYearChild<M>[] = [];
-      for (const member of shelfMembers) {
-        const childFilms = yearFilms.filter((film) => film.kind === 'birthday' && film.family_member_id === member.id);
-        const childBooks = yearBooks.filter((book) => book.child_id === member.id);
-        if (year === currentYear || childFilms.length > 0 || childBooks.length > 0) {
-          children.push({ member, films: childFilms, books: childBooks });
-        }
-      }
-      return {
-        year,
-        familyFilms: {
-          yearEnd: yearFilms.find((film) => film.kind === 'family_year') ?? null,
-          recaps: yearFilms.filter((film) => film.kind === 'family_month'),
-        },
-        children,
-      };
-    });
 }

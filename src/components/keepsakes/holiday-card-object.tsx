@@ -1,33 +1,37 @@
 // The holiday card as a physical object (docs/plans/keepsakes-redesign.md
-// C1/C5/D3): a white 5:7 card front -- the family's own picture on top, the
-// greeting and a tiny family line below -- tilted -1.5 degrees, with a kraft
-// envelope peeking out behind it at the top right (tilted +1.5 degrees). One
-// soft shadow, no tape. Shared by the storefront card, the shelf and the card
-// product page, so it scales everything from `width`.
+// C1/C5/D3): the card front tilted -1.5 degrees with a kraft envelope peeking
+// out behind it at the top right (tilted +1.5 degrees). One soft shadow, no
+// tape. Shared by the storefront card, the shelf and the card product page, so
+// it scales everything from `width`.
 //
-// OUTER SIZE (the layout box this component occupies, before the small tilt):
-//   width  = 1.27 * width   (the card is `width` wide; the envelope sticks out
-//                            0.27 * width to its right)
-//   height = 1.54 * width   (the card is 1.4 * width tall; the envelope sticks
-//                            out 0.14 * width above it)
-// The -1.5 / +1.5 degree tilts spill at most ~0.04 * width past that box; the
-// box itself is not clipped.
+// Two fronts:
+//  - `front` (the family's REAL card, `keepsakes_overview.card_front`): drawn by
+//    `HolidayCardFront`, landscape or portrait, with the chosen cover, crop,
+//    greeting and small line.
+//  - no `front` (nothing created yet, or the overview failed): a generic 5:7
+//    portrait "could look like this" preview on the family's newest picture,
+//    with the language's default greeting and just the year -- the real default.
+//
+// OUTER SIZE (the layout box this component occupies, before the small tilt;
+// see `holidayCardObjectLayout`): the envelope sticks out 0.27 x the card's
+// shorter side to the right and 0.14 x above. For the portrait 5:7 card that is
+// 1.27 x 1.54 of `width`; a landscape card (0.714 x its width tall) is
+// narrower in height. The tilts spill at most ~0.04 x past the box; the box
+// itself is not clipped.
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, fonts } from '@/constants/theme';
+import { HolidayCardFront, holidayCardFrontSize } from '@/components/keepsakes/holiday-card-front';
+import { fonts } from '@/constants/theme';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import type { KeepsakesCardFront } from '@/services/keepsakes';
+import { CARD_FRONT_STYLE, holidayCardObjectLayout } from '@/utils/holiday-card-front';
 import { mediaImageSource } from '@/utils/media-image-source';
 
-export const HOLIDAY_CARD_OUTER_WIDTH_RATIO = 1.27;
-export const HOLIDAY_CARD_OUTER_HEIGHT_RATIO = 1.54;
 const CARD_HEIGHT_RATIO = 1.4; // 5:7
-const ENVELOPE_TOP_RATIO = 0;
-const CARD_TOP_RATIO = 0.14;
-const ENVELOPE_LEFT_RATIO = 0.27;
 const PADDING_RATIO = 0.06;
-// The picture takes the top ~70% of the card (padding included).
+// The picture takes the top ~70% of the generic card (padding included).
 const IMAGE_HEIGHT_RATIO = 0.9;
 
 const ENVELOPE_BODY = '#F3EEE6';
@@ -35,68 +39,64 @@ const ENVELOPE_BORDER = '#E6DED2';
 const ENVELOPE_FLAP = '#E8E0D3';
 const IMAGE_WASH = ['#F7E3C8', '#F1CDB4'] as const;
 
+/** The object's outer box for a PORTRAIT 5:7 card of `width` (the generic preview). */
 export function holidayCardObjectSize(width: number): { width: number; height: number } {
-  return {
-    width: Math.round(width * HOLIDAY_CARD_OUTER_WIDTH_RATIO),
-    height: Math.round(width * HOLIDAY_CARD_OUTER_HEIGHT_RATIO),
-  };
+  return holidayCardObjectLayout(width, Math.round(width * CARD_HEIGHT_RATIO)).outer;
 }
 
-/**
- * "Tomás · 2026", "Tomás & Lucía · 2026", "A, B & C · 2026". Blank names are
- * dropped; with no names left it is just the year.
- */
-export function holidayCardFamilyLine(names: string[], year: number): string {
-  const cleaned = names.map((name) => name.trim()).filter((name) => name.length > 0);
-  if (cleaned.length === 0) return String(year);
-  const joined =
-    cleaned.length === 1
-      ? cleaned[0]!
-      : `${cleaned.slice(0, -1).join(', ')} & ${cleaned[cleaned.length - 1]!}`;
-  return `${joined} · ${year}`;
+/** The object's outer box for the family's real card (landscape or portrait) at `width`. */
+export function holidayCardFrontObjectSize(
+  front: Pick<KeepsakesCardFront, 'orientation'>,
+  width: number,
+): { width: number; height: number } {
+  return holidayCardObjectLayout(width, holidayCardFrontSize(front, width).height).outer;
 }
 
 export interface HolidayCardObjectProps {
-  /** The card's width; the outer box is ~1.27x wide and ~1.54x tall (see the file header). */
+  /** The card's width; the outer box follows the card's shape (see the file header). */
   width: number;
-  /** R2 key of the picture (the overview's `preview_key`); null renders a warm wash. */
-  imageKey: string | null;
-  /** From `holidayCardFamilyLine`. */
-  familyLine: string;
-  /** Defaults to "Happy holidays". */
+  /** The family's real card; omit / null for the generic preview. */
+  front?: KeepsakesCardFront | null;
+  /** Generic preview only: R2 key of the picture (the overview's `preview_key`); null renders a warm wash. */
+  imageKey?: string | null;
+  /** Generic preview only: defaults to "Happy Holidays". */
   greeting?: string;
+  /** Generic preview only: the small line (the year by default). Omit to hide. */
+  subline?: string;
   testID?: string;
 }
 
 export function HolidayCardObject({
   width,
-  imageKey,
-  familyLine,
-  greeting = 'Happy holidays',
+  front = null,
+  imageKey = null,
+  greeting = 'Happy Holidays',
+  subline,
   testID,
 }: HolidayCardObjectProps) {
-  const { url } = useMediaUrl(imageKey);
-  const outer = holidayCardObjectSize(width);
-  const cardHeight = Math.round(width * CARD_HEIGHT_RATIO);
+  const { url } = useMediaUrl(front ? null : imageKey);
+  const cardHeight = front ? holidayCardFrontSize(front, width).height : Math.round(width * CARD_HEIGHT_RATIO);
+  const layout = holidayCardObjectLayout(width, cardHeight);
   const padding = Math.round(width * PADDING_RATIO);
   const imageHeight = Math.round(width * IMAGE_HEIGHT_RATIO);
   const imageWidth = width - padding * 2;
-  const envelopeWidth = width;
-  const envelopeHeight = Math.round(width * 1.15);
+  const envelopeWidth = layout.envelope.width;
+  const envelopeHeight = layout.envelope.height;
   const flapHeight = Math.round(envelopeHeight * 0.5);
+  const unit = Math.min(width, cardHeight);
 
   return (
-    <View style={{ width: outer.width, height: outer.height }} testID={testID}>
+    <View style={{ width: layout.outer.width, height: layout.outer.height }} testID={testID}>
       <View
         pointerEvents="none"
         style={[
           styles.envelope,
           {
-            left: Math.round(width * ENVELOPE_LEFT_RATIO),
-            top: Math.round(width * ENVELOPE_TOP_RATIO),
+            left: layout.envelope.left,
+            top: layout.envelope.top,
             width: envelopeWidth,
             height: envelopeHeight,
-            borderRadius: Math.max(3, Math.round(width * 0.02)),
+            borderRadius: Math.max(3, Math.round(unit * 0.02)),
           },
         ]}
         testID={testID ? `${testID}-envelope` : undefined}
@@ -113,56 +113,69 @@ export function HolidayCardObject({
         />
       </View>
 
-      <View
-        style={[
-          styles.card,
-          {
-            top: Math.round(width * CARD_TOP_RATIO),
-            width,
-            height: cardHeight,
-            padding,
-            borderRadius: Math.max(3, Math.round(width * 0.025)),
-          },
-        ]}
-      >
-        <View style={{ width: imageWidth, height: imageHeight, borderRadius: Math.max(2, Math.round(width * 0.015)), overflow: 'hidden' }}>
-          {url && imageKey ? (
-            <Image
-              cachePolicy="disk"
-              contentFit="cover"
-              source={mediaImageSource(url, imageKey)}
-              style={StyleSheet.absoluteFill}
-              testID={testID ? `${testID}-image` : undefined}
-            />
-          ) : (
-            <LinearGradient
-              colors={IMAGE_WASH}
-              end={{ x: 0.5, y: 1 }}
-              pointerEvents="none"
-              start={{ x: 0.5, y: 0 }}
-              style={StyleSheet.absoluteFill}
-            />
-          )}
+      {front ? (
+        <View
+          style={[
+            styles.cardSlot,
+            { top: layout.card.top, width: layout.card.width, height: layout.card.height },
+          ]}
+        >
+          <HolidayCardFront front={front} testID={testID ? `${testID}-front` : undefined} width={width} />
         </View>
-        <View style={styles.captionBlock}>
-          <Text
-            adjustsFontSizeToFit
-            numberOfLines={1}
-            style={[styles.greeting, { fontSize: Math.round(width * 0.115), lineHeight: Math.round(width * 0.14) }]}
-          >
-            {greeting}
-          </Text>
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.familyLine,
-              { fontSize: Math.max(5, Math.round(width * 0.04 * 10) / 10), letterSpacing: Math.max(0.4, width * 0.006) },
-            ]}
-          >
-            {familyLine.toUpperCase()}
-          </Text>
+      ) : (
+        <View
+          style={[
+            styles.card,
+            {
+              top: layout.card.top,
+              width,
+              height: cardHeight,
+              padding,
+              borderRadius: Math.max(3, Math.round(width * 0.025)),
+            },
+          ]}
+        >
+          <View style={{ width: imageWidth, height: imageHeight, borderRadius: Math.max(2, Math.round(width * 0.015)), overflow: 'hidden' }}>
+            {url && imageKey ? (
+              <Image
+                cachePolicy="disk"
+                contentFit="cover"
+                source={mediaImageSource(url, imageKey)}
+                style={StyleSheet.absoluteFill}
+                testID={testID ? `${testID}-image` : undefined}
+              />
+            ) : (
+              <LinearGradient
+                colors={IMAGE_WASH}
+                end={{ x: 0.5, y: 1 }}
+                pointerEvents="none"
+                start={{ x: 0.5, y: 0 }}
+                style={StyleSheet.absoluteFill}
+              />
+            )}
+          </View>
+          <View style={styles.captionBlock}>
+            <Text
+              adjustsFontSizeToFit
+              numberOfLines={1}
+              style={[styles.greeting, { fontSize: Math.round(width * 0.115), lineHeight: Math.round(width * 0.14) }]}
+            >
+              {greeting}
+            </Text>
+            {subline ? (
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.subline,
+                  { fontSize: Math.max(5, Math.round(width * 0.04 * 10) / 10), letterSpacing: Math.max(0.4, width * 0.012) },
+                ]}
+              >
+                {subline}
+              </Text>
+            ) : null}
+          </View>
         </View>
-      </View>
+      )}
     </View>
   );
 }
@@ -189,8 +202,13 @@ const styles = StyleSheet.create({
     top: 0,
     width: 0,
   },
+  cardSlot: {
+    left: 0,
+    position: 'absolute',
+    transform: [{ rotate: '-1.5deg' }],
+  },
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: CARD_FRONT_STYLE.paper,
     left: 0,
     position: 'absolute',
     shadowColor: '#2C2418',
@@ -207,13 +225,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   greeting: {
-    color: colors.ink,
-    fontFamily: fonts.display,
+    color: CARD_FRONT_STYLE.accentInk,
+    fontFamily: fonts.displayItalic,
     textAlign: 'center',
   },
-  familyLine: {
-    color: colors.ink3,
+  subline: {
+    color: CARD_FRONT_STYLE.accent,
     fontFamily: fonts.sansBold,
     textAlign: 'center',
+    textTransform: 'uppercase',
   },
 });

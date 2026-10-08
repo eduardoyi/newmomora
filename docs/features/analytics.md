@@ -87,7 +87,7 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 | `timeline_jumped` | `source` (`month_picker`/`today_button`/`calendar_day`), `months_back` (0 = current month) | Timeline pinned bar: month-picker pick or Today tap; Calendar view: day tile tap (never a date) |
 | `timeline_view_switched` | `view` (`list`/`calendar`) | Timeline pinned bar's List/Calendar switcher |
 | `keepsakes_opened` | — | Keepsakes tab focus (fires on every focus, including returning from a product page) |
-| `keepsakes_create_book_tapped` | `children_count` (shelves shown) | Legacy: the old tab's "Create a book" / "Go to Family" CTA. The redesigned tab has no such CTA; the event stays in the type map but nothing fires it today |
+| `keepsakes_create_book_tapped` | `children_count` (children the page can make a book for / shelves shown) | Memory Book product page: tapping "Make {name}'s … book" (a first create only: not "Try again" or "Open"); and the one-child stack screen's "Create a book" CTA (`/keepsakes/[memberId]`) |
 | `keepsakes_product_opened` | `product` (`holiday-card`/`memory-book`) | Keepsakes "Make something" storefront card tap |
 | `keepsakes_filter_applied` | `type` (`all`/`films`/`books`/`cards`), `has_year`, `has_child` | Keepsakes filter sheet "Show {n}" (apply), not each chip tap |
 | `keepsakes_year_toggled` | `year`, `open` | A past year on the Keepsakes shelf folded or opened |
