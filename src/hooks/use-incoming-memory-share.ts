@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from 'react';
 
 import { extractImageCaptureDateIso } from '@/utils/image-exif-capture-date';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
-import { prepareSharedMedia, type PrepareSharedMediaResult } from '@/utils/prepare-shared-media';
+import {
+  prepareSharedMedia,
+  unattachedSharedPayloadUris,
+  type PrepareSharedMediaResult,
+} from '@/utils/prepare-shared-media';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 import { getSharedVideoDurationMs } from '@/utils/shared-video-duration';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
@@ -73,6 +78,10 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
 
     if (error && !hasPreparedRef.current) {
       hasPreparedRef.current = true;
+      // Resolution failed, so nothing will ever read these copies. The raw
+      // payload `value` is the copy's file URL for file-backed shares; the
+      // helper ignores text / links and anything outside the share root.
+      void deleteShareCopies(sharedPayloads.map((payload) => payload.value));
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current({ kind: 'error', errorMessage: INCOMING_SHARE_OPEN_ERROR });
@@ -96,6 +105,10 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
       if (preparationGeneration !== preparationGenerationRef.current) {
         return;
       }
+      // Copies that did not become attachments (errors, the 10-item cap,
+      // unsupported types) are ours to delete now; attached ones are cleaned
+      // up by the composer / upload queue.
+      void deleteShareCopies(unattachedSharedPayloadUris(resolvedSharedPayloads, result));
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current(result);
@@ -103,6 +116,7 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
       if (preparationGeneration !== preparationGenerationRef.current) {
         return;
       }
+      void deleteShareCopies(resolvedSharedPayloads.map((payload) => payload.contentUri));
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
       onPreparedRef.current({ kind: 'error', errorMessage: INCOMING_SHARE_OPEN_ERROR });

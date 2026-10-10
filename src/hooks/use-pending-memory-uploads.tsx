@@ -37,6 +37,7 @@ import {
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 
 export type PendingMemoryUploadStatus = 'posting' | 'failed';
 
@@ -106,6 +107,44 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
     setUploads((current) => current.filter((upload) => upload.memoryId !== memoryId));
   }, []);
 
+  // Photos / videos shared INTO Momora are private copies expo-sharing never
+  // deletes (src/utils/shared-file-cleanup.ts). Called only once an upload has
+  // succeeded or been discarded -- a failed post keeps them for retry(). A copy
+  // another live queue entry still points at (same-named re-share) is skipped.
+  const deleteInputShareCopies = useCallback((input: PendingMemoryUploadInput) => {
+    if (isAudioUploadInput(input)) {
+      return;
+    }
+    const stillReferenced = new Set<string>();
+    for (const [memoryId, record] of inputsRef.current) {
+      if (memoryId === input.memoryId || isAudioUploadInput(record.input)) {
+        continue;
+      }
+      for (const asset of record.input.mediaAssets) {
+        if (asset.fileUri) {
+          stillReferenced.add(asset.fileUri);
+        }
+      }
+    }
+    void deleteShareCopies(
+      input.mediaAssets
+        .filter((asset) => asset.deleteAfterUpload && asset.fileUri)
+        .map((asset) => asset.fileUri)
+        .filter((uri) => !stillReferenced.has(uri as string)),
+    );
+  }, []);
+
+  const discard = useCallback(
+    (memoryId: string) => {
+      const record = inputsRef.current.get(memoryId);
+      removeUpload(memoryId);
+      if (record) {
+        deleteInputShareCopies(record.input);
+      }
+    },
+    [deleteInputShareCopies, removeUpload],
+  );
+
   const runUpload = useCallback(
     async (input: PendingMemoryUploadInput, userId: string, activeFamilyId: string) => {
       try {
@@ -140,6 +179,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         // The card is already replaced by the prepended memory, so there's
         // no gap to bridge by waiting on a refetch before removing it.
         removeUpload(input.memoryId);
+        deleteInputShareCopies(input);
 
         if (isAudio && input.pendingTranscription) {
           // Ordering fix (cross-seam bug): the memories row is created by
@@ -270,7 +310,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         });
       }
     },
-    [patchUpload, queryClient, removeUpload],
+    [deleteInputShareCopies, patchUpload, queryClient, removeUpload],
   );
 
   const enqueue = useCallback(
@@ -359,8 +399,8 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
   }, [retry]);
 
   const value = useMemo(
-    () => ({ uploads, enqueue, retry, discard: removeUpload }),
-    [uploads, enqueue, retry, removeUpload],
+    () => ({ uploads, enqueue, retry, discard }),
+    [uploads, enqueue, retry, discard],
   );
 
   return (

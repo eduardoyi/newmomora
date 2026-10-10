@@ -347,9 +347,28 @@ Phases are ordered by dependency. P1–P4 can be developed in parallel after P0;
 | Backfill writes to prod | Dry-run default, pilot on one memory, owner approval, `where waveform is null` idempotency. |
 | Imported clip features an adult (grandma), year film voice check expects "the child" | Expected and fine — voice check skips non-child windows; no change. |
 
+## Addendum: post-save trim (v2.1, owner-approved 2026-10-10)
+
+**Status: implemented 2026-10-10 (pending device QA + release).** Code: `src/hooks/use-saved-audio-trim.ts`, `app/(app)/memory/[id]/edit.tsx`, `useMemories.ts` `updateMutation` (`audioClip`), `uploadAudioClipObject` in `memory-posting.ts`, `updateMemory` + `UpdateMemoryInput.audioTranscript`. Documented in [docs/features/audio-memories.md](../features/audio-memories.md) ("v2.1"). Implementation notes: the edit-screen state machine lives in the `useSavedAudioTrim` hook rather than inline; the trim button stays visible while a download/render is in flight even if connectivity drops (so the spinner does not vanish), and is hidden while the save mutation runs.
+
+Owner defaults: **permanent** (confirm before saving: "The part you cut will be gone for good."), **keep the note as is**, **who can trim = who can edit** (`canEditFamilyContent`), **online only**. No migration.
+
+Flow (edit screen `app/(app)/memory/[id]/edit.tsx`):
+1. The recessed clip well gets the scissors (`ClipChip onTrim`) when `MomoraAudio.isAvailable()`, the user can edit, and the device is online (`useIsOnline`); offline tap → "Trimming needs a connection." The "Kept as recorded" caption and "This sound cannot be re-recorded." hint stay (re-record is still impossible); when a trim is pending the caption reads "Trimmed — saves when you tap Save".
+2. Tap → `processing` on the chip → download the current clip (signed URL from `useMediaUrl`) with `FileSystem.downloadAsync` to `newAudioRecordingUri('m4a')` → `analyze` → `TrimSheet` (`maxSelectionMs` 300_000, `mustTrim` false, `suggested` from `suggestTrim`, `hasUserNote` = note non-empty). The downloaded file is the session's `original` (Reset works within the session; "Done" with the full range clears any pending trim).
+3. Done (not full range) → `render` (96 kbps) → `analyze` → pending trim `{ localUri, durationMs, sizeBytes, waveform, range }`; the chip previews the local trimmed file (playback + real waveform). Re-opening the trim sheet edits relative to the downloaded original (initial range = pending range).
+4. Save with a pending trim → `Alert` confirm ("Trim this sound?" / "The part you cut will be gone for good." / Cancel / "Trim and save") → the edit mutation uploads the trimmed `.m4a` via the **audio** upload path (`uploadMediaObject` + `buildMemoryMediaAssetKey(user.id, memoryId, newAssetId, 'm4a')`, same as `postAudioMemory`; NEVER `uploadMemoryMediaAssets`, which is the photo/video pipeline), pushes the key to `uploadedKeys` for rollback, then `updateMemory(..., { mediaAssets: [{ objectKey, contentType: 'audio/mp4', durationMs, waveform }], audioTranscript: null, ... })`.
+5. `updateMemory`: allow `mediaAssets` for `memoryType === 'audio'` only when it is exactly one audio asset (`audio/mp4|m4a|x-m4a`); anything else keeps the existing `invalid_memory_type` error. New optional `UpdateMemoryInput.audioTranscript` (audio only) clears the hidden transcript in a separate `memories` update written **after the clip replace succeeds** (the old transcript describes the cut parts; a failed RPC leaves the still-current clip's transcript intact). The existing removed-key cleanup deletes the old R2 object after the RPC succeeds.
+6. After a successful save, fire-and-forget `transcribeClip(trimmedLocalUri, members, familyId, { durationMs, sizeBytes })` (no `speaker`: post-save it only feeds the description/transcript patch, which never touches tags) → `patchAudioDescriptionIfEmpty(memoryId, { description, transcript })` (content filled only if the note is empty; transcript always). Then discard the local files (downloaded original + renders). Cancel/back discards them too. Never block navigation on transcription.
+7. Analytics: `audio_trim_applied { source: 'saved', removed_bucket }` (extend the `source` union with `'saved'`), `audio_trim_opened { source: 'saved', suggested }`.
+
+Side effects (verified, no code change): Year Films referencing the old key are invalidated by `year_films_on_memory_media_deleted` (re-render); book QR codes resolve the current clip live via `workers/memory-viewer`; other devices refresh via `updated_at`.
+
+Tests: `memories.integration.test.ts` (audio single-asset replace allowed; multi/non-audio rejected; transcript cleared; old key deleted), `useMemories` edit-mutation test (audio upload path, rollback on RPC failure), `edit-memory.integration.test.tsx` (trim button gating: unavailable / offline / no permission; download→sheet→done→preview; Save shows confirm; Cancel in confirm doesn't save; confirmed save sends the new asset; full-range Done clears pending; cancel discards files; transcription backfill fired after save).
+
 ## Out of scope
 
-- Trimming after save (V2), any edit-screen clip change.
+- ~~Trimming after save (V2)~~ — now the v2.1 addendum above. Re-recording a saved clip stays out of scope.
 - Raising the in-app recording cap above 2 minutes.
 - Multiple clips per audio memory; importing several voice notes at once (one at a time only).
 - Server-side transcoding; bundling libopus.

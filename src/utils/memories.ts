@@ -1,3 +1,4 @@
+import { isAudioContentType } from '@/utils/media-validation';
 import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
 
 export const MAX_ILLUSTRATION_MEMBERS = 6;
@@ -115,6 +116,13 @@ export interface UpdateMemoryInput {
   taggedMemberIds?: string[];
   mediaAssets?: MemoryMediaAssetInput[];
   memoryType?: MemoryType;
+  /**
+   * Audio memories only: the invisible search transcript. Pass `null` (or '')
+   * to clear it when the clip is replaced by a trimmed one (the old transcript
+   * describes parts that are gone); the post-save backfill rewrites it.
+   * Ignored for every other memory type.
+   */
+  audioTranscript?: string | null;
 }
 
 export function validateMemoryContent(
@@ -209,6 +217,23 @@ export function validateMemoryMediaAssets(assets: MemoryMediaAssetInput[]): stri
     )
   ) {
     return 'Media aspect ratio is invalid';
+  }
+
+  return null;
+}
+
+/**
+ * An audio memory carries exactly one clip, so a post-save replace (trim) must
+ * be a single audio asset. Returns an error message, or null when valid.
+ */
+export function validateAudioReplacementAssets(assets: MemoryMediaAssetInput[]): string | null {
+  if (assets.length !== 1) {
+    return 'A sound memory has exactly one audio clip';
+  }
+
+  const [asset] = assets;
+  if (!asset.objectKey || !isAudioContentType(asset.contentType)) {
+    return 'A sound memory can only hold an audio clip';
   }
 
   return null;

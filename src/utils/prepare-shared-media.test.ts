@@ -7,6 +7,7 @@ import {
   type PreparedSharedMedia,
   type PrepareSharedMediaDependencies,
   UNREADABLE_SHARED_MEDIA_COPY_ERROR,
+  unattachedSharedPayloadUris,
 } from './prepare-shared-media';
 
 function payload(overrides: Partial<ResolvedSharePayload> = {}): ResolvedSharePayload {
@@ -523,5 +524,84 @@ describe('shared voice notes', () => {
     );
 
     expect(result.kind).toBe('audio');
+  });
+});
+
+describe('share-copy ownership', () => {
+  const photo = (index: number) => payload({
+    contentUri: `file:///photo-${index}.jpg`,
+    value: `file:///photo-${index}.jpg`,
+  });
+  const audio = payload({
+    contentUri: 'file:///voice.m4a',
+    value: 'file:///voice.m4a',
+    shareType: 'audio',
+    contentType: 'audio',
+    contentMimeType: 'audio/mp4',
+    mimeType: 'audio/mp4',
+    originalName: 'voice.m4a',
+  });
+
+  it('marks every attachment as a share copy', async () => {
+    const result = await prepareSharedMedia([photo(1), photo(2)], dependencies);
+    expect(result.attachments.every((attachment) => attachment.isShareCopy === true)).toBe(true);
+  });
+
+  it('returns nothing to delete when every payload became an attachment', async () => {
+    const payloads = [photo(1), photo(2)];
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual([]);
+  });
+
+  it('returns the payloads beyond the 10-item cap', async () => {
+    const payloads = Array.from({ length: 12 }, (_, index) => photo(index));
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual([
+      'file:///photo-10.jpg',
+      'file:///photo-11.jpg',
+    ]);
+  });
+
+  it('returns every payload when validation fails', async () => {
+    dependencies.getLocalFileSizeBytes.mockResolvedValue(1);
+    const payloads = [photo(1), photo(2)];
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual([
+      'file:///photo-1.jpg',
+      'file:///photo-2.jpg',
+    ]);
+  });
+
+  it('returns unsupported files but not text without a uri', async () => {
+    const pdf = payload({
+      contentUri: 'file:///doc.pdf',
+      value: 'file:///doc.pdf',
+      shareType: 'file',
+      contentType: 'file',
+      contentMimeType: 'application/pdf',
+      mimeType: 'application/pdf',
+      originalName: 'doc.pdf',
+    });
+    const text = { value: 'hi', shareType: 'text', contentUri: null, contentType: 'text' } as unknown as ResolvedSharePayload;
+    const payloads = [pdf, text];
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual(['file:///doc.pdf']);
+  });
+
+  it('leaves the single voice note to the audio import path', async () => {
+    const payloads = [audio];
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(result.kind).toBe('audio');
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual([]);
+  });
+
+  it('returns the voice note and photos of a refused mixed share (no audio import will run)', async () => {
+    const payloads = [audio, photo(1)];
+    const result = await prepareAnySharedPayloads(payloads, dependencies);
+    expect(result.kind).toBe('error');
+    expect(unattachedSharedPayloadUris(payloads, result)).toEqual([
+      'file:///voice.m4a',
+      'file:///photo-1.jpg',
+    ]);
   });
 });

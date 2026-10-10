@@ -26,6 +26,7 @@ import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { navigateBack } from '@/lib/navigation';
 import { trackEvent } from '@/services/analytics';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 import { getNewMemoryDraftStorageKey, saveNewMemoryDraft } from '@/utils/new-memory-draft';
 
 // Imported with a relative path -- jest's moduleNameMapper only maps `@/` to
@@ -278,6 +279,11 @@ jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
 
+// Share-copy deletion is asserted by call, never run against the filesystem.
+jest.mock('@/utils/shared-file-cleanup', () => ({
+  deleteShareCopies: jest.fn(async () => {}),
+}));
+
 const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
 const mockedDateTimePickerAndroid = DateTimePickerAndroid as jest.Mocked<
   typeof DateTimePickerAndroid
@@ -291,6 +297,7 @@ const mockedUseUserProfile = useUserProfile as jest.Mock;
 const mockedUsePendingMemoryUploads = usePendingMemoryUploads as jest.Mock;
 const mockedUseIncomingMemoryShare = useIncomingMemoryShare as jest.Mock;
 const mockedUseLocalSearchParams = useLocalSearchParams as jest.Mock;
+const mockedDeleteShareCopies = deleteShareCopies as jest.MockedFunction<typeof deleteShareCopies>;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
 function renderScreen() {
@@ -2436,6 +2443,27 @@ describe('NewMemoryScreen -- audio trim and import', () => {
     expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
   });
 
+  it('deletes the share copies of photos refused because the composer holds a sound', async () => {
+    const prepared = captureShare();
+    const screen = renderScreen();
+    await keepSound(screen);
+
+    prepared({
+      kind: 'media',
+      attachments: [
+        { id: 'p1', uri: 'file:///group/refused-1.jpg', contentType: 'image/jpeg', sizeBytes: 10, isShareCopy: true },
+        { id: 'p2', uri: 'file:///group/refused-2.jpg', contentType: 'image/jpeg', sizeBytes: 10, isShareCopy: true },
+      ],
+      errorMessage: null,
+    });
+
+    expect(screen.getByText(SOUND_ERROR)).toBeTruthy();
+    expect(mockedDeleteShareCopies).toHaveBeenCalledWith([
+      'file:///group/refused-1.jpg',
+      'file:///group/refused-2.jpg',
+    ]);
+  });
+
   // ── In-app picker ─────────────────────────────────────────────────
 
   it('offers the sound option only with the native modules present and nothing attached', async () => {
@@ -2630,5 +2658,168 @@ describe('NewMemoryScreen -- audio trim and import', () => {
       expect(mockImportAudioFile).not.toHaveBeenCalled();
       expect(trackEvent).toHaveBeenCalledWith('audio_import_failed', { entry: 'share', code: 'unavailable' });
     });
+  });
+});
+
+describe('NewMemoryScreen -- share-copy cleanup', () => {
+  const enqueue = jest.fn();
+  const createMemory = jest.fn();
+  const updateProfile = jest.fn();
+
+  const sharedAttachment = (id: string, uri: string) => ({
+    id,
+    uri,
+    contentType: 'image/jpeg',
+    sizeBytes: 10,
+    isShareCopy: true,
+  });
+
+  function captureShare() {
+    let onPrepared: ((result: unknown) => void) | undefined;
+    mockedUseIncomingMemoryShare.mockImplementation((options) => {
+      onPrepared = options.onPrepared as never;
+      return false;
+    });
+    return (result: unknown) => {
+      act(() => {
+        onPrepared?.(result);
+      });
+    };
+  }
+
+  const deletedUris = () => mockedDeleteShareCopies.mock.calls.flatMap(([uris]) => [...uris]);
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseFamily.mockReturnValue({
+      role: 'manager',
+      familyId: 'family-1',
+      family: { id: 'family-1', name: 'Test family' },
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseUserProfile.mockReturnValue({ updateProfile });
+    mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
+    mockedUseIncomingMemoryShare.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  });
+
+  it('removing a shared attachment deletes its copy', () => {
+    const prepared = captureShare();
+    const screen = renderScreen();
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s1', 'file:///group/a.jpg'), sharedAttachment('s2', 'file:///group/b.jpg')],
+      errorMessage: null,
+    });
+
+    fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+
+    expect(mockedDeleteShareCopies).toHaveBeenCalledWith(['file:///group/a.jpg']);
+    expect(deletedUris()).not.toContain('file:///group/b.jpg');
+  });
+
+  it('removing a picker attachment never deletes anything', async () => {
+    const screen = renderScreen();
+    await attachPhoto(screen, buildImageAsset({ uri: 'file:///cache/ImagePicker/p.jpg' }));
+
+    fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+
+    expect(deletedUris()).toEqual([]);
+  });
+
+  it('cancel deletes every shared attachment still in the composer but not picker ones', async () => {
+    const prepared = captureShare();
+    const screen = renderScreen();
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s1', 'file:///group/a.jpg'), sharedAttachment('s2', 'file:///group/b.jpg')],
+      errorMessage: null,
+    });
+    await attachPhoto(screen, buildImageAsset({ uri: 'file:///cache/ImagePicker/p.jpg' }));
+
+    fireEvent.press(screen.getByTestId('new-memory-cancel'));
+
+    expect(deletedUris()).toEqual(expect.arrayContaining(['file:///group/a.jpg', 'file:///group/b.jpg']));
+    expect(deletedUris()).not.toContain('file:///cache/ImagePicker/p.jpg');
+    expect(navigateBack).toHaveBeenCalled();
+  });
+
+  it('leaving the composer any other way (unmount) also deletes shared copies', () => {
+    const prepared = captureShare();
+    const screen = renderScreen();
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s1', 'file:///group/a.jpg')],
+      errorMessage: null,
+    });
+
+    screen.unmount();
+
+    expect(deletedUris()).toContain('file:///group/a.jpg');
+  });
+
+  it('a share that errors or replaces the attachments deletes the copies it drops', () => {
+    const prepared = captureShare();
+    renderScreen();
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s1', 'file:///group/a.jpg'), sharedAttachment('s2', 'file:///group/b.jpg')],
+      errorMessage: null,
+    });
+
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s3', 'file:///group/b.jpg'), sharedAttachment('s4', 'file:///group/c.jpg')],
+      errorMessage: null,
+    });
+    expect(deletedUris()).toEqual(['file:///group/a.jpg']);
+
+    prepared({ kind: 'error', errorMessage: 'nope' });
+    expect(deletedUris()).toEqual(
+      expect.arrayContaining(['file:///group/a.jpg', 'file:///group/b.jpg', 'file:///group/c.jpg']),
+    );
+  });
+
+  it('saving hands share copies to the queue (flagged) and deletes nothing itself', async () => {
+    const prepared = captureShare();
+    const screen = renderScreen();
+    prepared({
+      kind: 'media',
+      attachments: [sharedAttachment('s1', 'file:///group/a.jpg')],
+      errorMessage: null,
+    });
+    await attachPhoto(screen, buildImageAsset({ uri: 'file:///cache/ImagePicker/p.jpg' }));
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+    screen.unmount();
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const { mediaAssets } = enqueue.mock.calls[0][0];
+    expect(mediaAssets[0]).toMatchObject({ fileUri: 'file:///group/a.jpg', deleteAfterUpload: true });
+    expect(mediaAssets[1].fileUri).toBe('file:///cache/ImagePicker/p.jpg');
+    expect(mediaAssets[1]).not.toHaveProperty('deleteAfterUpload');
+    expect(deletedUris()).toEqual([]);
   });
 });

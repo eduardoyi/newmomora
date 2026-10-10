@@ -41,6 +41,11 @@ export interface MediaAttachment {
    * container metadata (`src/utils/video-capture-date.ts`). Never the raw
    * EXIF object or any other container metadata. */
   capturedAtIso?: string;
+  /** True when `uri` is the private copy expo-sharing made of a file shared INTO
+   * Momora (set by `prepareSharedMedia`). Momora owns that copy and deletes it
+   * once the attachment is removed, abandoned or uploaded -- see
+   * `src/utils/shared-file-cleanup.ts`. Never set for picker/camera files. */
+  isShareCopy?: boolean;
 }
 
 interface MemoryMediaPickerProps {

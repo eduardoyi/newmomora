@@ -242,12 +242,13 @@ export interface AnalyticsEventMap {
   // Trim + import (docs/plans/audio-trim-import.md). Content-free: closed enums
   // and buckets only -- never a file name, path, or exact duration.
   audio_trim_opened: {
-    source: 'recorded' | 'imported';
+    /** 'saved' = trimming an already-saved sound from the edit screen. */
+    source: 'recorded' | 'imported' | 'saved';
     /** Whether the sheet opened with an automatic "quiet bits" suggestion applied. */
     suggested: boolean;
   };
   audio_trim_applied: {
-    source: 'recorded' | 'imported';
+    source: 'recorded' | 'imported' | 'saved';
     /** Total seconds cut from the clip (start + end). */
     removed_bucket: '0_5s' | '5_15s' | '15_60s' | '60s_plus';
   };

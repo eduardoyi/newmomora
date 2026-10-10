@@ -15,6 +15,7 @@ import { startConnectivityMonitoring } from '@/lib/connectivity';
 import { PersistedQueryProvider } from '@/lib/query-persistence';
 import { sweepAudioRecordingsDirectory } from '@/utils/audio-clip-custody';
 import { sweepFilmShareCache } from '@/utils/film-share';
+import { sweepShareContainer } from '@/utils/shared-file-cleanup';
 import { momoraWidgetAdapter } from '@/widgets';
 
 export function AppProviders({ children }: { children: ReactNode }) {
@@ -43,6 +44,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
   // same lifecycle slot as the effects above; never blocks first paint.
   useEffect(() => {
     void sweepAudioRecordingsDirectory();
+  }, []);
+
+  // Same slot: copies of photos/videos shared INTO Momora pile up in the iOS
+  // share app-group container (expo-sharing never deletes them); delete the
+  // stale ones (docs/features/media-memories.md "Share-copy cleanup").
+  useEffect(() => {
+    void sweepShareContainer();
   }, []);
 
   // Same slot: Year Film share downloads live in cache/film-share/ and are

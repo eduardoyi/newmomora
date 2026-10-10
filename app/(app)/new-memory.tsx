@@ -36,6 +36,7 @@ import { canEditFamilyContent } from '@/utils/roles';
 import { sanitizeWaveform } from '@/utils/audio-waveform';
 import { isDocumentPickerAvailable, pickAudioDocument } from '@/utils/document-picker';
 import type { PrepareSharedMediaResult } from '@/utils/prepare-shared-media';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 import {
   clearNewMemoryDraft,
   isEmptyDraft,
@@ -284,6 +285,16 @@ export default function NewMemoryScreen() {
   const [isPostingMedia, setIsPostingMedia] = useState(false);
   const hasEnqueuedMediaRef = useRef(false);
   const handleIncomingSharePrepared = useCallback((result: PrepareSharedMediaResult) => {
+    // Share copies still in the composer that this share is about to replace
+    // (or clear) have nowhere else to go; a re-shared same-named file reuses
+    // its path, so a copy the new set keeps is left alone.
+    const releaseReplacedShareCopies = (keepUris: readonly string[]) => {
+      void deleteShareCopies(
+        attachedMediaRef.current
+          .filter((attachment) => attachment.isShareCopy && !keepUris.includes(attachment.uri))
+          .map((attachment) => attachment.uri),
+      );
+    };
     if (result.kind === 'audio') {
       // Routed into the same import pipeline as the in-app picker. The share
       // hook reports "preparing" until this callback returns; the import
@@ -299,6 +310,7 @@ export default function NewMemoryScreen() {
       return;
     }
     if (result.kind === 'error') {
+      releaseReplacedShareCopies([]);
       setAttachedMedia([]);
       setErrorMessage(result.errorMessage);
       return;
@@ -307,9 +319,13 @@ export default function NewMemoryScreen() {
     // instead of silently dropping the clip or the photos. Checked against
     // the live clip (a ref), not a render-time value.
     if (audioClipRef.current) {
+      // The refused photos / videos are never attached, so their copies are
+      // deleted here.
+      void deleteShareCopies(result.attachments.map((attachment) => attachment.uri));
       setErrorMessage(SHARE_PHOTOS_REFUSED_SOUND_COPY);
       return;
     }
+    releaseReplacedShareCopies(result.attachments.map((attachment) => attachment.uri));
     setAttachedMedia(result.attachments);
     setErrorMessage(result.errorMessage ?? '');
   }, [audioClipRef, importAudio]);
@@ -373,6 +389,22 @@ export default function NewMemoryScreen() {
   useEffect(() => {
     selectedMemberIdsRef.current = selectedMemberIds;
   });
+
+  // Photos / videos shared INTO Momora are private copies the app must delete
+  // (src/utils/shared-file-cleanup.ts). Once the media save has been enqueued
+  // the upload queue owns them; until then every way out of the composer
+  // (Cancel, swipe-down, back, route replace) deletes whatever is still here.
+  const releaseSharedAttachments = useCallback(() => {
+    if (hasEnqueuedMediaRef.current) {
+      return;
+    }
+    void deleteShareCopies(
+      attachedMediaRef.current
+        .filter((attachment) => attachment.isShareCopy)
+        .map((attachment) => attachment.uri),
+    );
+  }, []);
+  useEffect(() => releaseSharedAttachments, [releaseSharedAttachments]);
 
   const hasAttemptedDraftRestoreRef = useRef(false);
   const [isDraftRestoreReady, setIsDraftRestoreReady] = useState(false);
@@ -550,6 +582,10 @@ export default function NewMemoryScreen() {
   };
 
   const removeMedia = (attachmentId: string) => {
+    const removed = attachedMedia.find((attachment) => attachment.id === attachmentId);
+    if (removed?.isShareCopy) {
+      void deleteShareCopies([removed.uri]);
+    }
     setAttachedMedia((current) => current.filter((attachment) => attachment.id !== attachmentId));
     setSelectedMediaId((current) => (current === attachmentId ? null : current));
   };
@@ -706,6 +742,8 @@ export default function NewMemoryScreen() {
             contentType: attachment.contentType,
             durationMs: attachment.durationMs,
             aspectRatio: attachment.aspectRatio,
+            // The queue deletes the share copy after a successful upload.
+            ...(attachment.isShareCopy ? { deleteAfterUpload: true } : {}),
           })),
           content: content.trim() || undefined,
           memoryDate: memoryDate.trim(),
@@ -892,6 +930,7 @@ export default function NewMemoryScreen() {
         // and must not linger on disk. A render still reading the original
         // discards it itself once it finishes (see the hook).
         audio.abandon();
+        releaseSharedAttachments();
         navigateBack();
       }}
       onContentChange={handleContentChange}
