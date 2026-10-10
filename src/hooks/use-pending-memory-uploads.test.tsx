@@ -27,6 +27,7 @@ import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { consumeArtworkReveal, resetArtworkReveals } from '@/utils/artwork-reveal';
 import { sweepStaleArtworkScans } from '@/utils/artwork-scan-custody';
 import * as FileSystem from 'expo-file-system/legacy';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -56,6 +57,10 @@ jest.mock('@/services/memory-posting', () => ({
   isAudioUploadInput: (input: { kind?: string }) => input?.kind === 'audio',
 }));
 
+jest.mock('@/utils/shared-file-cleanup', () => ({
+  deleteShareCopies: jest.fn(async () => {}),
+}));
+
 jest.mock('@/services/share-card', () => ({
   warmShareCardForMemoryFireAndForget: jest.fn(),
 }));
@@ -73,6 +78,7 @@ jest.mock('@/utils/artwork-scan-custody', () => ({
   sweepStaleArtworkScans: jest.fn().mockResolvedValue(undefined),
 }));
 
+const mockedDeleteShareCopies = deleteShareCopies as jest.MockedFunction<typeof deleteShareCopies>;
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedPostMediaMemory = postMediaMemory as jest.MockedFunction<typeof postMediaMemory>;
@@ -1377,5 +1383,148 @@ describe('usePendingMemoryUploads', () => {
       'You must be signed in to save a memory',
     );
     expect(result.current.uploads).toHaveLength(0);
+  });
+
+  describe('share-copy cleanup', () => {
+    const sharedInput = {
+      memoryId: 'memory-shared',
+      mediaAssets: [
+        {
+          mediaAssetId: 'a1',
+          fileUri: 'file:///group/shared-1.jpg',
+          contentType: 'image/jpeg',
+          deleteAfterUpload: true,
+        },
+        {
+          mediaAssetId: 'a2',
+          fileUri: 'file:///cache/ImagePicker/picked.jpg',
+          contentType: 'image/jpeg',
+        },
+      ],
+      memoryDate: '2026-07-12',
+      taggedMemberIds: [],
+    };
+
+    it('deletes only flagged share copies after a successful upload', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-shared' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(sharedInput);
+      });
+
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+      expect(mockedDeleteShareCopies).toHaveBeenCalledTimes(1);
+      expect(mockedDeleteShareCopies).toHaveBeenCalledWith(['file:///group/shared-1.jpg']);
+    });
+
+    it('keeps the copies after a failure, then deletes them when a retry succeeds', async () => {
+      mockedPostMediaMemory
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce({ id: 'memory-shared' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(sharedInput);
+      });
+      await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+      expect(mockedDeleteShareCopies).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.retry('memory-shared');
+      });
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+      expect(mockedDeleteShareCopies).toHaveBeenCalledTimes(1);
+      expect(mockedDeleteShareCopies).toHaveBeenCalledWith(['file:///group/shared-1.jpg']);
+    });
+
+    it('deletes the copies when a failed upload is discarded', async () => {
+      mockedPostMediaMemory.mockRejectedValue(new Error('network down'));
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(sharedInput);
+      });
+      await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+      expect(mockedDeleteShareCopies).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.discard('memory-shared');
+      });
+      expect(result.current.uploads).toHaveLength(0);
+      expect(mockedDeleteShareCopies).toHaveBeenCalledWith(['file:///group/shared-1.jpg']);
+    });
+
+    it('does not delete anything for non-share (picker) uploads', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+      for (const [uris] of mockedDeleteShareCopies.mock.calls) {
+        expect(uris).toEqual([]);
+      }
+    });
+
+    it('leaves audio inputs alone on success and discard', async () => {
+      mockedPostAudioMemory.mockResolvedValueOnce({ id: 'memory-audio-1' } as never);
+      mockedPostAudioMemory.mockRejectedValueOnce(new Error('network down'));
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(audioInput);
+      });
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+      act(() => {
+        result.current.enqueue({ ...audioInput, memoryId: 'memory-audio-2' });
+      });
+      await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+      act(() => {
+        result.current.discard('memory-audio-2');
+      });
+
+      expect(mockedDeleteShareCopies).not.toHaveBeenCalled();
+    });
+
+    it('skips a copy another live queue entry still references', async () => {
+      let resolveFirst: (memory: { id: string }) => void = () => {};
+      mockedPostMediaMemory
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveFirst = resolve as typeof resolveFirst;
+            }) as ReturnType<typeof postMediaMemory>,
+        )
+        .mockRejectedValueOnce(new Error('network down'));
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(sharedInput);
+      });
+      act(() => {
+        result.current.enqueue({
+          ...sharedInput,
+          memoryId: 'memory-shared-2',
+          mediaAssets: [sharedInput.mediaAssets[0]],
+        });
+      });
+      await waitFor(() =>
+        expect(result.current.uploads.find((u) => u.memoryId === 'memory-shared-2')?.status).toBe('failed'),
+      );
+
+      act(() => {
+        resolveFirst({ id: 'memory-shared' });
+      });
+      await waitFor(() => expect(result.current.uploads.map((u) => u.memoryId)).toEqual(['memory-shared-2']));
+      expect(mockedDeleteShareCopies).toHaveBeenCalledWith([]);
+
+      act(() => {
+        result.current.discard('memory-shared-2');
+      });
+      expect(mockedDeleteShareCopies).toHaveBeenLastCalledWith(['file:///group/shared-1.jpg']);
+    });
   });
 });

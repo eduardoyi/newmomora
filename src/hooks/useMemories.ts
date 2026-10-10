@@ -62,6 +62,7 @@ import { deleteStorageObject } from '@/services/media';
 import {
   hasImageMediaAsset,
   notifyFamilyActivityFireAndForget,
+  uploadAudioClipObject,
   uploadMemoryMediaAssets,
   type MediaAssetUploadPhase,
   type MemoryMediaMutationAsset,
@@ -70,6 +71,7 @@ import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { extractUrls } from '@/utils/links';
 import {
   needsIllustrationRecovery,
+  type MemoryMediaAssetInput,
   type MemoryType,
 } from '@/utils/memories';
 import {
@@ -283,6 +285,12 @@ export function useMemoryMutations() {
       taggedMemberIds?: string[];
       mediaAssets?: MemoryMediaMutationAsset[];
       memoryType?: MemoryType;
+      /**
+       * Audio memories only (post-save trim): a replacement clip, uploaded via
+       * the AUDIO path (never uploadMemoryMediaAssets -- that is the photo/video
+       * pipeline). The hidden transcript is cleared in the same write.
+       */
+      audioClip?: { fileUri: string; durationMs: number; waveform: number[] | null };
       onMediaProgress?: (index: number, phase: MediaAssetUploadPhase, fraction: number) => void;
     }) => {
       if (!user) {
@@ -309,12 +317,37 @@ export function useMemoryMutations() {
             })
           : undefined;
 
+        let audioMediaAssets: MemoryMediaAssetInput[] | undefined;
+        if (input.audioClip) {
+          const contentType = 'audio/mp4';
+          const objectKey = await uploadAudioClipObject({
+            userId: user.id,
+            familyId: activeFamilyId,
+            memoryId: input.memoryId,
+            clip: {
+              fileUri: input.audioClip.fileUri,
+              contentType,
+              durationMs: input.audioClip.durationMs,
+            },
+          });
+          uploadedKeys.push(objectKey);
+          audioMediaAssets = [
+            {
+              objectKey,
+              contentType,
+              durationMs: input.audioClip.durationMs,
+              waveform: input.audioClip.waveform,
+            },
+          ];
+        }
+
         const result = await updateMemory(input.memoryId, {
           content: input.content,
           memoryDate: input.memoryDate,
           taggedMemberIds: input.taggedMemberIds,
-          mediaAssets,
+          mediaAssets: audioMediaAssets ?? mediaAssets,
           memoryType: input.memoryType,
+          ...(audioMediaAssets ? { audioTranscript: null } : {}),
         });
 
         if (result.error) {

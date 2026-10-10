@@ -1,14 +1,20 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { onlineManager } from '@tanstack/react-query';
+import { router } from 'expo-router';
+import { Alert } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ARTWORK_INTRO_SEEN_STORAGE_KEY } from '@/components/artwork-scan-button';
+import { ClipChip } from '@/components/audio/clip-chip';
 import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
+import { trackEvent } from '@/services/analytics';
 
 import { MediaAssetUploadError } from '@/services/memory-posting';
 
@@ -114,6 +120,77 @@ jest.mock('@/hooks/useAudioClipPlayback', () => ({
     seekTo: jest.fn(),
   })),
 }));
+
+// Post-save trim (docs/plans/audio-trim-import.md addendum). The native
+// module, the file download, transcription, the backfill write and the sheet
+// are mocked at their boundary; the screen + useSavedAudioTrim run for real.
+// `isAvailable` defaults to false (an older binary) so every suite above keeps
+// exercising today's edit screen; the trim suite flips it on.
+const mockAudioIsAvailable = jest.fn(() => false);
+const mockAudioAnalyze = jest.fn();
+const mockAudioRender = jest.fn();
+jest.mock('../../modules/momora-audio', () => ({
+  isAvailable: () => mockAudioIsAvailable(),
+  analyze: (...args: unknown[]) => mockAudioAnalyze(...args),
+  render: (...args: unknown[]) => mockAudioRender(...args),
+  probe: jest.fn(),
+}));
+
+const mockDownloadAsync = jest.fn();
+jest.mock('expo-file-system/legacy', () => ({
+  downloadAsync: (...args: unknown[]) => mockDownloadAsync(...args),
+}));
+
+const mockDiscardAudioClip = jest.fn().mockResolvedValue(undefined);
+const mockNewAudioRecordingUri = jest.fn();
+jest.mock('@/utils/audio-clip-custody', () => ({
+  discardAudioClip: (...args: unknown[]) => mockDiscardAudioClip(...args),
+  newAudioRecordingUri: (...args: unknown[]) => mockNewAudioRecordingUri(...args),
+}));
+
+const mockTranscribeClip = jest.fn();
+jest.mock('@/services/voice-transcription', () => ({
+  transcribeClip: (...args: unknown[]) => mockTranscribeClip(...args),
+}));
+
+const mockPatchAudioDescriptionIfEmpty = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/services/memories', () => ({
+  ...jest.requireActual('@/services/memories'),
+  patchAudioDescriptionIfEmpty: (...args: unknown[]) => mockPatchAudioDescriptionIfEmpty(...args),
+}));
+
+type MockTrimSheetProps = {
+  visible: boolean;
+  sourceUri: string;
+  durationMs: number;
+  initialRange: { startMs: number; endMs: number };
+  suggested: boolean;
+  maxSelectionMs: number;
+  mustTrim: boolean;
+  hasUserNote: boolean;
+  onCancel: () => void;
+  onDone: (range: { startMs: number; endMs: number }) => void;
+  onDismissed?: () => void;
+};
+let mockTrimSheetProps: MockTrimSheetProps | undefined;
+let mockTrimSheetMounted = false;
+jest.mock('@/components/audio/trim-sheet', () => {
+  const { useEffect } = jest.requireActual('react');
+  return {
+    TrimSheet: (props: MockTrimSheetProps) => {
+      mockTrimSheetProps = props;
+      // The real sheet owns an audio player while mounted: the screen must
+      // mount it only for a trim session.
+      useEffect(() => {
+        mockTrimSheetMounted = true;
+        return () => {
+          mockTrimSheetMounted = false;
+        };
+      }, []);
+      return null;
+    },
+  };
+});
 
 const mockedUseAutoMemoryTags = useAutoMemoryTags as jest.Mock;
 const mockedUseFamily = useFamily as jest.Mock;
@@ -532,6 +609,608 @@ describe('EditMemoryScreen audio variant', () => {
     expect(updateMemory).toHaveBeenCalledWith(
       expect.objectContaining({ content: '', memoryType: 'audio' }),
     );
+  });
+});
+
+// docs/plans/audio-trim-import.md "Addendum: post-save trim".
+describe('EditMemoryScreen audio post-save trim', () => {
+  const SIGNED_URL = 'https://signed.test/clip.m4a';
+  const DOWNLOAD_URI = 'file:///documents/audio-recordings/download-1.m4a';
+  const RENDER_OUT_URI = 'file:///documents/audio-recordings/out-1.m4a';
+  const RENDERED_URI = 'file:///documents/audio-recordings/trim-1.m4a';
+  const RENDERED_URI_2 = 'file:///documents/audio-recordings/trim-2.m4a';
+  const SAVED_RANGE = { startMs: 1750, endMs: 8250 };
+
+  const audioMemory = {
+    id: 'memory-1',
+    content: 'Lila singing in the bath.',
+    memory_date: '2026-07-14',
+    memory_type: 'audio',
+    media_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+    media_content_type: 'audio/mp4',
+    mediaAssets: [
+      {
+        id: 'clip-1',
+        object_key: 'user-1/memories/memory-1/media/clip-1.m4a',
+        content_type: 'audio/mp4',
+        duration_ms: 10_000,
+        aspect_ratio: null,
+      },
+    ],
+    taggedMembers: [],
+    illustration_key: null,
+    illustration_status: 'none',
+    updated_at: '2026-07-14T09:00:00.000Z',
+  };
+
+  // 10 s at 100 ms buckets: quiet edges, loud middle, so suggestTrim offers
+  // roughly 1.75 s..8.25 s.
+  function energiesFixture(durationMs = 10_000) {
+    const count = durationMs / 100;
+    return {
+      durationMs,
+      bucketMs: 100,
+      energies: Array.from({ length: count }, (_, i) => (i >= 20 && i < count - 20 ? 0.1 : 1e-9)),
+    };
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  async function flush() {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  function mockPipeline(renderedUri = RENDERED_URI, durationMs = 6500) {
+    mockNewAudioRecordingUri
+      .mockResolvedValueOnce(DOWNLOAD_URI)
+      .mockResolvedValue(RENDER_OUT_URI);
+    mockDownloadAsync.mockResolvedValue({ status: 200, uri: DOWNLOAD_URI });
+    mockAudioRender.mockResolvedValue({ uri: renderedUri, durationMs, sizeBytes: 90_000 });
+    mockAudioAnalyze.mockImplementation(async (uri: string) =>
+      uri === renderedUri ? energiesFixture(durationMs) : energiesFixture(),
+    );
+  }
+
+  async function openSheet(screen: ReturnType<typeof renderScreen>) {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-audio-clip-trim'));
+    });
+    await flush();
+  }
+
+  async function trimTo(screen: ReturnType<typeof renderScreen>, range = SAVED_RANGE) {
+    await openSheet(screen);
+    expect(mockTrimSheetProps?.visible).toBe(true);
+    await act(async () => {
+      mockTrimSheetProps?.onDone(range);
+    });
+    await flush();
+  }
+
+  function discardedUris() {
+    return mockDiscardAudioClip.mock.calls.map((call) => call[0]);
+  }
+
+  function pressSave(screen: ReturnType<typeof renderScreen>) {
+    return act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+  }
+
+  /** Presses the named button of the most recent Alert.alert call. */
+  async function pressAlertButton(label: string) {
+    const buttons = (Alert.alert as jest.Mock).mock.calls.at(-1)?.[2] as
+      | { text: string; onPress?: () => void }[]
+      | undefined;
+    const button = buttons?.find((b) => b.text === label);
+    expect(button).toBeTruthy();
+    await act(async () => {
+      button?.onPress?.();
+    });
+    await flush();
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    onlineManager.setOnline(true);
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockTrimSheetProps = undefined;
+    mockTrimSheetMounted = false;
+    mockAudioIsAvailable.mockReturnValue(true);
+    mockDownloadAsync.mockReset();
+    mockAudioRender.mockReset();
+    mockAudioAnalyze.mockReset();
+    mockNewAudioRecordingUri.mockReset();
+    mockTranscribeClip.mockResolvedValue({
+      cleanedText: 'trimmed transcript',
+      description: 'Trimmed description',
+      mentionedMemberIds: [],
+    });
+    updateMemory.mockResolvedValue(undefined);
+
+    mockedUseFamily.mockReturnValue({ role: 'manager', familyId: 'family-1' });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ updateMemory, isUpdating: false });
+    mockedUseMediaUrl.mockReturnValue({ url: SIGNED_URL });
+    mockedUseMediaUrls.mockReturnValue({ data: undefined });
+    mockedUseAutoMemoryTags.mockReturnValue({
+      selectedMemberIds: [],
+      initializeTags,
+      applyForContent: jest.fn(),
+      toggleMember: jest.fn(),
+      applyVoiceResult: jest.fn(),
+    });
+    mockedUseMemory.mockReturnValue({ data: audioMemory, isLoading: false, isPlaceholderData: false });
+  });
+
+  afterEach(() => {
+    act(() => {
+      onlineManager.setOnline(true);
+    });
+    jest.restoreAllMocks();
+  });
+
+  // ── Gating ──────────────────────────────────────────────────────────
+
+  it('offers the scissors when the module is available, the user can edit, and the device is online', () => {
+    const screen = renderScreen();
+    expect(screen.getByTestId('edit-memory-audio-clip-trim')).toBeTruthy();
+    expect(screen.getByText('Kept as recorded')).toBeTruthy();
+    expect(screen.getByText('This sound cannot be re-recorded.')).toBeTruthy();
+  });
+
+  it('hides the scissors on a binary without the native module', () => {
+    mockAudioIsAvailable.mockReturnValue(false);
+    const screen = renderScreen();
+    expect(screen.getByTestId('edit-memory-audio-clip')).toBeTruthy();
+    expect(screen.queryByTestId('edit-memory-audio-clip-trim')).toBeNull();
+  });
+
+  it('hides the scissors when the user cannot edit', () => {
+    mockedUseFamily.mockReturnValue({ role: 'viewer', familyId: 'family-1' });
+    const screen = renderScreen();
+    expect(screen.queryByTestId('edit-memory-audio-clip-trim')).toBeNull();
+  });
+
+  it('hides the scissors while offline', () => {
+    onlineManager.setOnline(false);
+    const screen = renderScreen();
+    expect(screen.queryByTestId('edit-memory-audio-clip-trim')).toBeNull();
+  });
+
+  it('says trimming needs a connection when connectivity drops before the tap lands', async () => {
+    const screen = renderScreen();
+    const staleOnTrim = screen.UNSAFE_getByType(ClipChip).props.onTrim as () => void;
+
+    act(() => {
+      onlineManager.setOnline(false);
+    });
+    await act(async () => {
+      staleOnTrim();
+    });
+
+    expect(screen.getByTestId('edit-memory-error').props.children).toBe('Trimming needs a connection.');
+    expect(mockDownloadAsync).not.toHaveBeenCalled();
+  });
+
+  // ── Download -> sheet -> Done -> preview ─────────────────────────────
+
+  it('downloads the clip, analyses it, opens the sheet with the suggested range, then previews the render', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+
+    await openSheet(screen);
+
+    expect(mockNewAudioRecordingUri).toHaveBeenCalledWith('m4a');
+    expect(mockDownloadAsync).toHaveBeenCalledWith(SIGNED_URL, DOWNLOAD_URI);
+    expect(mockAudioAnalyze).toHaveBeenCalledWith(DOWNLOAD_URI, { maxBuckets: 4000, minBucketMs: 20 });
+    expect(mockTrimSheetMounted).toBe(true);
+    expect(mockTrimSheetProps).toMatchObject({
+      visible: true,
+      sourceUri: DOWNLOAD_URI,
+      durationMs: 10_000,
+      suggested: true,
+      maxSelectionMs: 300_000,
+      mustTrim: false,
+      hasUserNote: true,
+    });
+    expect(mockTrimSheetProps?.initialRange.startMs).toBeGreaterThan(1000);
+    expect(mockTrimSheetProps?.initialRange.endMs).toBeLessThanOrEqual(10_000);
+    expect(trackEvent).toHaveBeenCalledWith('audio_trim_opened', { source: 'saved', suggested: true });
+
+    await act(async () => {
+      mockTrimSheetProps?.onDone(SAVED_RANGE);
+    });
+    await flush();
+
+    expect(mockAudioRender).toHaveBeenCalledWith(DOWNLOAD_URI, {
+      ...SAVED_RANGE,
+      outputUri: RENDER_OUT_URI,
+      bitrate: 96_000,
+    });
+    expect(screen.getByText('Trimmed — saves when you tap Save')).toBeTruthy();
+    expect(screen.queryByText('Kept as recorded')).toBeNull();
+    // The chip now plays the local render, not the saved clip's signed URL.
+    const playbackSources = (useAudioClipPlayback as jest.Mock).mock.calls.map((call) => call[0]);
+    expect(playbackSources.at(-1)).toBe(RENDERED_URI);
+    // Nothing is uploaded or saved by trimming alone.
+    expect(updateMemory).not.toHaveBeenCalled();
+  });
+
+  it('tells the sheet there is no note to keep when the note is empty', async () => {
+    mockPipeline();
+    mockedUseMemory.mockReturnValue({
+      data: { ...audioMemory, content: null },
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    const screen = renderScreen();
+    await openSheet(screen);
+    expect(mockTrimSheetProps?.hasUserNote).toBe(false);
+  });
+
+  it('shows the spinner and disables Save while the clip downloads and while it renders', async () => {
+    mockPipeline();
+    const download = deferred<{ status: number }>();
+    mockDownloadAsync.mockReturnValue(download.promise);
+    const screen = renderScreen();
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-audio-clip-trim'));
+    });
+    expect(screen.getByTestId('edit-memory-audio-clip-trim-busy')).toBeTruthy();
+    expect(screen.getByTestId('edit-memory-save-btn').props.accessibilityState?.disabled).toBe(true);
+
+    await act(async () => {
+      download.resolve({ status: 200 });
+    });
+    await flush();
+    expect(screen.queryByTestId('edit-memory-audio-clip-trim-busy')).toBeNull();
+    expect(screen.getByTestId('edit-memory-save-btn').props.accessibilityState?.disabled).toBeFalsy();
+
+    const renderGate = deferred<{ uri: string; durationMs: number; sizeBytes: number }>();
+    mockAudioRender.mockReturnValue(renderGate.promise);
+    await act(async () => {
+      mockTrimSheetProps?.onDone(SAVED_RANGE);
+    });
+    expect(screen.getByTestId('edit-memory-audio-clip-trim-busy')).toBeTruthy();
+    expect(screen.getByTestId('edit-memory-save-btn').props.accessibilityState?.disabled).toBe(true);
+
+    await act(async () => {
+      renderGate.resolve({ uri: RENDERED_URI, durationMs: 6500, sizeBytes: 90_000 });
+    });
+    await flush();
+    expect(screen.queryByTestId('edit-memory-audio-clip-trim-busy')).toBeNull();
+  });
+
+  it('reuses the downloaded original when the sheet is reopened, starting at the pending range', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+
+    await openSheet(screen);
+
+    expect(mockDownloadAsync).toHaveBeenCalledTimes(1);
+    expect(mockTrimSheetProps?.sourceUri).toBe(DOWNLOAD_URI);
+    expect(mockTrimSheetProps?.initialRange).toEqual(SAVED_RANGE);
+    expect(mockTrimSheetProps?.suggested).toBe(false);
+  });
+
+  it('Done with the full range clears the pending trim and discards its render', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+    expect(screen.getByText('Trimmed — saves when you tap Save')).toBeTruthy();
+
+    await openSheet(screen);
+    await act(async () => {
+      mockTrimSheetProps?.onDone({ startMs: 0, endMs: 10_000 });
+    });
+    await flush();
+
+    expect(screen.getByText('Kept as recorded')).toBeTruthy();
+    expect(discardedUris()).toContain(RENDERED_URI);
+    expect(mockAudioRender).toHaveBeenCalledTimes(1);
+
+    await pressSave(screen);
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(updateMemory).toHaveBeenCalledWith(expect.objectContaining({ audioClip: undefined }));
+  });
+
+  it('re-trimming replaces the pending render and discards the superseded one', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+
+    mockAudioRender.mockResolvedValue({ uri: RENDERED_URI_2, durationMs: 4000, sizeBytes: 50_000 });
+    mockAudioAnalyze.mockImplementation(async (uri: string) =>
+      uri === RENDERED_URI_2 ? energiesFixture(4000) : energiesFixture(),
+    );
+    await openSheet(screen);
+    await act(async () => {
+      mockTrimSheetProps?.onDone({ startMs: 3000, endMs: 7000 });
+    });
+    await flush();
+
+    expect(discardedUris()).toContain(RENDERED_URI);
+    expect(discardedUris()).not.toContain(RENDERED_URI_2);
+    expect(mockDiscardAudioClip).not.toHaveBeenCalledWith(DOWNLOAD_URI);
+  });
+
+  // ── Failures ────────────────────────────────────────────────────────
+
+  it('reports an expired link (non-2xx) as "Couldn\'t load this sound" and discards the file', async () => {
+    mockPipeline();
+    mockDownloadAsync.mockResolvedValue({ status: 403, uri: DOWNLOAD_URI });
+    const screen = renderScreen();
+
+    await openSheet(screen);
+
+    expect(screen.getByTestId('edit-memory-error').props.children).toBe("Couldn't load this sound. Try again.");
+    expect(mockTrimSheetProps).toBeUndefined();
+    expect(discardedUris()).toContain(DOWNLOAD_URI);
+    expect(mockAudioAnalyze).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing signed URL gracefully', async () => {
+    mockPipeline();
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+    const screen = renderScreen();
+
+    await openSheet(screen);
+
+    expect(screen.getByTestId('edit-memory-error').props.children).toBe("Couldn't load this sound. Try again.");
+    expect(mockDownloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed render and leaves the clip as saved', async () => {
+    mockPipeline();
+    mockAudioRender.mockRejectedValue(new Error('decode_failed'));
+    const screen = renderScreen();
+
+    await trimTo(screen);
+
+    expect(screen.getByTestId('edit-memory-error').props.children).toBe("Couldn't trim that sound. Try again.");
+    expect(screen.getByText('Kept as recorded')).toBeTruthy();
+  });
+
+  // ── Save ────────────────────────────────────────────────────────────
+
+  it('Save with a pending trim asks for confirmation first, with the exact copy', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+
+    await pressSave(screen);
+
+    expect(Alert.alert).toHaveBeenCalledWith(
+      'Trim this sound?',
+      'The part you cut will be gone for good.',
+      [
+        expect.objectContaining({ text: 'Cancel', style: 'cancel' }),
+        expect.objectContaining({ text: 'Trim and save' }),
+      ],
+      expect.anything(),
+    );
+    expect(updateMemory).not.toHaveBeenCalled();
+  });
+
+  it('Cancel in the confirmation saves nothing and keeps the pending trim', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+    await pressSave(screen);
+
+    await pressAlertButton('Cancel');
+
+    expect(updateMemory).not.toHaveBeenCalled();
+    expect(router.back).not.toHaveBeenCalled();
+    expect(screen.getByText('Trimmed — saves when you tap Save')).toBeTruthy();
+
+    // A second Save asks again.
+    await pressSave(screen);
+    expect(Alert.alert).toHaveBeenCalledTimes(2);
+  });
+
+  it('a confirmed save sends the trimmed clip, keeps the note, and navigates back', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+    await pressSave(screen);
+
+    await pressAlertButton('Trim and save');
+
+    expect(updateMemory).toHaveBeenCalledTimes(1);
+    expect(updateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryId: 'memory-1',
+        content: 'Lila singing in the bath.',
+        memoryType: 'audio',
+        mediaAssets: undefined,
+        audioClip: {
+          fileUri: RENDERED_URI,
+          durationMs: 6500,
+          waveform: expect.any(Array),
+        },
+      }),
+    );
+    expect(router.back).toHaveBeenCalled();
+    expect(trackEvent).toHaveBeenCalledWith('audio_trim_applied', {
+      source: 'saved',
+      removed_bucket: '0_5s',
+    });
+  });
+
+  it('transcribes the new clip after saving, backfills the description/transcript, and only then deletes the local files', async () => {
+    mockPipeline();
+    const transcription = deferred<{
+      cleanedText: string;
+      description: string;
+      mentionedMemberIds: string[];
+    } | null>();
+    mockTranscribeClip.mockReturnValue(transcription.promise);
+    const screen = renderScreen();
+    await trimTo(screen);
+    await pressSave(screen);
+    await pressAlertButton('Trim and save');
+
+    expect(mockTranscribeClip).toHaveBeenCalledWith(RENDERED_URI, [], 'family-1', {
+      durationMs: 6500,
+      sizeBytes: 90_000,
+    });
+    // Navigation did not wait, and the render (which transcription reads) is still on disk.
+    expect(router.back).toHaveBeenCalled();
+    expect(discardedUris()).not.toContain(RENDERED_URI);
+
+    await act(async () => {
+      transcription.resolve({
+        cleanedText: 'trimmed transcript',
+        description: 'Trimmed description',
+        mentionedMemberIds: [],
+      });
+    });
+    await flush();
+
+    expect(mockPatchAudioDescriptionIfEmpty).toHaveBeenCalledWith('memory-1', {
+      description: 'Trimmed description',
+      transcript: 'trimmed transcript',
+    });
+    expect(discardedUris()).toEqual(expect.arrayContaining([RENDERED_URI, DOWNLOAD_URI]));
+  });
+
+  it('still deletes the local files when transcription fails, and never patches', async () => {
+    mockPipeline();
+    mockTranscribeClip.mockResolvedValue(null);
+    const screen = renderScreen();
+    await trimTo(screen);
+    await pressSave(screen);
+    await pressAlertButton('Trim and save');
+    await flush();
+
+    expect(mockPatchAudioDescriptionIfEmpty).not.toHaveBeenCalled();
+    expect(discardedUris()).toEqual(expect.arrayContaining([RENDERED_URI, DOWNLOAD_URI]));
+  });
+
+  it('keeps the pending trim and shows the error when the save fails, then a retry can succeed', async () => {
+    mockPipeline();
+    updateMemory.mockRejectedValueOnce(new Error('Could not update memory'));
+    const screen = renderScreen();
+    await trimTo(screen);
+    await pressSave(screen);
+    await pressAlertButton('Trim and save');
+
+    expect(router.back).not.toHaveBeenCalled();
+    expect(mockTranscribeClip).not.toHaveBeenCalled();
+    expect(discardedUris()).not.toContain(RENDERED_URI);
+    expect(screen.getByText('Trimmed — saves when you tap Save')).toBeTruthy();
+
+    await pressSave(screen);
+    await pressAlertButton('Trim and save');
+    expect(updateMemory).toHaveBeenCalledTimes(2);
+    expect(router.back).toHaveBeenCalled();
+  });
+
+  it('Save without a pending trim behaves exactly as before: no confirm, no clip, no transcription', async () => {
+    const screen = renderScreen();
+    fireEvent.changeText(screen.getByTestId('edit-memory-content'), 'Only the note changed');
+
+    await pressSave(screen);
+
+    expect(Alert.alert).not.toHaveBeenCalled();
+    expect(updateMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Only the note changed',
+        memoryType: 'audio',
+        mediaAssets: undefined,
+        audioClip: undefined,
+      }),
+    );
+    expect(mockTranscribeClip).not.toHaveBeenCalled();
+  });
+
+  // ── Leaving ─────────────────────────────────────────────────────────
+
+  it('leaving without saving discards the downloaded original and the pending render', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await trimTo(screen);
+    expect(discardedUris()).not.toContain(RENDERED_URI);
+
+    screen.unmount();
+
+    expect(discardedUris()).toEqual(expect.arrayContaining([RENDERED_URI, DOWNLOAD_URI]));
+    expect(updateMemory).not.toHaveBeenCalled();
+  });
+
+  it('a render that finishes after the screen was left is discarded, never applied', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await openSheet(screen);
+    const renderGate = deferred<{ uri: string; durationMs: number; sizeBytes: number }>();
+    mockAudioRender.mockReturnValue(renderGate.promise);
+    await act(async () => {
+      mockTrimSheetProps?.onDone(SAVED_RANGE);
+    });
+
+    screen.unmount();
+    expect(discardedUris()).toContain(DOWNLOAD_URI);
+
+    await act(async () => {
+      renderGate.resolve({ uri: RENDERED_URI, durationMs: 6500, sizeBytes: 90_000 });
+    });
+    await flush();
+
+    expect(discardedUris()).toEqual(expect.arrayContaining([RENDER_OUT_URI, RENDERED_URI]));
+    expect(mockTranscribeClip).not.toHaveBeenCalled();
+    expect(updateMemory).not.toHaveBeenCalled();
+  });
+
+  it('a download that finishes after the screen was left is discarded', async () => {
+    mockPipeline();
+    const download = deferred<{ status: number }>();
+    mockDownloadAsync.mockReturnValue(download.promise);
+    const screen = renderScreen();
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-audio-clip-trim'));
+    });
+
+    screen.unmount();
+    await act(async () => {
+      download.resolve({ status: 200 });
+    });
+    await flush();
+
+    expect(discardedUris()).toContain(DOWNLOAD_URI);
+    expect(mockAudioAnalyze).not.toHaveBeenCalled();
+    expect(mockTrimSheetProps).toBeUndefined();
+  });
+
+  it('unmounts the trim sheet (and its audio player) once its session has dismissed', async () => {
+    mockPipeline();
+    const screen = renderScreen();
+    await openSheet(screen);
+    expect(mockTrimSheetMounted).toBe(true);
+
+    await act(async () => {
+      mockTrimSheetProps?.onCancel();
+    });
+    expect(mockTrimSheetProps?.visible).toBe(false);
+    expect(mockTrimSheetMounted).toBe(true);
+
+    await act(async () => {
+      mockTrimSheetProps?.onDismissed?.();
+    });
+    expect(mockTrimSheetMounted).toBe(false);
+    expect(screen.getByText('Kept as recorded')).toBeTruthy();
   });
 });
 

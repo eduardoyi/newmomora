@@ -45,6 +45,11 @@ export interface MediaAttachment {
   /** Where the attachment came from. Only `'scan'` (artwork scanner) is read;
    * unset means library/camera/share and behaves as before. */
   source?: 'library' | 'camera' | 'share' | 'scan';
+  /** True when `uri` is the private copy expo-sharing made of a file shared INTO
+   * Momora (set by `prepareSharedMedia`). Momora owns that copy and deletes it
+   * once the attachment is removed, abandoned or uploaded -- see
+   * `src/utils/shared-file-cleanup.ts`. Never set for picker/camera files. */
+  isShareCopy?: boolean;
 }
 
 interface MemoryMediaPickerProps {

@@ -29,6 +29,8 @@ import {
   type MemoryWithTags,
 } from '@/services/memories';
 import { fetchLinkPreviews, notifyFamilyActivity } from '@/services/ai';
+import { deleteStorageObject, uploadMediaObject } from '@/services/media';
+import { uploadMemoryMediaAssets } from '@/services/memory-posting';
 import { warmShareCardFireAndForget, warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 
 jest.mock('@/hooks/use-auth', () => ({
@@ -68,6 +70,18 @@ jest.mock('@/services/memories', () => ({
 jest.mock('@/services/media', () => ({
   deleteStorageObject: jest.fn(),
   uploadMediaObject: jest.fn(),
+}));
+
+// Spy-wrapped so the audio edit test can prove the photo/video pipeline is
+// never entered; everything else in memory-posting stays real.
+jest.mock('@/services/memory-posting', () => {
+  const actual = jest.requireActual('@/services/memory-posting');
+  return { ...actual, uploadMemoryMediaAssets: jest.fn(actual.uploadMemoryMediaAssets) };
+});
+
+jest.mock('@/utils/local-files', () => ({
+  ...jest.requireActual('@/utils/local-files'),
+  getLocalFileSizeBytes: jest.fn().mockResolvedValue(90_000),
 }));
 
 jest.mock('@/services/ai', () => ({
@@ -590,6 +604,103 @@ describe('useMemories integration', () => {
 
       expect(mockedWarmShareCard).toHaveBeenCalledTimes(1);
       expect(mockedWarmShareCard).toHaveBeenCalledWith(updated);
+    });
+  });
+
+  describe('audio clip replacement on edit (post-save trim)', () => {
+    const audioMemory = {
+      id: 'memory-audio-1',
+      memory_type: 'audio',
+      memory_date: '2026-07-14',
+      taggedMembers: [],
+      mediaAssets: [],
+    };
+
+    beforeEach(() => {
+      (uploadMediaObject as jest.Mock).mockResolvedValue({ error: null });
+      (deleteStorageObject as jest.Mock).mockResolvedValue({ error: null });
+    });
+
+    it('uploads the trimmed clip via the audio path and sends a single audio asset with a cleared transcript', async () => {
+      mockedUpdateMemory.mockResolvedValue({ data: audioMemory as never, error: null });
+      const waveform = Array.from({ length: 64 }, () => 90);
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+      await result.current.updateMemory({
+        memoryId: 'memory-audio-1',
+        content: 'Kept note',
+        memoryType: 'audio',
+        audioClip: { fileUri: 'file:///audio-recordings/trim.m4a', durationMs: 6500, waveform },
+      });
+
+      expect(uploadMemoryMediaAssets).not.toHaveBeenCalled();
+      expect(uploadMediaObject).toHaveBeenCalledTimes(1);
+      const [objectKey, fileUri, contentType, familyId] = (uploadMediaObject as jest.Mock).mock.calls[0];
+      expect(objectKey).toMatch(/^user-1\/memories\/memory-audio-1\/media\/[A-Za-z0-9_-]+\.m4a$/);
+      expect(fileUri).toBe('file:///audio-recordings/trim.m4a');
+      expect(contentType).toBe('audio/mp4');
+      expect(familyId).toBe('family-1');
+      expect(mockedUpdateMemory).toHaveBeenCalledWith(
+        'memory-audio-1',
+        expect.objectContaining({
+          content: 'Kept note',
+          memoryType: 'audio',
+          mediaAssets: [{ objectKey, contentType: 'audio/mp4', durationMs: 6500, waveform }],
+          audioTranscript: null,
+        }),
+      );
+      expect(deleteStorageObject).not.toHaveBeenCalled();
+    });
+
+    it('deletes the uploaded clip when updateMemory fails', async () => {
+      mockedUpdateMemory.mockResolvedValue({
+        data: null,
+        error: { message: 'rpc failed', code: 'XX000' },
+      });
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+      await expect(
+        result.current.updateMemory({
+          memoryId: 'memory-audio-1',
+          memoryType: 'audio',
+          audioClip: { fileUri: 'file:///audio-recordings/trim.m4a', durationMs: 6500, waveform: null },
+        }),
+      ).rejects.toThrow();
+
+      const uploadedKey = (uploadMediaObject as jest.Mock).mock.calls[0][0];
+      expect(deleteStorageObject).toHaveBeenCalledWith(uploadedKey);
+    });
+
+    it('does not call updateMemory (and leaves nothing to clean up) when the audio upload fails', async () => {
+      (uploadMediaObject as jest.Mock).mockResolvedValue({ error: new Error('PUT failed') });
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+      await expect(
+        result.current.updateMemory({
+          memoryId: 'memory-audio-1',
+          memoryType: 'audio',
+          audioClip: { fileUri: 'file:///audio-recordings/trim.m4a', durationMs: 6500, waveform: null },
+        }),
+      ).rejects.toThrow('PUT failed');
+
+      expect(mockedUpdateMemory).not.toHaveBeenCalled();
+      expect(deleteStorageObject).not.toHaveBeenCalled();
+    });
+
+    it('does not send a transcript or media for an ordinary audio edit', async () => {
+      mockedUpdateMemory.mockResolvedValue({ data: audioMemory as never, error: null });
+
+      const { result } = renderHook(() => useMemoryMutations(), { wrapper: createWrapper() });
+      await result.current.updateMemory({
+        memoryId: 'memory-audio-1',
+        content: 'Only the note changed',
+        memoryType: 'audio',
+      });
+
+      expect(uploadMediaObject).not.toHaveBeenCalled();
+      const input = mockedUpdateMemory.mock.calls[0][1];
+      expect(input.mediaAssets).toBeUndefined();
+      expect('audioTranscript' in input).toBe(false);
     });
   });
 

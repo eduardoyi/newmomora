@@ -15,6 +15,7 @@ import {
   type CreateMemoryInput,
   type MemoryType,
   type UpdateMemoryInput,
+  validateAudioReplacementAssets,
   validateMemoryContent,
   validateMemoryDate,
   validateMemoryMediaAssets,
@@ -1566,7 +1567,10 @@ export async function updateMemory(
 
   let existingMediaAssets: MemoryMediaAsset[] = [];
   if (input.mediaAssets !== undefined) {
-    if (memoryType !== 'media') {
+    // An audio memory's clip can be replaced (post-save trim, docs/features/
+    // audio-memories.md) but only by exactly one audio asset; everything else
+    // keeps the original media-only rule.
+    if (memoryType !== 'media' && memoryType !== 'audio') {
       return {
         data: null,
         error: {
@@ -1574,6 +1578,16 @@ export async function updateMemory(
           code: 'invalid_memory_type',
         },
       };
+    }
+
+    if (memoryType === 'audio') {
+      const audioAssetError = validateAudioReplacementAssets(input.mediaAssets);
+      if (audioAssetError) {
+        return {
+          data: null,
+          error: { message: audioAssetError, code: 'invalid_memory_type' },
+        };
+      }
     }
 
     const mediaError = validateMemoryMediaAssets(input.mediaAssets);
@@ -1657,6 +1671,20 @@ export async function updateMemory(
     const nextKeys = new Set(input.mediaAssets.map((asset) => asset.objectKey));
     const removedAssets = existingMediaAssets.filter((asset) => !nextKeys.has(asset.object_key));
     await deleteStorageKeys(mediaAssetStorageKeys(removedAssets));
+  }
+
+  // Audio only: the clip was trimmed, so the hidden transcript describing the
+  // old clip is stale. Written only AFTER the clip replace succeeded, so a
+  // failed RPC leaves the still-current clip's transcript intact.
+  if (memoryType === 'audio' && input.audioTranscript !== undefined) {
+    const { error } = await supabase
+      .from('memories')
+      .update({ audio_transcript: normalizeOptionalContent(input.audioTranscript) })
+      .eq('id', memoryId);
+
+    if (error) {
+      return { data: null, error: mapSupabaseError(error) };
+    }
   }
 
   const result = await fetchMemoryById(memoryId);

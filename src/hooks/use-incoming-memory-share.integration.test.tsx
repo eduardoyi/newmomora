@@ -4,6 +4,7 @@ import { useIncomingShare } from 'expo-sharing';
 import { useIncomingMemoryShare } from './use-incoming-memory-share';
 import { extractImageCaptureDateIso } from '@/utils/image-exif-capture-date';
 import { prepareSharedMedia } from '@/utils/prepare-shared-media';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
 jest.mock('expo-sharing', () => ({ useIncomingShare: jest.fn() }));
@@ -22,6 +23,7 @@ jest.mock('@/utils/prepare-shared-media', () => {
   );
   return { ...actual, prepareSharedMedia: jest.fn(actual.prepareSharedMedia) };
 });
+jest.mock('@/utils/shared-file-cleanup', () => ({ deleteShareCopies: jest.fn(async () => {}) }));
 jest.mock('@/utils/video-capture-date', () => ({
   extractVideoCaptureDateIso: jest.fn(async () => '2024-02-01'),
 }));
@@ -34,6 +36,7 @@ const mockExtractVideoCaptureDateIso = extractVideoCaptureDateIso as jest.Mocked
   typeof extractVideoCaptureDateIso
 >;
 const mockPrepareSharedMedia = prepareSharedMedia as jest.MockedFunction<typeof prepareSharedMedia>;
+const mockDeleteShareCopies = deleteShareCopies as jest.MockedFunction<typeof deleteShareCopies>;
 const clearSharedPayloads = jest.fn();
 
 beforeEach(() => {
@@ -434,5 +437,109 @@ it('reports the native share error as an error result', async () => {
   expect(onPrepared).toHaveBeenCalledWith({
     kind: 'error',
     errorMessage: 'Could not open the shared photos or videos. Try sharing them again.',
+  });
+});
+
+describe('share-copy cleanup for payloads that never become attachments', () => {
+  const sharedPhoto = (name: string) => ({
+    value: `file:///group/${name}`,
+    shareType: 'image' as const,
+    mimeType: 'image/jpeg',
+    contentUri: `file:///group/${name}`,
+    contentType: 'image' as const,
+    contentMimeType: 'image/jpeg',
+    originalName: name,
+    contentSize: 2048,
+  });
+  const sharedVoice = {
+    value: 'file:///group/voice.m4a',
+    shareType: 'audio' as const,
+    mimeType: 'audio/mp4',
+    contentUri: 'file:///group/voice.m4a',
+    contentType: 'audio' as const,
+    contentMimeType: 'audio/mp4',
+    originalName: 'voice.m4a',
+    contentSize: 1000,
+  };
+
+  function share(payloads: ReturnType<typeof sharedPhoto>[] | (typeof sharedVoice | ReturnType<typeof sharedPhoto>)[]) {
+    mockUseIncomingShare.mockReturnValue({
+      sharedPayloads: payloads,
+      resolvedSharedPayloads: payloads,
+      clearSharedPayloads,
+      isResolving: false,
+      error: null,
+      refreshSharePayloads: jest.fn(),
+    } as never);
+    const onPrepared = jest.fn();
+    renderHook(() => useIncomingMemoryShare({ onPrepared }));
+    return onPrepared;
+  }
+
+  it('deletes nothing when every payload became an attachment', async () => {
+    const onPrepared = share([sharedPhoto('a.jpg'), sharedPhoto('b.jpg')]);
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(onPrepared.mock.calls[0][0].attachments).toHaveLength(2);
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith([]);
+  });
+
+  it('deletes the copies beyond the 10-item cap', async () => {
+    const onPrepared = share(Array.from({ length: 12 }, (_, i) => sharedPhoto(`p${i}.jpg`)));
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(onPrepared.mock.calls[0][0].attachments).toHaveLength(10);
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith([
+      'file:///group/p10.jpg',
+      'file:///group/p11.jpg',
+    ]);
+  });
+
+  it('deletes every copy when validation fails', async () => {
+    const { getLocalFileSizeBytes } = jest.requireMock('@/utils/local-files');
+    getLocalFileSizeBytes.mockResolvedValueOnce(1);
+    const onPrepared = share([sharedPhoto('a.jpg')]);
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(onPrepared.mock.calls[0][0].attachments).toEqual([]);
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith(['file:///group/a.jpg']);
+  });
+
+  it('leaves a lone voice note to the audio import path', async () => {
+    const onPrepared = share([sharedVoice]);
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(onPrepared.mock.calls[0][0].kind).toBe('audio');
+    expect(mockDeleteShareCopies).not.toHaveBeenCalledWith(['file:///group/voice.m4a']);
+    for (const [uris] of mockDeleteShareCopies.mock.calls) {
+      expect(uris).toEqual([]);
+    }
+  });
+
+  it('deletes a refused voice note + photo mix (no audio import will run)', async () => {
+    const onPrepared = share([sharedVoice, sharedPhoto('a.jpg')]);
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith([
+      'file:///group/voice.m4a',
+      'file:///group/a.jpg',
+    ]);
+  });
+
+  it('deletes the raw payload files when the native share resolution fails', async () => {
+    mockUseIncomingShare.mockReturnValue({
+      sharedPayloads: [{ value: 'file:///group/a.jpg', shareType: 'image', mimeType: 'image/jpeg' }],
+      resolvedSharedPayloads: [],
+      clearSharedPayloads,
+      isResolving: false,
+      error: new Error('resolve failed') as never,
+      refreshSharePayloads: jest.fn(),
+    });
+    const onPrepared = jest.fn();
+    renderHook(() => useIncomingMemoryShare({ onPrepared }));
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith(['file:///group/a.jpg']);
+  });
+
+  it('deletes the resolved copies when preparation itself rejects', async () => {
+    mockPrepareSharedMedia.mockRejectedValueOnce(new Error('boom'));
+    const onPrepared = share([sharedPhoto('a.jpg')]);
+    await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+    expect(mockDeleteShareCopies).toHaveBeenCalledWith(['file:///group/a.jpg']);
   });
 });

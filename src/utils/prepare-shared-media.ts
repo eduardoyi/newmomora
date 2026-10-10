@@ -314,6 +314,7 @@ export async function prepareSharedMedia(
       contentType: preparation.contentType,
       durationMs: preparation.durationMs ?? undefined,
       sizeBytes: preparation.payload.contentSize as number,
+      isShareCopy: true,
       ...(preparation.capturedAtIso ? { capturedAtIso: preparation.capturedAtIso } : {}),
     };
   });
@@ -325,4 +326,29 @@ export async function prepareSharedMedia(
       ? 'Momora attached the first 10 items. A memory can include up to 10 photos or videos.'
       : null,
   };
+}
+
+/**
+ * Share-copy URIs that `result` did NOT turn into attachments, so nothing in
+ * the app will ever read or delete them: payloads dropped by an error,
+ * validation failure, the 10-item cap or the unsupported-type filter. The
+ * single voice note of an `audio` result is excluded -- `importAudioFile`
+ * owns (and deletes) that copy. A mixed-audio `error` result means the audio
+ * path never runs, so those copies are returned too. Callers delete the result
+ * with `deleteShareCopies`, which re-checks that each is really a share copy.
+ */
+export function unattachedSharedPayloadUris(
+  payloads: ResolvedSharePayload[],
+  result: PrepareSharedMediaResult,
+): string[] {
+  if (result.kind === 'audio') {
+    return [];
+  }
+  const attached = new Set(
+    result.kind === 'media' ? result.attachments.map((attachment) => attachment.uri) : [],
+  );
+  return payloads
+    .filter(hasContentUri)
+    .map((payload) => payload.contentUri)
+    .filter((uri) => !attached.has(uri));
 }

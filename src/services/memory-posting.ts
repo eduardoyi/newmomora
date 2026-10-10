@@ -35,6 +35,12 @@ export interface MemoryMediaMutationAsset {
    * supabase/migrations/20260715140000_memory_media_preview_key.sql).
    */
   previewObjectKey?: string | null;
+  /**
+   * `fileUri` is the private copy expo-sharing made of a shared file. The
+   * pending-uploads queue deletes it after a successful post (or on discard);
+   * a failed post keeps it so retry can re-read it.
+   */
+  deleteAfterUpload?: boolean;
 }
 
 export interface UploadedMemoryMediaAsset {
@@ -532,6 +538,43 @@ async function assertAudioClipWithinLimits(clip: { fileUri: string; durationMs: 
 }
 
 /**
+ * Validates and uploads one audio clip to R2 and returns its object key. Shared
+ * by postAudioMemory (new sound) and the edit mutation (post-save trim) so the
+ * audio path stays in one place. Throws on any failure; the caller owns
+ * rollback of the returned key (nothing was uploaded if this throws).
+ */
+export async function uploadAudioClipObject(params: {
+  userId: string;
+  familyId: string;
+  memoryId: string;
+  clip: { fileUri: string; contentType: string; durationMs: number };
+}): Promise<string> {
+  const { userId, familyId, memoryId, clip } = params;
+  await assertAudioClipWithinLimits(clip);
+
+  const extension = getMediaExtensionFromContentType(clip.contentType);
+  if (!extension) {
+    throw new Error('Unsupported audio file type');
+  }
+
+  const mediaAssetId = createUuid();
+  const objectKey = buildMemoryMediaAssetKey(userId, memoryId, mediaAssetId, extension);
+
+  const { error: uploadError } = await uploadMediaObject(
+    objectKey,
+    clip.fileUri,
+    clip.contentType,
+    familyId,
+  );
+
+  if (uploadError) {
+    throw toError(uploadError, 'Audio upload failed');
+  }
+
+  return objectKey;
+}
+
+/**
  * Minimal audio upload pipeline (docs/plans/audio-memories-v1.md P2.4) --
  * deliberately NOT a call into uploadMemoryMediaAssets/postMediaMemory. A
  * raw recorded .m4a must never flow through the image branch: no video
@@ -554,26 +597,12 @@ export async function postAudioMemory(params: {
   const uploadedKeys: string[] = [];
 
   try {
-    await assertAudioClipWithinLimits(input.clip);
-
-    const extension = getMediaExtensionFromContentType(input.clip.contentType);
-    if (!extension) {
-      throw new Error('Unsupported audio file type');
-    }
-
-    const mediaAssetId = createUuid();
-    const objectKey = buildMemoryMediaAssetKey(userId, input.memoryId, mediaAssetId, extension);
-
-    const { error: uploadError } = await uploadMediaObject(
-      objectKey,
-      input.clip.fileUri,
-      input.clip.contentType,
+    const objectKey = await uploadAudioClipObject({
+      userId,
       familyId,
-    );
-
-    if (uploadError) {
-      throw toError(uploadError, 'Audio upload failed');
-    }
+      memoryId: input.memoryId,
+      clip: input.clip,
+    });
 
     uploadedKeys.push(objectKey);
     onAssetUploaded?.();

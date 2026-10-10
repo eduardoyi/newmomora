@@ -934,27 +934,220 @@ describe('memories service integration', () => {
       expect(updateBuilder.update).toHaveBeenCalledWith({ content: 'Added a caption' });
     });
 
-    it('rejects mediaAssets updates on an audio memory (clip is immutable post-save)', async () => {
-      const fetchBuilder = createQueryBuilder({
-        data: {
-          content: null,
-          memory_type: 'audio',
-          illustration_key: null,
-          illustration_status: 'none',
-        },
-        error: null,
+    describe('post-save trim: replacing the single audio clip', () => {
+      const OLD_KEY = 'user-1/memories/memory-audio-1/media/clip-old.m4a';
+      const NEW_KEY = 'user-2/memories/memory-audio-1/media/clip-new.m4a';
+
+      const OLD_ASSET = {
+        id: 'asset-old',
+        memory_id: 'memory-audio-1',
+        object_key: OLD_KEY,
+        preview_object_key: null,
+        share_card_key: null,
+        content_type: 'audio/mp4',
+        duration_ms: 42_000,
+        position: 0,
+        created_at: '2026-08-19T00:00:00Z',
+        updated_at: '2026-08-19T00:00:00Z',
+      };
+
+      /**
+       * Records every `memories` update payload, in order, together with a
+       * marker of whether the replace RPC had already been called -- so tests
+       * can assert the transcript is written only after the clip replace.
+       */
+      function mockAudioMemoryTables(transcriptError: { message: string; code?: string } | null = null) {
+        const existingBuilder = createQueryBuilder({
+          data: {
+            content: 'Kept note',
+            memory_type: 'audio',
+            illustration_key: null,
+            illustration_status: 'none',
+          },
+          error: null,
+        });
+        const detailResult = {
+          data: {
+            id: 'memory-audio-1',
+            memory_type: 'audio',
+            media_key: NEW_KEY,
+            media_content_type: 'audio/mp4',
+            illustration_key: null,
+            illustration_status: 'none',
+            created_at: '2026-08-19T00:00:00Z',
+            updated_at: '2026-08-19T00:00:00Z',
+          },
+          error: null,
+        };
+        const mediaBuilder = createQueryBuilder({ data: [OLD_ASSET], error: null });
+        const tagsBuilder = createQueryBuilder({ data: [], error: null });
+        const writes: { payload: Record<string, unknown>; afterRpc: boolean }[] = [];
+
+        let memoriesCall = 0;
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            memoriesCall += 1;
+            if (memoriesCall === 1) return existingBuilder;
+            const builder = createQueryBuilder(detailResult);
+            builder.update = jest.fn((payload: Record<string, unknown>) => {
+              writes.push({
+                payload,
+                afterRpc: (supabase.rpc as jest.Mock).mock.calls.length > 0,
+              });
+              const failsTranscript = 'audio_transcript' in payload && transcriptError;
+              return createQueryBuilder({ data: null, error: failsTranscript ? transcriptError : null });
+            });
+            return builder;
+          }
+          if (table === 'memory_media') return mediaBuilder;
+          if (table === 'memory_family_members') return tagsBuilder;
+          throw new Error(`Unexpected table ${table}`);
+        });
+        return { writes };
+      }
+
+      it('replaces the clip through the RPC, then clears the transcript, and deletes the old object', async () => {
+        const { writes } = mockAudioMemoryTables();
+        const waveform = Array.from({ length: 64 }, (_, i) => i);
+
+        const result = await updateMemory('memory-audio-1', {
+          mediaAssets: [
+            { objectKey: NEW_KEY, contentType: 'audio/mp4', durationMs: 6500, waveform },
+          ],
+          audioTranscript: null,
+        });
+
+        expect(result.error).toBeNull();
+        expect(supabase.rpc).toHaveBeenCalledWith('replace_memory_media_assets', {
+          target_memory_id: 'memory-audio-1',
+          assets: [
+            expect.objectContaining({
+              objectKey: NEW_KEY,
+              contentType: 'audio/mp4',
+              durationMs: 6500,
+              waveform,
+            }),
+          ],
+        });
+        // The transcript is cleared in its own write, AFTER the RPC; the note
+        // ("content") is not touched.
+        expect(writes).toEqual([{ payload: { audio_transcript: null }, afterRpc: true }]);
+        expect(deleteStorageObject).toHaveBeenCalledWith(OLD_KEY);
+        expect(deleteStorageObject).not.toHaveBeenCalledWith(NEW_KEY);
       });
 
-      (supabase.from as jest.Mock).mockImplementation((table: string) => {
-        if (table === 'memories') return fetchBuilder;
-        throw new Error(`Unexpected table ${table}`);
+      it('normalizes an empty-string transcript to NULL; content/date go in the early update, the transcript after the RPC', async () => {
+        const { writes } = mockAudioMemoryTables();
+
+        const result = await updateMemory('memory-audio-1', {
+          content: 'New note',
+          memoryDate: '2026-08-20',
+          mediaAssets: [{ objectKey: NEW_KEY, contentType: 'audio/x-m4a' }],
+          audioTranscript: '   ',
+        });
+
+        expect(result.error).toBeNull();
+        expect(writes).toEqual([
+          { payload: { content: 'New note', memory_date: '2026-08-20' }, afterRpc: false },
+          { payload: { audio_transcript: null }, afterRpc: true },
+        ]);
       });
 
-      const result = await updateMemory('memory-audio-1', {
-        mediaAssets: [{ objectKey: 'x', contentType: 'audio/mp4' }],
+      it('leaves the current clip\'s transcript untouched and deletes nothing when the RPC fails', async () => {
+        const { writes } = mockAudioMemoryTables();
+        (supabase.rpc as jest.Mock).mockResolvedValue({
+          data: null,
+          error: { message: 'rpc failed', code: 'XX000' },
+        });
+
+        const result = await updateMemory('memory-audio-1', {
+          content: 'New note',
+          mediaAssets: [{ objectKey: NEW_KEY, contentType: 'audio/mp4' }],
+          audioTranscript: null,
+        });
+
+        expect(result.error).not.toBeNull();
+        expect(writes.some((write) => 'audio_transcript' in write.payload)).toBe(false);
+        expect(deleteStorageObject).not.toHaveBeenCalled();
       });
 
-      expect(result.error?.code).toBe('invalid_memory_type');
+      it('returns the error when the late transcript write fails', async () => {
+        mockAudioMemoryTables({ message: 'transcript write failed', code: 'XX000' });
+
+        const result = await updateMemory('memory-audio-1', {
+          mediaAssets: [{ objectKey: NEW_KEY, contentType: 'audio/mp4' }],
+          audioTranscript: null,
+        });
+
+        expect(result.data).toBeNull();
+        expect(result.error?.message).toBe('transcript write failed');
+      });
+
+      it('rejects more than one asset for an audio memory', async () => {
+        mockAudioMemoryTables();
+
+        const result = await updateMemory('memory-audio-1', {
+          mediaAssets: [
+            { objectKey: NEW_KEY, contentType: 'audio/mp4' },
+            { objectKey: `${NEW_KEY}2`, contentType: 'audio/mp4' },
+          ],
+        });
+
+        expect(result.error?.code).toBe('invalid_memory_type');
+        expect(supabase.rpc).not.toHaveBeenCalled();
+      });
+
+      it('rejects a non-audio content type for an audio memory', async () => {
+        mockAudioMemoryTables();
+
+        const result = await updateMemory('memory-audio-1', {
+          mediaAssets: [{ objectKey: 'user-1/memories/memory-audio-1/media/x.jpg', contentType: 'image/jpeg' }],
+        });
+
+        expect(result.error?.code).toBe('invalid_memory_type');
+        expect(supabase.rpc).not.toHaveBeenCalled();
+      });
+
+      it('rejects an empty asset list for an audio memory', async () => {
+        mockAudioMemoryTables();
+
+        const result = await updateMemory('memory-audio-1', { mediaAssets: [] });
+
+        expect(result.error?.code).toBe('invalid_memory_type');
+        expect(supabase.rpc).not.toHaveBeenCalled();
+      });
+
+      it('ignores audioTranscript for non-audio memories', async () => {
+        const existingBuilder = createQueryBuilder({
+          data: {
+            content: 'Plain note',
+            memory_type: 'text_only',
+            illustration_key: null,
+            illustration_status: 'none',
+          },
+          error: null,
+        });
+        const updateBuilder = createQueryBuilder({ data: null, error: null });
+        const detailBuilder = createQueryBuilder({
+          data: { id: 'm-1', memory_type: 'text_only', illustration_key: null, illustration_status: 'none' },
+          error: null,
+        });
+        const tagsBuilder = createQueryBuilder({ data: [], error: null });
+        let call = 0;
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            call += 1;
+            return [existingBuilder, updateBuilder, detailBuilder][call - 1] ?? detailBuilder;
+          }
+          if (table === 'memory_family_members') return tagsBuilder;
+          if (table === 'memory_media') return createQueryBuilder({ data: [], error: null });
+          throw new Error(`Unexpected table ${table}`);
+        });
+
+        await updateMemory('m-1', { content: 'Edited', audioTranscript: null });
+
+        expect(updateBuilder.update).toHaveBeenCalledWith({ content: 'Edited' });
+      });
     });
   });
 

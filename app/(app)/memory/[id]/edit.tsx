@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   StyleSheet,
   Switch,
@@ -15,6 +16,7 @@ import { seedFromKey } from '@/components/audio/audio-seed';
 import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
 import { PhotosIcon, ScanArtIcon } from '@/components/icons/composer-icons';
 import { ClipChip } from '@/components/audio/clip-chip';
+import { TrimSheet } from '@/components/audio/trim-sheet';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
@@ -26,11 +28,17 @@ import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
+import { bucketSavedTrimRemovedMs, useSavedAudioTrim } from '@/hooks/use-saved-audio-trim';
 import { useMemory, useMemoryMutations, type MediaAssetUploadPhase } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { isArtworkScannerAvailable } from '@/services/artwork-scanner';
+import { useIsOnline } from '@/lib/connectivity';
+import { trackEvent } from '@/services/analytics';
+import { patchAudioDescriptionIfEmpty } from '@/services/memories';
 import { MediaAssetUploadError } from '@/services/memory-posting';
+import { transcribeClip } from '@/services/voice-transcription';
 import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
+import { discardAudioClip } from '@/utils/audio-clip-custody';
 import { mediaImageSource } from '@/utils/media-image-source';
 import {
   describeEditSaveError,
@@ -46,6 +54,8 @@ import {
 } from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
+import * as MomoraAudio from '../../../../modules/momora-audio';
+
 const TYPE_CONFIGS = {
   text_illustration: { label: 'Illustrated', color: colors.primary, bg: colors.primaryTint, border: colors.primarySoft },
   text_only:         { label: 'Text only',   color: colors.ink2,    bg: colors.surface,     border: colors.border },
@@ -60,7 +70,8 @@ const EMPTY_MEDIA_URLS: Record<string, string> = {};
 
 export default function EditMemoryScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { role } = useFamily();
+  const { role, familyId } = useFamily();
+  const isOnline = useIsOnline();
   // isPlaceholderData: useMemory seeds from the timeline list cache for an
   // instant detail paint, but the edit form must only initialize from
   // server-fresh data -- initializing from a stale cached copy and saving
@@ -192,9 +203,9 @@ export default function EditMemoryScreen() {
   }, [isInitialized, mediaUrls]);
 
   const isMedia = memory?.memory_type === 'media';
-  // Audio is exclusive and immutable (docs/plans/audio-memories-v1.md P3.2):
-  // description/date/tags are editable, the clip itself never is -- no media
-  // picker, no AI-illustration toggle, mic disabled.
+  // Audio is exclusive: description/date/tags are editable and the clip can
+  // only be TRIMMED (never replaced or re-recorded) -- no media picker, no
+  // AI-illustration toggle, mic disabled.
   const isAudio = memory?.memory_type === 'audio';
   // Artwork is derived from the memory row, never from attachment `source`
   // (a loaded memory's assets carry none). Library photos/videos can't be
@@ -215,8 +226,30 @@ export default function EditMemoryScreen() {
   const audioClipAsset = isAudio ? memory?.mediaAssets[0] ?? null : null;
   const audioClipKey = audioClipAsset?.object_key ?? memory?.media_key ?? null;
   const { url: audioClipUrl } = useMediaUrl(isAudio ? audioClipKey : null, memory?.updated_at);
-  const audioClipPlayback = useAudioClipPlayback(audioClipUrl);
-  const audioDurationSeconds = (audioClipAsset?.duration_ms ?? 0) / 1000;
+  // Post-save trim (docs/plans/audio-trim-import.md addendum): a pending trim
+  // is a local render held until Save; the chip previews it in the meantime.
+  const contentRef = useRef(content);
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
+  const hasUserNote = useCallback(() => contentRef.current.trim().length > 0, []);
+  const trim = useSavedAudioTrim({
+    audioClipUrl,
+    isOnline,
+    hasUserNote,
+    setErrorMessage,
+  });
+  const pendingTrim = isAudio ? trim.pending : null;
+  const audioClipPlayback = useAudioClipPlayback(pendingTrim?.localUri ?? audioClipUrl);
+  const audioDurationSeconds = pendingTrim
+    ? pendingTrim.durationMs / 1000
+    : (audioClipAsset?.duration_ms ?? 0) / 1000;
+  const canShowTrim =
+    isAudio &&
+    canEditFamilyContent(role) &&
+    MomoraAudio.isAvailable() &&
+    !isUpdating &&
+    (isOnline || trim.isBusy);
 
   const typeKey =
     isArtwork
@@ -238,7 +271,11 @@ export default function EditMemoryScreen() {
     isMedia ||
     isAudio ||
     (isIllustrationEnabled && (hasRetainedIllustration || isIllustrationJobInProgress));
-  const canSave = isMedia ? attachedMedia.length > 0 : isAudio ? true : content.trim().length > 0;
+  const canSave = isMedia
+    ? attachedMedia.length > 0
+    : isAudio
+      ? !trim.isBusy
+      : content.trim().length > 0;
 
   const voiceMembers = useMemo(
     () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames ?? [], is_user_profile: m.is_user_profile })),
@@ -309,10 +346,50 @@ export default function EditMemoryScreen() {
     [],
   );
 
-  const handleSave = async () => {
+  const confirmingTrimRef = useRef(false);
+
+  const handleSave = () => {
+    if (!id) return;
+    if (!pendingTrim) {
+      void performSave();
+      return;
+    }
+    // A saved trim is permanent (the old clip is deleted), so confirm first.
+    if (confirmingTrimRef.current) return;
+    confirmingTrimRef.current = true;
+    Alert.alert(
+      'Trim this sound?',
+      'The part you cut will be gone for good.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+          onPress: () => {
+            confirmingTrimRef.current = false;
+          },
+        },
+        {
+          text: 'Trim and save',
+          onPress: () => {
+            confirmingTrimRef.current = false;
+            void performSave();
+          },
+        },
+      ],
+      {
+        cancelable: true,
+        onDismiss: () => {
+          confirmingTrimRef.current = false;
+        },
+      },
+    );
+  };
+
+  const performSave = async () => {
     setErrorMessage('');
     if (!id) return;
     const savingMedia = attachedMedia;
+    const savingTrim = pendingTrim;
     if (isMedia) {
       const newEntries: Record<number, MediaSaveProgressEntry> = {};
       savingMedia.forEach((attachment, index) => {
@@ -344,8 +421,8 @@ export default function EditMemoryScreen() {
             : isIllustrationEnabled
               ? 'text_illustration'
               : 'text_only',
-        // Never sent for audio -- the clip is immutable post-save (P3.2);
-        // updateMemory rejects a mediaAssets write for any non-media type.
+        // Never sent for audio: a trimmed clip travels as `audioClip` below
+        // (its own upload path), never as photo/video `mediaAssets`.
         mediaAssets: isMedia
           ? savingMedia.map((attachment) => ({
               objectKey: attachment.objectKey,
@@ -356,6 +433,13 @@ export default function EditMemoryScreen() {
               aspectRatio: attachment.aspectRatio,
             }))
           : undefined,
+        audioClip: savingTrim
+          ? {
+              fileUri: savingTrim.localUri,
+              durationMs: savingTrim.durationMs,
+              waveform: savingTrim.waveform,
+            }
+          : undefined,
         onMediaProgress: isMedia ? reportMediaProgress : undefined,
       });
       // Uploaded: the scanned pages now live in R2.
@@ -364,6 +448,9 @@ export default function EditMemoryScreen() {
         if (attachment.source === 'scan') {
           void deleteArtworkScanFile(attachment.uri);
         }
+      }
+      if (savingTrim) {
+        finishTrimmedSave(id, savingTrim);
       }
       router.back();
     } catch (error) {
@@ -380,6 +467,36 @@ export default function EditMemoryScreen() {
     } finally {
       setUploadProgress(null);
     }
+  };
+
+  // After a successful trimmed save: tell analytics, then rebuild the hidden
+  // transcript (and an empty description) from the NEW clip in the background.
+  // The local files must outlive the transcription (it reads the render), so
+  // they are deleted only once it settles. Never blocks navigation.
+  const finishTrimmedSave = (memoryId: string, savedTrim: NonNullable<typeof pendingTrim>) => {
+    trackEvent('audio_trim_applied', {
+      source: 'saved',
+      removed_bucket: bucketSavedTrimRemovedMs(savedTrim.removedMs),
+    });
+    const handedOff = trim.handOffFiles();
+    const files = handedOff?.uris ?? [savedTrim.localUri];
+    void transcribeClip(savedTrim.localUri, voiceMembers, familyId, {
+      durationMs: savedTrim.durationMs,
+      sizeBytes: savedTrim.sizeBytes,
+    })
+      .then(async (result) => {
+        if (!result) return;
+        await patchAudioDescriptionIfEmpty(memoryId, {
+          description: result.description.trim() || null,
+          transcript: result.cleanedText.trim() || null,
+        });
+      })
+      .catch(() => {})
+      .finally(() => {
+        for (const uri of files) {
+          void discardAudioClip(uri);
+        }
+      });
   };
 
   const uploadSummary = uploadProgress
@@ -450,23 +567,28 @@ export default function EditMemoryScreen() {
     )
   ) : null;
 
-  // The clip -- read-only, recessed, no remove control (P3.2). Only the
-  // description/tags/date are editable for an audio memory.
+  // The clip -- recessed, no remove control. Description/tags/date are
+  // editable; the scissors (when the native module, permission and network
+  // allow) cut the clip down, saved with the memory.
   const noticeSlot = isAudio ? (
     <View style={styles.audioClipWrap}>
       <ClipChip
         durationSeconds={audioDurationSeconds}
         emotion={memory.emotion}
         onToggle={() => void audioClipPlayback.toggle()}
+        onTrim={canShowTrim ? () => void trim.openTrim() : undefined}
         playing={audioClipPlayback.playing}
         positionSeconds={audioClipPlayback.position}
+        processing={trim.isBusy}
         progress={audioClipPlayback.progress}
         recessed
         seed={seedFromKey(memory.id)}
         testID="edit-memory-audio-clip"
-        waveform={audioClipAsset?.waveform ?? null}
+        waveform={pendingTrim ? pendingTrim.waveform : (audioClipAsset?.waveform ?? null)}
       />
-      <Text style={styles.audioClipCaption}>Kept as recorded</Text>
+      <Text style={styles.audioClipCaption} testID="edit-memory-audio-caption">
+        {pendingTrim ? 'Trimmed — saves when you tap Save' : 'Kept as recorded'}
+      </Text>
     </View>
   ) : undefined;
 
@@ -599,17 +721,39 @@ export default function EditMemoryScreen() {
       typeBadge={typeCfg as MemoryComposerTypeBadge}
       voiceDisabled={isUpdating || isAudio}
       voiceModalSlot={(
-        <VoiceSpeakItModal
-          familyMembers={voiceMembers}
-          onDismiss={() => setShowVoiceModal(false)}
-          onResult={(result) => {
-            setHasEditedContent(true);
-            setContent(result.cleanedText);
-            applyVoiceResult(result);
-            setShowVoiceModal(false);
-          }}
-          visible={showVoiceModal}
-        />
+        <>
+          <VoiceSpeakItModal
+            familyMembers={voiceMembers}
+            onDismiss={() => setShowVoiceModal(false)}
+            onResult={(result) => {
+              setHasEditedContent(true);
+              setContent(result.cleanedText);
+              applyVoiceResult(result);
+              setShowVoiceModal(false);
+            }}
+            visible={showVoiceModal}
+          />
+          {/* Mounted only while a trim session exists (the sheet owns an audio
+              player) and unmounted once its Modal has fully dismissed. */}
+          {trim.trimSheet.config ? (
+            <TrimSheet
+              bucketMs={trim.trimSheet.config.bucketMs}
+              durationMs={trim.trimSheet.config.durationMs}
+              energies={trim.trimSheet.config.energies}
+              hasUserNote={trim.trimSheet.config.hasUserNote}
+              initialRange={trim.trimSheet.config.initialRange}
+              maxSelectionMs={trim.trimSheet.config.maxSelectionMs}
+              mustTrim={trim.trimSheet.config.mustTrim}
+              onCancel={trim.handleTrimCancel}
+              onDismissed={trim.handleTrimSheetDismissed}
+              onDone={trim.handleTrimDone}
+              sourceUri={trim.trimSheet.config.sourceUri}
+              suggested={trim.trimSheet.config.suggested}
+              testID="edit-memory-trim-sheet"
+              visible={trim.trimSheet.visible}
+            />
+          ) : null}
+        </>
       )}
       voiceTestID="edit-memory-voice-trigger"
     />

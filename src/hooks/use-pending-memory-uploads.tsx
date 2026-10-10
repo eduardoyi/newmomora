@@ -39,6 +39,7 @@ import { deleteArtworkScanFile, sweepStaleArtworkScans } from '@/utils/artwork-s
 import { markArtworkForReveal } from '@/utils/artwork-reveal';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
+import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 
 /** Scanned-artwork pages (docs/features/artwork.md) exist only as files in
  * `artwork-scans/` until a post succeeds. Deletes this input's scan files;
@@ -121,17 +122,47 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
     setUploads((current) => current.filter((upload) => upload.memoryId !== memoryId));
   }, []);
 
+  // Photos / videos shared INTO Momora are private copies expo-sharing never
+  // deletes (src/utils/shared-file-cleanup.ts). Called only once an upload has
+  // succeeded or been discarded -- a failed post keeps them for retry(). A copy
+  // another live queue entry still points at (same-named re-share) is skipped.
+  // Disjoint from scan custody: `deleteShareCopies` only matches files in the
+  // share-container / cache ROOT, scans live in `artwork-scans/`.
+  const deleteInputShareCopies = useCallback((input: PendingMemoryUploadInput) => {
+    if (isAudioUploadInput(input)) {
+      return;
+    }
+    const stillReferenced = new Set<string>();
+    for (const [memoryId, record] of inputsRef.current) {
+      if (memoryId === input.memoryId || isAudioUploadInput(record.input)) {
+        continue;
+      }
+      for (const asset of record.input.mediaAssets) {
+        if (asset.fileUri) {
+          stillReferenced.add(asset.fileUri);
+        }
+      }
+    }
+    void deleteShareCopies(
+      input.mediaAssets
+        .filter((asset) => asset.deleteAfterUpload && asset.fileUri)
+        .map((asset) => asset.fileUri)
+        .filter((uri) => !stillReferenced.has(uri as string)),
+    );
+  }, []);
+
   // User-facing Discard of a failed post: the queue is the last holder of its
-  // scanned pages, so they go with it.
+  // scanned pages and flagged share copies, so they go with it.
   const discardUpload = useCallback(
     (memoryId: string) => {
       const record = inputsRef.current.get(memoryId);
+      removeUpload(memoryId);
       if (record) {
         deleteScanFilesForInput(record.input);
+        deleteInputShareCopies(record.input);
       }
-      removeUpload(memoryId);
     },
-    [removeUpload],
+    [deleteInputShareCopies, removeUpload],
   );
 
   // Best-effort sweep of orphaned scan files (a force-quit mid-upload loses
@@ -197,6 +228,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         // Posted: the scanned pages (if any) now live in R2. Retries re-read
         // these files, so this is the only point they can go.
         deleteScanFilesForInput(input);
+        deleteInputShareCopies(input);
 
         if (isAudio && input.pendingTranscription) {
           // Ordering fix (cross-seam bug): the memories row is created by
@@ -333,7 +365,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         });
       }
     },
-    [patchUpload, queryClient, removeUpload],
+    [deleteInputShareCopies, patchUpload, queryClient, removeUpload],
   );
 
   const enqueue = useCallback(
