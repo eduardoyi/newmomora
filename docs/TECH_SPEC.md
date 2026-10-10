@@ -78,9 +78,22 @@ human must confirm them against the live project.
 | Language | TypeScript 5.x, strict mode |
 | Server state | TanStack Query v5 |
 | Local persistence | AsyncStorage (session, query cache optional) |
-| Audio | `expo-audio` |
+| Audio | `expo-audio` (record/play) |
+| Audio decode/analyze/trim | Local Expo module `modules/momora-audio` (iOS Swift, Android Kotlin) — see below |
+| File picker | `expo-document-picker` (import a voice note from Files; always loaded lazily behind `src/utils/document-picker.ts`) |
 | Image display | `expo-image` + presigned R2 URLs (via Edge Function) |
 | Builds | EAS Build + development client |
+
+**`momora-audio` native module** (audio memories v2, [features/audio-memories.md](features/audio-memories.md)). A local Expo module, autolinked from `modules/` and imported by relative path (`modules/momora-audio`; no root `package.json` entry, same as `momora-widget`). It decodes and measures only; all dB/normalization math is TypeScript (`src/utils/audio-waveform.ts`), shared with the waveform backfill script. It ships in the 1.5.0 store build; OTA JS reaching older binaries resolves it with `requireOptionalNativeModule('MomoraAudio')` (`isAvailable()`), so every caller must feature-detect.
+
+| Function | Contract |
+|----------|----------|
+| `isAvailable(): boolean` | `true` when the native module is present in this binary |
+| `probe(uri): Promise<AudioProbe>` | Cheap metadata read, no decode: `durationMs`, `container` (`mp4`\|`ogg`\|`caf`\|`wav`\|`aiff`\|`mp3`\|`amr`\|`other`, sniffed from magic bytes), `codec` (`aac`\|`opus`\|`pcm`\|`mp3`\|`amr`\|`other`), `sampleRate`, `channels`, `creationDate` (ISO or `null`; the export time for WhatsApp files), `sizeBytes`. Does not enforce the 30-minute ceiling |
+| `analyze(uri, { maxBuckets, minBucketMs }): Promise<AudioEnergies>` | Streams the file and returns `{ durationMs, bucketMs, energies[] }`, the mean-square energy of the mono downmix per bucket. `bucketMs = max(minBucketMs, ceil(durationEstimate / maxBuckets))`, buckets sample-aligned at the decoded rate, `durationMs = round(decodedSamples * 1000 / sampleRate)`. The app uses `maxBuckets: 4000, minBucketMs: 20` |
+| `render(uri, { startMs, endMs, outputUri, bitrate }): Promise<RenderResult>` | Decodes only `[startMs, endMs)` and writes AAC-LC, mono, 48 kHz `.m4a` to `outputUri`: `{ uri, durationMs, sizeBytes }`. Bitrate is a target (clips 96000, transcription excerpts 64000). Partial output is deleted on failure |
+
+Errors reject with a stable `code` and a path-free message: `unsupported_format`, `decode_failed`, `too_long` (source > 30 minutes), `io_failed`; the TS wrapper adds `unavailable` when the module is missing (`MomoraAudioError.code`). iOS reads whatever `AVAudioFile` reads (Ogg Opus returns `unsupported_format` until phase P1b); Android uses `MediaExtractor` + `MediaCodec`/`MediaMuxer`.
 
 ### Backend
 
@@ -375,6 +388,23 @@ create table public.memory_media (
   -- asset always starts with share_card_key null -- no trigger needed here,
   -- unlike the memories-table column above.
   share_card_key text,
+  -- Real loudness contour of an AUDIO clip (audio memories v2,
+  -- docs/plans/audio-trim-import.md; migration
+  -- 20261013120000_memory_media_waveform.sql). 16-256 integer buckets, each
+  -- 0-255 (the app writes 64). Null = unknown, the UI draws the seeded
+  -- decorative line. Measured on-device at keep/import time, or by the
+  -- backfill script for existing clips. The CHECK is the real guard
+  -- (`authenticated` holds a table-level UPDATE grant gated only by RLS); the
+  -- array_position term is needed because `0 <= all(waveform)` is NULL, i.e.
+  -- passes, for NULL elements. Always null for image/video rows.
+  waveform smallint[] constraint memory_media_waveform_valid check (
+    waveform is null or (
+      cardinality(waveform) between 16 and 256
+      and array_position(waveform, null) is null
+      and 0 <= all(waveform)
+      and 255 >= all(waveform)
+    )
+  ),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (memory_id, position),
@@ -2243,7 +2273,7 @@ Presigned PUT for direct client → R2 upload.
 - Reject `objectKey` not matching any allowed pattern (still caller-prefix-scoped)
 - Reject `contentType` not in the allowed set for the matched pattern
 - Reject if `familyId` missing or caller isn't owner/manager of that family (`403 forbidden`)
-- Client is responsible for enforcing video duration ≤ 3 minutes and raw source size ≤ 2 GB (pick-time sanity cap) before compression, video size ≤ 100 MB after compression (the same cap this function/`upload-media` enforce server-side), and image size ≤ 20 MB before upload — see [docs/features/media-memories.md](./features/media-memories.md#constraints--gotchas) for the full pipeline. Audio clips are client-capped at 2 minutes / 5 MB (`MAX_AUDIO_DURATION_MS`/`MAX_AUDIO_BYTES`, `src/utils/media-validation.ts`), mirroring `upload-media`'s server-side audio cap below.
+- Client is responsible for enforcing video duration ≤ 3 minutes and raw source size ≤ 2 GB (pick-time sanity cap) before compression, video size ≤ 100 MB after compression (the same cap this function/`upload-media` enforce server-side), and image size ≤ 20 MB before upload — see [docs/features/media-memories.md](./features/media-memories.md#constraints--gotchas) for the full pipeline. Audio clips are client-capped at 5 minutes + 1 s of slack / 5 MB at upload (`MAX_AUDIO_UPLOAD_DURATION_MS`/`MAX_AUDIO_BYTES`, `src/utils/media-validation.ts`; the in-app recorder still auto-stops at 2 minutes, `MAX_RECORDING_DURATION_MS`/`MAX_RECORDING_MS`), mirroring `upload-media`'s server-side 5 MB audio cap below. Imported or trimmed clips are re-encoded at 96 kbps mono, so 5 minutes is ≈ 3.6 MB.
 
 **Response:** `{ uploadUrl, objectKey, expiresIn }`
 
@@ -2540,6 +2570,16 @@ exactly one authorized family membership; otherwise the function returns
 `FAMILY_CONTEXT_REQUIRED`. The client can never select the roster by sending
 member data.
 
+Family mode also accepts an optional `speaker?: 'unknown'` (audio memories v2,
+docs/plans/audio-trim-import.md). It marks an **imported** voice note — usually
+someone other than the caller speaking — so step 6 below (mapping a
+self-reference to the caller's own member) is skipped and the caller is never
+auto-tagged by "I miss you". Name/nickname matches in the transcript are
+unaffected. Absent = the speaker is the caller (the pre-existing behavior).
+Any other value returns HTTP 400 `validation_error` ("speaker is invalid"), and
+the field is rejected in `mode: 'onboarding'` ("Onboarding voice cannot include
+speaker"), before any reservation or provider call.
+
 Pre-auth onboarding uses a separate, discriminated request. It is accepted
 only for a verified Supabase user whose server-returned `is_anonymous` field
 is exactly `true`; the client cannot opt into it by setting `mode` alone.
@@ -2584,7 +2624,7 @@ Family mode:
    trimmed, clamped to 120 chars, `''` when speech is unusable (silence,
    babble, indistinct noise) — the model is instructed to never invent or
    guess one.
-6. If `mentionedUserSelf`, append the caller's own member: their
+6. If `mentionedUserSelf` (and `speaker` is not `'unknown'`), append the caller's own member: their
    `family_memberships.family_member_id` ("this is me", §2.1g), falling back to
    the deprecated `is_user_profile` row.
 7. Return result; audio is discarded and never stored by this function.
@@ -4066,6 +4106,20 @@ exactly the flow above. "Keep the sound" instead claims the clip
 flow. The edit screen's dictation-into-existing-memory usage never offers
 the fork.
 
+**Trim and import (audio memories v2, 2026-10-10):** a kept clip's loudness is
+measured on-device (`MomoraAudio.analyze` → `waveformFromEnergies`, 64 buckets)
+and rides the upload as `clip.waveform` into `replace_memory_media_assets` (§5.5).
+A trim renders `[start, end)` of the **original** to a new AAC `.m4a`
+(`MomoraAudio.render`), re-analyzes it and re-runs step 2 on the cut clip. An
+import (share sheet via `expo-sharing`, or the Files picker via
+`expo-document-picker`) is claimed into the app-owned recordings directory,
+analyzed, passed through (AAC/MP4 ≤ 4.5 MB) or re-encoded at 96 kbps mono, and
+transcribed with `speaker: 'unknown'` (§4.4). Step 2's payload is capped by
+cutting an excerpt (first ≤ 115 s at 64 kbps) when the clip is > 115 s or
+> 1.75 MB, because the function estimates duration from bytes. Imports up to
+5 minutes are accepted (longer sources must be trimmed first; > 30 minutes is
+refused). See [audio-memories.md](./features/audio-memories.md).
+
 ### 5.3 Add Family Member
 
 ```
@@ -4127,6 +4181,20 @@ member's prefix; no other foreign preview is admitted, including one paired
 with a different retained asset. When an older client edits an existing asset
 without one or both of `aspectRatio`/`previewObjectKey`, the RPC preserves the
 row's current value (keyed by matching `objectKey`) instead of clearing it.
+
+`waveform` (audio memories v2, migration `20261013120000_memory_media_waveform.sql`)
+is an optional per-asset field: a JSON array of 16–256 integers, each 0–255.
+The RPC stores it only for audio content types (`audio/mp4`, `audio/m4a`,
+`audio/x-m4a`); on any other asset it is ignored. **A bad waveform never fails
+the save:** a non-array, wrong length, non-integer, out-of-range or `null`
+element (what `NaN` becomes after JSON serialization) is stored as `NULL` —
+the field is cosmetic and the client upload queue retries an identical payload
+forever, so raising would permanently fail a clip save. When the payload's
+`waveform` is absent or `null` and `objectKey` matches an existing row, the
+existing row's waveform is preserved (same mechanism as `aspect_ratio`, via an
+`existing_waveforms` map); an invalid non-null value is *not* preserved over —
+it stores `NULL`. The `memory_media_waveform_valid` CHECK (§2.1) guards direct
+table writes.
 
 `durationMs` is cast via `round(nullif(asset->>'durationMs', '')::numeric)::integer`
 (migration `20260716120000_round_media_duration_ms_cast.sql`), not a bare

@@ -1,11 +1,11 @@
 // The compact clip row shared by the fork sheet, the composer, and the edit
 // screen's read-only clip well. Ported from the design prototype's
-// `ClipChip` (audio-kit.jsx): seal + trace + mono mm:ss time, with an
-// optional remove control, a `recessed` variant (edit screen -- the clip
+// `ClipChip` (audio-kit.jsx): seal + trace + mono mm:ss time, with optional
+// trim and remove controls, a `recessed` variant (edit screen -- the clip
 // renders inset, with no remove control, since v1 has no clip replacement
 // post-save), and a `slim` variant for tighter contexts.
 import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 
@@ -16,6 +16,8 @@ import { SoundTrace } from './sound-trace';
 export interface ClipChipProps {
   /** Deterministic per-clip seed shared with every other trace of this clip. */
   seed: number;
+  /** The clip's real loudness envelope; null/absent keeps the seeded trace. */
+  waveform?: number[] | null;
   /** Null before emotion analysis lands. */
   emotion: string | null;
   durationSeconds: number;
@@ -25,7 +27,15 @@ export interface ClipChipProps {
   progress: number;
   playing: boolean;
   busy?: boolean;
+  /**
+   * A trim (or other edit of the clip) is being processed: the trim button
+   * becomes a spinner and trim/remove are disabled until it clears. Separate
+   * from `busy`, which only means the seal's playback is loading.
+   */
+  processing?: boolean;
   onToggle: () => void;
+  /** Shows a scissors control that opens the trim sheet -- omit to hide it. */
+  onTrim?: () => void;
   /**
    * Omitted (or ignored when `recessed`) hides the remove control -- the
    * edit screen's recessed clip has no remove/replace affordance in v1
@@ -42,13 +52,16 @@ export interface ClipChipProps {
 
 export function ClipChip({
   seed,
+  waveform,
   emotion,
   durationSeconds,
   positionSeconds = 0,
   progress,
   playing,
   busy = false,
+  processing = false,
   onToggle,
+  onTrim,
   onRemove,
   recessed = false,
   slim = false,
@@ -58,6 +71,7 @@ export function ClipChip({
   const e = resolveAudioEmotionColors(emotion);
   const showElapsed = playing || positionSeconds > 0.05;
   const showRemove = Boolean(onRemove) && !recessed;
+  const showTrim = Boolean(onTrim);
 
   return (
     <View
@@ -87,6 +101,7 @@ export function ClipChip({
           progress={progress}
           seed={seed}
           stroke={1.9}
+          waveform={waveform}
         />
       </View>
       <View style={styles.timeColumn}>
@@ -98,10 +113,33 @@ export function ClipChip({
           {formatClipTime(durationSeconds)}
         </Text>
       </View>
+      {showTrim ? (
+        processing ? (
+          <View style={styles.trimButton} testID={testID ? `${testID}-trim-busy` : undefined}>
+            <ActivityIndicator color={colors.ink2} size="small" />
+          </View>
+        ) : (
+          <Pressable
+            accessibilityLabel="Trim this sound"
+            accessibilityRole="button"
+            onPress={onTrim}
+            style={styles.trimButton}
+            testID={testID ? `${testID}-trim` : undefined}
+          >
+            <SymbolView
+              fallback={<Text style={styles.trimFallback}>✂</Text>}
+              name={{ ios: 'scissors', android: 'content_cut' }}
+              size={13}
+              tintColor={colors.ink2}
+            />
+          </Pressable>
+        )
+      ) : null}
       {showRemove ? (
         <Pressable
           accessibilityLabel="Remove sound"
           accessibilityRole="button"
+          disabled={processing}
           onPress={onRemove}
           style={styles.removeButton}
           testID={testID ? `${testID}-remove` : undefined}
@@ -168,6 +206,22 @@ const styles = StyleSheet.create({
   },
   timeDim: {
     color: colors.ink3,
+  },
+  trimButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    flexShrink: 0,
+    height: 26,
+    justifyContent: 'center',
+    width: 26,
+  },
+  trimFallback: {
+    color: colors.ink2,
+    fontSize: 13,
+    lineHeight: 14,
   },
   removeButton: {
     alignItems: 'center',

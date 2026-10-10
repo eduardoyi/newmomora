@@ -146,6 +146,10 @@ export async function processVoiceMemory(
   audioBase64: string,
   familyMembers: VoiceFamilyMemberPayload[],
   familyId: string,
+  // `speaker: 'unknown'` marks an imported voice note (not necessarily the
+  // caller's voice): the server then skips mapping "I/me/my" to the caller's
+  // own member. Omitted by default = the speaker is the caller.
+  options?: { speaker?: 'unknown' },
 ): Promise<{
   // `description` is the audio-memories fork's short AI caption (P1.2,
   // docs/plans/audio-memories-v1.md) -- family mode now returns it alongside
@@ -159,6 +163,7 @@ export async function processVoiceMemory(
     audioBase64,
     familyMembers,
     familyId,
+    ...(options?.speaker ? { speaker: options.speaker } : {}),
   });
 }
 

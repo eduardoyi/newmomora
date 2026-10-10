@@ -1,0 +1,113 @@
+appId: com.memora.app
+---
+# Audio memories v2 (docs/features/audio-memories.md, "v2: trim, import, real
+# waveforms"): record -> keep the sound -> trim it from the composer chip ->
+# Done (re-renders + re-transcribes the cut) -> save -> the sound card shows on
+# the timeline.
+#
+# Needs a build that contains the momora-audio native module (store build
+# 1.5.0+ / a fresh dev client): without it the scissors button is hidden and
+# the flow stops at the first wait for `new-memory-audio-clip-trim`.
+#
+# testIDs used (all in the composer, app/(app)/new-memory.tsx):
+#   new-memory-audio-clip               ClipChip testID prefix (existing)
+#   new-memory-audio-clip-trim          scissors button (ClipChip `onTrim`;
+#                                       appears once the clip's loudness
+#                                       analysis has loaded)
+#   new-memory-audio-clip-trim-busy     spinner replacing the button while the
+#                                       trim renders
+#   new-memory-trim-sheet-*             TrimSheet testID prefix chosen by the
+#                                       composer (`new-memory-trim-sheet`):
+#                                       -end-handle, -done (see
+#                                       src/components/audio/trim-sheet.tsx)
+# The composer wiring (the `new-memory-trim-sheet` prefix, the chip's
+# onTrim/processing props) was finished last; if a testID below does not
+# resolve, check new-memory.tsx first.
+#
+# CI simulators record silence, so there is no "quiet bits" suggestion
+# (suggestTrim needs a loudest bucket) and the sheet opens on the full range.
+# The explicit end-handle drag below is what makes this a real trim (a
+# full-range Done would just restore the original with no render).
+#
+# Authored, not executed (no bootable simulator/emulator in the authoring
+# environment). Runs in the release device pass.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- tapOn:
+    id: new-memory-voice-trigger
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-mic
+    timeout: 10000
+# Let the recorder run a few seconds so there is something to trim (trim needs
+# >= 1 s kept). The mic rings animate for the whole recording, so this waits
+# out the timeout instead of returning early.
+- waitForAnimationToEnd:
+    timeout: 4000
+- tapOn:
+    id: voice-speak-it-mic
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-fork
+    timeout: 10000
+- tapOn:
+    id: voice-speak-it-keep-sound
+- extendedWaitUntil:
+    notVisible:
+      id: voice-speak-it-modal
+    timeout: 15000
+- assertVisible:
+    id: new-memory-audio-clip
+# The scissors only shows once the native analysis has loaded.
+- extendedWaitUntil:
+    visible:
+      id: new-memory-audio-clip-trim
+    timeout: 15000
+- tapOn:
+    id: new-memory-audio-clip-trim
+- extendedWaitUntil:
+    visible:
+      id: new-memory-trim-sheet
+    timeout: 10000
+# Pull the end handle left to cut the tail off.
+- swipe:
+    from:
+      id: new-memory-trim-sheet-end-handle
+    direction: LEFT
+    duration: 600
+- tapOn:
+    id: new-memory-trim-sheet-done
+- extendedWaitUntil:
+    notVisible:
+      id: new-memory-trim-sheet
+    timeout: 15000
+# Save and the toolbar mic are disabled while the trim renders; wait for the
+# chip's spinner to clear before saving.
+- extendedWaitUntil:
+    notVisible:
+      id: new-memory-audio-clip-trim-busy
+    timeout: 30000
+- assertVisible:
+    id: new-memory-audio-clip
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+# Deferred posting: the composer closes before the upload finishes. The banner
+# clearing (and no failure card) is what proves the trimmed clip uploaded.
+- extendedWaitUntil:
+    notVisible:
+      id: pending-memory-uploads-banner
+    timeout: 60000
+- assertNotVisible: "Couldn't post memory"
+- assertVisible:
+    id: "memory-card-.*-stub"

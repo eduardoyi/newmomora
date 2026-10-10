@@ -19,9 +19,93 @@ export interface PrepareSharedMediaDependencies {
   getVideoCaptureDateIso: (uri: string) => Promise<string | null>;
 }
 
-export interface PrepareSharedMediaResult {
+export const MIXED_SHARED_AUDIO_ERROR =
+  'Share one voice note at a time, or photos and videos together.';
+
+/** Photos and videos (today's behavior); `errorMessage` carries notices like "first 10 items" and validation failures. */
+export interface PreparedSharedMedia {
+  kind: 'media';
   attachments: MediaAttachment[];
   errorMessage: string | null;
+}
+
+/**
+ * Exactly one shared voice note. Nothing has been validated beyond
+ * classification: `importAudioFile` (probe) makes the final call on the
+ * content, and deletes the shared payload copy when it is done.
+ */
+export interface PreparedSharedAudio {
+  kind: 'audio';
+  uri: string;
+  mimeType: string;
+  fileName: string;
+  sizeBytes: number | null;
+}
+
+/** Nothing to apply; just show the message (e.g. a voice note mixed with photos). */
+export interface PreparedSharedError {
+  kind: 'error';
+  errorMessage: string;
+}
+
+export type PrepareSharedMediaResult =
+  | PreparedSharedMedia
+  | PreparedSharedAudio
+  | PreparedSharedError;
+
+// Extensions / mime types treated as a voice note even when the platform
+// routes the payload as a generic `file` (Android maps application/ogg to
+// `file`; iOS gives a `.opus` a dynamic UTI and `application/octet-stream`).
+const SHARED_AUDIO_EXTENSIONS = new Set([
+  'opus',
+  'ogg',
+  'oga',
+  'm4a',
+  'mp3',
+  'wav',
+  'caf',
+  'amr',
+  'aac',
+  'aiff',
+]);
+
+type UriPayload = ResolvedSharePayload & { contentUri: string };
+
+function hasContentUri(payload: ResolvedSharePayload): payload is UriPayload {
+  return typeof payload.contentUri === 'string' && payload.contentUri.length > 0;
+}
+
+function lastPathComponent(uri: string): string {
+  const withoutQuery = uri.split(/[?#]/)[0] ?? '';
+  const component = withoutQuery.slice(withoutQuery.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(component);
+  } catch {
+    return component;
+  }
+}
+
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
+}
+
+function isSharedAudioPayload(payload: ResolvedSharePayload): payload is UriPayload {
+  if (!hasContentUri(payload)) {
+    return false;
+  }
+  if (payload.contentType === 'audio') {
+    return true;
+  }
+  if (payload.contentType !== 'file') {
+    return false;
+  }
+  const mime = (payload.contentMimeType ?? payload.mimeType ?? '').toLowerCase();
+  if (mime.startsWith('audio/') || mime === 'application/ogg') {
+    return true;
+  }
+  const name = payload.originalName ?? lastPathComponent(payload.contentUri);
+  return SHARED_AUDIO_EXTENSIONS.has(extensionOf(name));
 }
 
 function isSupportedSharedPayload(
@@ -84,9 +168,26 @@ export async function prepareSharedMedia(
 ): Promise<PrepareSharedMediaResult> {
   const optionalMetadataDeadlineAt = Date.now() + OPTIONAL_METADATA_TIMEOUT_MS;
   const mediaPayloads = payloads.filter(isSupportedSharedPayload);
+  const audioPayloads = payloads.filter(isSharedAudioPayload);
+
+  if (audioPayloads.length > 0) {
+    // An audio memory is a single clip with no photos or videos.
+    if (audioPayloads.length > 1 || mediaPayloads.length > 0) {
+      return { kind: 'error', errorMessage: MIXED_SHARED_AUDIO_ERROR };
+    }
+    const audio = audioPayloads[0];
+    return {
+      kind: 'audio',
+      uri: audio.contentUri,
+      mimeType: audio.contentMimeType ?? audio.mimeType ?? '',
+      fileName: audio.originalName ?? lastPathComponent(audio.contentUri),
+      sizeBytes: typeof audio.contentSize === 'number' ? audio.contentSize : null,
+    };
+  }
 
   if (mediaPayloads.length === 0) {
     return {
+      kind: 'media',
       attachments: [],
       errorMessage: 'Momora can only attach shared photos and videos.',
     };
@@ -104,14 +205,14 @@ export async function prepareSharedMedia(
     });
 
     if (validationError) {
-      return { attachments: [], errorMessage: validationError };
+      return { kind: 'media', attachments: [], errorMessage: validationError };
     }
   }
 
   const seenContentUris = new Set<string>();
   for (const payload of selectedPayloads) {
     if (seenContentUris.has(payload.contentUri)) {
-      return { attachments: [], errorMessage: DUPLICATE_SHARED_MEDIA_URI_ERROR };
+      return { kind: 'media', attachments: [], errorMessage: DUPLICATE_SHARED_MEDIA_URI_ERROR };
     }
     seenContentUris.add(payload.contentUri);
   }
@@ -195,7 +296,7 @@ export async function prepareSharedMedia(
   // observed error remains stable and all-or-nothing.
   for (const preparation of preparations) {
     if (preparation?.errorMessage) {
-      return { attachments: [], errorMessage: preparation.errorMessage };
+      return { kind: 'media', attachments: [], errorMessage: preparation.errorMessage };
     }
   }
 
@@ -218,6 +319,7 @@ export async function prepareSharedMedia(
   });
 
   return {
+    kind: 'media',
     attachments,
     errorMessage: mediaPayloads.length > MAX_SHARED_MEDIA_ATTACHMENTS
       ? 'Momora attached the first 10 items. A memory can include up to 10 photos or videos.'

@@ -8,7 +8,7 @@ import {
   getMediaExtensionFromContentType,
   isVideoContentType,
   MAX_AUDIO_BYTES,
-  MAX_AUDIO_DURATION_MS,
+  MAX_AUDIO_UPLOAD_DURATION_MS,
   MAX_VIDEO_BYTES,
 } from '@/utils/media-validation';
 import { buildMemoryMediaAssetKey } from '@/utils/storage-keys';
@@ -74,6 +74,13 @@ export interface PostAudioMemoryInput {
     fileUri: string;
     durationMs: number;
     contentType: string;
+    /**
+     * 64-bucket loudness contour (0..255) of THIS clip, or null/absent when
+     * analysis was unavailable. Cosmetic: forwarded as-is and sanitised at
+     * the RPC boundary (mediaAssetsToRpcPayload), so a bad value is stored
+     * as NULL rather than failing the save.
+     */
+    waveform?: number[] | null;
   };
   content: string | null;
   audioTranscript: string | null;
@@ -496,10 +503,11 @@ export async function postMediaMemory(params: {
 }
 
 /**
- * Client-side backstop for the recorded clip's cap, mirroring
+ * Client-side backstop for a kept clip's cap (recorded or imported, so the
+ * 5-minute upload cap rather than the 2-minute recorder cap), mirroring
  * assertVideoWithinUploadCap above -- the server (upload-media) is
  * authoritative, but failing here gives a clearer error and avoids spending
- * a PUT on a clip that will just be rejected. MAX_AUDIO_DURATION_MS/
+ * a PUT on a clip that will just be rejected. MAX_AUDIO_UPLOAD_DURATION_MS/
  * MAX_AUDIO_BYTES are kept in sync by hand with
  * supabase/functions/upload-media/index.ts (see media-validation.ts).
  */
@@ -508,8 +516,8 @@ async function assertAudioClipWithinLimits(clip: { fileUri: string; durationMs: 
     throw new Error('Could not read the recording duration. Try recording again.');
   }
 
-  if (clip.durationMs > MAX_AUDIO_DURATION_MS) {
-    throw new Error('Recordings must be 2 minutes or shorter.');
+  if (clip.durationMs > MAX_AUDIO_UPLOAD_DURATION_MS) {
+    throw new Error('Sounds must be 5 minutes or shorter.');
   }
 
   const sizeBytes = await getLocalFileSizeBytes(clip.fileUri);
@@ -577,6 +585,7 @@ export async function postAudioMemory(params: {
         objectKey,
         contentType: input.clip.contentType,
         durationMs: input.clip.durationMs,
+        waveform: input.clip.waveform ?? null,
       },
     });
 

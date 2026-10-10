@@ -38,6 +38,17 @@ export interface UseAudioClipPlaybackResult {
   toggle: () => Promise<void>;
   /** Seeks to a 0-1 fraction of the clip's duration. No-op while duration is unknown. */
   seekTo: (fraction: number) => Promise<void>;
+  /**
+   * Plays only `[startSeconds, endSeconds)`: seeks to the start, plays, and
+   * pauses once the playhead reaches the end. Claims the coordinator slot
+   * exactly like `toggle`. The stop is driven by status updates (250 ms
+   * apart, STATUS_UPDATE_INTERVAL_MS), so playback can overshoot `endSeconds`
+   * by up to ~250 ms -- accepted for a preview. A later `toggle()` plays the
+   * rest of the clip normally (it clears the stop point).
+   */
+  playRange: (startSeconds: number, endSeconds: number) => Promise<void>;
+  /** Pauses (and releases the coordinator slot) if playing; clears any range stop point. */
+  pause: () => void;
 }
 
 const FINISHED_EPSILON_SECONDS = 0.05;
@@ -50,6 +61,8 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
   const clipId = useId();
   const playerRef = useRef<AudioPlayer | null>(null);
   const loadedSourceRef = useRef<string | null>(null);
+  // Pause-at position set by playRange(); null = play to the end of the clip.
+  const stopAtSecondsRef = useRef<number | null>(null);
   const [player, setPlayer] = useState<AudioPlayer | null>(null);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -105,6 +118,7 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
     setLoading(true);
     setError(null);
     setPosition(0);
+    stopAtSecondsRef.current = null;
     player.replace(nextSource ? { uri: nextSource } : null);
   }, [player, source]);
 
@@ -118,7 +132,16 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
       setPlaying(status.playing ?? false);
       setLoading(!status.isLoaded);
       setError(status.error ?? null);
+      const stopAt = stopAtSecondsRef.current;
+      if (stopAt !== null && status.playing && (status.currentTime ?? 0) >= stopAt) {
+        stopAtSecondsRef.current = null;
+        player.pause();
+        endAudioPlayback(clipId);
+        return;
+      }
       if (!status.playing) {
+        // Deliberately does NOT clear stopAtSecondsRef: a status event can
+        // land between playRange()'s seek and play() reporting playing=false.
         endAudioPlayback(clipId);
       }
     });
@@ -131,6 +154,7 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
       return;
     }
 
+    stopAtSecondsRef.current = null;
     if (current.playing) {
       current.pause();
       endAudioPlayback(clipId);
@@ -147,6 +171,42 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
     current.play();
   }, [clipId]);
 
+  const pause = useCallback(() => {
+    const current = playerRef.current;
+    stopAtSecondsRef.current = null;
+    if (!current) {
+      return;
+    }
+    if (current.playing) {
+      current.pause();
+    }
+    endAudioPlayback(clipId);
+  }, [clipId]);
+
+  const playRange = useCallback(
+    async (startSeconds: number, endSeconds: number) => {
+      const current = playerRef.current;
+      if (!current || !Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) {
+        return;
+      }
+      const start = Math.max(0, startSeconds);
+      if (endSeconds <= start) {
+        return;
+      }
+
+      await prepareAudioPlaybackMode();
+      beginAudioPlayback(clipId, () => current.pause());
+
+      await current.seekTo(start);
+      // Armed after the seek (a status event from before it could still carry
+      // the old position) but before play(), so the first playing update
+      // already counts.
+      stopAtSecondsRef.current = endSeconds;
+      current.play();
+    },
+    [clipId],
+  );
+
   const seekTo = useCallback(async (fraction: number) => {
     const current = playerRef.current;
     if (!current || !current.duration) {
@@ -158,5 +218,5 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
 
   const progress = duration > 0 ? Math.min(1, position / duration) : 0;
 
-  return { position, duration, progress, playing, loading, error, toggle, seekTo };
+  return { position, duration, progress, playing, loading, error, toggle, seekTo, playRange, pause };
 }

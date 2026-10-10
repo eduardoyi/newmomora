@@ -276,4 +276,92 @@ describe('useSuggestedMemoryDate', () => {
       dateSource: 'media',
     });
   });
+
+  describe('audioCapturedAtIso', () => {
+    function renderAudio(initial: { attachments?: Attachment[]; audio?: string | null }) {
+      return renderHook(
+        ({ attachments, audio }: { attachments: Attachment[]; audio: string | null }) =>
+          useSuggestedMemoryDate({ attachments, audioCapturedAtIso: audio }),
+        { initialProps: { attachments: initial.attachments ?? [], audio: initial.audio ?? null } },
+      );
+    }
+
+    it('applies the voice note date as source "media" with suggestionKind "audio"', () => {
+      const { result, rerender } = renderAudio({});
+      expect(result.current.suggestionKind).toBeNull();
+
+      rerender({ attachments: [], audio: '2024-06-01' });
+
+      expect(result.current.memoryDate).toBe('2024-06-01');
+      expect(result.current.dateSource).toBe('media');
+      expect(result.current.suggestionKind).toBe('audio');
+    });
+
+    it('reports suggestionKind "media" for an attachment date', () => {
+      const { result } = renderAudio({ attachments: [dated('a', '2024-06-01')] });
+
+      expect(result.current.dateSource).toBe('media');
+      expect(result.current.suggestionKind).toBe('media');
+    });
+
+    it('lets attachments win if both are somehow present', () => {
+      const { result } = renderAudio({ attachments: [dated('a', '2024-06-10')], audio: '2024-05-01' });
+
+      expect(result.current.memoryDate).toBe('2024-06-10');
+      expect(result.current.suggestionKind).toBe('media');
+    });
+
+    it('restores the default when the voice note is cleared', () => {
+      const { result, rerender } = renderAudio({ audio: '2024-06-01' });
+      expect(result.current.memoryDate).toBe('2024-06-01');
+
+      rerender({ attachments: [], audio: null });
+
+      expect(result.current.memoryDate).toBe(todayIsoDate());
+      expect(result.current.dateSource).toBe('default');
+      expect(result.current.suggestionKind).toBeNull();
+    });
+
+    it('never overrides a date the user picked, and keeps the user pick when cleared', () => {
+      const { result, rerender } = renderAudio({});
+
+      act(() => result.current.setMemoryDate('2024-01-15'));
+      rerender({ attachments: [], audio: '2024-06-01' });
+      expect(result.current.memoryDate).toBe('2024-01-15');
+      expect(result.current.dateSource).toBe('user');
+      expect(result.current.suggestionKind).toBeNull();
+
+      rerender({ attachments: [], audio: null });
+      expect(result.current.memoryDate).toBe('2024-01-15');
+    });
+
+    it('a later user pick replaces an audio suggestion and drops its kind', () => {
+      const { result } = renderAudio({ audio: '2024-06-01' });
+
+      act(() => result.current.setMemoryDate('2024-02-02'));
+
+      expect(result.current.dateSource).toBe('user');
+      expect(result.current.suggestionKind).toBeNull();
+    });
+
+    it('replacing one voice note with another updates the suggestion', () => {
+      const { result, rerender } = renderAudio({ audio: '2024-06-01' });
+
+      rerender({ attachments: [], audio: '2024-07-04' });
+
+      expect(result.current.memoryDate).toBe('2024-07-04');
+      expect(result.current.suggestionKind).toBe('audio');
+    });
+
+    it('ignores a malformed or impossible voice note date (future dates are filtered upstream)', () => {
+      const { result, rerender } = renderAudio({});
+
+      rerender({ attachments: [], audio: '2024-02-30' });
+      expect(result.current.dateSource).toBe('default');
+
+      rerender({ attachments: [], audio: 'not-a-date' });
+      expect(result.current.dateSource).toBe('default');
+      expect(result.current.memoryDate).toBe(todayIsoDate());
+    });
+  });
 });

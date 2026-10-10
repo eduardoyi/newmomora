@@ -26,6 +26,10 @@ import { useFamily } from '@/hooks/use-family';
 import { trackEvent } from '@/services/analytics';
 import type { VoiceFamilyMemberPayload } from '@/services/ai';
 import { claimAudioClip } from '@/utils/audio-clip-custody';
+import { sanitizeWaveform, waveformFromEnergies } from '@/utils/audio-waveform';
+
+import * as MomoraAudio from '../../modules/momora-audio';
+import type { AudioEnergies } from '../../modules/momora-audio';
 
 // Teal accent used only on this screen — matches the design mock
 const TEAL = '#6AAEAA';
@@ -52,7 +56,19 @@ export interface VoiceKeptClip {
    * (docs/plans/audio-memories-v1.md P2.3).
    */
   pendingTranscription: Promise<VoiceProcessingResult | null> | null;
+  /**
+   * The loudness analysis the modal started when the recording stopped (only
+   * when the native audio module is present). Handed over so the composer
+   * doesn't decode the same clip twice; resolves null on failure. Absent when
+   * the module is unavailable or the mode never analysed (the composer then
+   * starts its own, or skips it).
+   */
+  pendingAnalysis?: Promise<AudioEnergies | null>;
 }
+
+// Same analysis shape the composer and the trim sheet use (docs/plans/
+// audio-trim-import.md "Energy bucket spec").
+const ANALYZE_OPTIONS = { maxBuckets: 4000, minBucketMs: 20 } as const;
 
 /**
  * `dictate` -- today's transcribe-only flow, unchanged. Default, so the edit
@@ -144,6 +160,36 @@ function VoiceSpeakItContent({
       hasTrackedForkShownRef.current = false;
     }
   }, [stoppedClip]);
+
+  // Real waveform for the stopped clip. Starts the moment recording stops (so
+  // it is usually ready by the time the fork is read) and is handed to the
+  // composer on keep. Guarded by identity: a "Record again" or a dismissed
+  // modal must not paint an old clip's contour onto a newer one. Dictation
+  // (the edit screen) never keeps a clip, so it never analyses.
+  const stoppedUri = stoppedClip?.localUri ?? null;
+  const analysisRef = useRef<{ uri: string; promise: Promise<AudioEnergies | null> } | null>(null);
+  // Keyed by the clip it was measured from, so a "Record again" never shows
+  // the previous clip's contour while the new one is still being analysed.
+  const [analysedWaveform, setAnalysedWaveform] = useState<{ uri: string; waveform: number[] | null } | null>(null);
+  const stoppedWaveform = analysedWaveform?.uri === stoppedUri ? analysedWaveform.waveform : null;
+
+  useEffect(() => {
+    analysisRef.current = null;
+    if (!stoppedUri || captureMode === 'dictate' || !MomoraAudio.isAvailable()) {
+      return;
+    }
+    const entry = {
+      uri: stoppedUri,
+      promise: MomoraAudio.analyze(stoppedUri, ANALYZE_OPTIONS).catch(() => null),
+    };
+    analysisRef.current = entry;
+    void entry.promise.then((energies) => {
+      if (analysisRef.current !== entry || !energies) {
+        return;
+      }
+      setAnalysedWaveform({ uri: entry.uri, waveform: sanitizeWaveform(waveformFromEnergies(energies.energies)) });
+    });
+  }, [stoppedUri, captureMode]);
 
   const forkVisible = captureMode === 'fork' && Boolean(stoppedClip);
   const isFailed = forkVisible && transcriptionStatus === 'failed';
@@ -261,6 +307,10 @@ function VoiceSpeakItContent({
       trackEvent('voice_fork_choice', { choice: 'keep_the_sound' });
     }
     setIsKeeping(true);
+    // Read before the await: the claim takes a tick and the ref belongs to
+    // THIS stopped clip, not whatever the modal shows afterwards.
+    const analysis =
+      analysisRef.current?.uri === stoppedClip.localUri ? analysisRef.current.promise : undefined;
     try {
       const claimedUri = await claimAudioClip(stoppedClip.localUri);
       onKeepSound?.({
@@ -269,6 +319,7 @@ function VoiceSpeakItContent({
         transcriptionStatus,
         transcriptionResult,
         pendingTranscription: transcriptionStatus === 'transcribing' ? transcriptionPromise : null,
+        ...(analysis ? { pendingAnalysis: analysis } : {}),
       });
     } finally {
       onDismiss();
@@ -408,6 +459,7 @@ function VoiceSpeakItContent({
               seed={seedFromUri(stoppedClip.localUri)}
               slim
               testID="voice-speak-it-clip-chip"
+              waveform={stoppedWaveform}
             />
           </View>
         ) : null}

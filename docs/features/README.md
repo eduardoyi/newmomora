@@ -42,7 +42,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Memories & illustrations | [memories.md](./memories.md) | done |
 | Media memories (photo & video) | [media-memories.md](./media-memories.md) | done |
 | Gallery import (AI-staged camera-roll memories) | [gallery-import.md](./gallery-import.md) | done; production rollout gated |
-| Audio memories | [audio-memories.md](./audio-memories.md) | planned |
+| Audio memories | [audio-memories.md](./audio-memories.md) | done (v2 trim/import/waveforms implemented, pending release) |
 | Calendar view (Timeline month grid) | [calendar.md](./calendar.md) | done |
 | Keepsakes (books + films tab) | [keepsakes.md](./keepsakes.md) | in-progress |
 | Inline links in memory text | [inline-links.md](./inline-links.md) | done |

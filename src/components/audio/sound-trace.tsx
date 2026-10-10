@@ -1,9 +1,11 @@
-// The inked-trace visualization every audio surface shares: a deterministic,
-// stylized "waveform" line drawn once per (seed, points) and never
-// recomputed from real audio -- there is no waveform-peaks sidecar in v1
-// (see docs/features/audio-memories.md). Ported from the approved design
-// prototype's `moEnv`/`SoundTrace` (audio-kit.jsx) so every surface (card,
-// chip, tile, mark) draws the identical hand-inked line for a given clip.
+// The inked-trace visualization every audio surface shares. The envelope is
+// the clip's real loudness when a stored `waveform` (64 buckets, 0..255, see
+// src/utils/audio-waveform.ts) is supplied; clips without one (legacy rows,
+// clips still uploading, decorative tiles) fall back to a deterministic,
+// stylized line drawn once per (seed, points) by `moEnv`. Ported from the
+// approved design prototype's `moEnv`/`SoundTrace` (audio-kit.jsx) so every
+// surface (card, chip, tile, mark) draws the identical hand-inked look; only
+// the envelope source differs.
 //
 // Playback reads as the recording being inked: un-played ink is a faint
 // pencil line; played ink is bold emotion-toned ink with a soft glow; a
@@ -28,6 +30,8 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import Svg, { ClipPath, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+
+import { envelopeForTrace } from '@/utils/audio-waveform';
 
 import { resolveAudioEmotionColors } from './audio-emotion';
 
@@ -148,6 +152,11 @@ function useSmoothProgress(
 export interface SoundTraceProps {
   /** Deterministic per-clip seed -- same clip always draws the same trace. */
   seed: number;
+  /**
+   * The clip's real loudness envelope (64 ints, 0..255). Null/absent/empty
+   * keeps the seeded decorative trace.
+   */
+  waveform?: number[] | null;
   /** 0-1 playback progress (as last reported by the player). */
   progress?: number;
   /** Null before emotion analysis lands (or forever, for unclassified babble) -- renders neutral graphite. */
@@ -176,6 +185,7 @@ export interface SoundTraceProps {
 
 export function SoundTrace({
   seed,
+  waveform,
   progress = 0,
   emotion,
   height = 56,
@@ -200,7 +210,15 @@ export function SoundTrace({
   const e = resolveAudioEmotionColors(emotion);
   const ink = inkColor ?? e.ink;
   const mid = VIEWBOX_HEIGHT / 2;
-  const env = useMemo(() => moEnv(seed, points), [seed, points]);
+  // Keyed on the waveform's content, so a new-but-equal array (a refetched
+  // row, a persisted-cache rehydrate) doesn't recompute on every render.
+  const waveformKey = waveform && waveform.length > 0 ? waveform.join(',') : null;
+  const env = useMemo(
+    () => (waveformKey
+      ? envelopeForTrace(waveformKey.split(',').map(Number), points)
+      : moEnv(seed, points)),
+    [seed, points, waveformKey],
+  );
   const ys = useMemo(
     () => env.map((amplitude, i) => mid + (i % 2 ? 1 : -1) * amplitude * (VIEWBOX_HEIGHT / 2) * 0.94),
     [env, mid],

@@ -168,4 +168,46 @@ describe('SoundTrace', () => {
 
     expect(firstPaths[0].props.d).toBe(secondPaths[0].props.d);
   });
+  describe('real waveform', () => {
+    const pathOf = (node: any) => findByType(node, 'RNSVGPath')[0].props.d as string;
+    const loud = Array.from({ length: 64 }, (_, i) => (i % 8 < 4 ? 220 : 40));
+    const ramp = Array.from({ length: 64 }, (_, i) => i * 4);
+
+    it('falls back to the seeded trace when the waveform is null, undefined or empty', () => {
+      const seeded = pathOf(render(<SoundTrace emotion={null} points={20} seed={22} />).toJSON());
+      expect(pathOf(render(<SoundTrace emotion={null} points={20} seed={22} waveform={null} />).toJSON())).toBe(seeded);
+      expect(pathOf(render(<SoundTrace emotion={null} points={20} seed={22} waveform={[]} />).toJSON())).toBe(seeded);
+    });
+
+    it('draws the real envelope when a waveform is present, ignoring the seed', () => {
+      const seeded = pathOf(render(<SoundTrace emotion={null} points={20} seed={22} />).toJSON());
+      const a = pathOf(render(<SoundTrace emotion={null} points={20} seed={22} waveform={loud} />).toJSON());
+      const b = pathOf(render(<SoundTrace emotion={null} points={20} seed={99} waveform={loud} />).toJSON());
+      expect(a).not.toBe(seeded);
+      expect(a).toBe(b);
+    });
+
+    it('draws the thin floor line for a silence-only waveform', () => {
+      const d = pathOf(
+        render(<SoundTrace emotion={null} points={10} seed={22} waveform={new Array(64).fill(0)} />).toJSON(),
+      );
+      // Floor 0.06 -> y = 50 +/- 0.06 * 50 * 0.94 = 47.2 / 52.8, alternating.
+      const ys = [...d.matchAll(/[ML][\d.]+ ([\d.]+)/g)].map((m) => Number(m[1]));
+      expect(ys).toHaveLength(10);
+      ys.forEach((y, i) => expect(y).toBeCloseTo(i % 2 ? 52.8 : 47.2, 1));
+    });
+
+    it('draws different paths for different waveforms', () => {
+      const a = pathOf(render(<SoundTrace emotion={null} points={20} seed={22} waveform={loud} />).toJSON());
+      const b = pathOf(render(<SoundTrace emotion={null} points={20} seed={22} waveform={ramp} />).toJSON());
+      expect(a).not.toBe(b);
+    });
+
+    it('treats a new-but-equal waveform array as the same trace', () => {
+      const first = render(<SoundTrace emotion={null} points={20} seed={22} waveform={[...loud]} />);
+      const before = pathOf(first.toJSON());
+      first.rerender(<SoundTrace emotion={null} points={20} seed={22} waveform={[...loud]} />);
+      expect(pathOf(first.toJSON())).toBe(before);
+    });
+  });
 });

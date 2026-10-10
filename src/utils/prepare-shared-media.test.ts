@@ -2,7 +2,9 @@ import type { ResolvedSharePayload } from 'expo-sharing';
 
 import {
   DUPLICATE_SHARED_MEDIA_URI_ERROR,
-  prepareSharedMedia,
+  MIXED_SHARED_AUDIO_ERROR,
+  prepareSharedMedia as prepareAnySharedPayloads,
+  type PreparedSharedMedia,
   type PrepareSharedMediaDependencies,
   UNREADABLE_SHARED_MEDIA_COPY_ERROR,
 } from './prepare-shared-media';
@@ -19,6 +21,19 @@ function payload(overrides: Partial<ResolvedSharePayload> = {}): ResolvedSharePa
     contentSize: 1024,
     ...overrides,
   } as ResolvedSharePayload;
+}
+
+// The photo/video tests below only ever expect a media result; narrow it once
+// here so each assertion keeps reading `result.attachments`.
+async function prepareSharedMedia(
+  payloads: ResolvedSharePayload[],
+  deps: PrepareSharedMediaDependencies,
+): Promise<PreparedSharedMedia> {
+  const result = await prepareAnySharedPayloads(payloads, deps);
+  if (result.kind !== 'media') {
+    throw new Error(`Expected a media result, got ${result.kind}`);
+  }
+  return result;
 }
 
 const dependencies: jest.Mocked<PrepareSharedMediaDependencies> = {
@@ -76,7 +91,7 @@ it('rejects a shared video longer than 3 minutes', async () => {
     }),
   ], dependencies);
 
-  expect(result).toEqual({ attachments: [], errorMessage: 'Videos must be 3 minutes or shorter.' });
+  expect(result).toEqual({ kind: 'media', attachments: [], errorMessage: 'Videos must be 3 minutes or shorter.' });
 });
 
 it('accepts a shared video source file well over the old 100MB pick-time cap (share-sheet intake shares media-validation constants)', async () => {
@@ -99,6 +114,7 @@ it('rejects a missing or partially copied cache file before metadata probing', a
   dependencies.getLocalFileSizeBytes.mockResolvedValueOnce(null);
 
   await expect(prepareSharedMedia([payload()], dependencies)).resolves.toEqual({
+    kind: 'media',
     attachments: [],
     errorMessage: UNREADABLE_SHARED_MEDIA_COPY_ERROR,
   });
@@ -106,6 +122,7 @@ it('rejects a missing or partially copied cache file before metadata probing', a
 
   dependencies.getLocalFileSizeBytes.mockResolvedValueOnce(512);
   await expect(prepareSharedMedia([payload()], dependencies)).resolves.toEqual({
+    kind: 'media',
     attachments: [],
     errorMessage: UNREADABLE_SHARED_MEDIA_COPY_ERROR,
   });
@@ -113,6 +130,7 @@ it('rejects a missing or partially copied cache file before metadata probing', a
 
   dependencies.getLocalFileSizeBytes.mockRejectedValueOnce(new Error('stat failed'));
   await expect(prepareSharedMedia([payload()], dependencies)).resolves.toEqual({
+    kind: 'media',
     attachments: [],
     errorMessage: UNREADABLE_SHARED_MEDIA_COPY_ERROR,
   });
@@ -221,6 +239,7 @@ it('preflights cheap validation before starting duration or metadata work', asyn
   ], dependencies);
 
   expect(result).toEqual({
+    kind: 'media',
     attachments: [],
     errorMessage: 'Unsupported file type. Use JPEG, PNG, HEIC, WEBP, MP4, or MOV.',
   });
@@ -236,7 +255,7 @@ it('rejects duplicate content URIs in the selected first ten before any probe st
     payload(),
   ], dependencies);
 
-  expect(result).toEqual({ attachments: [], errorMessage: DUPLICATE_SHARED_MEDIA_URI_ERROR });
+  expect(result).toEqual({ kind: 'media', attachments: [], errorMessage: DUPLICATE_SHARED_MEDIA_URI_ERROR });
   expect(dependencies.getVideoDurationMs).not.toHaveBeenCalled();
   expect(dependencies.getLocalFileSizeBytes).not.toHaveBeenCalled();
   expect(dependencies.getImageCaptureDateIso).not.toHaveBeenCalled();
@@ -318,6 +337,7 @@ it('returns the first validation error in payload order and stops scheduling aft
 
   const result = await resultPromise;
   expect(result).toEqual({
+    kind: 'media',
     attachments: [],
     errorMessage: 'Could not read video duration. Try another clip.',
   });
@@ -387,4 +407,121 @@ it('discards a late date result even when its microtask runs before an overdue t
   const result = await resultPromise;
   expect(result.attachments[0].capturedAtIso).toBeUndefined();
   expect(jest.getTimerCount()).toBe(0);
+});
+
+describe('shared voice notes', () => {
+  function audioPayload(overrides: Partial<ResolvedSharePayload> = {}): ResolvedSharePayload {
+    return payload({
+      value: 'file:///shared/AUDIO-2026-10-10-15-31-04.m4a',
+      shareType: 'audio',
+      mimeType: 'audio/mp4',
+      contentUri: 'file:///shared/AUDIO-2026-10-10-15-31-04.m4a',
+      contentType: 'audio',
+      contentMimeType: 'audio/mp4',
+      originalName: 'AUDIO-2026-10-10-15-31-04.m4a',
+      contentSize: 240_000,
+      ...overrides,
+    });
+  }
+
+  it('returns an audio result for a payload routed as audio', async () => {
+    const result = await prepareAnySharedPayloads([audioPayload()], dependencies);
+
+    expect(result).toEqual({
+      kind: 'audio',
+      uri: 'file:///shared/AUDIO-2026-10-10-15-31-04.m4a',
+      mimeType: 'audio/mp4',
+      fileName: 'AUDIO-2026-10-10-15-31-04.m4a',
+      sizeBytes: 240_000,
+    });
+    expect(dependencies.getLocalFileSizeBytes).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an Android application/ogg file', { contentType: 'file', contentMimeType: 'application/ogg', originalName: 'PTT-20261010-WA0007.opus' }],
+    ['an iOS opus with a dynamic UTI', { contentType: 'file', contentMimeType: 'application/octet-stream', mimeType: 'application/octet-stream', originalName: 'voice.opus' }],
+    ['a file with an audio mime type and no extension', { contentType: 'file', contentMimeType: 'audio/x-whatever', originalName: 'voice' }],
+    ['a file recognised only by its uri extension', { contentType: 'file', contentMimeType: null, mimeType: undefined, originalName: null, contentUri: 'file:///cache/My%20Note.AMR?x=1', value: 'file:///cache/My%20Note.AMR' }],
+  ] as const)('classifies %s as audio', async (_label, overrides) => {
+    const result = await prepareAnySharedPayloads(
+      [audioPayload(overrides as unknown as Partial<ResolvedSharePayload>)],
+      dependencies,
+    );
+
+    expect(result.kind).toBe('audio');
+  });
+
+  it.each(['opus', 'ogg', 'oga', 'm4a', 'mp3', 'wav', 'caf', 'amr', 'aac', 'aiff'])(
+    'allow-lists the .%s extension for generic file payloads',
+    async (extension) => {
+      const result = await prepareAnySharedPayloads(
+        [audioPayload({
+          contentType: 'file',
+          contentMimeType: 'application/octet-stream',
+          originalName: `note.${extension}`,
+        } as Partial<ResolvedSharePayload>)],
+        dependencies,
+      );
+
+      expect(result.kind).toBe('audio');
+    },
+  );
+
+  it('uses the last path component when the platform gives no original name', async () => {
+    const result = await prepareAnySharedPayloads(
+      [audioPayload({ originalName: null, contentUri: 'file:///cache/Voice%20Note.m4a' })],
+      dependencies,
+    );
+
+    expect(result).toMatchObject({ kind: 'audio', fileName: 'Voice Note.m4a' });
+  });
+
+  it('reports a missing size as null', async () => {
+    const result = await prepareAnySharedPayloads([audioPayload({ contentSize: null })], dependencies);
+
+    expect(result).toMatchObject({ kind: 'audio', sizeBytes: null });
+  });
+
+  it('does not treat other generic files (PDF, zip) as audio', async () => {
+    const result = await prepareAnySharedPayloads(
+      [audioPayload({
+        contentType: 'file',
+        contentMimeType: 'application/pdf',
+        originalName: 'report.pdf',
+      } as Partial<ResolvedSharePayload>)],
+      dependencies,
+    );
+
+    expect(result).toEqual({
+      kind: 'media',
+      attachments: [],
+      errorMessage: 'Momora can only attach shared photos and videos.',
+    });
+  });
+
+  it('refuses a voice note mixed with photos or videos', async () => {
+    const result = await prepareAnySharedPayloads([audioPayload(), payload()], dependencies);
+
+    expect(result).toEqual({ kind: 'error', errorMessage: MIXED_SHARED_AUDIO_ERROR });
+    expect(MIXED_SHARED_AUDIO_ERROR).toBe('Share one voice note at a time, or photos and videos together.');
+    expect(dependencies.getLocalFileSizeBytes).not.toHaveBeenCalled();
+  });
+
+  it('refuses more than one voice note', async () => {
+    const result = await prepareAnySharedPayloads(
+      [audioPayload(), audioPayload({ contentUri: 'file:///shared/second.m4a', originalName: 'second.m4a' })],
+      dependencies,
+    );
+
+    expect(result).toEqual({ kind: 'error', errorMessage: MIXED_SHARED_AUDIO_ERROR });
+  });
+
+  it('ignores unsupported extras (e.g. text) next to a single voice note', async () => {
+    const result = await prepareAnySharedPayloads(
+      [audioPayload(), { value: 'hello', shareType: 'text', mimeType: 'text/plain', contentUri: null, contentType: 'text', contentMimeType: null, originalName: null, contentSize: null } as unknown as ResolvedSharePayload],
+      dependencies,
+    );
+
+    expect(result.kind).toBe('audio');
+  });
 });

@@ -2,6 +2,7 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { useState } from 'react';
 import { Pressable } from 'react-native';
 
+import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { MemoryCard } from '@/components/memory-card';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
@@ -359,6 +360,7 @@ describe('MemoryCard audio variant (P3.1, docs/plans/audio-memories-v1.md)', () 
         position: 0,
         preview_object_key: null,
         share_card_key: null,
+        waveform: null,
         created_at: '2026-07-14T00:00:00.000Z',
         updated_at: '2026-07-14T00:00:00.000Z',
       },
@@ -396,6 +398,20 @@ describe('MemoryCard audio variant (P3.1, docs/plans/audio-memories-v1.md)', () 
     expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ enableShare: false }),
     );
+  });
+
+  it('draws the clip\'s real waveform in the stub band when the media row has one', () => {
+    const base = audioMemory();
+    const withWaveform = audioMemory({
+      mediaAssets: [{ ...base.mediaAssets[0], waveform: SILENT_WAVEFORM }],
+    });
+
+    const seeded = render(<MemoryCard memory={base} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    seeded.unmount();
+
+    const real = render(<MemoryCard memory={withWaveform} onOpenComments={jest.fn()} onPress={jest.fn()} />);
+    expect(hasFloorTrace(real.toJSON())).toBe(true);
   });
 
   it('toggles playback via the seal without navigating to detail', () => {

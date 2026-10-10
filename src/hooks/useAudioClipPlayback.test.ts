@@ -243,3 +243,125 @@ describe('useAudioClipPlayback -- status, toggle, seek', () => {
     expect(player.seekTo).not.toHaveBeenCalled();
   });
 });
+
+describe('useAudioClipPlayback -- playRange / pause', () => {
+  const SOURCE = 'https://example.test/clip-1.m4a';
+  const playingStatus = (currentTime: number) => ({
+    currentTime,
+    duration: 30,
+    playing: true,
+    isLoaded: true,
+    error: null,
+  });
+
+  it('playRange() prepares audio mode, claims the coordinator slot, seeks to the start, then plays', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+
+    expect(mockSetAudioModeAsync).toHaveBeenCalledTimes(1);
+    expect(coordinator.beginAudioPlayback).toHaveBeenCalledTimes(1);
+    expect(player.seekTo).toHaveBeenCalledWith(4);
+    expect(player.play).toHaveBeenCalledTimes(1);
+    expect(player.seekTo.mock.invocationCallOrder[0]).toBeLessThan(player.play.mock.invocationCallOrder[0]);
+  });
+
+  it('pauses and releases the coordinator slot once a status update reaches the end point', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+    coordinator.endAudioPlayback.mockClear();
+
+    act(() => player.emit('playbackStatusUpdate', playingStatus(8.75)));
+    expect(player.pause).not.toHaveBeenCalled();
+
+    // Up to one 250 ms update past the end is accepted.
+    act(() => player.emit('playbackStatusUpdate', playingStatus(9.1)));
+    expect(player.pause).toHaveBeenCalledTimes(1);
+    expect(coordinator.endAudioPlayback).toHaveBeenCalledTimes(1);
+
+    // The stop point is spent: a later update must not pause again.
+    act(() => player.emit('playbackStatusUpdate', playingStatus(9.4)));
+    expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not stop on a paused status that lands between the seek and play', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+
+    act(() => player.emit('playbackStatusUpdate', { ...playingStatus(4), playing: false }));
+    act(() => player.emit('playbackStatusUpdate', playingStatus(8.9)));
+    expect(player.pause).not.toHaveBeenCalled();
+    act(() => player.emit('playbackStatusUpdate', playingStatus(9.2)));
+    expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an empty or inverted range', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+
+    await act(async () => {
+      await result.current.playRange(5, 5);
+      await result.current.playRange(8, 2);
+    });
+
+    expect(player.play).not.toHaveBeenCalled();
+    expect(coordinator.beginAudioPlayback).not.toHaveBeenCalled();
+  });
+
+  it('toggle() after a range preview plays through the end point (stop point cleared)', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+    player.playing = false;
+
+    await act(async () => {
+      await result.current.toggle();
+    });
+    act(() => player.emit('playbackStatusUpdate', playingStatus(12)));
+
+    expect(player.pause).not.toHaveBeenCalled();
+  });
+
+  it('pause() pauses a playing clip, releases the slot and clears the stop point', async () => {
+    const { result } = renderHook(() => useAudioClipPlayback(SOURCE));
+    const player = createdPlayers[0];
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+    coordinator.endAudioPlayback.mockClear();
+    player.pause.mockClear();
+
+    act(() => result.current.pause());
+    expect(player.pause).toHaveBeenCalledTimes(1);
+    expect(coordinator.endAudioPlayback).toHaveBeenCalledTimes(1);
+
+    act(() => player.emit('playbackStatusUpdate', playingStatus(9.5)));
+    expect(player.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it('swapping the source clears a pending stop point', async () => {
+    const { result, rerender } = renderHook(({ source }) => useAudioClipPlayback(source), {
+      initialProps: { source: SOURCE },
+    });
+    const player = createdPlayers[0];
+    await act(async () => {
+      await result.current.playRange(4, 9);
+    });
+
+    rerender({ source: 'https://example.test/clip-2.m4a' });
+    act(() => player.emit('playbackStatusUpdate', playingStatus(10)));
+
+    expect(player.pause).not.toHaveBeenCalled();
+  });
+});

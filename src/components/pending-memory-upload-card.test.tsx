@@ -1,5 +1,6 @@
 import { fireEvent, render } from '@testing-library/react-native';
 
+import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { PendingMemoryUploadCard } from './pending-memory-upload-card';
 import type { PendingMemoryUpload } from '@/hooks/use-pending-memory-uploads';
 
@@ -13,6 +14,7 @@ function buildUpload(overrides: Partial<PendingMemoryUpload> = {}): PendingMemor
     errorMessage: null,
     previewUri: null,
     previewContentType: null,
+    previewWaveform: null,
     isNetworkFailure: false,
     ...overrides,
   };
@@ -42,6 +44,20 @@ describe('PendingMemoryUploadCard audio (docs/plans/audio-memories-v1.md P3.3)',
     expect(getByTestId('pending-memory-card-memory-1-sound')).toBeTruthy();
     expect(getByText('Posting memory…')).toBeTruthy();
     expect(getByText('Keep Momora open just a moment.')).toBeTruthy();
+  });
+
+  it('draws the clip\'s real waveform when the upload carries one, the seeded trace otherwise', () => {
+    const card = (previewWaveform: number[] | null) => (
+      <PendingMemoryUploadCard
+        onDiscard={jest.fn()}
+        onRetry={jest.fn()}
+        upload={buildUpload({ previewContentType: 'audio/mp4', previewUri: 'file:///clip.m4a', previewWaveform })}
+      />
+    );
+    const seeded = render(card(null));
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    seeded.unmount();
+    expect(hasFloorTrace(render(card(SILENT_WAVEFORM)).toJSON())).toBe(true);
   });
 
   it('shows the audio-specific failed copy with Retry/Discard', () => {

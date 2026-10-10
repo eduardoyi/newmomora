@@ -518,12 +518,14 @@ function SoundStage({
   emotion,
   seed,
   state,
+  waveform,
 }: {
   clip: ReturnType<typeof useAudioClipPlayback>;
   durationSeconds: number;
   emotion: string | null;
   seed: number;
   state: SoundPlaybackState;
+  waveform: number[] | null;
 }) {
   // While dragging, the time shows where the scrub would land.
   const [scrubFraction, setScrubFraction] = useState<number | null>(null);
@@ -540,6 +542,7 @@ function SoundStage({
           progress={0}
           seed={seed}
           stroke={2}
+          waveform={waveform}
         />
         <Text style={styles.soundUnavailableTitle}>Not on this phone yet</Text>
         <Text style={styles.soundUnavailableBody}>
@@ -576,6 +579,7 @@ function SoundStage({
           seed={seed}
           stroke={2.6}
           testID="memory-detail-sound-trace"
+          waveform={waveform}
         />
       </View>
       <View style={styles.soundStageControls}>
@@ -691,6 +695,7 @@ function MemoryDetailSound({
               emotion={memory.emotion}
               seed={seed}
               state={state}
+              waveform={clipAsset?.waveform ?? null}
             />
           </View>
           <Animated.View style={[styles.framedCardBody, { opacity: quietOpacity }]}>

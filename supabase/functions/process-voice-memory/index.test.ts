@@ -400,6 +400,62 @@ Deno.test('family voice resolves "I/me" to the caller\'s linked member, falling 
   assertEquals((await readBody(unlinkedResponse)).mentionedMemberIds, ['canonical-sarah', 'legacy-self']);
 });
 
+Deno.test('family voice speaker "unknown" never tags the caller, even when the model reports mentionedUserSelf', async () => {
+  const members = [
+    { id: 'canonical-sarah', name: 'Sarah' },
+    { id: 'legacy-self', name: 'Legacy', is_user_profile: true },
+    { id: 'linked-dad', name: 'Eduardo' },
+  ];
+  const lookups: unknown[] = [];
+  const { dependencies } = makeDependencies({
+    getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    getCanonicalFamilyMembers: async () => members,
+    getSelfMemberId: async (input) => {
+      lookups.push(input);
+      return 'linked-dad';
+    },
+    chatJson: async <T>() => ({ cleanedText: 'I miss you sweetie, Sarah', mentionedUserSelf: true } as T),
+  });
+  const response = await handleProcessVoiceMemoryWithDependencies(
+    makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID, speaker: 'unknown' }),
+    dependencies,
+  );
+  assertEquals(response.status, 200);
+  // Name-based mentions still resolve; only the self-mention mapping is skipped.
+  assertEquals((await readBody(response)).mentionedMemberIds, ['canonical-sarah']);
+  assertEquals(lookups, []);
+});
+
+Deno.test('family voice rejects an invalid speaker value before any provider call', async () => {
+  for (const speaker of ['parent', '', null, 1, true, {}, ['unknown']]) {
+    const { dependencies, calls } = makeDependencies({
+      getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),
+    });
+    const response = await handleProcessVoiceMemoryWithDependencies(
+      makeRequest({ audioBase64: 'AQID', familyId: FAMILY_ID, speaker }),
+      dependencies,
+    );
+    assertEquals(response.status, 400);
+    assertEquals(await readBody(response), { error: 'speaker is invalid', code: 'validation_error' });
+    assertEquals(calls.events, []);
+  }
+});
+
+Deno.test('onboarding voice rejects the speaker field before reserving an attempt', async () => {
+  for (const speaker of ['unknown', 'parent']) {
+    const { dependencies, calls } = makeDependencies();
+    const response = await handleProcessVoiceMemoryWithDependencies(
+      makeRequest({ mode: 'onboarding', audioBase64: 'AQID', nameHints: ['Maya'], speaker }),
+      dependencies,
+    );
+    assertEquals(response.status, 400);
+    assertEquals(await readBody(response), {
+      error: 'Onboarding voice cannot include speaker', code: 'validation_error',
+    });
+    assertEquals(calls.events, []);
+  }
+});
+
 Deno.test('family voice returns an empty description for unusable speech, never an error', async () => {
   const { dependencies } = makeDependencies({
     getAuthenticatedUser: async () => ({ id: USER_ID, is_anonymous: false }),

@@ -58,6 +58,13 @@ export interface MemoryMediaAssetInput {
    * key when the incoming value is null and `objectKey` matches.
    */
   previewObjectKey?: string | null;
+  /**
+   * 64-bucket loudness contour (0..255) for an audio clip. Omitted/null is
+   * valid -- the RPC preserves an existing row's waveform when the incoming
+   * value is null and `objectKey` matches. Invalid values are nulled by
+   * mediaAssetsToRpcPayload before they reach the RPC.
+   */
+  waveform?: number[] | null;
 }
 
 export interface CreateMemoryInput {
@@ -98,6 +105,7 @@ export interface CreateAudioMemoryInput {
     objectKey: string;
     contentType: string;
     durationMs?: number | null;
+    waveform?: number[] | null;
   };
 }
 

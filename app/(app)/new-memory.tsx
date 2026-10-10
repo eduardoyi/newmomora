@@ -10,7 +10,9 @@ import {
   type MediaAttachment,
 } from '@/components/memory-media-picker';
 import { VoiceSpeakItModal, type VoiceKeptClip } from '@/components/voice-speak-it-modal';
+import { BringInSoundSheet } from '@/components/audio/bring-in-sound-sheet';
 import { ClipChip } from '@/components/audio/clip-chip';
+import { TrimSheet } from '@/components/audio/trim-sheet';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { pickJournalingPrompt } from '@/constants/journaling-prompts';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
@@ -21,13 +23,19 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
+import {
+  SHARE_PHOTOS_REFUSED_SOUND_COPY,
+  useComposerAudioClip,
+} from '@/hooks/use-composer-audio-clip';
 import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
 import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
-import { discardAudioClip } from '@/utils/audio-clip-custody';
+import { sanitizeWaveform } from '@/utils/audio-waveform';
+import { isDocumentPickerAvailable, pickAudioDocument } from '@/utils/document-picker';
+import type { PrepareSharedMediaResult } from '@/utils/prepare-shared-media';
 import {
   clearNewMemoryDraft,
   isEmptyDraft,
@@ -40,6 +48,8 @@ import {
   validateMemoryContent,
   validateMemoryDate,
 } from '@/utils/memories';
+
+import * as MomoraAudio from '../../modules/momora-audio';
 
 // Debounced draft-autosave write delay -- long enough to coalesce
 // keystrokes, short enough that an interruption rarely loses more than
@@ -92,7 +102,8 @@ function bucketAudioDurationMs(durationMs: number): AnalyticsEventMap['audio_mem
   if (seconds <= 30) return '15_30s';
   if (seconds <= 60) return '30_60s';
   if (seconds <= 90) return '60_90s';
-  return '90_120s';
+  if (seconds <= 120) return '90_120s';
+  return '120_300s';
 }
 
 /** A tiny deterministic hash -- only used to pick a stable SoundTrace seed for an unsaved clip's local URI. */
@@ -162,59 +173,25 @@ export default function NewMemoryScreen() {
   }, [role]);
   const [content, setContent] = useState('');
   const [attachedMedia, setAttachedMedia] = useState<MediaAttachment[]>([]);
-  const { memoryDate, setMemoryDate, dateSource } = useSuggestedMemoryDate({
-    attachments: attachedMedia,
-  });
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [illustrationEnabled, setIllustrationEnabled] = useState(true);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // ── Audio memories (docs/plans/audio-memories-v1.md P2.3) ──
-  // A kept clip makes this an emergent `audio` composer: media/AI illustration
-  // hide, and `content` becomes the (optional) description. `audioClip` is the
-  // single source of truth for "is this an audio memory" (isAudio below) --
-  // removing it is an Undo affordance (audioClipRemoved), never a type flip.
-  const [audioClip, setAudioClip] = useState<{ localUri: string; durationMs: number } | null>(null);
-  const [audioClipRemoved, setAudioClipRemoved] = useState(false);
-  const [audioTranscript, setAudioTranscript] = useState<string | null>(null);
-  const [audioNoteGenerating, setAudioNoteGenerating] = useState(false);
-  const isAudio = audioClip !== null;
-  // Ratchets true the instant the user types anything (or already had text
-  // before keeping the sound) -- once true, an AI description that arrives
-  // later is discarded silently, never merged/prompted (same empty-form-only
-  // spirit as draft restore). Recomputed at each keep (see handleKeepSound)
-  // from lastAppliedAiCaptionRef, so an *untouched* AI caption from a
-  // previous clip stays replaceable across a re-record, while anything the
-  // user actually typed or edited never does.
-  const hasTypedAudioNoteRef = useRef(false);
-  // The exact description text `applyAudioTranscriptionResult` last wrote
-  // into `content` (if any). Lets keep-time distinguish "content still holds
-  // the AI's own words, untouched" from "the user typed or edited it" --
-  // the former describes a clip that's about to be replaced and should be
-  // replaced with it; the latter is the user's and is never clobbered.
-  const lastAppliedAiCaptionRef = useRef<string | null>(null);
-  // Set only when the kept clip's transcription was still in flight -- awaited
-  // fire-and-forget at save time to backfill the description post-save. This
-  // promise outlives the (already-closed) voice modal; see useVoiceInput.ts.
-  const pendingAudioTranscriptionRef = useRef<VoiceKeptClip['pendingTranscription']>(null);
-  const audioClipPlayback = useAudioClipPlayback(audioClip?.localUri ?? null);
+  // Refs mirror the latest values of fields that async work (the draft
+  // restore below, and the audio clip's trim / import completions) must read
+  // live instead of through a stale closure. Synced in an effect (not during
+  // render) to avoid mutating a ref as a render side effect;
+  // handleContentChange also writes `contentRef` eagerly so a read that lands
+  // before the next render still sees the keystroke.
+  const contentRef = useRef(content);
+  const attachedMediaRef = useRef(attachedMedia);
+
   // `memory_saved.used_voice` -- set once the Speak It modal ever hands back
-  // a result, even if the user edits the transcribed text afterward. Not
-  // reset on save (a fresh mount is a fresh composer instance).
+  // a result, even if the user edits the transcribed text afterward. Imported
+  // voice notes don't set it. Not reset on save (a fresh mount is a fresh
+  // composer instance).
   const usedVoiceRef = useRef(false);
-  // Enqueueing a media post returns instantly, so React Query's isPending
-  // can't guard the Save button like it did for the old inline mutation. The
-  // ref blocks synchronous double-taps that land before the state re-render.
-  const [isPostingMedia, setIsPostingMedia] = useState(false);
-  const hasEnqueuedMediaRef = useRef(false);
-  const handleIncomingSharePrepared = useCallback((attachments: MediaAttachment[], message: string | null) => {
-    setAttachedMedia(attachments);
-    setErrorMessage(message ?? '');
-  }, []);
-  const isPreparingIncomingShare = useIncomingMemoryShare({
-    onPrepared: handleIncomingSharePrepared,
-  });
 
   const tagMembers = useMemo(
     () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames })),
@@ -233,31 +210,183 @@ export default function NewMemoryScreen() {
     onSelectedMemberIdsChange: handleSelectedMemberIdsChange,
   });
 
-  // ── Draft autosave (docs/features/memories.md "Draft autosave") ──
-  // Refs mirror the latest values of fields the restore effect checks, so
-  // that effect (which only runs once) never needs them in its dependency
-  // array or reads a stale closure. Synced in an effect (not during render)
-  // to avoid mutating a ref as a render side effect.
-  const contentRef = useRef(content);
-  const selectedMemberIdsRef = useRef(selectedMemberIds);
-  const attachedMediaRef = useRef(attachedMedia);
-  const audioClipRef = useRef(audioClip);
+  const voiceMembers = useMemo(
+    () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames ?? [], is_user_profile: m.is_user_profile })),
+    [members],
+  );
+
+  // ── Bring-in-a-sound sheet (docs/plans/audio-trim-import.md "Modal hand-offs") ──
+  // iOS won't present a Modal while another is still dismissing, so "Choose
+  // from Files" closes the sheet, waits for its onDismissed, and only then
+  // opens the system picker. The gate lets the must-trim sheet wait on the
+  // same dismissal.
+  const [isBringInVisible, setIsBringInVisible] = useState(false);
+  const isBringInVisibleRef = useRef(false);
+  const wantsFilePickRef = useRef(false);
+  const bringInDismissGateRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+
+  const closeBringInSheet = useCallback(() => {
+    if (!isBringInVisibleRef.current) {
+      return;
+    }
+    if (!bringInDismissGateRef.current) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((resolvePromise) => {
+        resolve = resolvePromise;
+      });
+      bringInDismissGateRef.current = { promise, resolve };
+    }
+    isBringInVisibleRef.current = false;
+    setIsBringInVisible(false);
+  }, []);
+
+  const awaitModalsSettled = useCallback(
+    () => bringInDismissGateRef.current?.promise ?? Promise.resolve(),
+    [],
+  );
+
+  // ── Audio memories (docs/plans/audio-memories-v1.md P2.3, audio-trim-import.md) ──
+  // A kept (or imported) clip makes this an emergent `audio` composer:
+  // media/AI illustration hide, and `content` becomes the (optional)
+  // description. The clip state machine -- keep, trim, import, the "user text
+  // beats the AI caption" ratchet, file ownership -- lives in the hook.
+  // Removing the clip is an Undo affordance (audioClipRemoved), never a type
+  // flip.
+  const audio = useComposerAudioClip({
+    contentRef,
+    attachedMediaRef,
+    setContent,
+    setErrorMessage,
+    applyVoiceResult,
+    members,
+    voiceMembers,
+    familyId,
+    usedVoiceRef,
+    awaitModalsSettled,
+  });
+  const {
+    audioClip,
+    audioClipRef,
+    audioClipRemoved,
+    audioNoteGenerating,
+    importAudio,
+    isAudio,
+  } = audio;
+  const { memoryDate, setMemoryDate, dateSource, suggestionKind } = useSuggestedMemoryDate({
+    attachments: attachedMedia,
+    audioCapturedAtIso: audio.suggestedDateIso,
+  });
+  const audioClipPlayback = useAudioClipPlayback(audioClip?.localUri ?? null);
+
+  // Enqueueing a media post returns instantly, so React Query's isPending
+  // can't guard the Save button like it did for the old inline mutation. The
+  // ref blocks synchronous double-taps that land before the state re-render.
+  const [isPostingMedia, setIsPostingMedia] = useState(false);
+  const hasEnqueuedMediaRef = useRef(false);
+  const handleIncomingSharePrepared = useCallback((result: PrepareSharedMediaResult) => {
+    if (result.kind === 'audio') {
+      // Routed into the same import pipeline as the in-app picker. The share
+      // hook reports "preparing" until this callback returns; the import
+      // flag it raises synchronously takes over, so a stored draft never
+      // wins over a shared voice note.
+      void importAudio({
+        uri: result.uri,
+        fileName: result.fileName,
+        mimeType: result.mimeType,
+        sizeBytes: result.sizeBytes,
+        entry: 'share',
+      });
+      return;
+    }
+    if (result.kind === 'error') {
+      setAttachedMedia([]);
+      setErrorMessage(result.errorMessage);
+      return;
+    }
+    // A sound memory is a single clip with no mixed media: refuse photos
+    // instead of silently dropping the clip or the photos. Checked against
+    // the live clip (a ref), not a render-time value.
+    if (audioClipRef.current) {
+      setErrorMessage(SHARE_PHOTOS_REFUSED_SOUND_COPY);
+      return;
+    }
+    setAttachedMedia(result.attachments);
+    setErrorMessage(result.errorMessage ?? '');
+  }, [audioClipRef, importAudio]);
+  const isPreparingIncomingShare = useIncomingMemoryShare({
+    onPrepared: handleIncomingSharePrepared,
+  });
+
+  const pickSoundFile = useCallback(async () => {
+    const picked = await pickAudioDocument();
+    if (!picked) {
+      return;
+    }
+    await importAudio({
+      uri: picked.uri,
+      fileName: picked.name,
+      mimeType: picked.mimeType,
+      sizeBytes: picked.size,
+      entry: 'picker',
+    });
+  }, [importAudio]);
+
+  const handleBringInDismissed = useCallback(() => {
+    const gate = bringInDismissGateRef.current;
+    bringInDismissGateRef.current = null;
+    gate?.resolve();
+    if (wantsFilePickRef.current) {
+      wantsFilePickRef.current = false;
+      void pickSoundFile();
+    }
+  }, [pickSoundFile]);
+
+  const handleOpenBringIn = useCallback(() => {
+    isBringInVisibleRef.current = true;
+    setIsBringInVisible(true);
+  }, []);
+
+  const handleChooseSoundFile = useCallback(() => {
+    wantsFilePickRef.current = true;
+    closeBringInSheet();
+  }, [closeBringInSheet]);
+
+  const handleCloseBringIn = useCallback(() => {
+    wantsFilePickRef.current = false;
+    closeBringInSheet();
+  }, [closeBringInSheet]);
+
+  const handleOpenTrim = useCallback(() => {
+    // Whatever the chip is playing stops while the sheet is open (the sheet's
+    // own preview claims the single playback slot when it plays).
+    if (audioClipPlayback.playing) {
+      void audioClipPlayback.toggle();
+    }
+    audio.openTrim();
+  }, [audio, audioClipPlayback]);
+
   useEffect(() => {
     contentRef.current = content;
-    selectedMemberIdsRef.current = selectedMemberIds;
     attachedMediaRef.current = attachedMedia;
-    audioClipRef.current = audioClip;
+  });
+  const selectedMemberIdsRef = useRef(selectedMemberIds);
+  useEffect(() => {
+    selectedMemberIdsRef.current = selectedMemberIds;
   });
 
   const hasAttemptedDraftRestoreRef = useRef(false);
   const [isDraftRestoreReady, setIsDraftRestoreReady] = useState(false);
 
   // Restore a saved draft once per mount. Deferred while an incoming share
-  // is still being prepared (`isPreparingIncomingShare`) so a share/voice
-  // prefill always wins -- a stored draft is only ever applied to an
-  // otherwise-empty form. Media is never restored (see new-memory-draft.ts).
+  // is still being prepared (`isPreparingIncomingShare`) or an imported voice
+  // note is still coming in (`isImportingAudio`: reading, waiting on the
+  // must-trim sheet, or rendering the cut) so a share/voice prefill always
+  // wins -- a stored draft is only ever applied to an otherwise-empty form.
+  // Media is never restored (see new-memory-draft.ts).
+  const isImportingAudio = audio.isImporting;
+  const isAudioBusy = audio.isProcessing;
   useEffect(() => {
-    if (hasAttemptedDraftRestoreRef.current || isPreparingIncomingShare) {
+    if (hasAttemptedDraftRestoreRef.current || isPreparingIncomingShare || isAudioBusy) {
       return;
     }
     if (!user?.id || !familyId) {
@@ -300,7 +429,7 @@ export default function NewMemoryScreen() {
     return () => {
       cancelled = true;
     };
-  }, [isPreparingIncomingShare, user?.id, familyId, initializeTags, setMemoryDate]);
+  }, [isPreparingIncomingShare, isAudioBusy, user?.id, familyId, initializeTags, setMemoryDate, audioClipRef]);
 
   // Auto-tag the sole family member so onboarding users can't save an
   // untagged memory (docs/plans/onboarding-illustration-reliability.md WS1).
@@ -378,123 +507,29 @@ export default function NewMemoryScreen() {
   // An audio memory's description is optional (like a media caption) --
   // Save is gated on the clip being present, not on any text. Removing the
   // clip (Undo pending) disables Save until it's restored.
-  const canSave = isAudio
-    ? !audioClipRemoved
-    : memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0;
-
-  const voiceMembers = useMemo(
-    () => members.map((m) => ({ id: m.id, name: m.name, nicknames: m.nicknames ?? [], is_user_profile: m.is_user_profile })),
-    [members],
-  );
+  //
+  // A trim render or an import in flight also gates Save: a save landing
+  // mid-render would hand the queue a clip that is about to be replaced (or,
+  // mid-import, save a text memory the incoming sound should have joined).
+  const canSave =
+    !audio.isProcessing &&
+    (isAudio
+      ? !audioClipRemoved
+      : memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0);
 
   const handleContentChange = (text: string) => {
+    contentRef.current = text;
     setContent(text);
     applyForContent(text);
     // Once the user has typed anything, an AI-generated audio description
     // that arrives later must never clobber it (docs/plans/
     // audio-memories-v1.md P2.3 "user text always beats the AI caption").
-    hasTypedAudioNoteRef.current = true;
+    audio.markNoteTyped();
   };
-
-  // Applies an audio transcription result (already resolved, or arriving
-  // late via pendingTranscription) to the composer: the description
-  // prefills the content field only while the user hasn't typed anything
-  // (including before the clip was kept), and auto-tags mentioned members
-  // the same way dictation does.
-  const applyAudioTranscriptionResult = useCallback(
-    (result: { cleanedText: string; description: string; mentionedMemberIds: string[] }) => {
-      setAudioTranscript(result.cleanedText.trim() || null);
-      if (!hasTypedAudioNoteRef.current) {
-        setContent(result.description);
-        lastAppliedAiCaptionRef.current = result.description;
-      }
-      const mentionedMemberIds =
-        result.mentionedMemberIds.length === 0 && members.length === 1
-          ? [members[0].id]
-          : result.mentionedMemberIds;
-      applyVoiceResult({ cleanedText: result.cleanedText, mentionedMemberIds });
-    },
-    [applyVoiceResult, members],
-  );
 
   const handleKeepSound = (clip: VoiceKeptClip) => {
-    usedVoiceRef.current = true;
-    // The toolbar mic re-records and replaces the clip pre-save (docs/plans/
-    // audio-memories-v1.md P2.3 "Recording again replaces this sound.") --
-    // the previous local file has nowhere else to go once superseded.
-    if (audioClip && audioClip.localUri !== clip.localUri) {
-      void discardAudioClip(audioClip.localUri);
-    }
-    setAudioClip({ localUri: clip.localUri, durationMs: clip.durationMs });
-    setAudioClipRemoved(false);
-    // "User owns the note" (never overwritten) means: there's text, AND
-    // it's not just the previous clip's untouched AI caption sitting there.
-    // An untouched AI caption describes a sound that's about to be replaced
-    // -- it must be replaceable too, or a re-record leaves a caption for a
-    // clip that no longer exists in this memory.
-    const trimmedContent = content.trim();
-    const isUntouchedAiCaption =
-      trimmedContent.length > 0 && trimmedContent === (lastAppliedAiCaptionRef.current ?? '').trim();
-    hasTypedAudioNoteRef.current = trimmedContent.length > 0 && !isUntouchedAiCaption;
-    pendingAudioTranscriptionRef.current = null;
-
-    if (clip.transcriptionResult) {
-      // Already resolved by keep-time (the user sat at the fork long enough
-      // for transcription to finish before tapping "Keep the sound").
-      // applyAudioTranscriptionResult below sets `content` synchronously --
-      // `content` (React state, the value handleSaveAudio reads at save
-      // time) is therefore already correct the instant this call returns,
-      // independent of whatever the native TextInput has painted on screen
-      // (see the `contentKey` comment on the form's TextInput for the
-      // display-only half of this bug). So an immediate save right after
-      // this keep needs no extra plumbing here: pendingAudioTranscriptionRef.
-      // current was already cleared to null above, handleSaveAudio reads
-      // `content` itself (not a promise), and enqueuePendingMemoryUpload
-      // gets the real description directly -- there is no race to bridge,
-      // unlike the pendingTranscription branch below where the row doesn't
-      // exist yet.
-      applyAudioTranscriptionResult(clip.transcriptionResult);
-    } else if (clip.pendingTranscription) {
-      if (isUntouchedAiCaption) {
-        // The old clip's caption is about to be superseded by one for the
-        // NEW clip -- clear it now so the "Writing a note..." generating
-        // treatment shows while we wait, instead of leaving the old
-        // (now-stale) caption on screen with no indication it's about to
-        // change. Mirrors the always-starts-empty first-record case.
-        setContent('');
-      }
-      setAudioNoteGenerating(true);
-      pendingAudioTranscriptionRef.current = clip.pendingTranscription;
-      const awaited = clip.pendingTranscription;
-      void awaited.then((result) => {
-        // A "Record again" replace, or a stale response from a previous
-        // clip, must not resurrect the generating UI or apply a result that
-        // no longer belongs to the clip currently in the composer.
-        if (pendingAudioTranscriptionRef.current !== awaited) {
-          return;
-        }
-        pendingAudioTranscriptionRef.current = null;
-        setAudioNoteGenerating(false);
-        if (result) {
-          applyAudioTranscriptionResult(result);
-        }
-      });
-    }
+    audio.keepRecordedSound(clip);
     setShowVoiceModal(false);
-  };
-
-  const handleRemoveAudioClip = () => {
-    setAudioClipRemoved(true);
-  };
-
-  const handleUndoRemoveAudioClip = () => {
-    setAudioClipRemoved(false);
-  };
-
-  const handleSkipAudioNoteGeneration = () => {
-    setAudioNoteGenerating(false);
-    hasTypedAudioNoteRef.current = true;
-    pendingAudioTranscriptionRef.current = null;
   };
 
   const appendMedia = (attachments: MediaAttachment[]) => {
@@ -541,13 +576,25 @@ export default function NewMemoryScreen() {
     hasEnqueuedMediaRef.current = true;
     setIsPostingMedia(true);
 
-    const memoryId = createMemoryId();
-    const normalizedContent = content.trim().length > 0 ? content.trim() : null;
-    const normalizedTranscript = audioTranscript && audioTranscript.trim().length > 0 ? audioTranscript.trim() : null;
-    const clip = audioClip;
-    const pendingTranscription = pendingAudioTranscriptionRef.current;
-
     try {
+      // A recording's waveform analysis may still be running; wait for it
+      // briefly (<= 1.5 s) rather than save a seeded trace for a clip that
+      // would have had a real one. Everything below is read AFTER the wait,
+      // from live refs: the note, tags and transcript can change meanwhile.
+      const clip = await audio.settleForSave();
+      if (!clip) {
+        hasEnqueuedMediaRef.current = false;
+        setIsPostingMedia(false);
+        return;
+      }
+      const memoryId = createMemoryId();
+      const trimmedContent = contentRef.current.trim();
+      const normalizedContent = trimmedContent.length > 0 ? trimmedContent : null;
+      const transcript = audio.audioTranscriptRef.current;
+      const normalizedTranscript = transcript && transcript.trim().length > 0 ? transcript.trim() : null;
+      const pendingTranscription = audio.pendingTranscriptionRef.current;
+      const taggedMemberIds = selectedMemberIdsRef.current;
+
       // Deferred posting, same as media -- the composer closes immediately
       // while the clip uploads in the background (docs/plans/
       // audio-memories-v1.md P2.3 seam contract). If transcription is still
@@ -564,27 +611,36 @@ export default function NewMemoryScreen() {
         memoryId,
         memoryDate: memoryDate.trim(),
         content: normalizedContent,
-        taggedMemberIds: selectedMemberIds,
+        taggedMemberIds,
         audioTranscript: normalizedTranscript,
         clip: {
           fileUri: clip.localUri,
           durationMs: clip.durationMs,
           contentType: 'audio/mp4',
+          // The save path re-sanitizes; null (analysis missing/late/NaN)
+          // keeps the seeded trace until a backfill re-run.
+          waveform: sanitizeWaveform(clip.waveform),
         },
         pendingTranscription: pendingTranscription ?? undefined,
       });
+      // The queue owns clip.localUri from here (retries re-read it). Only the
+      // untrimmed-away original may go, and only if it is a different file.
+      audio.markSaved(clip.localUri);
 
       trackEvent('memory_saved', {
         memory_type: 'audio',
-        used_voice: true,
+        // Only a recording is the parent's own voice; an import is not.
+        used_voice: clip.source === 'recorded',
         has_media: false,
-        tagged_count: selectedMemberIds.length,
+        tagged_count: taggedMemberIds.length,
         illustration_enabled: false,
         source: memorySavedSource,
       });
       trackEvent('audio_memory_saved', {
         duration_bucket: bucketAudioDurationMs(clip.durationMs),
         has_description: normalizedContent !== null,
+        source: clip.source,
+        trimmed: clip.trimmed,
       });
 
       if (user?.id && familyId) {
@@ -722,7 +778,7 @@ export default function NewMemoryScreen() {
       style={styles.dateSourceHint}
       testID="new-memory-date-source"
     >
-      From media
+      {suggestionKind === 'audio' ? 'From the voice note' : 'From media'}
     </Text>
   ) : null;
 
@@ -735,11 +791,15 @@ export default function NewMemoryScreen() {
         <View style={[styles.audioNoteGeneratingBar, styles.audioNoteGeneratingBarWide]} />
         <View style={[styles.audioNoteGeneratingBar, styles.audioNoteGeneratingBarShort]} />
       </View>
-      <Text style={styles.audioNoteGeneratingLabel}>Writing a note from what you said…</Text>
+      <Text style={styles.audioNoteGeneratingLabel}>
+        {audioClip?.source === 'imported'
+          ? 'Writing a note about this sound…'
+          : 'Writing a note from what you said…'}
+      </Text>
       <Pressable
         accessibilityLabel="Write my own note"
         accessibilityRole="button"
-        onPress={handleSkipAudioNoteGeneration}
+        onPress={audio.skipNoteGeneration}
         style={styles.audioNoteSkipBtn}
         testID="new-memory-audio-note-skip"
       >
@@ -761,18 +821,24 @@ export default function NewMemoryScreen() {
         <ClipChip
           durationSeconds={audioClip.durationMs / 1000}
           emotion={null}
-          onRemove={handleRemoveAudioClip}
+          onRemove={audio.removeClip}
+          // The scissors only exists with the native module and a loaded
+          // analysis; while a render runs the chip shows its spinner and
+          // locks remove (`processing`).
+          onTrim={audio.canTrim ? handleOpenTrim : undefined}
           onToggle={() => { void audioClipPlayback.toggle(); }}
           playing={audioClipPlayback.playing}
           positionSeconds={audioClipPlayback.position}
+          processing={audio.isRendering}
           progress={audioClipPlayback.progress}
           seed={seedFromUri(audioClip.localUri)}
           testID="new-memory-audio-clip"
+          waveform={audioClip.waveform}
         />
       ) : (
         <View style={styles.audioClipRemovedRow} testID="new-memory-audio-clip-removed">
           <Text style={styles.audioClipRemovedText}>The sound is gone from this memory.</Text>
-          <Pressable onPress={handleUndoRemoveAudioClip} testID="new-memory-audio-clip-undo">
+          <Pressable onPress={audio.undoRemoveClip} testID="new-memory-audio-clip-undo">
             <Text style={styles.audioClipUndoText}>Undo</Text>
           </Pressable>
         </View>
@@ -788,6 +854,11 @@ export default function NewMemoryScreen() {
           <ActivityIndicator color={colors.primary} size="small" />
           <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
         </View>
+      ) : isImportingAudio ? (
+        <View style={styles.sharedMediaLoading} testID="new-memory-audio-import-loading">
+          <ActivityIndicator color={colors.primary} size="small" />
+          <Text style={styles.sharedMediaLoadingText}>Bringing in your sound…</Text>
+        </View>
       ) : null}
       canSave={canSave}
       cancelTestID="new-memory-cancel"
@@ -796,7 +867,13 @@ export default function NewMemoryScreen() {
       contentSlot={contentSlot}
       contentTestID="new-memory-content"
       contentValue={content}
-      dateAccessibilityHint={dateSource === 'media' ? 'Suggested from media date' : undefined}
+      dateAccessibilityHint={
+        dateSource === 'media'
+          ? suggestionKind === 'audio'
+            ? "Suggested from the voice note's date"
+            : 'Suggested from media date'
+          : undefined
+      }
       dateAccessorySlot={dateAccessorySlot}
       datePlaceholder="Today"
       dateTestID="new-memory-date"
@@ -810,11 +887,11 @@ export default function NewMemoryScreen() {
       onAddMediaPress={undefined}
       onCancel={() => {
         // The whole composer session is being abandoned -- any locally
-        // claimed clip (kept, or currently hidden behind Undo) has nowhere
-        // else to go and must not linger on disk.
-        if (audioClip) {
-          void discardAudioClip(audioClip.localUri);
-        }
+        // claimed clip (kept, or currently hidden behind Undo), its original
+        // and any import waiting on the trim sheet have nowhere else to go
+        // and must not linger on disk. A render still reading the original
+        // discards it itself once it finishes (see the hook).
+        audio.abandon();
         navigateBack();
       }}
       onContentChange={handleContentChange}
@@ -831,9 +908,18 @@ export default function NewMemoryScreen() {
       toolbarMediaButton={!isAudio ? (
         <MemoryMediaPicker
           compact
-          disabled={isSaving || attachedMedia.length >= 10}
+          disabled={isSaving || attachedMedia.length >= 10 || isImportingAudio}
           includeCaptureDate
           onError={setErrorMessage}
+          // "A sound or voice note" only when it can work: nothing attached
+          // (a sound is single-clip, no mixed media), the native module is in
+          // this binary, and so is the document picker. Older binaries
+          // receiving this JS by OTA simply don't get the option.
+          onPickSound={
+            attachedMedia.length === 0 && MomoraAudio.isAvailable() && isDocumentPickerAvailable()
+              ? handleOpenBringIn
+              : undefined
+          }
           onSelect={appendMedia}
           remainingSlots={10 - attachedMedia.length}
         />
@@ -877,8 +963,9 @@ export default function NewMemoryScreen() {
         </View>
       ) : null}
       typeBadge={typeCfg as MemoryComposerTypeBadge}
-      voiceDisabled={isSaving}
+      voiceDisabled={isSaving || audio.isProcessing}
       voiceModalSlot={(
+        <>
         <VoiceSpeakItModal
           captureMode={isAudio ? 'keepOnly' : 'fork'}
           familyMembers={voiceMembers}
@@ -886,7 +973,8 @@ export default function NewMemoryScreen() {
           onKeepSound={handleKeepSound}
           onResult={(result) => {
             usedVoiceRef.current = true;
-            hasTypedAudioNoteRef.current = true;
+            audio.markNoteTyped();
+            contentRef.current = result.cleanedText;
             setContent(result.cleanedText);
             // applyVoiceResult overwrites selectedMemberIds with the mention
             // match. With no name mentioned ("she took her first steps
@@ -903,6 +991,34 @@ export default function NewMemoryScreen() {
           }}
           visible={showVoiceModal}
         />
+        <BringInSoundSheet
+          onChooseFile={handleChooseSoundFile}
+          onClose={handleCloseBringIn}
+          onDismissed={handleBringInDismissed}
+          testID="new-memory-bring-in-sound"
+          visible={isBringInVisible}
+        />
+        {/* Mounted only while a trim session exists (the sheet owns an audio
+            player) and unmounted once its Modal has fully dismissed. */}
+        {audio.trimSheet.config ? (
+          <TrimSheet
+            durationMs={audio.trimSheet.config.durationMs}
+            energies={audio.trimSheet.config.energies}
+            bucketMs={audio.trimSheet.config.bucketMs}
+            hasUserNote={audio.trimSheet.config.hasUserNote}
+            initialRange={audio.trimSheet.config.initialRange}
+            maxSelectionMs={audio.trimSheet.config.maxSelectionMs}
+            mustTrim={audio.trimSheet.config.mustTrim}
+            onCancel={audio.handleTrimCancel}
+            onDismissed={audio.handleTrimSheetDismissed}
+            onDone={audio.handleTrimDone}
+            sourceUri={audio.trimSheet.config.sourceUri}
+            suggested={audio.trimSheet.config.suggested}
+            testID="new-memory-trim-sheet"
+            visible={audio.trimSheet.visible}
+          />
+        ) : null}
+        </>
       )}
       voiceTestID="new-memory-voice-trigger"
     />

@@ -141,17 +141,15 @@
           "ios": {
             "enabled": true,
             "appGroupId": "group.com.memora.app.shared",
-            "activationRule": {
-              "supportsAttachmentsWithMaxCount": 10,
-              "supportsImageWithMaxCount": 10,
-              "supportsMovieWithMaxCount": 10
-            }
+            "activationRule": "(SUBQUERY(extensionItems, $e, $e.attachments.@count >= 1 AND $e.attachments.@count <= 10 AND SUBQUERY($e.attachments, $a, (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"public.image\") OR (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"public.movie\")).@count == $e.attachments.@count).@count == extensionItems.@count AND extensionItems.@count >= 1) OR (extensionItems.@count == 1 AND SUBQUERY(extensionItems, $e, $e.attachments.@count == 1 AND SUBQUERY($e.attachments, $a, (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"public.audio\") OR (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"public.mpeg-4-audio\") OR (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"org.xiph.ogg\") OR (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"org.xiph.opus\") OR (ANY $a.registeredTypeIdentifiers UTI-CONFORMS-TO \"org.xiph.ogg-audio\")).@count == 1).@count == 1)"
           },
           "android": {
             "enabled": true,
             "singleShareMimeTypes": [
               "image/*",
-              "video/*"
+              "video/*",
+              "audio/*",
+              "application/ogg"
             ],
             "multipleShareMimeTypes": [
               "image/*",

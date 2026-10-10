@@ -5,6 +5,7 @@ import { useRef } from 'react';
 import {
   ActionSheetIOS,
   Alert,
+  type AlertButton,
   Platform,
   Pressable,
   StyleSheet,
@@ -66,6 +67,15 @@ interface MemoryMediaPickerProps {
    * meaningful with `compact`. Omitted everywhere else.
    */
   onPress?: () => void;
+  /**
+   * When provided, the attach action sheet gains a third option, "A sound or
+   * voice note", which runs this callback (via `runAfterNativeChooserDismisses`
+   * like the other actions). The composer passes it only while no media is
+   * attached and the sound import is available. On Android, `Alert.alert`
+   * supports at most three buttons, so with this set the menu is exactly the
+   * three actions and is dismissed by tapping outside / back (no Cancel).
+   */
+  onPickSound?: () => void;
   /** Defaults to the historical hardcoded value so existing screens (which
    * never pass this) render an unchanged testID. */
   testID?: string;
@@ -142,6 +152,7 @@ export function MemoryMediaPicker({
   remainingSlots = 10,
   includeCaptureDate = false,
   onPress,
+  onPickSound,
   testID = 'new-memory-attach-media',
 }: MemoryMediaPickerProps) {
   const isPickerOpeningRef = useRef(false);
@@ -336,10 +347,13 @@ export function MemoryMediaPicker({
       return;
     }
 
-    const options = [
+    const options: { text: string; action: () => void | Promise<void> }[] = [
       { text: 'Photo library', action: handlePickMedia },
       { text: 'Take photo', action: handleTakePhoto },
     ];
+    if (onPickSound) {
+      options.push({ text: 'A sound or voice note', action: onPickSound });
+    }
 
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -357,26 +371,29 @@ export function MemoryMediaPicker({
       return;
     }
 
-    Alert.alert(
-      'Add media',
-      undefined,
-      [
-        ...options.map((option) => ({
-          text: option.text,
-          onPress: () => {
-            runAfterNativeChooserDismisses(() => { void option.action(); });
-          },
-        })),
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
+    const alertButtons: AlertButton[] = options.map((option) => ({
+      text: option.text,
+      onPress: () => {
+        runAfterNativeChooserDismisses(() => { void option.action(); });
+      },
+    }));
+
+    if (onPickSound) {
+      // Alert.alert allows at most three buttons on Android: with the sound
+      // option there is no room for Cancel, so the menu is dismissed by
+      // tapping outside / back instead.
+      Alert.alert('Add media', undefined, alertButtons, { cancelable: true });
+      return;
+    }
+
+    Alert.alert('Add media', undefined, [...alertButtons, { text: 'Cancel', style: 'cancel' }]);
   };
 
   if (compact) {
     return (
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Attach photo or video"
+        accessibilityLabel={onPickSound ? 'Attach photo, video, or sound' : 'Attach photo or video'}
         accessibilityState={{ disabled }}
         disabled={disabled}
         onPress={handleAttachPress}

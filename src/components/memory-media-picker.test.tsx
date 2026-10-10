@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert, Platform } from 'react-native';
+import { ActionSheetIOS, Alert, Platform } from 'react-native';
 
 import { MemoryMediaPicker } from './memory-media-picker';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
@@ -405,6 +405,115 @@ describe('MemoryMediaPicker', () => {
         const [[attachments]] = onSelect.mock.calls;
         expect(attachments[0].capturedAtIso).toBe('2024-06-01');
       });
+    });
+  });
+  describe('sound option (onPickSound)', () => {
+    it('Android: shows exactly three actions with no Cancel and a cancelable alert', () => {
+      const onPickSound = jest.fn();
+      const screen = render(
+        <MemoryMediaPicker onError={jest.fn()} onPickSound={onPickSound} onSelect={jest.fn()} />,
+      );
+
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+
+      const [title, message, buttons, options] = (Alert.alert as jest.Mock).mock.calls[0];
+      expect(title).toBe('Add media');
+      expect(message).toBeUndefined();
+      expect((buttons as { text: string }[]).map((button) => button.text)).toEqual([
+        'Photo library',
+        'Take photo',
+        'A sound or voice note',
+      ]);
+      expect(options).toEqual({ cancelable: true });
+    });
+
+    it('Android: the sound action runs after the native chooser dismisses', async () => {
+      const onPickSound = jest.fn();
+      const screen = render(
+        <MemoryMediaPicker onError={jest.fn()} onPickSound={onPickSound} onSelect={jest.fn()} />,
+      );
+
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+      const buttons = (Alert.alert as jest.Mock).mock.calls[0][2] as {
+        text: string;
+        onPress?: () => void;
+      }[];
+      buttons.find((button) => button.text === 'A sound or voice note')?.onPress?.();
+
+      expect(onPickSound).not.toHaveBeenCalled();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      expect(onPickSound).toHaveBeenCalledTimes(1);
+      expect(mockedImagePicker.launchImageLibraryAsync).not.toHaveBeenCalled();
+    });
+
+    it('Android: without onPickSound keeps the two actions plus Cancel and no options argument', () => {
+      const screen = render(<MemoryMediaPicker onError={jest.fn()} onSelect={jest.fn()} />);
+
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+
+      const call = (Alert.alert as jest.Mock).mock.calls[0];
+      expect(call).toHaveLength(3);
+      expect((call[2] as { text: string }[]).map((button) => button.text)).toEqual([
+        'Photo library',
+        'Take photo',
+        'Cancel',
+      ]);
+    });
+
+    it('iOS: adds the sound option before Cancel and runs it after the chooser dismisses', async () => {
+      Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+      const showSpy = jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation(() => undefined);
+      const onPickSound = jest.fn();
+      const screen = render(
+        <MemoryMediaPicker onError={jest.fn()} onPickSound={onPickSound} onSelect={jest.fn()} />,
+      );
+
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+
+      const [config, callback] = showSpy.mock.calls[0];
+      expect(config.options).toEqual(['Photo library', 'Take photo', 'A sound or voice note', 'Cancel']);
+      expect(config.cancelButtonIndex).toBe(3);
+
+      callback(2);
+      expect(onPickSound).not.toHaveBeenCalled();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      expect(onPickSound).toHaveBeenCalledTimes(1);
+
+      // Cancel does nothing.
+      callback(3);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+      expect(onPickSound).toHaveBeenCalledTimes(1);
+      showSpy.mockRestore();
+    });
+
+    it('iOS: without onPickSound keeps the original two options plus Cancel', () => {
+      Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+      const showSpy = jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation(() => undefined);
+      const screen = render(<MemoryMediaPicker onError={jest.fn()} onSelect={jest.fn()} />);
+
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+
+      const [config] = showSpy.mock.calls[0];
+      expect(config.options).toEqual(['Photo library', 'Take photo', 'Cancel']);
+      expect(config.cancelButtonIndex).toBe(2);
+      showSpy.mockRestore();
+    });
+
+    it('compact button label reflects whether sound is offered', () => {
+      const withSound = render(
+        <MemoryMediaPicker compact onError={jest.fn()} onPickSound={jest.fn()} onSelect={jest.fn()} />,
+      );
+      expect(withSound.getByLabelText('Attach photo, video, or sound')).toBeTruthy();
+      withSound.unmount();
+
+      const withoutSound = render(<MemoryMediaPicker compact onError={jest.fn()} onSelect={jest.fn()} />);
+      expect(withoutSound.getByLabelText('Attach photo or video')).toBeTruthy();
     });
   });
 });

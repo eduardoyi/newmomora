@@ -405,6 +405,7 @@ export default function EditMemoryScreen() {
         recessed
         seed={seedFromKey(memory.id)}
         testID="edit-memory-audio-clip"
+        waveform={audioClipAsset?.waveform ?? null}
       />
       <Text style={styles.audioClipCaption}>Kept as recorded</Text>
     </View>

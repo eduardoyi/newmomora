@@ -63,6 +63,7 @@ export function PendingMemoryUploadCard({ upload, onRetry, onDiscard }: PendingM
             showDuration={false}
             size={52}
             testID={`pending-memory-card-${upload.memoryId}-sound`}
+            waveform={upload.previewWaveform ?? null}
           />
         ) : upload.previewUri && !isVideoPreview ? (
           <Image contentFit="cover" source={{ uri: upload.previewUri }} style={styles.thumb} />

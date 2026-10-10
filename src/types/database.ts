@@ -3356,6 +3356,7 @@ export type Database = {
           preview_object_key: string | null
           share_card_key: string | null
           updated_at: string
+          waveform: number[] | null
         }
         Insert: {
           aspect_ratio?: number | null
@@ -3369,6 +3370,7 @@ export type Database = {
           preview_object_key?: string | null
           share_card_key?: string | null
           updated_at?: string
+          waveform?: number[] | null
         }
         Update: {
           aspect_ratio?: number | null
@@ -3382,6 +3384,7 @@ export type Database = {
           preview_object_key?: string | null
           share_card_key?: string | null
           updated_at?: string
+          waveform?: number[] | null
         }
         Relationships: [
           {

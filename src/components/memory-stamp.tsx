@@ -129,6 +129,7 @@ export function MemoryStamp({
         seed={seedFromKey(memory.id)}
         size={size}
         testID={`${testIDPrefix}-${memory.id}-sound`}
+        waveform={memory.mediaAssets[0]?.waveform ?? null}
       />
     );
   }

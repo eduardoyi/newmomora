@@ -172,6 +172,7 @@ describe('usePendingMemoryUploads', () => {
       totalAssets: 1,
       uploadedAssets: 0,
       previewUri: 'file:///photo.jpg',
+      previewWaveform: null,
     });
 
     act(() => {
@@ -676,6 +677,7 @@ describe('usePendingMemoryUploads', () => {
         uploadedAssets: 0,
         previewUri: 'file:///recording.m4a',
         previewContentType: 'audio/mp4',
+        previewWaveform: null,
       });
 
       act(() => {
@@ -686,6 +688,21 @@ describe('usePendingMemoryUploads', () => {
         expect(result.current.uploads).toHaveLength(0);
       });
       expect(mockedPostMediaMemory).not.toHaveBeenCalled();
+    });
+
+    it('exposes the clip waveform as previewWaveform so the pending card can draw it', async () => {
+      mockedPostAudioMemory.mockImplementation(
+        () => new Promise(() => {}) as ReturnType<typeof postAudioMemory>,
+      );
+      const waveform = Array.from({ length: 64 }, (_, index) => index * 4);
+
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue({ ...audioInput, clip: { ...audioInput.clip, waveform } });
+      });
+
+      expect(result.current.uploads[0]?.previewWaveform).toEqual(waveform);
     });
 
     it('kicks the text-path emotion analysis (never the photo/vision one) when content or transcript is analyzable', async () => {

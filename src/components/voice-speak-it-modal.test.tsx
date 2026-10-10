@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
+import { ClipChip } from '@/components/audio/clip-chip';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useVoiceInput } from '@/hooks/useVoiceInput';
 import { trackEvent } from '@/services/analytics';
@@ -26,6 +27,15 @@ jest.mock('@/utils/audio-clip-custody', () => ({
 
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
+}));
+
+// Native loudness analysis (docs/plans/audio-trim-import.md): absent by
+// default, like an older binary; the "real waveform" tests turn it on.
+const mockAudioIsAvailable = jest.fn(() => false);
+const mockAudioAnalyze = jest.fn();
+jest.mock('../../modules/momora-audio', () => ({
+  isAvailable: () => mockAudioIsAvailable(),
+  analyze: (...args: unknown[]) => mockAudioAnalyze(...args),
 }));
 
 const mockedUseVoiceInput = useVoiceInput as jest.MockedFunction<typeof useVoiceInput>;
@@ -70,6 +80,8 @@ describe('VoiceSpeakItModal', () => {
       seekTo: jest.fn().mockResolvedValue(undefined),
     });
     mockedClaimAudioClip.mockResolvedValue('file:///documents/audio-recordings/claimed.m4a');
+    mockAudioIsAvailable.mockReturnValue(false);
+    mockAudioAnalyze.mockReset();
   });
 
   it('waits for the native modal to finish presenting before requesting microphone access', async () => {
@@ -596,6 +608,128 @@ describe('VoiceSpeakItModal', () => {
 
       expect(mockedTrackEvent).not.toHaveBeenCalledWith('voice_fork_shown', expect.anything());
       expect(mockedTrackEvent).not.toHaveBeenCalledWith('voice_fork_choice', expect.anything());
+    });
+  });
+  describe('real waveform of the stopped clip', () => {
+    const energies = {
+      durationMs: 4000,
+      bucketMs: 100,
+      energies: Array.from({ length: 40 }, (_, i) => (i % 2 === 0 ? 0.1 : 0.001)),
+    };
+
+    function renderFork(captureMode: 'fork' | 'keepOnly' | 'dictate', onKeepSound = jest.fn()) {
+      mockedUseVoiceInput.mockReturnValue(
+        baseHookReturn({
+          stoppedClip: { localUri: 'file:///cache/rec.m4a', durationMs: 4000 },
+          transcriptionStatus: 'done',
+          transcriptionResult: { cleanedText: 'hello', description: 'a hello', mentionedMemberIds: [] },
+        }),
+      );
+      const screen = render(
+        <VoiceSpeakItModal
+          captureMode={captureMode}
+          familyMembers={[]}
+          onDismiss={jest.fn()}
+          onKeepSound={onKeepSound}
+          onResult={jest.fn()}
+          visible
+        />,
+      );
+      present(screen);
+      return screen;
+    }
+
+    it('analyses the stopped clip and draws its real waveform in the chip', async () => {
+      mockAudioIsAvailable.mockReturnValue(true);
+      mockAudioAnalyze.mockResolvedValue(energies);
+      const screen = renderFork('fork');
+      expect(screen.getByTestId('voice-speak-it-clip-chip')).toBeTruthy();
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(mockAudioAnalyze).toHaveBeenCalledWith('file:///cache/rec.m4a', { maxBuckets: 4000, minBucketMs: 20 });
+      expect(mockAudioAnalyze).toHaveBeenCalledTimes(1);
+      const waveform = screen.UNSAFE_getByType(ClipChip).props.waveform as number[];
+      expect(waveform).toHaveLength(64);
+      expect(Math.max(...waveform)).toBe(255);
+    });
+
+    it('draws the seeded trace (no waveform) until the analysis lands, and without the module', async () => {
+      const screen = renderFork('fork');
+      expect(screen.UNSAFE_getByType(ClipChip).props.waveform ?? null).toBeNull();
+    });
+
+    it('hands the analysis promise to the composer on keep, so it is not decoded twice', async () => {
+      mockAudioIsAvailable.mockReturnValue(true);
+      const analysis = Promise.resolve(energies);
+      mockAudioAnalyze.mockReturnValue(analysis);
+      const onKeepSound = jest.fn();
+      const screen = renderFork('fork', onKeepSound);
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('voice-speak-it-keep-sound'));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const kept = onKeepSound.mock.calls[0][0] as { pendingAnalysis?: Promise<unknown> };
+      await expect(kept.pendingAnalysis).resolves.toEqual(energies);
+      expect(mockAudioAnalyze).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed analysis resolves null and never blocks keeping the sound', async () => {
+      mockAudioIsAvailable.mockReturnValue(true);
+      mockAudioAnalyze.mockRejectedValue(new Error('decode_failed'));
+      const onKeepSound = jest.fn();
+      const screen = renderFork('fork', onKeepSound);
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('voice-speak-it-keep-sound'));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      const kept = onKeepSound.mock.calls[0][0] as { pendingAnalysis?: Promise<unknown> };
+      await expect(kept.pendingAnalysis).resolves.toBeNull();
+    });
+
+    it('keepOnly hands the analysis over too', async () => {
+      mockAudioIsAvailable.mockReturnValue(true);
+      mockAudioAnalyze.mockResolvedValue(energies);
+      const onKeepSound = jest.fn();
+      renderFork('keepOnly', onKeepSound);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(onKeepSound).toHaveBeenCalledTimes(1);
+      expect((onKeepSound.mock.calls[0][0] as { pendingAnalysis?: unknown }).pendingAnalysis).toBeDefined();
+    });
+
+    it('never analyses without the native module, nor for plain dictation', async () => {
+      const onKeepSound = jest.fn();
+      const forkScreen = renderFork('fork', onKeepSound);
+      await act(async () => {
+        fireEvent.press(forkScreen.getByTestId('voice-speak-it-keep-sound'));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(mockAudioAnalyze).not.toHaveBeenCalled();
+      expect(onKeepSound.mock.calls[0][0]).not.toHaveProperty('pendingAnalysis');
+      forkScreen.unmount();
+
+      mockAudioIsAvailable.mockReturnValue(true);
+      renderFork('dictate');
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mockAudioAnalyze).not.toHaveBeenCalled();
     });
   });
 });

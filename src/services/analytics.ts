@@ -232,8 +232,31 @@ export interface AnalyticsEventMap {
     choice: 'turn_into_text' | 'keep_the_sound';
   };
   audio_memory_saved: {
-    duration_bucket: '0_15s' | '15_30s' | '30_60s' | '60_90s' | '90_120s';
+    duration_bucket: '0_15s' | '15_30s' | '30_60s' | '60_90s' | '90_120s' | '120_300s';
     has_description: boolean;
+    /** docs/plans/audio-trim-import.md: recorded in-app vs brought in from outside. */
+    source: 'recorded' | 'imported';
+    /** The saved clip is a trimmed cut of the original, not the original itself. */
+    trimmed: boolean;
+  };
+  // Trim + import (docs/plans/audio-trim-import.md). Content-free: closed enums
+  // and buckets only -- never a file name, path, or exact duration.
+  audio_trim_opened: {
+    source: 'recorded' | 'imported';
+    /** Whether the sheet opened with an automatic "quiet bits" suggestion applied. */
+    suggested: boolean;
+  };
+  audio_trim_applied: {
+    source: 'recorded' | 'imported';
+    /** Total seconds cut from the clip (start + end). */
+    removed_bucket: '0_5s' | '5_15s' | '15_60s' | '60s_plus';
+  };
+  audio_import_started: {
+    entry: 'share' | 'picker';
+  };
+  audio_import_failed: {
+    entry: 'share' | 'picker';
+    code: 'unsupported_format' | 'too_long' | 'decode_failed' | 'io_failed' | 'unavailable';
   };
 
   // Year Films (docs/plans/year-film-p2.md Step 9). Content-free: no film

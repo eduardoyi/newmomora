@@ -205,6 +205,7 @@ function imageAssetForMemory(memory: MemoryWithTags): {
           aspect_ratio: null,
           preview_object_key: null,
           share_card_key: null,
+          waveform: null,
           position: 0,
           created_at: memory.created_at,
           updated_at: memory.updated_at,

@@ -2,6 +2,7 @@ import { render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import ViewFamilyMemberScreen from '../../app/(app)/family/[id]';
+import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemberMemories } from '@/hooks/useMemories';
@@ -131,5 +132,36 @@ describe('ViewFamilyMemberScreen audio memory-row thumb', () => {
 
     expect(screen.getByTestId('member-memory-memory-1-sound')).toBeTruthy();
     expect(screen.getByText('Sound')).toBeTruthy();
+  });
+  it('draws the real waveform in the member-row SoundTile when the media row has one', () => {
+    const rows = (waveform: number[] | null) => ({
+      memories: [
+        {
+          id: 'memory-1',
+          memory_type: 'audio',
+          memory_date: '2026-08-10',
+          content: null,
+          emotion: null,
+          media_key: null,
+          media_content_type: null,
+          mediaAssets: [
+            { id: 'clip-1', object_key: 'clip.m4a', content_type: 'audio/mp4', duration_ms: 20_000, position: 0, waveform },
+          ],
+          link_previews: {},
+          user_id: 'user-1',
+        },
+      ],
+      fetchNextPage: jest.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+    });
+
+    mockedUseMemberMemories.mockReturnValue(rows(null));
+    const seeded = renderScreen();
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    seeded.unmount();
+
+    mockedUseMemberMemories.mockReturnValue(rows(SILENT_WAVEFORM));
+    expect(hasFloorTrace(renderScreen().toJSON())).toBe(true);
   });
 });

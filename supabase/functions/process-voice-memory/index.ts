@@ -36,6 +36,12 @@ export interface ProcessVoiceMemoryRequest {
   familyId?: string;
   /** Ignored for authorization and prompt construction; retained for compatibility. */
   familyMembers?: ProcessVoiceFamilyMember[];
+  /**
+   * Family mode only. 'unknown' = the speaker is not necessarily the caller
+   * (an imported voice note), so first-person mentions are never mapped to the
+   * caller's own member. Absent = the speaker is the caller (today's behavior).
+   */
+  speaker?: 'unknown';
 }
 
 export interface ProcessOnboardingVoiceMemoryRequest {
@@ -285,6 +291,9 @@ export async function handleProcessVoiceMemoryWithDependencies(
       if (onboardingBody.familyId !== undefined || onboardingBody.familyMembers !== undefined) {
         return errorResponse('Onboarding voice cannot include family context', 400, 'validation_error');
       }
+      if (onboardingBody.speaker !== undefined) {
+        return errorResponse('Onboarding voice cannot include speaker', 400, 'validation_error');
+      }
       const nameHints = validateOnboardingNameHints(body.nameHints);
       if (!nameHints) {
         return errorResponse('nameHints must contain at most 6 non-empty names of 50 characters or fewer', 400, 'validation_error');
@@ -336,6 +345,9 @@ export async function handleProcessVoiceMemoryWithDependencies(
     }
     if (body.familyId !== undefined && (typeof body.familyId !== 'string' || !/^[0-9a-f-]{36}$/i.test(body.familyId))) {
       return errorResponse('familyId is invalid', 400, 'validation_error');
+    }
+    if (body.speaker !== undefined && body.speaker !== 'unknown') {
+      return errorResponse('speaker is invalid', 400, 'validation_error');
     }
     const familyResolution = await resolveVoiceFamilyId({
       supabase: supabase as unknown as VoiceFamilyLookupClient,
@@ -390,7 +402,9 @@ export async function handleProcessVoiceMemoryWithDependencies(
     const description = sanitizeVoiceDescription(cleanup.description);
     const mentionedMemberIds = matchMemberIdsMentionedInText(cleanedText, familyMembers);
 
-    if (cleanup.mentionedUserSelf) {
+    // speaker === 'unknown' (imported voice note): the speaker is not the
+    // caller, so "I/me/my" must not tag the caller's own member.
+    if (cleanup.mentionedUserSelf && body.speaker !== 'unknown') {
       // The speaker's own account link wins; the deprecated is_user_profile
       // flag stays as a fallback (only demo seeds set it).
       const linkedId = dependencies.getSelfMemberId

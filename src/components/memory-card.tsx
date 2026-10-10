@@ -400,6 +400,7 @@ function SoundCard({ memory, onPress, onOpenComments }: MemoryCardProps) {
         progress={clip.progress}
         seed={seedFromKey(memory.id)}
         testID={`memory-card-${memory.id}-stub`}
+        waveform={clipAsset?.waveform ?? null}
       />
       <StubTear />
       <View style={styles.engagementWrap}>

@@ -333,6 +333,7 @@ describe('memories service integration', () => {
         durationMs: null,
         aspectRatio: null,
         previewObjectKey: null,
+        waveform: null,
       }],
     });
     expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
@@ -408,10 +409,130 @@ describe('memories service integration', () => {
             durationMs: 4200,
             aspectRatio: null,
             previewObjectKey: null,
+            waveform: null,
           },
         ],
       });
       expect(analyzeMemoryEmotion).not.toHaveBeenCalled();
+    });
+
+    describe('waveform (docs/plans/audio-trim-import.md P3)', () => {
+      const clipKey = 'user-1/memories/memory-audio-1/media/clip.m4a';
+      const waveform = Array.from({ length: 64 }, (_, index) => index * 4);
+
+      function mockInsertSucceeds() {
+        const memoriesBuilder = createQueryBuilder({ data: audioMemoryRow(), error: null });
+        const tagsBuilder = createQueryBuilder({ data: [], error: null });
+        const mediaBuilder = createQueryBuilder({ data: [], error: null });
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') return memoriesBuilder;
+          if (table === 'memory_family_members') return tagsBuilder;
+          if (table === 'memory_media') return mediaBuilder;
+          throw new Error(`Unexpected table ${table}`);
+        });
+      }
+
+      function saveClip(clipWaveform: unknown) {
+        return createAudioMemory({
+          userId: 'user-1',
+          familyId: 'family-1',
+          memoryId: 'memory-audio-1',
+          content: null,
+          audioTranscript: null,
+          memoryDate: '2026-08-19',
+          taggedMemberIds: [],
+          clip: {
+            objectKey: clipKey,
+            contentType: 'audio/mp4',
+            durationMs: 4200,
+            waveform: clipWaveform as number[] | null | undefined,
+          },
+        });
+      }
+
+      function rpcAssets(): Record<string, unknown>[] {
+        const call = (supabase.rpc as jest.Mock).mock.calls.find(
+          ([name]) => name === 'replace_memory_media_assets',
+        );
+        return call?.[1].assets;
+      }
+
+      it('round-trips a valid waveform into the RPC payload', async () => {
+        mockInsertSucceeds();
+
+        const result = await saveClip(waveform);
+
+        expect(result.error).toBeNull();
+        expect(rpcAssets()).toEqual([expect.objectContaining({ objectKey: clipKey, waveform })]);
+      });
+
+      it('sends null when the clip has no waveform', async () => {
+        mockInsertSucceeds();
+
+        await saveClip(undefined);
+
+        expect(rpcAssets()[0].waveform).toBeNull();
+      });
+
+      it.each([
+        ['NaN energies serialised as null elements', waveform.map((v, i) => (i === 3 ? null : v))],
+        ['NaN element', waveform.map((v, i) => (i === 3 ? Number.NaN : v))],
+        ['wrong length', waveform.slice(0, 63)],
+        ['out of range', waveform.map((v, i) => (i === 3 ? 256 : v))],
+        ['fractional', waveform.map((v, i) => (i === 3 ? 1.5 : v))],
+      ])('saves with a null waveform instead of failing for %s', async (_label, bad) => {
+        mockInsertSucceeds();
+
+        const result = await saveClip(bad);
+
+        expect(result.error).toBeNull();
+        expect(rpcAssets()[0].waveform).toBeNull();
+      });
+
+      it('carries the waveform through the 23505 orphan-repair path', async () => {
+        const insertBuilder = createQueryBuilder({
+          data: null,
+          error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+        });
+        const conflictFetchBuilder = createQueryBuilder({ data: audioMemoryRow(), error: null });
+        const tagsBuilder = createQueryBuilder({ data: [], error: null });
+        const emptyMediaBuilder = createQueryBuilder({ data: [], error: null });
+        const populatedMediaBuilder = createQueryBuilder({
+          data: [
+            {
+              id: 'asset-audio-1',
+              memory_id: 'memory-audio-1',
+              object_key: clipKey,
+              content_type: 'audio/mp4',
+              duration_ms: 4200,
+              position: 0,
+              created_at: '2026-08-19T00:00:00Z',
+              updated_at: '2026-08-19T00:00:00Z',
+            },
+          ],
+          error: null,
+        });
+
+        let memoriesCall = 0;
+        let mediaCall = 0;
+        (supabase.from as jest.Mock).mockImplementation((table: string) => {
+          if (table === 'memories') {
+            memoriesCall += 1;
+            return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+          }
+          if (table === 'memory_family_members') return tagsBuilder;
+          if (table === 'memory_media') {
+            mediaCall += 1;
+            return mediaCall === 1 ? emptyMediaBuilder : populatedMediaBuilder;
+          }
+          throw new Error(`Unexpected table ${table}`);
+        });
+
+        const result = await saveClip(waveform);
+
+        expect(result.error).toBeNull();
+        expect(rpcAssets()).toEqual([expect.objectContaining({ objectKey: clipKey, waveform })]);
+      });
     });
 
     it('stores real, trimmed content and transcript untouched', async () => {
@@ -1038,6 +1159,7 @@ describe('memories service integration', () => {
         durationMs: 21895,
         aspectRatio: null,
         previewObjectKey: null,
+        waveform: null,
       }],
     });
   });
@@ -1128,6 +1250,7 @@ describe('memories service integration', () => {
         durationMs: null,
         aspectRatio: null,
         previewObjectKey: null,
+        waveform: null,
       }],
     });
     // A repaired orphan must not re-delete the storage objects it already owns.

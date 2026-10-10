@@ -1,10 +1,9 @@
 import { useIncomingShare } from 'expo-sharing';
 import { useEffect, useRef, useState } from 'react';
 
-import type { MediaAttachment } from '@/components/memory-media-picker';
 import { extractImageCaptureDateIso } from '@/utils/image-exif-capture-date';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
-import { prepareSharedMedia } from '@/utils/prepare-shared-media';
+import { prepareSharedMedia, type PrepareSharedMediaResult } from '@/utils/prepare-shared-media';
 import { getSharedVideoDurationMs } from '@/utils/shared-video-duration';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
 
@@ -19,8 +18,18 @@ function createAttachmentId(): string {
   });
 }
 
+export const INCOMING_SHARE_OPEN_ERROR =
+  'Could not open the shared photos or videos. Try sharing them again.';
+
 interface UseIncomingMemoryShareOptions {
-  onPrepared: (attachments: MediaAttachment[], errorMessage: string | null) => void;
+  /**
+   * Called once per share with the discriminated result: `media` (photos and
+   * videos, possibly with a notice), `audio` (exactly one voice note, not yet
+   * imported -- the caller runs `importAudioFile`) or `error` (nothing to
+   * apply, just show the message). The hook reports `isPreparing` until this
+   * callback has been invoked; an audio share's import is the caller's work.
+   */
+  onPrepared: (result: PrepareSharedMediaResult) => void;
 }
 
 export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOptions): boolean {
@@ -66,7 +75,7 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
       hasPreparedRef.current = true;
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
-      onPreparedRef.current([], 'Could not open the shared photos or videos. Try sharing them again.');
+      onPreparedRef.current({ kind: 'error', errorMessage: INCOMING_SHARE_OPEN_ERROR });
       return;
     }
 
@@ -83,20 +92,20 @@ export function useIncomingMemoryShare({ onPrepared }: UseIncomingMemoryShareOpt
       getImageCaptureDateIso: extractImageCaptureDateIso,
       getVideoDurationMs: getSharedVideoDurationMs,
       getVideoCaptureDateIso: extractVideoCaptureDateIso,
-    }).then(({ attachments, errorMessage }) => {
+    }).then((result) => {
       if (preparationGeneration !== preparationGenerationRef.current) {
         return;
       }
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
-      onPreparedRef.current(attachments, errorMessage);
+      onPreparedRef.current(result);
     }).catch(() => {
       if (preparationGeneration !== preparationGenerationRef.current) {
         return;
       }
       clearAndRefreshSharedPayloads();
       setIsPreparing(false);
-      onPreparedRef.current([], 'Could not open the shared photos or videos. Try sharing them again.');
+      onPreparedRef.current({ kind: 'error', errorMessage: INCOMING_SHARE_OPEN_ERROR });
     });
   }, [
     clearSharedPayloads,

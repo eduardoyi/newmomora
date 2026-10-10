@@ -3,6 +3,7 @@ import { State } from 'react-native-gesture-handler';
 import { fireGestureHandler, getByGestureTestId } from 'react-native-gesture-handler/jest-utils';
 
 import { StubBand } from './stub-band';
+import { hasFloorTrace, SILENT_WAVEFORM } from './trace-test-utils';
 
 describe('StubBand', () => {
   it('shows only the total duration when idle', () => {
@@ -147,5 +148,21 @@ describe('StubBand', () => {
     fireEvent.press(getByTestId('stub-band'));
     fireEvent.press(getByTestId('stub-band-seal'));
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+  it('draws the real waveform when supplied and the seeded trace otherwise', () => {
+    const band = (waveform?: number[] | null) => (
+      <StubBand
+        durationSeconds={42}
+        emotion={null}
+        onToggle={jest.fn()}
+        playing={false}
+        positionSeconds={0}
+        progress={0}
+        seed={7}
+        waveform={waveform}
+      />
+    );
+    expect(hasFloorTrace(render(band(null)).toJSON())).toBe(false);
+    expect(hasFloorTrace(render(band(SILENT_WAVEFORM)).toJSON())).toBe(true);
   });
 });

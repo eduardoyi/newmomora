@@ -46,14 +46,21 @@ export const MAX_VIDEO_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 // Audio "keep the sound" client-side caps (docs/features/audio-memories.md,
-// P0.2/P2.4). Mirrors the server-side authoritative limits: MAX_AUDIO_BYTES
-// must match MAX_AUDIO_UPLOAD_BYTES in
-// supabase/functions/upload-media/index.ts, and MAX_AUDIO_DURATION_MS
-// matches the recorder's 2-minute auto-stop cap (same cap as dictation).
-// Kept in sync by hand (Deno edge functions can't import from src/) --
-// change both together. A 2-minute AAC clip at expo-audio's HIGH_QUALITY
-// preset is ~1.9 MB, so 5 MB leaves generous headroom.
-export const MAX_AUDIO_DURATION_MS = 2 * 60 * 1000;
+// P0.2/P2.4). MAX_AUDIO_BYTES mirrors the server-side authoritative limit and
+// must match MAX_AUDIO_UPLOAD_BYTES in supabase/functions/upload-media/index.ts
+// (kept in sync by hand -- Deno edge functions can't import from src/; change
+// both together). A 2-minute AAC clip at expo-audio's HIGH_QUALITY preset is
+// ~1.9 MB, and an imported/trimmed 5-minute clip re-encoded at 96 kbps is
+// ~3.6 MB, so 5 MB leaves headroom for both.
+//
+// Two duration caps, deliberately separate: the recorder's auto-stop (same cap
+// as dictation, and the server's process-voice-memory limit) is 2 minutes, but
+// imports may be up to 5 minutes (docs/plans/audio-trim-import.md), and the
+// upload gate must accept those. The upload cap carries +1 s of slack because
+// durations come from the decoded length / recorder metadata, which can
+// overshoot the 5:00 trim selection by a few ms.
+export const MAX_RECORDING_DURATION_MS = 2 * 60 * 1000;
+export const MAX_AUDIO_UPLOAD_DURATION_MS = 5 * 60 * 1000 + 1000;
 export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
 
 // Deliberately separate from ALLOWED_MEDIA_CONTENT_TYPES below -- audio

@@ -81,6 +81,23 @@ describe('voice service contracts', () => {
     });
   });
 
+  it('sends speaker only when provided (imported voice notes)', async () => {
+    (supabase.functions.invoke as jest.Mock).mockResolvedValue({
+      data: { cleanedText: 'A memory', mentionedMemberIds: [] }, error: null,
+    });
+
+    await processVoiceMemory('audio', [{ id: 'member-1', name: 'Maya' }], 'family-1', { speaker: 'unknown' });
+
+    expect(supabase.functions.invoke).toHaveBeenCalledWith('process-voice-memory', {
+      body: {
+        audioBase64: 'audio',
+        familyMembers: [{ id: 'member-1', name: 'Maya' }],
+        familyId: 'family-1',
+        speaker: 'unknown',
+      },
+    });
+  });
+
   it('uses the separate onboarding contract without family or member identifiers', async () => {
     (supabase.functions.invoke as jest.Mock).mockResolvedValue({
       data: { cleanedText: 'A memory', mentionedMemberIds: [] }, error: null,

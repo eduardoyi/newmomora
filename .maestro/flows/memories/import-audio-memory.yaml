@@ -1,0 +1,109 @@
+appId: com.memora.app
+---
+# Audio memories v2 (docs/features/audio-memories.md): bring in an outside
+# voice note through the composer's attach menu -> "A sound or voice note" ->
+# bring-in sheet -> "Choose from Files" -> system picker -> the clip lands in
+# the composer with a date suggested from the WhatsApp-style file name ->
+# save -> the sound card shows on the timeline.
+#
+# MANUAL-ASSISTED: the system file picker is outside Momora, so the fixture
+# has to be on the device before the run. Fixture (repo):
+#   .maestro/assets/AUDIO-2024-03-05-10-15-30.m4a
+# A 3.6 s synthetic tone (AAC-LC mono 48 kHz, no human voice -- the repo is
+# public), named like a WhatsApp iOS export so the filename-date rule gives
+# 2024-03-05. `addMedia` (and `xcrun simctl addmedia`) only take photos and
+# videos, so audio needs one of:
+#   iOS simulator:  copy the file into the simulator's "On My iPhone" storage:
+#       UDID=$(xcrun simctl list devices booted | grep -Eo '[0-9A-F-]{36}' | head -1)
+#       DEST=$(find ~/Library/Developer/CoreSimulator/Devices/$UDID -type d -path '*File Provider Storage' | head -1)
+#       cp .maestro/assets/AUDIO-2024-03-05-10-15-30.m4a "$DEST/"
+#     (If that directory is missing, open the Files app once, then retry; or
+#     AirDrop / "Save to Files" the file by hand.)
+#   Android:        adb push .maestro/assets/AUDIO-2024-03-05-10-15-30.m4a /sdcard/Download/
+#
+# testIDs / labels used:
+#   new-memory-attach-media             the compact attach button (existing)
+#   "A sound or voice note"             attach menu entry (ActionSheetIOS on
+#                                       iOS, Alert on Android), shown by
+#                                       MemoryMediaPicker `onPickSound`
+#   new-memory-bring-in-sound           BringInSoundSheet testID prefix chosen
+#   new-memory-bring-in-sound-choose    its "Choose from Files" button
+#   new-memory-audio-clip               the imported clip's chip
+#   new-memory-date-source              visible suggestion label (composer:
+#                                       "From the voice note" for an audio
+#                                       date)
+# The bring-in sheet / menu wiring and the date label came from the composer
+# work finished last; if one of these does not resolve, check new-memory.tsx.
+# The system picker's own UI is not under our control: the Files steps are
+# `optional` text taps that match the fixture's file name -- adjust per OS
+# version (iOS: Browse > On My iPhone; Android: Downloads).
+#
+# Needs a build with the momora-audio module and expo-document-picker (store
+# build 1.5.0+ / a fresh dev client). Authored, not executed.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-attach-media
+    timeout: 10000
+- tapOn:
+    id: new-memory-attach-media
+- tapOn: "A sound or voice note"
+- extendedWaitUntil:
+    visible:
+      id: new-memory-bring-in-sound
+    timeout: 10000
+- tapOn:
+    id: new-memory-bring-in-sound-choose
+# --- system file picker (manual-assisted; see header) ---
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          text: "Browse"
+          optional: true
+      - tapOn:
+          text: "On My iPhone"
+          optional: true
+      - tapOn:
+          text: "AUDIO-2024-03-05-10-15-30.*"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          text: "Downloads"
+          optional: true
+      - tapOn:
+          text: "AUDIO-2024-03-05-10-15-30.*"
+# --- back in Momora ---
+- extendedWaitUntil:
+    visible:
+      id: new-memory-audio-clip
+    timeout: 30000
+# WhatsApp iOS file names encode the send time; the date is a suggestion, not
+# a user edit.
+- assertVisible:
+    id: new-memory-date
+    text: ".*2024.*"
+- assertVisible:
+    id: new-memory-date-source
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+- extendedWaitUntil:
+    notVisible:
+      id: pending-memory-uploads-banner
+    timeout: 60000
+- assertNotVisible: "Couldn't post memory"

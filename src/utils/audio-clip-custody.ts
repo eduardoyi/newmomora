@@ -47,15 +47,44 @@ function createClipId(): string {
 }
 
 /**
- * Copies the recorder's temp clip into `documentDirectory/audio-recordings/`
- * under a fresh uuid filename and returns the new URI. Call this exactly
- * once, at "Keep the sound" time -- the returned URI is what the composer
- * and the pending-uploads queue read from then on, never the recorder's
- * original temp URI.
+ * Every file in `audio-recordings/` is named `<claimEpochMs>-<uuid>.<ext>`.
+ * The sweep reads the timestamp from the name because a copied file can keep
+ * its source's old modification time (an imported voice note recorded last
+ * month would otherwise be swept the instant it is claimed). Legacy
+ * `<uuid>.m4a` names have no timestamp and fall back to mtime.
  */
-export async function claimAudioClip(tempUri: string): Promise<string> {
+const CLAIM_NAME_PATTERN = /^(\d{13})-[A-Za-z0-9-]+\.[A-Za-z0-9]+$/;
+
+function normalizeExtension(extension: string): string {
+  const cleaned = extension.replace(/^\./, '').replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  return cleaned || 'm4a';
+}
+
+/**
+ * Builds a fresh `audio-recordings/` destination URI (and makes sure the
+ * directory exists). Use it for every file Momora writes there: claimed
+ * recordings, imported copies, trim/convert renders and transcription
+ * excerpts -- the 48 h sweep then covers all of them.
+ */
+export async function newAudioRecordingUri(extension = 'm4a'): Promise<string> {
   const dir = await ensureRecordingsDirectory();
-  const destination = `${dir}${createClipId()}.m4a`;
+  return `${dir}${Date.now()}-${createClipId()}.${normalizeExtension(extension)}`;
+}
+
+/** True when `uri` lives inside the app-owned `audio-recordings/` directory. */
+export function isInsideAudioRecordingsDirectory(uri: string): boolean {
+  return uri.startsWith(recordingsDirectory());
+}
+
+/**
+ * Copies the recorder's temp clip into `documentDirectory/audio-recordings/`
+ * under a fresh `<claimEpochMs>-<uuid>` filename and returns the new URI.
+ * Call this exactly once, at "Keep the sound" time -- the returned URI is what
+ * the composer and the pending-uploads queue read from then on, never the
+ * recorder's original temp URI.
+ */
+export async function claimAudioClip(tempUri: string, extension = 'm4a'): Promise<string> {
+  const destination = await newAudioRecordingUri(extension);
   await FileSystem.copyAsync({ from: tempUri, to: destination });
   return destination;
 }
@@ -100,8 +129,11 @@ export async function sweepAudioRecordingsDirectory(): Promise<void> {
           if (!fileInfo.exists) {
             return;
           }
-          const modifiedMs = fileInfo.modificationTime * 1000;
-          if (now - modifiedMs > SWEEP_MAX_AGE_MS) {
+          const claimedMatch = CLAIM_NAME_PATTERN.exec(name);
+          const ageReferenceMs = claimedMatch
+            ? Number(claimedMatch[1])
+            : fileInfo.modificationTime * 1000;
+          if (now - ageReferenceMs > SWEEP_MAX_AGE_MS) {
             await FileSystem.deleteAsync(uri, { idempotent: true });
           }
         } catch {

@@ -9,8 +9,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { pauseAllAudioPlayback } from '@/hooks/audio-playback-coordinator';
-import { processVoiceMemory, type VoiceFamilyMemberPayload } from '@/services/ai';
-import { readLocalFileAsBase64 } from '@/utils/local-files';
+import type { VoiceFamilyMemberPayload } from '@/services/ai';
+import { transcribeClip, type VoiceProcessingResult } from '@/services/voice-transcription';
 import {
   getOrRequestNativePermission,
   waitForNativePresentationToSettle,
@@ -28,12 +28,7 @@ export const MAX_RECORDING_MS = 2 * 60 * 1000;
  */
 export type VoiceTranscriptionStatus = 'idle' | 'transcribing' | 'done' | 'failed';
 
-export interface VoiceProcessingResult {
-  cleanedText: string;
-  /** Short AI-generated caption for a kept clip. Empty string when speech was unusable -- never an error. */
-  description: string;
-  mentionedMemberIds: string[];
-}
+export type { VoiceProcessingResult };
 
 export interface StoppedVoiceClip {
   /** The recorder's own temp file URI -- not yet claimed into app-owned storage. */
@@ -77,51 +72,23 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[], familyI
   const transcriptionPromiseRef = useRef<Promise<VoiceProcessingResult | null> | null>(null);
 
   const kickTranscription = useCallback(
-    (uri: string) => {
+    (uri: string, durationMs?: number) => {
       activeClipUriRef.current = uri;
       setTranscriptionResult(null);
       setTranscriptionStatus('transcribing');
 
       const promise = (async (): Promise<VoiceProcessingResult | null> => {
-        if (!familyId) {
-          if (activeClipUriRef.current === uri) {
-            setTranscriptionStatus('failed');
-          }
-          return null;
-        }
+        const result = await transcribeClip(uri, familyMembers, familyId, { durationMs });
 
-        try {
-          const base64 = await readLocalFileAsBase64(uri);
-          const { data, error } = await processVoiceMemory(base64, familyMembers, familyId);
-
-          if (error || !data) {
-            if (activeClipUriRef.current === uri) {
-              setTranscriptionStatus('failed');
-            }
-            return null;
-          }
-
-          const result: VoiceProcessingResult = {
-            cleanedText: data.cleanedText,
-            // `description` is additive to today's process-voice-memory
-            // contract (docs/plans/audio-memories-v1.md P1.2) -- guarded
-            // here so this hook still degrades gracefully against an
-            // edge function that hasn't deployed the field yet.
-            description: (data as { description?: string }).description ?? '',
-            mentionedMemberIds: data.mentionedMemberIds,
-          };
-
-          if (activeClipUriRef.current === uri) {
+        if (activeClipUriRef.current === uri) {
+          if (result) {
             setTranscriptionResult(result);
             setTranscriptionStatus('done');
-          }
-          return result;
-        } catch {
-          if (activeClipUriRef.current === uri) {
+          } else {
             setTranscriptionStatus('failed');
           }
-          return null;
         }
+        return result;
       })();
 
       transcriptionPromiseRef.current = promise;
@@ -150,7 +117,7 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[], familyI
         setStoppedClip({ localUri: uri, durationMs: recorderState.durationMillis });
         // Kick immediately -- neither fork branch should ever wait on this
         // (docs/features/audio-memories.md "Zero-wait fork").
-        kickTranscription(uri);
+        kickTranscription(uri, recorderState.durationMillis);
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Voice processing failed');
       }

@@ -102,6 +102,27 @@ describe('analytics', () => {
       });
     });
 
+    it('captures audio trim/import events with only closed enums and buckets', () => {
+      const { trackEvent } = loadAnalytics();
+      const { mockPostHogClient } = loadPostHogMock();
+
+      trackEvent('audio_memory_saved', {
+        duration_bucket: '120_300s', has_description: true, source: 'imported', trimmed: true,
+      });
+      trackEvent('audio_trim_opened', { source: 'imported', suggested: true });
+      trackEvent('audio_trim_applied', { source: 'recorded', removed_bucket: '5_15s' });
+      trackEvent('audio_import_started', { entry: 'share' });
+      trackEvent('audio_import_failed', { entry: 'picker', code: 'unsupported_format' });
+
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('audio_memory_saved', {
+        duration_bucket: '120_300s', has_description: true, source: 'imported', trimmed: true,
+      });
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('audio_trim_opened', { source: 'imported', suggested: true });
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('audio_trim_applied', { source: 'recorded', removed_bucket: '5_15s' });
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('audio_import_started', { entry: 'share' });
+      expect(mockPostHogClient.capture).toHaveBeenCalledWith('audio_import_failed', { entry: 'picker', code: 'unsupported_format' });
+    });
+
     it('identifyUser calls posthog.identify with the given id and properties', () => {
       const { identifyUser } = loadAnalytics();
       const { mockPostHogClient } = loadPostHogMock();

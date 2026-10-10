@@ -218,6 +218,7 @@ describe('MemoryWidgetSyncCoordinator', () => {
         duration_ms: null,
         aspect_ratio: 1,
         share_card_key: null,
+        waveform: null,
         position: 0,
         created_at: verifiedAt,
         updated_at: verifiedAt,

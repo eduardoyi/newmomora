@@ -132,6 +132,7 @@ function MemoryThumb({
         seed={seedFromKey(memory.id)}
         size={54}
         testID={`member-memory-${memory.id}-sound`}
+        waveform={memory.mediaAssets[0]?.waveform ?? null}
       />
     );
   }

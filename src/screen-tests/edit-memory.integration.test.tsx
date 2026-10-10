@@ -1,6 +1,7 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
@@ -431,6 +432,20 @@ describe('EditMemoryScreen audio variant', () => {
     expect(screen.getByText('· Sound')).toBeTruthy();
     expect(screen.queryByTestId('edit-memory-ai-toggle')).toBeNull();
     expect(screen.getByTestId('edit-memory-audio-clip')).toBeTruthy();
+  });
+
+  it('draws the clip\'s real waveform in the recessed chip when the media row has one', () => {
+    const seeded = renderScreen();
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    seeded.unmount();
+
+    const base = audioMemoryData();
+    mockedUseMemory.mockReturnValue({
+      data: audioMemoryData({ mediaAssets: [{ ...base.mediaAssets[0], waveform: SILENT_WAVEFORM }] }),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    expect(hasFloorTrace(renderScreen().toJSON())).toBe(true);
   });
 
   it('never renders a remove control on the clip', () => {

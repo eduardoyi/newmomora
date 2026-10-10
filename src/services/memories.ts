@@ -6,6 +6,7 @@ import {
   type IllustrationRequestIntent,
 } from '@/services/ai';
 import { deleteStorageObject } from '@/services/media';
+import { sanitizeWaveform } from '@/utils/audio-waveform';
 import type { FamilyMember } from '@/services/family-members';
 import {
   type CreateAudioMemoryInput,
@@ -41,6 +42,12 @@ export interface MemoryMediaAsset {
    * client, never by this client. See
    * docs/plans/share-card-store-through.md. */
   share_card_key: string | null;
+  /** 64-bucket loudness contour (0..255) of an audio clip, or null (not an
+   * audio row, not analysed yet, or analysis failed -> seeded fallback line).
+   * Rows rehydrated from a persisted TanStack cache written before the column
+   * existed lack the key entirely: readers must treat `undefined` like null
+   * (`asset.waveform ?? null`). */
+  waveform: number[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -215,6 +222,7 @@ function buildLegacyMediaAssets(memory: Memory): MemoryMediaAsset[] {
       aspect_ratio: null,
       preview_object_key: null,
       share_card_key: null,
+      waveform: null,
       position: 0,
       created_at: memory.created_at,
       updated_at: memory.updated_at,
@@ -317,6 +325,11 @@ function mediaAssetsToRpcPayload(assets: MemoryMediaAssetInput[]) {
     durationMs: asset.durationMs != null ? Math.round(asset.durationMs) : null,
     aspectRatio: asset.aspectRatio ?? null,
     previewObjectKey: asset.previewObjectKey ?? null,
+    // Cosmetic field: anything that is not exactly 64 integers in 0..255
+    // (e.g. NaN energies serialised to JSON null) is sent as null so a bad
+    // contour can never fail -- and, via the retrying queue, re-fail -- a
+    // clip save. The RPC also nulls invalid values; this is the first guard.
+    waveform: sanitizeWaveform(asset.waveform),
   }));
 }
 
@@ -1295,6 +1308,7 @@ async function resolveAudioMemoryInsertConflict(
         objectKey: input.clip.objectKey,
         contentType: input.clip.contentType,
         durationMs: input.clip.durationMs ?? null,
+        waveform: input.clip.waveform ?? null,
       },
     ],
     taggedMemberIds: input.taggedMemberIds,
@@ -1389,6 +1403,7 @@ export async function createAudioMemory(input: CreateAudioMemoryInput): Promise<
     objectKey: input.clip.objectKey,
     contentType: input.clip.contentType,
     durationMs: input.clip.durationMs ?? null,
+    waveform: input.clip.waveform ?? null,
   };
 
   const { data: memory, error } = await supabase

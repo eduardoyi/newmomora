@@ -8,6 +8,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { trackEvent } from '@/services/analytics';
 
@@ -375,6 +376,23 @@ describe('MemoryDetailScreen audio variant', () => {
     expect(mockedEngagementBar.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ enableShare: false }),
     );
+  });
+
+  it('draws the clip\'s real waveform on the stage when the media row has one', () => {
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    const base = audioMemory();
+
+    mockedUseMemory.mockReturnValue({ data: base, isLoading: false, isError: false });
+    const seeded = renderScreen();
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    seeded.unmount();
+
+    mockedUseMemory.mockReturnValue({
+      data: audioMemory({ mediaAssets: [{ ...base.mediaAssets[0], waveform: SILENT_WAVEFORM }] }),
+      isLoading: false,
+      isError: false,
+    });
+    expect(hasFloorTrace(renderScreen().toJSON())).toBe(true);
   });
 
   it('shows the "getting the sound" loading state while the signed URL is still resolving', () => {

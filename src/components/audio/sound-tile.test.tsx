@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react-native';
 
 import { SoundMark, SoundTile } from './sound-tile';
+import { hasFloorTrace, SILENT_WAVEFORM } from './trace-test-utils';
 
 describe('SoundTile', () => {
   it('renders the duration label by default', () => {
@@ -24,6 +25,15 @@ describe('SoundTile', () => {
     );
     expect(getNeutral('tile-neutral')).toBeTruthy();
     expect(getJoy('tile-joy')).toBeTruthy();
+  });
+});
+
+describe('SoundTile waveform', () => {
+  it('draws the real waveform when supplied and the seeded trace otherwise', () => {
+    const seeded = render(<SoundTile durationSeconds={10} emotion={null} seed={7} />);
+    expect(hasFloorTrace(seeded.toJSON())).toBe(false);
+    const real = render(<SoundTile durationSeconds={10} emotion={null} seed={7} waveform={SILENT_WAVEFORM} />);
+    expect(hasFloorTrace(real.toJSON())).toBe(true);
   });
 });
 

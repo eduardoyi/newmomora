@@ -374,6 +374,7 @@ describe('useMemoriesRealtime', () => {
           aspect_ratio: null,
           preview_object_key: null,
           share_card_key: null,
+          waveform: null,
           position: 0,
           created_at: '2026-07-15T00:00:00.000Z',
           updated_at: '2026-07-15T00:00:00.000Z',

@@ -199,6 +199,7 @@ describe('serializePersistedClient', () => {
             object_key: `${longObjectKey}-${memoryId}-${assetIndex}`,
             preview_object_key: `${longObjectKey}-preview-${memoryId}-${assetIndex}`,
             share_card_key: `${longObjectKey}-share-${memoryId}-${assetIndex}`,
+            waveform: null,
             content_type: assetIndex % 2 === 0 ? 'image/webp' : 'video/mp4',
             duration_ms: 15_000,
             aspect_ratio: 0.75,

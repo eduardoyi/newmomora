@@ -49,6 +49,10 @@ export interface PendingMemoryUpload {
   errorMessage: string | null;
   previewUri: string | null;
   previewContentType: string | null;
+  // Audio only: the clip's 64-bucket loudness contour so the pending card
+  // draws the real trace (null/absent -> seeded fallback). Unsanitised here;
+  // the save path sanitises at the RPC boundary and the card only draws it.
+  previewWaveform: number[] | null;
   // O6 (docs/plans/offline-awareness-and-share-cards.md): only meaningful
   // when status is 'failed'. Distinguishes a failure worth auto-retrying on
   // reconnect (the device just couldn't reach the server) from a failure
@@ -293,6 +297,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
           errorMessage: null,
           previewUri: isAudio ? input.clip.fileUri : (previewAsset?.fileUri ?? null),
           previewContentType: isAudio ? input.clip.contentType : (previewAsset?.contentType ?? null),
+          previewWaveform: isAudio ? (input.clip.waveform ?? null) : null,
           isNetworkFailure: false,
         },
       ]);

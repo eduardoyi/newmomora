@@ -65,7 +65,7 @@ it('prepares a native shared photo for the memory composer and clears the intent
   renderHook(() => useIncomingMemoryShare({ onPrepared }));
 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
-  expect(onPrepared.mock.calls[0][0][0]).toMatchObject({
+  expect(onPrepared.mock.calls[0][0].attachments[0]).toMatchObject({
     uri: 'file:///cache/shared.jpg',
     contentType: 'image/jpeg',
     sizeBytes: 2048,
@@ -101,7 +101,7 @@ it('wires the video capture-date extractor and keeps its scalar on the prepared 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
   expect(mockExtractVideoCaptureDateIso).toHaveBeenCalledWith('file:///cache/shared.mov');
   expect(mockExtractImageCaptureDateIso).not.toHaveBeenCalled();
-  expect(onPrepared.mock.calls[0][0][0]).toMatchObject({ capturedAtIso: '2024-02-01' });
+  expect(onPrepared.mock.calls[0][0].attachments[0]).toMatchObject({ capturedAtIso: '2024-02-01' });
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
 });
 
@@ -129,10 +129,12 @@ it('fails open when an optional image date extractor rejects and clears the payl
   renderHook(() => useIncomingMemoryShare({ onPrepared }));
 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
-  expect(onPrepared).toHaveBeenCalledWith([
-    expect.objectContaining({ uri: 'file:///cache/shared.jpg' }),
-  ], null);
-  expect(onPrepared.mock.calls[0][0][0]).not.toHaveProperty('capturedAtIso');
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'media',
+    attachments: [expect.objectContaining({ uri: 'file:///cache/shared.jpg' })],
+    errorMessage: null,
+  });
+  expect(onPrepared.mock.calls[0][0].attachments[0]).not.toHaveProperty('capturedAtIso');
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
 });
 
@@ -160,7 +162,11 @@ it('returns the duplicate shared-URI error and clears the native payload once', 
   renderHook(() => useIncomingMemoryShare({ onPrepared }));
 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
-  expect(onPrepared).toHaveBeenCalledWith([], 'Momora could not distinguish same-named shared files. Please attach them from inside Momora instead.');
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'media',
+    attachments: [],
+    errorMessage: 'Momora could not distinguish same-named shared files. Please attach them from inside Momora instead.',
+  });
   expect(mockExtractImageCaptureDateIso).not.toHaveBeenCalled();
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
 });
@@ -192,10 +198,10 @@ it('handles an unexpected preparation rejection once, including after a rerender
   );
 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
-  expect(onPrepared).toHaveBeenCalledWith(
-    [],
-    'Could not open the shared photos or videos. Try sharing them again.',
-  );
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'error',
+    errorMessage: 'Could not open the shared photos or videos. Try sharing them again.',
+  });
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
 
   rerender({ callback: onPrepared });
@@ -249,7 +255,7 @@ it('resets the consumed payload state so sharing the same photo again is prepare
   rerender({});
 
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(2));
-  expect(onPrepared.mock.calls[1][0][0]).toMatchObject({
+  expect(onPrepared.mock.calls[1][0].attachments[0]).toMatchObject({
     uri: 'file:///cache/same-photo.jpg',
     capturedAtIso: '2024-03-05',
   });
@@ -322,14 +328,111 @@ it('does not let a stale preparation clear or replace a newer same-length share'
 
   await waitFor(() => expect(mockPrepareSharedMedia).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
-  expect(onPrepared.mock.calls[0][0][0]).toMatchObject({ uri: secondResolvedPayload.contentUri });
+  expect(onPrepared.mock.calls[0][0].attachments[0]).toMatchObject({ uri: secondResolvedPayload.contentUri });
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
 
-  resolveFirstPreparation?.({ attachments: [], errorMessage: null });
+  resolveFirstPreparation?.({ kind: 'media', attachments: [], errorMessage: null });
   await Promise.resolve();
   await Promise.resolve();
 
   expect(onPrepared).toHaveBeenCalledTimes(1);
   expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
   expect(refreshSharePayloads).toHaveBeenCalledTimes(1);
+});
+
+it('hands a shared voice note to the callback as an audio result and clears the native payload', async () => {
+  const audioPayload = {
+    value: 'file:///group/AUDIO-2026-10-10-15-31-04.m4a',
+    shareType: 'audio' as const,
+    mimeType: 'audio/mp4',
+    contentUri: 'file:///group/AUDIO-2026-10-10-15-31-04.m4a',
+    contentType: 'audio' as const,
+    contentMimeType: 'audio/mp4',
+    originalName: 'AUDIO-2026-10-10-15-31-04.m4a',
+    contentSize: 240_000,
+  };
+  mockUseIncomingShare.mockReturnValue({
+    sharedPayloads: [audioPayload],
+    resolvedSharedPayloads: [audioPayload],
+    clearSharedPayloads,
+    isResolving: false,
+    error: null,
+    refreshSharePayloads: jest.fn(),
+  });
+
+  const onPrepared = jest.fn();
+  const { result } = renderHook(() => useIncomingMemoryShare({ onPrepared }));
+
+  await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'audio',
+    uri: 'file:///group/AUDIO-2026-10-10-15-31-04.m4a',
+    mimeType: 'audio/mp4',
+    fileName: 'AUDIO-2026-10-10-15-31-04.m4a',
+    sizeBytes: 240_000,
+  });
+  expect(mockExtractImageCaptureDateIso).not.toHaveBeenCalled();
+  expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
+  expect(result.current).toBe(false);
+});
+
+it('reports a voice note mixed with a photo as an error result', async () => {
+  const audioPayload = {
+    value: 'file:///group/voice.m4a',
+    shareType: 'audio' as const,
+    mimeType: 'audio/mp4',
+    contentUri: 'file:///group/voice.m4a',
+    contentType: 'audio' as const,
+    contentMimeType: 'audio/mp4',
+    originalName: 'voice.m4a',
+    contentSize: 1000,
+  };
+  const photoPayload = {
+    value: 'file:///shared.jpg',
+    shareType: 'image' as const,
+    mimeType: 'image/jpeg',
+    contentUri: 'file:///cache/shared.jpg',
+    contentType: 'image' as const,
+    contentMimeType: 'image/jpeg',
+    originalName: 'shared.jpg',
+    contentSize: 2048,
+  };
+  mockUseIncomingShare.mockReturnValue({
+    sharedPayloads: [audioPayload, photoPayload],
+    resolvedSharedPayloads: [audioPayload, photoPayload],
+    clearSharedPayloads,
+    isResolving: false,
+    error: null,
+    refreshSharePayloads: jest.fn(),
+  });
+
+  const onPrepared = jest.fn();
+  renderHook(() => useIncomingMemoryShare({ onPrepared }));
+
+  await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'error',
+    errorMessage: 'Share one voice note at a time, or photos and videos together.',
+  });
+  expect(clearSharedPayloads).toHaveBeenCalledTimes(1);
+});
+
+it('reports the native share error as an error result', async () => {
+  mockUseIncomingShare.mockReturnValue({
+    sharedPayloads: [{ value: 'file:///shared.jpg', shareType: 'image', mimeType: 'image/jpeg' }],
+    resolvedSharedPayloads: [],
+    clearSharedPayloads,
+    isResolving: false,
+    error: new Error('resolve failed') as never,
+    refreshSharePayloads: jest.fn(),
+  });
+
+  const onPrepared = jest.fn();
+  renderHook(() => useIncomingMemoryShare({ onPrepared }));
+
+  await waitFor(() => expect(onPrepared).toHaveBeenCalledTimes(1));
+  expect(onPrepared).toHaveBeenCalledWith({
+    kind: 'error',
+    errorMessage: 'Could not open the shared photos or videos. Try sharing them again.',
+  });
 });

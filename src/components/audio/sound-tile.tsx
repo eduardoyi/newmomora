@@ -15,6 +15,8 @@ import { moEnv, SoundTrace } from './sound-trace';
 
 export interface SoundTileProps {
   seed: number;
+  /** The clip's real loudness envelope; null/absent keeps the seeded trace. */
+  waveform?: number[] | null;
   emotion: string | null;
   durationSeconds: number;
   size?: number;
@@ -25,6 +27,7 @@ export interface SoundTileProps {
 /** Small square tile -- member profile grid, calendar hero, anywhere 1:1. */
 export function SoundTile({
   seed,
+  waveform,
   emotion,
   durationSeconds,
   size = 108,
@@ -60,6 +63,7 @@ export function SoundTile({
           seed={seed}
           showNib={false}
           stroke={1.8}
+          waveform={waveform}
         />
       </View>
       <View

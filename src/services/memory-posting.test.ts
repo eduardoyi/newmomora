@@ -9,7 +9,11 @@ import {
   uploadMemoryMediaAssets,
 } from '@/services/memory-posting';
 import { getLocalFileSizeBytes } from '@/utils/local-files';
-import { MAX_AUDIO_BYTES, MAX_AUDIO_DURATION_MS, MAX_VIDEO_BYTES } from '@/utils/media-validation';
+import {
+  MAX_AUDIO_BYTES,
+  MAX_AUDIO_UPLOAD_DURATION_MS,
+  MAX_VIDEO_BYTES,
+} from '@/utils/media-validation';
 import { getVideoFrame } from '@/utils/video-aspect-ratio';
 
 jest.mock('@/services/memories', () => ({
@@ -794,20 +798,73 @@ describe('postAudioMemory', () => {
     );
   });
 
-  it('never uploads (and never rolls back) when the recording exceeds the duration cap', async () => {
+  it('never uploads (and never rolls back) when the sound exceeds the 5-minute upload cap', async () => {
     await expect(
       postAudioMemory({
         userId: 'user-1',
         familyId: 'family-1',
         input: {
           ...audioInput,
-          clip: { ...audioInput.clip, durationMs: MAX_AUDIO_DURATION_MS + 1 },
+          clip: { ...audioInput.clip, durationMs: 5 * 60 * 1000 + 2000 }, // 5:02
         },
       }),
-    ).rejects.toThrow(/2 minutes/i);
+    ).rejects.toThrow(/5 minutes/i);
 
     expect(mockedUploadMediaObject).not.toHaveBeenCalled();
     expect(mockedCreateAudioMemory).not.toHaveBeenCalled();
+  });
+
+  it('rejects one millisecond past the upload cap constant', async () => {
+    await expect(
+      postAudioMemory({
+        userId: 'user-1',
+        familyId: 'family-1',
+        input: {
+          ...audioInput,
+          clip: { ...audioInput.clip, durationMs: MAX_AUDIO_UPLOAD_DURATION_MS + 1 },
+        },
+      }),
+    ).rejects.toThrow(/5 minutes/i);
+
+    expect(mockedUploadMediaObject).not.toHaveBeenCalled();
+  });
+
+  it('accepts a 4:30 imported sound (longer than the 2-minute recorder cap)', async () => {
+    mockedCreateAudioMemory.mockResolvedValue({
+      data: { id: 'memory-audio-1', memory_type: 'audio' },
+      error: null,
+    } as Awaited<ReturnType<typeof createAudioMemory>>);
+
+    await postAudioMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      input: {
+        ...audioInput,
+        clip: { ...audioInput.clip, durationMs: 4.5 * 60 * 1000 },
+      },
+    });
+
+    expect(mockedUploadMediaObject).toHaveBeenCalledTimes(1);
+    expect(mockedCreateAudioMemory).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards the clip waveform to createAudioMemory, and null when absent', async () => {
+    mockedCreateAudioMemory.mockResolvedValue({
+      data: { id: 'memory-audio-1', memory_type: 'audio' },
+      error: null,
+    } as Awaited<ReturnType<typeof createAudioMemory>>);
+    const waveform = Array.from({ length: 64 }, (_, index) => index * 4);
+
+    await postAudioMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      input: { ...audioInput, clip: { ...audioInput.clip, waveform } },
+    });
+    expect(mockedCreateAudioMemory.mock.calls[0]?.[0].clip.waveform).toEqual(waveform);
+
+    mockedCreateAudioMemory.mockClear();
+    await postAudioMemory({ userId: 'user-1', familyId: 'family-1', input: audioInput });
+    expect(mockedCreateAudioMemory.mock.calls[0]?.[0].clip.waveform).toBeNull();
   });
 
   it('never uploads when the local recording exceeds the size cap', async () => {

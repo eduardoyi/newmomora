@@ -20,6 +20,8 @@ import { SoundTrace } from './sound-trace';
 export interface StubBandProps {
   /** Deterministic per-clip seed shared with every other trace of this clip. */
   seed: number;
+  /** The clip's real loudness envelope; null/absent keeps the seeded trace. */
+  waveform?: number[] | null;
   /** Null before emotion analysis lands (or forever, for unclassified babble). */
   emotion: string | null;
   durationSeconds: number;
@@ -44,6 +46,7 @@ export interface StubBandProps {
 
 export function StubBand({
   seed,
+  waveform,
   emotion,
   durationSeconds,
   positionSeconds,
@@ -98,6 +101,7 @@ export function StubBand({
             progress={progress}
             seed={seed}
             stroke={2.2}
+            waveform={waveform}
             testID={testID ? `${testID}-trace` : undefined}
           />
           <View style={styles.timeRow}>
