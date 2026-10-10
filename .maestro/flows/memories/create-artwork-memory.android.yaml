@@ -1,0 +1,79 @@
+appId: com.memora.app
+tags:
+  - android
+---
+# Artwork scan -> framed memory (docs/features/artwork.md). The scanner is
+# Google's ML Kit document scanner, hosted by Google Play services in its own
+# Activity -- NOT part of the Momora view hierarchy, so there are no Momora
+# testIDs inside it and its button labels belong to Google. This flow needs:
+#   * an Android emulator image WITH Google Play services (a "Google Play"
+#     system image, not "Google APIs"), or a physical device;
+#   * a dev/preview build that includes modules/momora-artwork-scanner (the
+#     scan button is absent on OTA-only binaries without it);
+#   * a camera that sees something: on the emulator use the virtual-scene
+#     camera (Extended controls > Camera > Back camera = VirtualScene) and
+#     point it at the poster, or expect to run this on a physical device with
+#     a drawing on a table. First use may download the ML Kit module, so the
+#     first run needs network and the wait below is generous.
+# The in-scanner taps are best-effort and optional: ML Kit may auto-capture
+# on some devices, and its labels vary by Play-services version. If this flow
+# stalls inside the scanner, drive that screen by hand once and re-run.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: new-memory-scan-artwork
+    timeout: 10000
+- tapOn:
+    id: new-memory-scan-artwork
+# Camera permission is not required (Play services hosts the UI). Capture
+# the page, then accept the crop and finish.
+- tapOn:
+    text: ".*([Cc]apture|[Ss]hutter|[Tt]ake).*"
+    optional: true
+- tapOn:
+    text: ".*([Dd]one|[Ss]ave|[Nn]ext|[Ff]inish).*"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: new-memory-media-preview
+    timeout: 60000
+# Scanned pages make the composer an Artwork composer and lock the photo
+# picker (scans and library photos can't mix).
+- assertVisible: "· Artwork"
+- assertVisible:
+    id: new-memory-attach-media
+    enabled: false
+- tapOn:
+    id: new-memory-save
+- extendedWaitUntil:
+    notVisible: "New memory"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: timeline-memory-list
+    timeout: 30000
+# Posting is deferred (pending-uploads queue); a failed post keeps the banner.
+- extendedWaitUntil:
+    notVisible:
+      id: pending-memory-uploads-banner
+    timeout: 60000
+- assertNotVisible: "Couldn't post memory"
+# The Timeline card draws the picture frame (testID carries the memory id,
+# hence the regex).
+- extendedWaitUntil:
+    visible:
+      id: "memory-card-.*-artwork-frame"
+    timeout: 30000
+- tapOn:
+    id: memory-media-carousel-scroll
+- extendedWaitUntil:
+    visible:
+      id: memory-detail-back
+    timeout: 15000
+- assertVisible:
+    id: memory-detail-artwork-frame

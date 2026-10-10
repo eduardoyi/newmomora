@@ -178,6 +178,39 @@ describe('useMemoriesRealtime', () => {
     });
   });
 
+  it('patches artwork_medium into InfiniteData caches on UPDATE', () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([
+        buildMemoryWithTags({
+          memory_type: 'media',
+          media_variant: 'artwork',
+          artwork_medium: null,
+          illustration_status: 'none',
+        }),
+      ]),
+    );
+
+    renderHook(() => useMemoriesRealtime(FAMILY_ID), { wrapper });
+
+    fake.emit('UPDATE', {
+      new: buildMemoryRow({
+        memory_type: 'media',
+        media_variant: 'artwork',
+        artwork_medium: 'chalk',
+        emotion: 'wonder',
+        illustration_status: 'none',
+      }),
+      old: { id: 'memory-1' },
+    });
+
+    const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+    expect(list?.pages[0]?.memories[0]).toMatchObject({
+      artwork_medium: 'chalk',
+      emotion: 'wonder',
+    });
+  });
+
   it('invalidates media-urls and calendar when an UPDATE transitions to ready', () => {
     queryClient.setQueryData(
       memoriesQueryKey(FAMILY_ID),

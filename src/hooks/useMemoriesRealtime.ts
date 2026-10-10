@@ -128,6 +128,7 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
             illustration_generation_id: row.illustration_generation_id,
             illustration_generation_started_at: row.illustration_generation_started_at,
             emotion: row.emotion,
+            artwork_medium: row.artwork_medium,
             updated_at: row.updated_at,
             link_previews: row.link_previews,
             content: row.content,

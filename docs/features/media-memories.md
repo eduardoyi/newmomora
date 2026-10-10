@@ -1,12 +1,14 @@
 # Feature: Media memories (photo & video attachments)
 
 **Status:** `done`
-**Last updated:** 2026-08-09
+**Last updated:** 2026-10-10
 **PRD reference:** §6.3 Journal Entries (Memories) — `media` type
 
 ## Overview
 
 Parents can attach 1-10 user-uploaded photos/videos to a memory instead of — or in addition to — relying on an AI-generated illustration. Mixed photo/video memories are ordered, private, and displayed as carousels in timeline/detail views. The `media` memory type is a first-class citizen: it follows the same R2 presigned-URL pattern as family profile photos and is fully covered by RLS and account deletion.
+
+**Artwork variant:** a `media` memory made of scanned children's drawings (`memories.media_variant = 'artwork'`) reuses all of this plumbing but is image-only, renders in a picture frame, and gets an AI medium chip. It is created from the composer's scan button, never from the library picker — see [artwork.md](./artwork.md).
 
 ## User-facing behavior
 
@@ -309,6 +311,7 @@ references. Viewers can view media but cannot attach/reorder/remove it. See
 - Depends on: [Memories & illustrations](./memories.md) — extends the `memories` table and `memory_type` concept
 - Depends on: [Family profiles](./family-profiles.md) — tagging still uses the same family member picker
 - Used by: Timeline, Calendar, Memory detail screen
+- Extended by: [Artwork](./artwork.md) (`media_variant = 'artwork'` scanned drawings)
 
 ## Testing
 
@@ -413,6 +416,7 @@ Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-
 
 | Date | Change |
 |------|--------|
+| 2026-10-10 | Artwork variant (scanned drawings): composer scan button, `media_variant` on insert, images-only trigger; documented in [artwork.md](./artwork.md). |
 | 2026-10-05 | Edit-memory now shows compress/upload progress for newly added media, names the failing item on error, and fails stalled uploads after 60 s of no progress (device-measured: an added 16 s video spent ~3.5 s compressing + ~11 s uploading behind a bare spinner). Share-card warm now skips media memories whose cover is a video (server always 400s `video_not_supported`). |
 | 2026-08-15 | Fixed cross-creator media edits: an owner/manager retaining an existing original now retains its exact paired preview even though it sits under the original uploader's immutable prefix. New/replaced previews remain caller-prefix constrained; forged foreign previews and previews swapped from another asset are rejected. |
 | 2026-08-09 | Real Pixel 9a diagnostics reproduced an empty share surface as two simultaneous Momora tasks: a gallery `ACTION_SEND` started a second `MainActivity`, which never mounted React and detached the shared host from the original activity. Android now uses `singleTop` + `documentLaunchMode="never"`; incoming cache copies are verified before attachment; and consumed hook state is refreshed so repeated same-photo shares are processed. This native manifest repair requires a new Android build. |

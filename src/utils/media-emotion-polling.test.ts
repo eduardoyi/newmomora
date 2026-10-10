@@ -32,6 +32,19 @@ describe('media-emotion-polling', () => {
     expect(memoriesNeedEmotionPolling([buildMemory({})])).toBe(true);
   });
 
+  it('stops polling an artwork memory once emotion exists (medium lands in the same analysis write)', () => {
+    const artwork = { ...buildMemory({}), media_variant: 'artwork', artwork_medium: null };
+    expect(shouldPollForMediaEmotion(artwork)).toBe(true);
+
+    const analyzed = { ...artwork, emotion: 'joy', artwork_medium: 'crayon' };
+    expect(shouldPollForMediaEmotion(analyzed)).toBe(false);
+    expect(memoriesNeedEmotionPolling([analyzed])).toBe(false);
+
+    // Emotion present but medium still null (a null parse) is deliberately NOT
+    // polled again -- the "Artwork" badge is the accepted fallback.
+    expect(shouldPollForMediaEmotion({ ...artwork, emotion: 'joy' })).toBe(false);
+  });
+
   it('does not poll for video media', () => {
     expect(
       shouldPollForMediaEmotion(buildMemory({ media_content_type: 'video/mp4' })),

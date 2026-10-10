@@ -1,4 +1,7 @@
+import { formatArtworkMedium } from '@/utils/artwork-medium';
 import { substituteLinkLabels, type LinkPreviewMap } from '@/utils/links';
+
+export { formatArtworkMedium };
 
 export const MAX_ILLUSTRATION_MEMBERS = 6;
 
@@ -32,6 +35,18 @@ export type MemoryType = 'text_illustration' | 'text_only' | 'media' | 'audio';
  * through into a branch that assumes one of these four shapes.
  */
 export const KNOWN_MEMORY_TYPES: readonly MemoryType[] = ['text_illustration', 'text_only', 'media', 'audio'];
+
+/**
+ * An artwork memory is a `media` memory flagged `media_variant = 'artwork'`
+ * (docs/plans/artwork-scanning.md). `media_variant` is `undefined` on rows
+ * fetched before the column existed, so this tolerates a missing field.
+ */
+export function isArtworkMemory(memory: {
+  memory_type: string;
+  media_variant?: string | null;
+}): boolean {
+  return memory.memory_type === 'media' && memory.media_variant === 'artwork';
+}
 
 export function isKnownMemoryType(type: string): type is MemoryType {
   return (KNOWN_MEMORY_TYPES as readonly string[]).includes(type);
@@ -79,6 +94,9 @@ export interface CreateMediaMemoryInput {
   content?: string;
   memoryDate: string;
   taggedMemberIds: string[];
+  /** Scanned artwork (docs/features/artwork.md). Written once on insert;
+   * clients may never update it. */
+  mediaVariant?: 'artwork';
 }
 
 export interface CreateAudioMemoryInput {

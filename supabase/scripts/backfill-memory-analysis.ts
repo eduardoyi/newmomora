@@ -98,6 +98,8 @@ export interface CandidateMemoryRow {
   memory_type: string;
   memory_date: string;
   audio_transcript: string | null;
+  /** `'artwork'` rows run in artwork mode and write `artwork_medium`; selected so a backfill never skips or nulls the medium. */
+  media_variant: string | null;
   updated_at: string;
 }
 
@@ -250,7 +252,7 @@ async function loadCandidates(
   for (let offset = 0; ; offset += DATABASE_PAGE_SIZE) {
     let query = admin
       .from('memories')
-      .select('id, family_id, content, memory_type, memory_date, audio_transcript, updated_at')
+      .select('id, family_id, content, memory_type, memory_date, audio_transcript, media_variant, updated_at')
       .or(`analyzed_at.is.null,analysis_version.lt.${TOPICS_VERSION}`)
       .order('memory_date', { ascending: true })
       .order('id', { ascending: true })
@@ -332,6 +334,7 @@ async function processCandidate(
         memoryType: candidate.memory_type,
         memoryDate: candidate.memory_date,
         audioTranscript: candidate.audio_transcript,
+        mediaVariant: candidate.media_variant,
       },
       taggedMembers,
       media,
@@ -354,8 +357,9 @@ async function processCandidate(
         topicDetails: result.topicDetails,
         labels: result.labels,
         description: result.description,
+        artworkMedium: result.artworkMedium,
       },
-      { updated_at: candidate.updated_at, content: candidate.content },
+      { updated_at: candidate.updated_at, content: candidate.content, media_variant: candidate.media_variant },
     );
 
     if (!updated) {

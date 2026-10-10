@@ -1,0 +1,27 @@
+apply plugin: 'com.android.library'
+apply plugin: 'expo-module-gradle-plugin'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+group = 'expo.modules.momoraartworkscanner'
+version = '1.0.0'
+
+expoModule {
+  canBePublished false
+}
+
+android {
+  namespace 'expo.modules.momoraartworkscanner'
+  compileSdkVersion rootProject.ext.compileSdkVersion
+
+  defaultConfig {
+    minSdkVersion rootProject.ext.minSdkVersion
+    targetSdkVersion rootProject.ext.targetSdkVersion
+  }
+}
+
+dependencies {
+  // ML Kit Document Scanner is hosted by Google Play services: no CAMERA
+  // permission is needed and the module may download on first use.
+  implementation 'com.google.android.gms:play-services-mlkit-document-scanner:16.0.0'
+  implementation 'androidx.activity:activity-ktx:1.11.0'
+}

@@ -16,6 +16,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ArtworkFrame } from '@/components/artwork-frame';
+import { ArtworkMediumTag } from '@/components/artwork-medium-chip';
 import { seedFromKey } from '@/components/audio/audio-seed';
 import { formatClipTime } from '@/components/audio/audio-emotion';
 import { ListenSeal } from '@/components/audio/listen-seal';
@@ -50,6 +52,7 @@ import { toLinkPreviewMap } from '@/utils/links';
 import {
   formatDisplayDate,
   getIllustrationStatusLabel,
+  isArtworkMemory,
   isIllustrationGenerationStale,
   isIllustrationInProgress,
   isKnownMemoryType,
@@ -185,17 +188,24 @@ function MemoryMetaFooter({
   date,
   attributionName,
   emotion,
+  isArtwork = false,
+  artworkMedium,
 }: {
   date: string;
   attributionName: string;
   emotion?: string | null;
+  /** Artwork shows the medium chip / "Artwork" badge instead of the emotion chip. */
+  isArtwork?: boolean;
+  artworkMedium?: string | null;
 }) {
   const emo = getEmotionColors(emotion);
   return (
     <View style={styles.metaFooter} testID="memory-detail-section-metadata">
       <View style={styles.metaFooterTop}>
         <Text style={styles.detailDate}>{formatDisplayDate(date)}</Text>
-        {emo && emotion ? (
+        {isArtwork ? (
+          <ArtworkMediumTag medium={artworkMedium} />
+        ) : emo && emotion ? (
           <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
             <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
             <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
@@ -250,6 +260,7 @@ function MemoryDetailFramed({
   onShowIllustration: () => void;
 }) {
   const isMedia = memory.memory_type === 'media';
+  const isArtwork = isArtworkMemory(memory);
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
   // Illustrations are generated square (1024×1024); measure on load so any
   // legacy or future sizes still render uncropped.
@@ -279,6 +290,78 @@ function MemoryDetailFramed({
         }]
       : [];
 
+  const mediaVisual = isMedia ? (
+    memory.mediaAssets.length > 0 ? (
+      <MemoryMediaCarousel
+        assets={memory.mediaAssets}
+        cacheVersion={memory.updated_at}
+        initialIndex={initialMediaIndex}
+        isActive={fullScreenIndex === null}
+        mutedVideos={false}
+        onActiveIndexChange={setActiveMediaIndex}
+        onPress={setFullScreenIndex}
+        style={isArtwork ? styles.artworkMedia : styles.framedMedia}
+      />
+    ) : (
+      <View style={[styles.framedImage, styles.placeholderFrame]}>
+        <Text style={styles.placeholderText}>Loading…</Text>
+      </View>
+    )
+  ) : null;
+
+  // Everything under the media/illustration: engagement, caption, tagged
+  // members (with ages), retry, metadata. Shared by the white framed card and
+  // the artwork layout, which hangs the picture on the emotion gradient with
+  // this block beneath it instead of inside a card.
+  const detailBody = (
+    <>
+      <View testID="memory-detail-section-engagement">
+        <MemoryEngagementBar
+          memory={memory}
+          onOpenComments={onOpenComments}
+          iconSize={24}
+          enableShare
+          currentMediaAssetId={activeMediaAsset?.id ?? null}
+          isCurrentPageVideo={isActiveMediaVideo}
+        />
+      </View>
+      {memory.content ? (
+        <MemoryContentText
+          content={memory.content}
+          linkPreviews={toLinkPreviewMap(memory.link_previews)}
+          style={styles.detailText}
+          testID="memory-detail-section-content"
+        />
+      ) : null}
+      {memory.taggedMembers.length > 0 && (
+        <View style={styles.memberRow} testID="memory-detail-section-members">
+          {memory.taggedMembers.map((m) => (
+            <MemberPill key={m.id} member={m} memoryDate={memory.memory_date} />
+          ))}
+        </View>
+      )}
+      {canEdit &&
+        memory.memory_type === 'text_illustration' &&
+        (memory.illustration_status === 'failed' || needsIllustrationRecovery(memory)) && (
+        <Pressable
+          onPress={onRetry}
+          disabled={isRetrying}
+          style={styles.retryBtn}
+          testID="memory-detail-retry-illustration"
+        >
+          <Text style={styles.retryBtnText}>{isRetrying ? 'Retrying…' : 'Retry illustration'}</Text>
+        </Pressable>
+      )}
+      <MemoryMetaFooter
+        artworkMedium={memory.artwork_medium}
+        date={memory.memory_date}
+        attributionName={attributionName}
+        emotion={memory.emotion}
+        isArtwork={isArtwork}
+      />
+    </>
+  );
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <LinearGradient
@@ -300,113 +383,66 @@ function MemoryDetailFramed({
         />
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
-        <View style={styles.framedCard}>
-          {/* Media / illustration */}
-          <View style={styles.framedMediaWrap}>
-            {isMedia ? (
-              memory.mediaAssets.length > 0 ? (
-                <MemoryMediaCarousel
-                  assets={memory.mediaAssets}
-                  cacheVersion={memory.updated_at}
-                  initialIndex={initialMediaIndex}
-                  isActive={fullScreenIndex === null}
-                  mutedVideos={false}
-                  onActiveIndexChange={setActiveMediaIndex}
-                  onPress={setFullScreenIndex}
-                  style={styles.framedMedia}
-                />
-              ) : (
-                <View style={[styles.framedImage, styles.placeholderFrame]}>
-                  <Text style={styles.placeholderText}>Loading…</Text>
-                </View>
-              )
-            ) : isIllustrationHidden ? (
-              <ContentHiddenNotice
-                label="Reported AI illustration hidden"
-                onShow={onShowIllustration}
-                style={styles.hiddenIllustration}
-                testID="memory-illustration-hidden"
-              />
-            ) : showIllustrationGenerating || !illustrationUrl ? (
-              <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
-                <GeneratingVisualOverlay
-                  label={
-                    getIllustrationStatusLabel(memory.illustration_status as IllustrationStatus) ??
-                    'Illustrated memory'
-                  }
-                  sparkleSize={32}
-                  variant="inline"
-                />
-              </View>
-            ) : (
-              <Pressable
-                accessibilityLabel="View illustration full screen"
-                accessibilityRole="button"
-                onPress={() => setFullScreenIndex(0)}
-                style={({ pressed }) => pressed && styles.mediaPressed}
-                testID="memory-detail-illustration"
-              >
-                <Image
-                  contentFit="cover"
-                  onLoad={(event) => {
-                    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
-                    if (ratio) {
-                      setIllustrationRatio(clampMediaAspectRatio(ratio));
-                    }
-                  }}
-                  source={mediaImageSource(illustrationUrl, memory.illustration_key)}
-                  style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
-                />
-              </Pressable>
-            )}
-          </View>
-
-          {/* Content inside card */}
-          <View style={styles.framedCardBody}>
-            <View testID="memory-detail-section-engagement">
-              <MemoryEngagementBar
-                memory={memory}
-                onOpenComments={onOpenComments}
-                iconSize={24}
-                enableShare
-                currentMediaAssetId={activeMediaAsset?.id ?? null}
-                isCurrentPageVideo={isActiveMediaVideo}
-              />
+        {isArtwork ? (
+          <>
+            <View style={styles.artworkWall}>
+              <ArtworkFrame size="detail" testID="memory-detail-artwork-frame">
+                {mediaVisual}
+              </ArtworkFrame>
             </View>
-            {memory.content ? (
-              <MemoryContentText
-                content={memory.content}
-                linkPreviews={toLinkPreviewMap(memory.link_previews)}
-                style={styles.detailText}
-                testID="memory-detail-section-content"
-              />
-            ) : null}
-            {memory.taggedMembers.length > 0 && (
-              <View style={styles.memberRow} testID="memory-detail-section-members">
-                {memory.taggedMembers.map((m) => (
-                  <MemberPill key={m.id} member={m} memoryDate={memory.memory_date} />
-                ))}
-              </View>
-            )}
-            {canEdit &&
-              memory.memory_type === 'text_illustration' &&
-              (memory.illustration_status === 'failed' || needsIllustrationRecovery(memory)) && (
-              <Pressable
-                onPress={onRetry}
-                disabled={isRetrying}
-                style={styles.retryBtn}
-                testID="memory-detail-retry-illustration"
-              >
-                <Text style={styles.retryBtnText}>{isRetrying ? 'Retrying…' : 'Retry illustration'}</Text>
-              </Pressable>
-            )}
-            <MemoryMetaFooter
-              date={memory.memory_date}
-              attributionName={attributionName}
-              emotion={memory.emotion}
-            />
+            <View style={styles.artworkBody}>{detailBody}</View>
+          </>
+        ) : (
+          <View style={styles.framedCard}>
+            {/* Media / illustration */}
+            <View style={styles.framedMediaWrap}>
+              {isMedia ? (
+                mediaVisual
+              ) : isIllustrationHidden ? (
+                <ContentHiddenNotice
+                  label="Reported AI illustration hidden"
+                  onShow={onShowIllustration}
+                  style={styles.hiddenIllustration}
+                  testID="memory-illustration-hidden"
+                />
+              ) : showIllustrationGenerating || !illustrationUrl ? (
+                <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
+                  <GeneratingVisualOverlay
+                    label={
+                      getIllustrationStatusLabel(memory.illustration_status as IllustrationStatus) ??
+                      'Illustrated memory'
+                    }
+                    sparkleSize={32}
+                    variant="inline"
+                  />
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityLabel="View illustration full screen"
+                  accessibilityRole="button"
+                  onPress={() => setFullScreenIndex(0)}
+                  style={({ pressed }) => pressed && styles.mediaPressed}
+                  testID="memory-detail-illustration"
+                >
+                  <Image
+                    contentFit="cover"
+                    onLoad={(event) => {
+                      const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                      if (ratio) {
+                        setIllustrationRatio(clampMediaAspectRatio(ratio));
+                      }
+                    }}
+                    source={mediaImageSource(illustrationUrl, memory.illustration_key)}
+                    style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
+                  />
+                </Pressable>
+              )}
+            </View>
+
+            {/* Content inside card */}
+            <View style={styles.framedCardBody}>{detailBody}</View>
           </View>
-        </View>
+        )}
       </ScrollView>
       {fullScreenIndex !== null && fullScreenItems.length > 0 ? (
         <FullScreenMediaViewer
@@ -1265,6 +1301,22 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     overflow: 'hidden',
+  },
+  // Artwork: the picture hangs directly on the emotion gradient inside an
+  // ArtworkFrame (square mat opening, so no corner radius), with the body
+  // beneath it rather than in a white card.
+  artworkWall: {
+    marginHorizontal: 20,
+    marginTop: 12,
+  },
+  artworkMedia: {
+    width: '100%',
+    backgroundColor: colors.surface,
+  },
+  artworkBody: {
+    gap: 14,
+    marginTop: 22,
+    paddingHorizontal: 24,
   },
   mediaPressed: {
     opacity: 0.92,

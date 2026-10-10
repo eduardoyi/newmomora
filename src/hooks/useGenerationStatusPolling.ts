@@ -103,7 +103,8 @@ function applyStatusPatches(
       previous.illustration_key !== status.illustration_key ||
       previous.illustration_generation_id !== status.illustration_generation_id ||
       previous.illustration_generation_started_at !== status.illustration_generation_started_at ||
-      previous.emotion !== status.emotion;
+      previous.emotion !== status.emotion ||
+      (previous.artwork_medium ?? null) !== (status.artwork_medium ?? null);
 
     if (!changed) {
       continue;
@@ -115,6 +116,7 @@ function applyStatusPatches(
       illustration_generation_id: status.illustration_generation_id,
       illustration_generation_started_at: status.illustration_generation_started_at,
       emotion: status.emotion,
+      artwork_medium: status.artwork_medium ?? null,
       updated_at: status.updated_at,
     });
 

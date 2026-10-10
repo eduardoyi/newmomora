@@ -1,3 +1,4 @@
+import { isArtworkMemory } from './layout';
 import type { ExportPlan } from './types';
 
 /**
@@ -36,7 +37,14 @@ export function buildFamilyManifest(plan: ExportPlan, familyId: string, missingP
     profile: plan.profile,
     family,
     familyMembers: data?.familyMembers ?? [],
-    memories: (data?.memories ?? []).map((memory) => ({ ...memory, folder: memoryFolders.get(memory.id) ?? null })),
+    memories: (data?.memories ?? []).map(({ media_variant: _mediaVariant, artwork_medium: _artworkMedium, ...memory }) => ({
+      ...memory,
+      // Raw artwork columns are folded into `artwork` so other memories' JSON is unchanged.
+      ...(isArtworkMemory({ memory_type: memory.memory_type, media_variant: _mediaVariant })
+        ? { artwork: { medium: _artworkMedium ?? null } }
+        : {}),
+      folder: memoryFolders.get(memory.id) ?? null,
+    })),
     memoryTags: data?.memoryTags ?? [],
     memoryMedia: data?.memoryMedia ?? [],
     memoryComments: data?.memoryComments ?? [],

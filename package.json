@@ -19,6 +19,7 @@
     "eval:portrait": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-portrait.ts",
     "eval:illustration": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-illustration.ts",
     "eval:image-cost": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-image-cost.ts",
+    "eval:artwork-medium": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-artwork-medium.ts",
     "eval:memory-book-audit": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-audit.ts",
     "eval:memory-book-tagging": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-tagging.ts",
     "eval:memory-book-outline": "npx --yes deno run --allow-all --node-modules-dir=none --sloppy-imports --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/eval-memory-book-outline.ts",

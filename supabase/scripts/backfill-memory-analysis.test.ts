@@ -105,6 +105,7 @@ function candidate(overrides: Partial<CandidateMemoryRow> = {}): CandidateMemory
     memory_type: 'text_only',
     memory_date: '2026-01-01',
     audio_transcript: null,
+    media_variant: null,
     updated_at: '2026-01-01T00:00:00Z',
     ...overrides,
   };

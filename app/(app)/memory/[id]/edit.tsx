@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { seedFromKey } from '@/components/audio/audio-seed';
+import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
 import { ClipChip } from '@/components/audio/clip-chip';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
@@ -27,7 +28,9 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useMemory, useMemoryMutations, type MediaAssetUploadPhase } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
+import { isArtworkScannerAvailable } from '@/services/artwork-scanner';
 import { MediaAssetUploadError } from '@/services/memory-posting';
+import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
 import { mediaImageSource } from '@/utils/media-image-source';
 import {
   describeEditSaveError,
@@ -35,7 +38,12 @@ import {
   type MediaSaveProgressEntry,
 } from '@/utils/media-save-progress';
 import { isVideoContentType } from '@/utils/media-validation';
-import { isKnownMemoryType, MAX_ILLUSTRATION_MEMBERS } from '@/utils/memories';
+import {
+  isArtworkMemory,
+  isKnownMemoryType,
+  MAX_ILLUSTRATION_MEMBERS,
+  MAX_MEMORY_MEDIA_ASSETS,
+} from '@/utils/memories';
 import { canEditFamilyContent } from '@/utils/roles';
 
 const TYPE_CONFIGS = {
@@ -44,6 +52,7 @@ const TYPE_CONFIGS = {
   media_photo:       { label: 'Photo',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_video:       { label: 'Video',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_mixed:       { label: 'Media',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
+  media_artwork:     { label: 'Artwork',      color: colors.ink2,    bg: colors.surface,     border: colors.border },
   audio:             { label: 'Sound',        color: colors.seaInk,  bg: colors.seaSoft,     border: colors.sea },
 } as const;
 
@@ -92,6 +101,27 @@ export default function EditMemoryScreen() {
   const [illustrationEnabled, setIllustrationEnabled] = useState(false);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [scanNotice, setScanNotice] = useState('');
+  // Scanned pages appended to an artwork memory live in app-owned storage
+  // (`artwork-scans/`) until the save below uploads them. Delete the files we
+  // discard: removed tiles, and everything on leaving without a save.
+  const attachedMediaRef = useRef(attachedMedia);
+  const hasSavedRef = useRef(false);
+  useEffect(() => {
+    attachedMediaRef.current = attachedMedia;
+  });
+  useEffect(() => {
+    return () => {
+      if (hasSavedRef.current) {
+        return;
+      }
+      for (const attachment of attachedMediaRef.current) {
+        if (attachment.source === 'scan') {
+          void deleteArtworkScanFile(attachment.uri);
+        }
+      }
+    };
+  }, []);
   // Keyed by index into the attachedMedia array being saved; only newly added
   // (not yet uploaded) assets get an entry. Null when no upload is running.
   const [uploadProgress, setUploadProgress] = useState<Record<number, MediaSaveProgressEntry> | null>(null);
@@ -166,6 +196,11 @@ export default function EditMemoryScreen() {
   // description/date/tags are editable, the clip itself never is -- no media
   // picker, no AI-illustration toggle, mic disabled.
   const isAudio = memory?.memory_type === 'audio';
+  // Artwork is derived from the memory row, never from attachment `source`
+  // (a loaded memory's assets carry none). Library photos/videos can't be
+  // added to a scanned-artwork memory -- docs/plans/artwork-scanning.md,
+  // decision 5.
+  const isArtwork = memory ? isArtworkMemory(memory) : false;
   const isIllustrationOverLimit = selectedMemberIds.length > MAX_ILLUSTRATION_MEMBERS;
   const isIllustrationEnabled = illustrationEnabled && !isIllustrationOverLimit;
   const hasRetainedIllustration = Boolean(memory?.illustration_key);
@@ -184,7 +219,9 @@ export default function EditMemoryScreen() {
   const audioDurationSeconds = (audioClipAsset?.duration_ms ?? 0) / 1000;
 
   const typeKey =
-    memory?.memory_type === 'media' && attachedMedia.length > 1
+    isArtwork
+      ? 'media_artwork'
+      : memory?.memory_type === 'media' && attachedMedia.length > 1
       ? 'media_mixed'
       : memory?.memory_type === 'media' && memory.media_content_type?.startsWith('video/')
       ? 'media_video'
@@ -216,7 +253,17 @@ export default function EditMemoryScreen() {
 
   const appendMedia = (attachments: MediaAttachment[]) => {
     setErrorMessage('');
-    setAttachedMedia((current) => [...current, ...attachments].slice(0, 10));
+    setAttachedMedia((current) => [...current, ...attachments].slice(0, MAX_MEMORY_MEDIA_ASSETS));
+  };
+
+  // Scanned pages joining an artwork memory (docs/plans/artwork-scanning.md
+  // 3.6). Resolves long after the tap, so room is computed from the ref.
+  const handleArtworkScanned = (scanned: MediaAttachment[]) => {
+    const room = Math.max(0, MAX_MEMORY_MEDIA_ASSETS - attachedMediaRef.current.length);
+    for (const overflow of scanned.slice(room)) {
+      void deleteArtworkScanFile(overflow.uri);
+    }
+    appendMedia(scanned.slice(0, room));
   };
 
   const moveMedia = (fromIndex: number, toIndex: number) => {
@@ -237,6 +284,11 @@ export default function EditMemoryScreen() {
       return;
     }
 
+    const removed = attachedMedia.find((attachment) => attachment.id === attachmentId);
+    if (removed?.source === 'scan') {
+      void deleteArtworkScanFile(removed.uri);
+    }
+    setScanNotice('');
     setAttachedMedia((current) => current.filter((attachment) => attachment.id !== attachmentId));
     setSelectedMediaId((current) => (current === attachmentId ? null : current));
   };
@@ -306,6 +358,13 @@ export default function EditMemoryScreen() {
           : undefined,
         onMediaProgress: isMedia ? reportMediaProgress : undefined,
       });
+      // Uploaded: the scanned pages now live in R2.
+      hasSavedRef.current = true;
+      for (const attachment of savingMedia) {
+        if (attachment.source === 'scan') {
+          void deleteArtworkScanFile(attachment.uri);
+        }
+      }
       router.back();
     } catch (error) {
       const failedAttachment =
@@ -422,29 +481,35 @@ export default function EditMemoryScreen() {
       dateValue={memoryDate}
       errorMessage={errorMessage || undefined}
       errorTestID="edit-memory-error"
-      belowErrorSlot={uploadSummary ? (
-        <View
-          accessibilityLabel={uploadSummary.label}
-          accessibilityLiveRegion="polite"
-          style={styles.uploadProgress}
-          testID="edit-memory-upload-progress"
-        >
-          <Text style={styles.uploadProgressLabel}>{uploadSummary.label}</Text>
-          <View style={styles.uploadProgressTrack}>
+      belowErrorSlot={(
+        <>
+          {scanNotice ? <ArtworkScanNotice message={scanNotice} testID="edit-memory-scan-notice" /> : null}
+          {uploadSummary ? (
             <View
-              style={[
-                styles.uploadProgressFill,
-                // Never sit at 0 -- a sliver reads as "working".
-                { width: `${Math.max(uploadSummary.fraction, 0.03) * 100}%` },
-              ]}
-            />
-          </View>
-        </View>
-      ) : null}
+              accessibilityLabel={uploadSummary.label}
+              accessibilityLiveRegion="polite"
+              style={styles.uploadProgress}
+              testID="edit-memory-upload-progress"
+            >
+              <Text style={styles.uploadProgressLabel}>{uploadSummary.label}</Text>
+              <View style={styles.uploadProgressTrack}>
+                <View
+                  style={[
+                    styles.uploadProgressFill,
+                    // Never sit at 0 -- a sliver reads as "working".
+                    { width: `${Math.max(uploadSummary.fraction, 0.03) * 100}%` },
+                  ]}
+                />
+              </View>
+            </View>
+          ) : null}
+        </>
+      )}
       hasMediaRegion={hasAttachment}
       illustrationSlot={illustrationSlot}
       isSaving={isUpdating}
       mediaDisabled={isUpdating}
+      mediaHeaderLabel={isArtwork ? 'Artwork' : undefined}
       maxSelectedMembers={isIllustrationEnabled && hasIllustrationHistory ? MAX_ILLUSTRATION_MEMBERS : undefined}
       members={members}
       noticeSlot={noticeSlot}
@@ -460,13 +525,45 @@ export default function EditMemoryScreen() {
       saveTestID="edit-memory-save-btn"
       selectedMediaId={selectedMediaId}
       selectedMemberIds={selectedMemberIds}
-      toolbarMediaButton={isMedia ? (
+      toolbarMediaButton={isArtwork ? (
+        // No MemoryMediaPicker on artwork. Binaries with the native scanner
+        // get the live scan button (pages append to this memory and upload
+        // through the normal edit save); OTA-only runtimes without it get a
+        // disabled placeholder.
+        isArtworkScannerAvailable() ? (
+          <ArtworkScanButton
+            disabled={isUpdating || attachedMedia.length >= MAX_MEMORY_MEDIA_ASSETS}
+            onError={setErrorMessage}
+            onNotice={setScanNotice}
+            onScanned={handleArtworkScanned}
+            remainingSlots={MAX_MEMORY_MEDIA_ASSETS - attachedMedia.length}
+            testID="edit-memory-scan-artwork"
+          />
+        ) : (
+          <View
+            accessibilityHint="Update the app to scan more artwork"
+            accessibilityLabel="Scan artwork"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: true }}
+            accessible
+            style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}
+            testID="edit-memory-scan-artwork-disabled"
+          >
+            <SymbolView
+              name={{ ios: 'doc.viewfinder', android: 'document_scanner' }}
+              size={20}
+              tintColor={colors.ink3}
+              fallback={<Text style={styles.toolbarIconFallback}>▣</Text>}
+            />
+          </View>
+        )
+      ) : isMedia ? (
         <MemoryMediaPicker
           compact
-          disabled={isUpdating || attachedMedia.length >= 10}
+          disabled={isUpdating || attachedMedia.length >= MAX_MEMORY_MEDIA_ASSETS}
           onError={setErrorMessage}
           onSelect={appendMedia}
-          remainingSlots={10 - attachedMedia.length}
+          remainingSlots={MAX_MEMORY_MEDIA_ASSETS - attachedMedia.length}
         />
       ) : (
         <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>

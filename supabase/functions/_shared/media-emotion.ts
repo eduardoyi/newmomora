@@ -29,12 +29,14 @@ export type PrepareVisionImageErrorCode = 'file_too_large' | 'unsupported_image_
 export async function prepareVisionImageFromBytes(
   bytes: Uint8Array,
   sourceContentType: string,
+  /** Per-call edge cap; production callers keep the default. The artwork-medium eval passes a larger value. */
+  maxEdge: number = MAX_EMOTION_VISION_EDGE,
 ): Promise<VisionImageInput | { code: PrepareVisionImageErrorCode }> {
   if (bytes.length > MAX_EMOTION_SOURCE_BYTES) {
     return { code: 'file_too_large' };
   }
 
-  const capped = await capImageMaxEdge(bytes, MAX_EMOTION_VISION_EDGE, sourceContentType);
+  const capped = await capImageMaxEdge(bytes, maxEdge, sourceContentType);
 
   if (HEIC_CONTENT_TYPES.has(capped.contentType)) {
     return { code: 'unsupported_image_format' };

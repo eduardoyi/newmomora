@@ -10,6 +10,7 @@ import {
   updateMemoryAnalysisIfSnapshotMatches,
   upsertMemoryMilestones,
   type MediaAssetForAnalysis,
+  type MemoryAnalysisResult,
 } from '../_shared/analyze-memory-core.ts';
 import { createServiceClient, createUserClient } from '../_shared/supabase-admin.ts';
 import { checkBillingFamilyWrite } from '../_shared/billing.ts';
@@ -39,6 +40,12 @@ export interface AnalyzeMemoryResponse extends AnalyzeEmotionResponse {
   topics?: string[];
   labels?: string[];
   description?: string;
+  /**
+   * Artwork memories only (`media_variant = 'artwork'`): the normalized medium
+   * (null when the model's value was unusable). Omitted for every other
+   * memory. Additive -- older clients ignore it.
+   */
+  artworkMedium?: string | null;
 }
 
 // `fetchTaggedMembers`/`updateMemoryAnalysisIfSnapshotMatches`/
@@ -61,6 +68,8 @@ interface MemoryRow {
   updated_at: string;
   /** Audio memories only (docs/features/audio-memories.md). Invisible, search-only transcript. */
   audio_transcript: string | null;
+  /** `'artwork'` for scanned-artwork media memories (docs/plans/artwork-scanning.md). */
+  media_variant: string | null;
 }
 
 interface MemoryMediaRow {
@@ -161,6 +170,27 @@ export function validateMediaPhotoMemoryRow(
   return null;
 }
 
+/**
+ * Success body for a completed (non-skipped) analysis. `artworkMedium` is
+ * present only for artwork memories (null when the model's medium was
+ * unusable) so every other memory's response is unchanged.
+ */
+export function buildAnalyzeMemoryResponse(
+  result: Extract<MemoryAnalysisResult, { skipped: false }>,
+  mediaVariant: string | null,
+  updated: boolean,
+): AnalyzeMemoryResponse {
+  return {
+    emotion: result.emotion,
+    colorPalette: result.colorPalette,
+    topics: result.topics.map((topic) => topic.id),
+    labels: result.labels,
+    description: result.description,
+    ...(mediaVariant === 'artwork' ? { artworkMedium: result.artworkMedium } : {}),
+    skipped: updated ? undefined : true,
+  };
+}
+
 export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   const corsResponse = handleCors(req);
   if (corsResponse) {
@@ -209,7 +239,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   const { data: memory, error: memoryError } = await supabase
     .from('memories')
     .select(
-      'id, family_id, content, memory_type, memory_date, media_key, media_content_type, audio_transcript, updated_at',
+      'id, family_id, content, memory_type, memory_date, media_key, media_content_type, audio_transcript, media_variant, updated_at',
     )
     .eq('id', memoryId)
     .maybeSingle();
@@ -240,6 +270,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
   const snapshot = {
     updated_at: row.updated_at,
     content: row.content,
+    media_variant: row.media_variant,
   };
 
   try {
@@ -292,6 +323,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
         memoryType: row.memory_type,
         memoryDate: row.memory_date,
         audioTranscript: row.audio_transcript,
+        mediaVariant: row.media_variant,
       },
       taggedMembers,
       media: orderedMedia.map(
@@ -318,6 +350,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
         topicDetails: result.topicDetails,
         labels: result.labels,
         description: result.description,
+        artworkMedium: result.artworkMedium,
       },
       snapshot,
     );
@@ -326,16 +359,7 @@ export async function handleAnalyzeEmotion(req: Request): Promise<Response> {
       await upsertMemoryMilestones(serviceClient, memoryId, row.family_id, result.milestones);
     }
 
-    const response: AnalyzeMemoryResponse = {
-      emotion: result.emotion,
-      colorPalette: result.colorPalette,
-      topics: result.topics.map((topic) => topic.id),
-      labels: result.labels,
-      description: result.description,
-      skipped: updated ? undefined : true,
-    };
-
-    return jsonResponse(response);
+    return jsonResponse(buildAnalyzeMemoryResponse(result, row.media_variant, updated));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown';
 

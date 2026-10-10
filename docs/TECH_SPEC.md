@@ -247,6 +247,19 @@ create table public.memories (
   -- rows, search-only -- never rendered client-side. GIN index below.
   -- Nullable, normalized empty-string -> NULL on write (never '').
   audio_transcript text,
+  -- Artwork memories (2026-10-14, 20261014120000_artwork_memories.sql,
+  -- docs/plans/artwork-scanning.md): `media_variant = 'artwork'` flags a
+  -- `media` memory made of scanned child artwork (no new memory_type).
+  -- Client-set at insert (column grant: insert only, no update -> immutable
+  -- for clients). `artwork_medium` is the AI-suggested medium
+  -- (`_shared/artwork-medium.ts` vocabulary, stored lowercase), written only
+  -- by the analysis service-role CAS write; no DB vocabulary check.
+  media_variant text
+    constraint memories_media_variant_check
+    check (media_variant is null or (media_variant = 'artwork' and memory_type = 'media')),
+  artwork_medium text
+    constraint memories_artwork_medium_requires_artwork
+    check (artwork_medium is null or coalesce(media_variant = 'artwork', false)),
   link_previews jsonb not null default '{}'::jsonb,  -- { [url]: { title: string|null, fetchedAt } } -- see fetch-link-previews (§4.13)
   -- Share card store-through cache (2026-08-05,
   -- docs/plans/share-card-store-through.md, W1): cached compose-share-card
@@ -1872,6 +1885,30 @@ $$ language plpgsql set search_path = public;
 create trigger memories_audio_type_immutable
   before update of memory_type on public.memories
   for each row execute function public.enforce_audio_memory_type_immutable();
+
+-- Artwork memories (20261014120000_artwork_memories.sql): an artwork parent
+-- (`memories.media_variant = 'artwork'`) holds images only. A trigger rather
+-- than a check inside `replace_memory_media_assets` (redefined many times; an
+-- inline check would be dropped by the next rewrite) so it also covers direct
+-- table writes and stops old app versions adding a video from their edit
+-- screen. SECURITY INVOKER; the client maps the message to a friendly error.
+create or replace function public.enforce_artwork_memory_media_images_only()
+returns trigger language plpgsql security invoker set search_path = public as $$
+declare parent_media_variant text;
+begin
+  select media_variant into parent_media_variant
+  from public.memories where id = new.memory_id;
+
+  if parent_media_variant = 'artwork' and new.content_type not like 'image/%' then
+    raise exception 'artwork_media_must_be_image' using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger memory_media_artwork_images_only
+  before insert or update of content_type, memory_id on public.memory_media
+  for each row execute function public.enforce_artwork_memory_media_images_only();
 ```
 
 Mirrored at the app level by `updateMemory`'s explicit type-immutability guard
@@ -1939,6 +1976,7 @@ file. 04:30 UTC sits between `invoke-hard-delete-expired-accounts` (03:00,
 - `memories.content`: non-empty after trim for `text_illustration` and `text_only` types; nullable for `media` and `audio` types — enforced in Edge Function / client layer. For `audio`, deliberately left unconstrained rather than forbidden even at the DB layer (the `memories_type_invariants` check constraint, `20260819120000_audio_memories.sql`) — an old-build edit screen can still staple a caption onto an audio row.
 - `memories.memory_type`: drives whether AI pipeline fires and whether `media_key` is expected. `audio` is DB-immutable once set (`memories_audio_type_immutable` trigger, above) — no other type transitions into or out of it.
 - `memories.media_key`: required (non-null) when `memory_type = 'media'` or `'audio'`; must be null for other types — enforced in Edge Function / client layer, and by the `memories_type_invariants` check constraint (`20260819120000_audio_memories.sql`) for `media`/`audio`
+- `memories.media_variant` / `memories.artwork_medium` (artwork memories, `20261014120000_artwork_memories.sql`): `media_variant` is null or `'artwork'` and only on `memory_type = 'media'` (`memories_media_variant_check`); `artwork_medium` is null or requires `media_variant = 'artwork'` (`memories_artwork_medium_requires_artwork`, written with `coalesce` so a NULL variant cannot satisfy it). There is deliberately **no** `artwork_medium in (<vocabulary>)` check: vocabulary drift must never fail the analysis CAS UPDATE that also carries emotion/topics/milestones, so `_shared/artwork-medium.ts` (`normalizeArtworkMedium`, sync-tested against `src/utils/artwork-medium.ts`) is the only enforcement. Grants: `authenticated` has `insert (media_variant)` and **no** update grant on either column (the variant is immutable for clients; `artwork_medium` is service-role only). Artwork parents accept image `memory_media` rows only (`memory_media_artwork_images_only`, §2.4).
 - `memories.illustration_status`: on insert, set to `'pending'` for `text_illustration` and `'none'` for other types. Editing an illustrated memory to `text_only` deliberately retains its illustration key/prompt/status so toggling AI back on can reveal the existing asset without regeneration; rendering and generation eligibility branch on `memory_type`.
 - `memories.illustration_generation_id`: identifies the exact immutable R2 illustration object currently referenced by the row. `illustration_generation_attempt_id` is a transient CAS token owned by one generator attempt.
 - `memories.illustration_generation_started_at`: server-owned recovery clock. It is set when an illustrated memory is parked/claimed, cleared at terminal publication/failure, and is never written by the client. Older/null rows fall back to `updated_at`, then `created_at`, so a memory saved before a dispatch attempt remains recoverable.
@@ -2355,6 +2393,8 @@ This `verify_jwt = false` internal function is not a browser API. It verifies ra
 | `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | none | `gpt-4o-mini` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
 | `audio` (both empty) | — | — | `{ emotion: '', colorPalette: '', skipped: true }` — success-shaped, never an error (babble/silence with no typed caption) |
 
+**Artwork medium axis (2026-10-14, [artwork-scanning plan](./plans/artwork-scanning.md)).** For a `media` memory with `media_variant = 'artwork'` (the handler selects `media_variant`; `MemoryForAnalysis.mediaVariant`) the same single call gains an artwork addendum appended to the system prompt (non-artwork prompts are byte-identical, pinned by a hash test): the images are scans of a child's drawing, not a family event, and the model adds `medium` — one of `_shared/artwork-medium.ts`'s `ARTWORK_MEDIUMS` (`crayon`, `marker`, `colored pencil`, `pencil`, `watercolor`, `paint`, `chalk`, `pastel`, `collage`, `mixed media`; `mixed media` when pieces differ). `parseMemoryAnalysisModelOutput` reads it through the tolerant `normalizeArtworkMedium` (case, plurals, spelling variants, synonym map; unknown -> null). Only the first 4 pieces are seen, so a larger batch's medium reflects pieces 1-4. **Artwork-mode post-processing** ("depicted content is not a family event" — a drawn castle must not feed the holiday-card trips, book travel spreads, or film script) runs in `runMemoryAnalysis` before the write: `topics` forced to `['arts-crafts']` (model topics discarded; `topic_details` kept only for that topic), `labels` lowercased and prefixed `artwork` + the medium, `description` prefixed `a child's <medium|artwork> drawing of …`; milestones are unchanged (explicit-text-only still applies to the caption). The CAS write includes `artwork_medium` **only when the memory is artwork and the parsed medium is non-null** (the check constraint would reject it otherwise, and a flaky re-analysis never erases a good medium); `supabase/scripts/backfill-memory-analysis.ts` selects `media_variant` and passes it through the same helper.
+
 **Video memories with a backfilled poster now get emotion (and the rest of the analysis) — the "video has no emotion in MVP" gap is closed.** A video with no poster at all still has no usable image; if it also has no caption, the request validates as `400 video_not_supported` before any OpenAI call (same as before). A `media` request that clears validation but ends up with neither text nor a fetchable image (e.g. every candidate image fails to fetch/decode) degrades to the success-shaped `skipped: true` response above rather than a `file_too_large`/`unsupported_image_format` error — a deliberate behavior change from the single-image legacy path: with up to 4 images, one bad image no longer fails the whole call, so `file_too_large`/`unsupported_image_format` are effectively unreachable outside this all-images-failed edge case.
 
 **Triggers**
@@ -2381,12 +2421,12 @@ Does **not** invoke `generate-illustration` for `media`.
 
 **Logic**
 
-1. Fetch memory (JWT + RLS: `content`, `memory_type`, `memory_date`, `media_key`, `media_content_type`, `audio_transcript`, `updated_at`); assert caller is a family member; check billing write access
+1. Fetch memory (JWT + RLS: `content`, `memory_type`, `memory_date`, `media_key`, `media_content_type`, `audio_transcript`, `media_variant`, `updated_at`); assert caller is a family member; check billing write access
 2. Per-type request validation (unchanged error contract): empty-text 400 for `text_illustration`/`text_only`; for `media`, load ordered `memory_media` (now including `preview_object_key`) and validate — a usable candidate is any asset with a `preview_object_key` OR any non-video image asset; an all-video list with no poster on any asset is still `400 video_not_supported`
 3. Fetch tagged members (`memory_family_members` → `family_members` id/name/date_of_birth) for structured context and milestone resolution
 4. `runMemoryAnalysis` (`_shared/analyze-memory-core.ts`): builds the per-type text/image input, fetches and prepares up to 4 images (best-effort per image), builds the structured context block (date, tagged members' ages/child-adult/days-to-birthday, nearby holidays — `_shared/date-context.ts`) and the milestone catalog subset for the tagged members' age bands, makes the one multimodal OpenAI call, then post-processes every axis in code: topic vocabulary validation + date gating (`_shared/memory-topics.ts` + `gateTopicsByDate`), the milestone explicit-text-only rule + age-band plausibility + deterministic birthday resolution (`_shared/memory-milestones.ts`)
 5. No text and no usable image → `{ skipped: true }`, no DB write, no OpenAI call
-6. Otherwise: **guarded compare-and-set UPDATE** on `memories` (`emotion`, `topics`, `topic_details`, `labels`, `description`, `analysis_version` = `TOPICS_VERSION`, `analyzed_at`), matching on `updated_at` — extended from the media-photo-only guard that existed before this change; every memory type now shares it
+6. Otherwise: **guarded compare-and-set UPDATE** on `memories` (`emotion`, `topics`, `topic_details`, `labels`, `description`, `analysis_version` = `TOPICS_VERSION`, `analyzed_at`, plus `artwork_medium` for artwork memories with a parsed medium only), matching on `updated_at` — extended from the media-photo-only guard that existed before this change; every memory type now shares it
 6a. Milestone explicit-evidence gate (2026-10-01): the model's milestone claim carries a verbatim `evidence` quote; a deterministic gate drops the claim unless the quote is in the memory text and has the explicit first-time/achievement/event wording the catalog entry requires (`_shared/memory-milestone-evidence.ts`; see memory-analysis.md). HTTP response contract unchanged
 7. If the guarded update landed: upsert `memory_milestones` rows (unique on `memory_id, milestone_id`) via the service client. Milestone writes are skipped entirely when the guarded update was discarded (the analysis ran against superseded content) and are non-fatal on failure (logged, does not fail the request)
 8. Per-memory cooldown: 5s between calls (`429` `rate_limited`)
@@ -2404,7 +2444,7 @@ Does **not** invoke `generate-illustration` for `media`.
 }
 ```
 
-`topics`/`labels`/`description` are omitted (not just empty) when the request returned early via `skipped: true`. `skipped: true` when analysis succeeded but the stale-write guard discarded the DB update — `emotion`/`topics`/`labels`/`description` in the response still reflect the freshly analyzed values even though the persisted row wasn't updated.
+`artworkMedium` (`string | null`, additive, 2026-10-14) is present only for artwork memories (`media_variant = 'artwork'`) — `null` when the model's medium was unusable; it is omitted for every other memory, so their responses are unchanged. Older clients ignore it. `topics`/`labels`/`description` are omitted (not just empty) when the request returned early via `skipped: true`. `skipped: true` when analysis succeeded but the stale-write guard discarded the DB update — `emotion`/`topics`/`labels`/`description` in the response still reflect the freshly analyzed values even though the persisted row wasn't updated.
 
 **Errors:** `MEMORY_NOT_FOUND`, `invalid_memory_type`, `video_not_supported`, `file_too_large`, `unsupported_image_format`, `forbidden`, `rate_limited`, `ANALYSIS_FAILED`
 
@@ -4185,6 +4225,20 @@ Retry/Discard, so this cannot strand the queue. **Videos are out of scope**
 [docs/features/media-memories.md](./features/media-memories.md) for the
 full behavior, fail-open EXIF-prefill rules, and Phase 2 (location)
 extension path.
+
+**Scanned artwork (client, 2026-10-10):** the composer's scan button
+(`src/components/artwork-scan-button.tsx`) calls the optional native module
+`MomoraArtworkScanner` through `src/services/artwork-scanner.ts` (Android ML Kit
+document scanner in `SCANNER_MODE_BASE`; iOS VisionKit). Pages are moved into
+`documentDirectory/artwork-scans/` (`src/utils/artwork-scan-custody.ts`),
+validated, and attached as `MediaAttachment`s with `source: 'scan'`. The media
+save passes `mediaVariant: 'artwork'` through the pending-uploads queue →
+`postMediaMemory` → `createMediaMemory`, which writes `memories.media_variant`
+on INSERT (immutable afterwards); the queue deletes the scan files after a
+successful post or a Discard. `memory_saved` gains `is_artwork` and a new
+`artwork_scan_result` event is emitted by the button
+([analytics.md](./features/analytics.md)). See
+[docs/features/artwork.md](./features/artwork.md).
 
 ### 5.6 Family sharing: invite → redeem → approve
 

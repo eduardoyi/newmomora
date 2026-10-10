@@ -316,11 +316,20 @@ export interface ChatVisionResult<T> {
  * `usage` on its result so the backfill script can report real token counts
  * and cost without a second OpenAI call or reimplementing this helper.
  */
+export interface ChatVisionMultiOptions extends OpenAiRequestOptions {
+  /**
+   * Per-image `detail` hint. Defaults to `'low'` (the production setting for
+   * `analyze-memory`); only the artwork-medium eval
+   * (supabase/scripts/eval-artwork-medium.ts) opts into `'high'`.
+   */
+  detail?: 'low' | 'high';
+}
+
 export async function chatJsonWithVisionMulti<T>(
   systemPrompt: string,
   userText: string | null,
   images: VisionImageInput[],
-  options: OpenAiRequestOptions = {},
+  options: ChatVisionMultiOptions = {},
 ): Promise<ChatVisionResult<T>> {
   const aiCallId = crypto.randomUUID();
   const userContent: Array<{ type: string; text?: string; image_url?: { url: string; detail?: string } }> = [];
@@ -334,7 +343,7 @@ export async function chatJsonWithVisionMulti<T>(
       type: 'image_url',
       image_url: {
         url: `data:${image.contentType};base64,${image.base64}`,
-        detail: 'low',
+        detail: options.detail ?? 'low',
       },
     });
   }

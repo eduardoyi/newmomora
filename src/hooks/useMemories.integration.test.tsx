@@ -20,7 +20,7 @@ import {
   fetchMemoryGenerationStatuses,
   regenerateMemoryIllustration,
   retryMemoryIllustration,
-  runMediaPhotoEmotionAnalysis,
+  runMediaPhotoAnalysis,
   runTextOnlyEmotionAnalysis,
   fetchMemorySearchFacets,
   searchMemories,
@@ -55,6 +55,7 @@ jest.mock('@/services/memories', () => ({
   fetchMemoryGenerationStatuses: jest.fn(),
   regenerateMemoryIllustration: jest.fn(),
   retryMemoryIllustration: jest.fn(),
+  runMediaPhotoAnalysis: jest.fn().mockResolvedValue(undefined),
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   runTextOnlyEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   searchMemories: jest.fn(),
@@ -98,8 +99,8 @@ const mockedFetchMemoryGenerationStatuses = fetchMemoryGenerationStatuses as jes
 const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
 const mockedUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
 const mockedDeleteMemory = deleteMemory as jest.MockedFunction<typeof deleteMemory>;
-const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
-  typeof runMediaPhotoEmotionAnalysis
+const mockedRunMediaPhotoAnalysis = runMediaPhotoAnalysis as jest.MockedFunction<
+  typeof runMediaPhotoAnalysis
 >;
 const mockedNotifyFamilyActivity = notifyFamilyActivity as jest.MockedFunction<
   typeof notifyFamilyActivity
@@ -291,7 +292,7 @@ describe('useMemories integration', () => {
     });
 
     await waitFor(() => {
-      expect(mockedRunMediaPhotoEmotionAnalysis).toHaveBeenCalledWith('memory-photo-2');
+      expect(mockedRunMediaPhotoAnalysis).toHaveBeenCalledWith('memory-photo-2');
     });
   });
 
@@ -319,7 +320,7 @@ describe('useMemories integration', () => {
       memoryDate: '2026-05-27',
     });
 
-    expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+    expect(mockedRunMediaPhotoAnalysis).not.toHaveBeenCalled();
   });
 
   describe('notify-family-activity fire-and-forget (plan §10)', () => {
@@ -1046,6 +1047,37 @@ describe('useMemories integration', () => {
       });
       expect(mockedRunTextOnlyEmotionAnalysis).toHaveBeenCalledTimes(1);
       // Patched in place -- page 1 was fetched exactly once, no refetch.
+      expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
+    });
+
+    it('backfills a missing artwork emotion and medium together by patching the cache', async () => {
+      const artwork = {
+        id: 'memory-backfill-artwork',
+        family_id: 'family-1',
+        memory_type: 'media',
+        media_variant: 'artwork',
+        artwork_medium: null,
+        media_content_type: 'image/jpeg',
+        content: null,
+        emotion: null,
+        illustration_status: 'none',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        taggedMembers: [],
+        mediaAssets: [{ content_type: 'image/jpeg' }],
+      };
+      mockedFetchMemoriesPage.mockResolvedValue(pageResult([artwork as never]));
+      mockedRunMediaPhotoAnalysis.mockResolvedValue({ emotion: 'wonder', artworkMedium: 'marker' });
+
+      const { result } = renderHook(() => useMemories(), { wrapper: createWrapper() });
+
+      await waitFor(() => {
+        expect(result.current.memories[0]).toMatchObject({
+          emotion: 'wonder',
+          artwork_medium: 'marker',
+        });
+      });
+      expect(mockedRunMediaPhotoAnalysis).toHaveBeenCalledWith('memory-backfill-artwork');
       expect(mockedFetchMemoriesPage).toHaveBeenCalledTimes(1);
     });
 

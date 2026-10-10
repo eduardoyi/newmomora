@@ -104,7 +104,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Momora uses your photo library to add photos and videos to family memories, privately suggest moments for your review, and choose profile photos for family members.",
-          "cameraPermission": "Momora uses your camera to take photos for family memories and family member profiles."
+          "cameraPermission": "Momora uses your camera to take photos for family memories and family member profiles, and to scan your children's artwork."
         }
       ],
       [

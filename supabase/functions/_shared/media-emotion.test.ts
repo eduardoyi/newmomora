@@ -38,3 +38,19 @@ Deno.test('normalizeEmotionLabel falls back to tender for unknown labels', () =>
   assertEquals(result.emotion, 'tender');
   assertEquals(result.colorPalette, 'soft rose');
 });
+
+Deno.test('prepareVisionImageFromBytes caps at MAX_EMOTION_VISION_EDGE by default and honors a per-call edge', async () => {
+  const { Image } = await import('https://deno.land/x/imagescript@1.3.0/mod.ts');
+  const image = new Image(2000, 1500);
+  image.fill(0x336699ff);
+  const bytes = await image.encodeJPEG(80);
+
+  const decodeWidth = async (prepared: Awaited<ReturnType<typeof prepareVisionImageFromBytes>>) => {
+    if ('code' in prepared) throw new Error(prepared.code);
+    const decoded = await Image.decode(Uint8Array.from(atob(prepared.base64), (char) => char.charCodeAt(0)));
+    return decoded.width;
+  };
+
+  assertEquals(await decodeWidth(await prepareVisionImageFromBytes(bytes, 'image/jpeg')), 768);
+  assertEquals(await decodeWidth(await prepareVisionImageFromBytes(bytes, 'image/jpeg', 1280)), 1280);
+});

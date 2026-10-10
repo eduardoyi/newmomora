@@ -244,6 +244,92 @@ describe('MemoryDetailScreen hierarchy', () => {
   });
 });
 
+describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning.md)', () => {
+  const assets = [
+    { id: 'asset-1', object_key: 'scan-1.jpg', content_type: 'image/jpeg', position: 0 },
+    { id: 'asset-2', object_key: 'scan-2.jpg', content_type: 'image/jpeg', position: 1 },
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete mockSearchParams.comments;
+    delete mockSearchParams.mediaIndex;
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [{ user_id: 'user-1', name: 'Eduardo' }],
+    });
+    mockedUseMemoryMutations.mockReturnValue({
+      deleteMemory: jest.fn(),
+      retryIllustration: jest.fn(),
+      regenerateIllustration: jest.fn(),
+      isDeleting: false,
+      isRetrying: false,
+      isRegenerating: false,
+    });
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+  });
+
+  function mockMemory(overrides: Record<string, unknown>) {
+    mockedUseMemory.mockReturnValue({
+      data: { ...baseMemory, mediaAssets: assets, ...overrides },
+      isLoading: false,
+      isError: false,
+    });
+  }
+
+  it('hangs the carousel in the artwork frame and shows the medium chip instead of the emotion chip', () => {
+    mockMemory({ media_variant: 'artwork', artwork_medium: 'watercolor', emotion: 'joy' });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('memory-detail-artwork-frame')).toBeTruthy();
+    expect(screen.getByTestId('artwork-medium-chip')).toHaveTextContent('watercolor');
+    expect(screen.queryByText('joy')).toBeNull();
+    // Same carousel as the photo layout, so tapping still opens the full-screen viewer.
+    const carouselProps = (MemoryMediaCarousel as jest.Mock).mock.calls[0]?.[0];
+    expect(carouselProps).toEqual(expect.objectContaining({ onPress: expect.any(Function) }));
+    expect(screen.getByTestId('memory-detail-section-engagement')).toBeTruthy();
+  });
+
+  it('falls back to the "Artwork" badge while the medium is not yet known', () => {
+    mockMemory({ media_variant: 'artwork', artwork_medium: null, emotion: 'joy' });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('artwork-badge')).toHaveTextContent('Artwork');
+    expect(screen.queryByTestId('artwork-medium-chip')).toBeNull();
+    expect(screen.queryByText('joy')).toBeNull();
+  });
+
+  it('keeps the tagged-member age row for artwork', () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-08-09T12:00:00'));
+    try {
+      mockMemory({
+        media_variant: 'artwork',
+        memory_date: '2026-07-10',
+        taggedMembers: [{ ...taggedMember, date_of_birth: '2022-11-10' }],
+      });
+
+      const screen = renderScreen();
+
+      expect(screen.getByText('Tomás, 3y 8m')).toBeTruthy();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('renders regular photo memories without the frame and with the emotion chip', () => {
+    mockMemory({ media_variant: null, emotion: 'joy' });
+
+    const screen = renderScreen();
+
+    expect(screen.queryByTestId('memory-detail-artwork-frame')).toBeNull();
+    expect(screen.queryByTestId('artwork-badge')).toBeNull();
+    expect(screen.getByText('joy')).toBeTruthy();
+  });
+});
+
 // P0.1 forward-compat fallback (docs/plans/audio-memories-v1.md) -- an old
 // installed client fetching a memory_type it doesn't recognize yet (e.g. a
 // hypothetical future type -- 'audio' itself is now known, so the fixture

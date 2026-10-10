@@ -39,6 +39,7 @@ import {
   verifyMilestoneEvidence,
   type EvidenceRejection,
 } from './memory-milestone-evidence.ts';
+import { ARTWORK_MEDIUMS, normalizeArtworkMedium, type ArtworkMedium } from './artwork-medium.ts';
 import { stripUrls } from './link-preview.ts';
 import { normalizeEmotionLabel, prepareVisionImageFromBytes } from './media-emotion.ts';
 import { chatJsonWithVisionMulti, type ChatVisionUsage, type VisionImageInput } from './openai.ts';
@@ -55,6 +56,8 @@ export interface MemoryForAnalysis {
   /** `YYYY-MM-DD`. */
   memoryDate: string;
   audioTranscript: string | null;
+  /** `memories.media_variant`; `'artwork'` switches on the artwork-mode prompt addendum and post-processing. */
+  mediaVariant: string | null;
 }
 
 export interface MediaAssetForAnalysis {
@@ -88,6 +91,9 @@ export type MemoryAnalysisResult =
       labels: string[];
       description: string;
       milestones: MemoryMilestoneWrite[];
+      /** Normalized medium from the artwork-mode pass; null for non-artwork
+       * memories and for an unparseable model value. */
+      artworkMedium: string | null;
       /** Token usage from the one OpenAI call, when the provider reported
        * it. Consumed by the backfill script's cost/summary reporting
        * (supabase/scripts/backfill-memory-analysis.ts); the Edge Function
@@ -368,6 +374,8 @@ export interface ParsedMemoryAnalysisOutput {
   emotion: string;
   colorPalette: string;
   milestoneClaim: ParsedMilestoneClaim | null;
+  /** Tolerantly normalized `medium` (null when absent or outside the vocabulary). Only meaningful in artwork mode. */
+  artworkMedium: ArtworkMedium | null;
 }
 
 export function parseMemoryAnalysisModelOutput(raw: unknown): ParsedMemoryAnalysisOutput {
@@ -388,7 +396,43 @@ export function parseMemoryAnalysisModelOutput(raw: unknown): ParsedMemoryAnalys
     emotion: normalized.emotion,
     colorPalette: normalized.colorPalette,
     milestoneClaim,
+    artworkMedium: normalizeArtworkMedium(obj.medium),
   };
+}
+
+// ── Artwork mode (docs/plans/artwork-scanning.md 1.5) ───────────────────
+//
+// "Depicted content is not a family event": a drawing of a Disney castle must
+// not feed the holiday-card letter's trips (holiday-card-digest.ts reads
+// capitalized labels + TRIP_TOPICS), the book's travel spreads, or the film
+// script. So for artwork the model's topics are discarded, labels are
+// lowercased (no capitalized place name survives namedTrips' `^\p{Lu}`
+// filter) and prefixed, and the description says it is a drawing.
+
+export const ARTWORK_TOPIC_ID = 'arts-crafts';
+
+export interface ArtworkModeOutput {
+  topics: TopicAssignment[];
+  labels: string[];
+  description: string;
+}
+
+export function applyArtworkAnalysisMode(
+  parsed: Pick<ParsedMemoryAnalysisOutput, 'topics' | 'labels' | 'description' | 'artworkMedium'>,
+): ArtworkModeOutput {
+  // Keep a model-supplied detail only for the one topic we force.
+  const keptDetail = parsed.topics.find((topic) => topic.id === ARTWORK_TOPIC_ID)?.detail ?? null;
+  const topics: TopicAssignment[] = [{ id: ARTWORK_TOPIC_ID, detail: keptDetail }];
+
+  const medium = parsed.artworkMedium;
+  const prefix = medium ? ['artwork', medium] : ['artwork'];
+  const labels = [...new Set([...prefix, ...parsed.labels.map((label) => label.toLowerCase())])].slice(0, MAX_LABELS);
+
+  const subject = parsed.description.trim();
+  const lead = `a child's ${medium ?? 'artwork'} drawing`;
+  const description = subject ? `${lead} of ${subject}` : lead;
+
+  return { topics, labels, description };
 }
 
 // ── Milestone resolution (age-band plausibility + deterministic birthday) ─
@@ -571,6 +615,8 @@ function buildTopicsInstructionLines(topics: readonly TopicDefinition[]): string
 export function buildMemoryAnalysisSystemPrompt(input: {
   topics: readonly TopicDefinition[];
   milestoneCatalog: readonly MilestoneDefinition[];
+  /** Artwork scans only: appends the medium field + "depicts, not happened" guidance. Omitted/false leaves the prompt byte-identical. */
+  isArtwork?: boolean;
 }): string {
   const emotionList = Object.keys(EMOTION_PALETTES).join(', ');
 
@@ -591,7 +637,19 @@ export function buildMemoryAnalysisSystemPrompt(input: {
     formatMilestoneCatalogWithRequirements(input.milestoneCatalog),
   ];
 
+  if (input.isArtwork) {
+    lines.push(...buildArtworkPromptLines());
+  }
+
   return lines.join('\n');
+}
+
+function buildArtworkPromptLines(): string[] {
+  return [
+    '',
+    "ARTWORK: The images are scans of a child's artwork (a drawing, painting, or craft), not photos of a family event. They show what the child drew, not where the family was or what it did -- a drawn castle is not a trip to a castle, a drawn beach is not a beach day. Describe and label only what is depicted, and never treat it as something the family did.",
+    `- Add \`medium\`: exactly one of [${ARTWORK_MEDIUMS.join(', ')}], the main material the artwork appears to be made with; use \`mixed media\` when pieces differ or materials combine.`,
+  ];
 }
 
 // ── Orchestrator ─────────────────────────────────────────────────────────
@@ -648,7 +706,12 @@ export async function runMemoryAnalysis(input: RunMemoryAnalysisInput): Promise<
   }));
   const relevantMilestoneCatalog = buildRelevantMilestoneCatalog(taggedMembersWithAge);
 
-  const systemPrompt = buildMemoryAnalysisSystemPrompt({ topics: TOPICS, milestoneCatalog: relevantMilestoneCatalog });
+  const isArtwork = memory.memoryType === 'media' && memory.mediaVariant === 'artwork';
+  const systemPrompt = buildMemoryAnalysisSystemPrompt({
+    topics: TOPICS,
+    milestoneCatalog: relevantMilestoneCatalog,
+    isArtwork,
+  });
   const contextText = formatMemoryContextForPrompt(memoryContext);
   const userText = `${contextText}\n\nParent's text:\n${text ?? '(no text)'}`;
 
@@ -672,7 +735,10 @@ export async function runMemoryAnalysis(input: RunMemoryAnalysisInput): Promise<
   }
   const milestoneClaim = gated.claim;
 
-  const { topics: dateGatedTopics } = gateTopicsByDate(parsed.topics, memory.memoryDate);
+  // Artwork mode replaces the model's topics/labels/description (see
+  // applyArtworkAnalysisMode); milestones stay as computed from the caption.
+  const artworkOutput = isArtwork ? applyArtworkAnalysisMode(parsed) : null;
+  const { topics: dateGatedTopics } = gateTopicsByDate(artworkOutput?.topics ?? parsed.topics, memory.memoryDate);
 
   const topicDetails: Record<string, string> = {};
   for (const topic of dateGatedTopics) {
@@ -696,9 +762,10 @@ export async function runMemoryAnalysis(input: RunMemoryAnalysisInput): Promise<
     colorPalette: parsed.colorPalette,
     topics: dateGatedTopics,
     topicDetails,
-    labels: parsed.labels,
-    description: parsed.description,
+    labels: artworkOutput?.labels ?? parsed.labels,
+    description: artworkOutput?.description ?? parsed.description,
     milestones,
+    artworkMedium: isArtwork ? parsed.artworkMedium : null,
     usage,
   };
 }
@@ -760,6 +827,8 @@ export interface MemoryAnalysisWriteResult {
   topicDetails: Record<string, string>;
   labels: string[];
   description: string;
+  /** Written only when the memory is artwork AND this is non-null (see below). */
+  artworkMedium: string | null;
 }
 
 /**
@@ -773,8 +842,15 @@ export async function updateMemoryAnalysisIfSnapshotMatches(
   supabase: SupabaseClient,
   memoryId: string,
   result: MemoryAnalysisWriteResult,
-  snapshot: { updated_at: string; content: string | null },
+  snapshot: { updated_at: string; content: string | null; media_variant?: string | null },
 ): Promise<boolean> {
+  // `artwork_medium` has a check constraint (requires media_variant =
+  // 'artwork'), so the key is sent ONLY for an artwork memory with a parsed
+  // medium. Omitting it otherwise also means a flaky re-analysis (null parse)
+  // on an edit never erases a good medium.
+  const artworkMediumFields =
+    snapshot.media_variant === 'artwork' && result.artworkMedium ? { artwork_medium: result.artworkMedium } : {};
+
   const query = supabase
     .from('memories')
     .update({
@@ -785,6 +861,7 @@ export async function updateMemoryAnalysisIfSnapshotMatches(
       description: result.description,
       analysis_version: TOPICS_VERSION,
       analyzed_at: new Date().toISOString(),
+      ...artworkMediumFields,
     })
     .eq('id', memoryId)
     .eq('updated_at', snapshot.updated_at);

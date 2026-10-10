@@ -1,4 +1,5 @@
 import { assertEquals } from 'jsr:@std/assert@1';
+import { handleAnalyzeEmotion } from '../analyze-emotion/index.ts';
 import { handleAnalyzeMemory } from './index.ts';
 
 // `analyze-memory` is a thin re-export of analyze-emotion's handler
@@ -16,4 +17,14 @@ Deno.test('analyze-memory rejects unauthenticated requests', async () => {
   );
 
   assertEquals(response.status, 401);
+});
+
+// The alias endpoint must be the very same handler: the artwork medium axis
+// (media_variant select, artwork-mode analysis, the additive `artworkMedium`
+// response field, the artwork_medium CAS write -- all in analyze-emotion and
+// _shared/analyze-memory-core.ts) reaches `analyze-memory` callers only
+// through this identity. If the wrapper ever gets its own handler, it must
+// re-cover those behaviors.
+Deno.test('analyze-memory is the same handler as analyze-emotion (artwork medium behavior is shared)', () => {
+  assertEquals(handleAnalyzeMemory, handleAnalyzeEmotion);
 });

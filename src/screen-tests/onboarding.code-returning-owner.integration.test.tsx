@@ -53,7 +53,7 @@ import { timelineRoute } from '@/lib/routes';
 import { supabase } from '@/lib/supabase';
 import { createFamily, fetchMyFamilyMemberships } from '@/services/family';
 import { createFamilyMember, fetchFamilyMembers } from '@/services/family-members';
-import { createMemory, runMediaPhotoEmotionAnalysis } from '@/services/memories';
+import { createMemory, runMediaPhotoAnalysis } from '@/services/memories';
 import { postMediaMemory } from '@/services/memory-posting';
 import { fetchUserProfile, updateUserProfile } from '@/services/user-profile';
 
@@ -104,6 +104,7 @@ jest.mock('@/services/family-members', () => ({
 
 jest.mock('@/services/memories', () => ({
   createMemory: jest.fn(),
+  runMediaPhotoAnalysis: jest.fn(),
   runMediaPhotoEmotionAnalysis: jest.fn(),
 }));
 
@@ -151,8 +152,8 @@ const mockedCreateFamily = createFamily as jest.MockedFunction<typeof createFami
 const mockedCreateFamilyMember = createFamilyMember as jest.MockedFunction<typeof createFamilyMember>;
 const mockedFetchFamilyMembers = fetchFamilyMembers as jest.MockedFunction<typeof fetchFamilyMembers>;
 const mockedCreateMemory = createMemory as jest.MockedFunction<typeof createMemory>;
-const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
-  typeof runMediaPhotoEmotionAnalysis
+const mockedRunMediaPhotoAnalysis = runMediaPhotoAnalysis as jest.MockedFunction<
+  typeof runMediaPhotoAnalysis
 >;
 const mockedFetchUserProfile = fetchUserProfile as jest.MockedFunction<typeof fetchUserProfile>;
 const mockedUpdateUserProfile = updateUserProfile as jest.MockedFunction<typeof updateUserProfile>;
@@ -278,7 +279,7 @@ describe('S12B code.tsx -- returning owner with a photo capture (real auth/sessi
       data: [{ id: 'member-real-lila', name: 'Lila' } as never],
       error: null,
     });
-    mockedRunMediaPhotoEmotionAnalysis.mockResolvedValue(null);
+    mockedRunMediaPhotoAnalysis.mockResolvedValue(null);
     mockedPostMediaMemory.mockResolvedValue({ id: 'memory-existing-1' } as never);
     mockedUseMemoriesRealtime.mockReturnValue(undefined);
   });

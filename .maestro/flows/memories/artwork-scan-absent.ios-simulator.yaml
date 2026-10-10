@@ -1,0 +1,23 @@
+appId: com.memora.app
+tags:
+  - ios
+---
+# iOS SIMULATOR only. VisionKit's document camera is unsupported on the
+# simulator, so the native module reports isAvailable() = false and the
+# composer must not offer the scan button (it would open a dead scanner).
+# Do NOT run this on a physical iPhone: there the button is present by
+# design -- use the Android flow (create-artwork-memory.android.yaml) or a
+# manual device check for the real scanner.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: new-memory-fab
+- extendedWaitUntil:
+    visible: "New memory"
+    timeout: 15000
+# The sibling attach button proves the toolbar rendered.
+- extendedWaitUntil:
+    visible:
+      id: new-memory-attach-media
+    timeout: 10000
+- assertNotVisible:
+    id: new-memory-scan-artwork

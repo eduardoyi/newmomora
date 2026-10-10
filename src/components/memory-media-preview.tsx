@@ -25,6 +25,9 @@ const MAX_ATTACHMENTS = 10;
 
 interface MemoryMediaPreviewProps {
   attachments: MediaAttachment[];
+  /** Header text; defaults to "Photos & videos". The composers pass
+   * "Artwork" for scanned-artwork memories. */
+  headerLabel?: string;
   onMove: (fromIndex: number, toIndex: number) => void;
   onRemove: (attachmentId: string) => void;
   selectedId: string | null;
@@ -235,6 +238,7 @@ function MemoryMediaTile({
 
 export function MemoryMediaPreview({
   attachments,
+  headerLabel = 'Photos & videos',
   onMove,
   onRemove,
   selectedId,
@@ -253,7 +257,7 @@ export function MemoryMediaPreview({
   return (
     <View style={styles.container} testID="new-memory-media-preview">
       <View style={styles.header}>
-        <Text style={styles.headerLabel}>Photos & videos</Text>
+        <Text style={styles.headerLabel}>{headerLabel}</Text>
         <Text style={styles.headerCount}>{attachments.length}/{MAX_ATTACHMENTS}</Text>
       </View>
       <View

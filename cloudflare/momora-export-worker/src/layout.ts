@@ -151,11 +151,17 @@ export interface MemoryTextContext {
   comments: Array<Pick<ExportComment, 'content' | 'created_at'> & { authorName: string }>;
 }
 
+/** A media memory whose images are scans of a child's drawings. */
+export function isArtworkMemory(memory: Pick<ExportMemory, 'memory_type' | 'media_variant'>): boolean {
+  return memory.memory_type === 'media' && memory.media_variant === 'artwork';
+}
+
 export function renderMemoryText(memory: ExportMemory, context: MemoryTextContext): string {
   const lines: string[] = [memory.memory_date.slice(0, 10)];
   if (context.postedBy) lines.push(`Added by ${context.postedBy}`);
   if (context.taggedNames.length > 0) lines.push(`With ${context.taggedNames.join(', ')}`);
   if (memory.emotion) lines.push(`Feeling: ${memory.emotion}`);
+  if (isArtworkMemory(memory)) lines.push(memory.artwork_medium ? `Artwork: ${memory.artwork_medium}` : 'Artwork');
 
   const content = memory.content?.trim();
   if (content) lines.push('', content);

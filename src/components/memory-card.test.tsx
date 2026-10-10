@@ -162,6 +162,96 @@ describe('MemoryCard media (Workstream C6)', () => {
   });
 });
 
+describe('MemoryCard artwork variant (docs/plans/artwork-scanning.md)', () => {
+  const mediaAsset = {
+    id: 'asset-1',
+    memory_id: 'memory-1',
+    object_key: 'user-1/memories/memory-1/media/asset-1.jpg',
+    content_type: 'image/jpeg',
+    position: 0,
+    created_at: '2026-07-14T00:00:00.000Z',
+  };
+  const mediaMemory = (overrides: Record<string, unknown> = {}) =>
+    ({
+      ...createMemory(0),
+      memory_type: 'media',
+      mediaAssets: [mediaAsset],
+      ...overrides,
+    }) as unknown as MemoryWithTags;
+
+  it('wraps the media carousel in the frame only for artwork memories', () => {
+    const artwork = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork' })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(artwork.getByTestId('memory-card-memory-1-artwork-frame')).toBeTruthy();
+    artwork.unmount();
+
+    const photo = render(
+      <MemoryCard memory={mediaMemory()} onOpenComments={jest.fn()} onPress={jest.fn()} />,
+    );
+    expect(photo.queryByTestId('memory-card-memory-1-artwork-frame')).toBeNull();
+  });
+
+  it('does not frame a non-media memory even if media_variant is somehow set', () => {
+    const { queryByTestId } = render(
+      <MemoryCard
+        memory={{ ...createMemory(0), media_variant: 'artwork' } as unknown as MemoryWithTags}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+    expect(queryByTestId('memory-card-memory-1-artwork-frame')).toBeNull();
+  });
+
+  it('shows the medium chip in place of the emotion chip', () => {
+    const { getByTestId, queryByText } = render(
+      <MemoryCard
+        memory={mediaMemory({
+          media_variant: 'artwork',
+          artwork_medium: 'crayon',
+          emotion: 'joy',
+        })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(getByTestId('artwork-medium-chip')).toHaveTextContent('crayon');
+    expect(queryByText('joy')).toBeNull();
+  });
+
+  it('falls back to an "Artwork" badge (never the emotion chip) before the medium is known', () => {
+    const { getByTestId, queryByText, queryByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork', artwork_medium: null, emotion: 'joy' })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(getByTestId('artwork-badge')).toHaveTextContent('Artwork');
+    expect(queryByTestId('artwork-medium-chip')).toBeNull();
+    expect(queryByText('joy')).toBeNull();
+  });
+
+  it('keeps the emotion chip on regular photo memories', () => {
+    const { getByText, queryByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({ emotion: 'joy' })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(getByText('joy')).toBeTruthy();
+    expect(queryByTestId('artwork-medium-chip')).toBeNull();
+  });
+});
+
 describe('MemoryCard share affordance (Workstream S4)', () => {
   it('passes the active carousel page as the share target and flags video pages', () => {
     const mockedCarousel = MemoryMediaCarousel as jest.Mock;

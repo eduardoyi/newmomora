@@ -625,6 +625,41 @@ describe('postMediaMemory', () => {
     );
   });
 
+  it('threads mediaVariant into the insert, and keeps it on a Retry of a failed post', async () => {
+    const artworkInput = { ...baseInput, mediaVariant: 'artwork' as const };
+    mockedCreateMediaMemory
+      .mockResolvedValueOnce({
+        data: null,
+        error: { message: 'Network request failed' },
+      } as Awaited<ReturnType<typeof createMediaMemory>>)
+      .mockResolvedValueOnce({
+        data: { id: 'memory-1', memory_type: 'media', media_variant: 'artwork' },
+        error: null,
+      } as Awaited<ReturnType<typeof createMediaMemory>>);
+
+    // The pending-uploads queue re-runs the SAME input on Retry.
+    await expect(
+      postMediaMemory({ userId: 'user-1', familyId: 'family-1', input: artworkInput }),
+    ).rejects.toThrow('Network request failed');
+    await postMediaMemory({ userId: 'user-1', familyId: 'family-1', input: artworkInput });
+
+    expect(mockedCreateMediaMemory).toHaveBeenCalledTimes(2);
+    for (const [call] of mockedCreateMediaMemory.mock.calls) {
+      expect(call).toEqual(expect.objectContaining({ mediaVariant: 'artwork' }));
+    }
+  });
+
+  it('passes no mediaVariant for a regular media post', async () => {
+    mockedCreateMediaMemory.mockResolvedValue({
+      data: { id: 'memory-1', memory_type: 'media' },
+      error: null,
+    } as Awaited<ReturnType<typeof createMediaMemory>>);
+
+    await postMediaMemory({ userId: 'user-1', familyId: 'family-1', input: baseInput });
+
+    expect(mockedCreateMediaMemory.mock.calls[0][0].mediaVariant).toBeUndefined();
+  });
+
   it('rolls back uploaded objects when the insert fails', async () => {
     mockedCreateMediaMemory.mockResolvedValue({
       data: null,
