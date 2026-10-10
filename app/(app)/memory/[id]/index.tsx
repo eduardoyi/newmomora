@@ -12,11 +12,17 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ArtworkFrame } from '@/components/artwork-frame';
+import { ARTWORK_NAIL_HEIGHT } from '@/components/artwork-frame';
+import { artworkRatio } from '@/components/artwork/artwork-layout';
+import { ArtworkPiece, fitArtWidthToHeight } from '@/components/artwork/artwork-piece';
+import { GalleryWalk } from '@/components/artwork/gallery-walk';
+import { GalleryWall } from '@/components/artwork/gallery-wall';
+import { MuseumPlacard } from '@/components/artwork/museum-placard';
 import { ArtworkMediumTag } from '@/components/artwork-medium-chip';
 import { seedFromKey } from '@/components/audio/audio-seed';
 import { formatClipTime } from '@/components/audio/audio-emotion';
@@ -39,7 +45,7 @@ import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFami
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
-import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
 import { trackEvent } from '@/services/analytics';
@@ -219,6 +225,81 @@ function MemoryMetaFooter({
   );
 }
 
+// ── Artwork on the gallery wall (single piece or horizontal gallery walk) ─────
+// Single piece: the frame hangs from a nail ~64% of the screen wide, height
+// clamped so tall art shrinks. Batch: the snapping gallery walk. Both sit above
+// a museum placard (docs/plans/artwork-scanning-v2.md decisions 5-6).
+const ARTWORK_SINGLE_WIDTH_RATIO = 0.64;
+const ARTWORK_SINGLE_MAX_FRAME_HEIGHT = 480;
+
+function ArtworkDetailStage({
+  memory,
+  initialMediaIndex,
+  onActiveIndexChange,
+  onOpenFullScreen,
+}: {
+  memory: NonNullable<ReturnType<typeof useMemory>['data']>;
+  initialMediaIndex: number;
+  onActiveIndexChange: (index: number) => void;
+  onOpenFullScreen: (index: number) => void;
+}) {
+  const { width: windowWidth } = useWindowDimensions();
+  const assets = memory.mediaAssets;
+  const { data: urls = {}, refetch } = useMediaUrls(
+    assets.map((asset) => asset.object_key),
+    memory.updated_at,
+  );
+  const first = assets[0];
+  const isBatch = assets.length > 1;
+
+  return (
+    <View style={styles.artworkStage} testID="memory-detail-artwork-stage">
+      {!first ? (
+        <View style={styles.artworkLoading}>
+          <Text style={styles.placeholderText}>Loading…</Text>
+        </View>
+      ) : isBatch ? (
+        <GalleryWalk
+          assets={assets}
+          initialIndex={initialMediaIndex}
+          memoryId={memory.id}
+          onActiveIndexChange={onActiveIndexChange}
+          onOpen={onOpenFullScreen}
+          onUrlError={() => void refetch()}
+          screenWidth={windowWidth}
+          urls={urls}
+        />
+      ) : (
+        <View style={{ paddingTop: ARTWORK_NAIL_HEIGHT + 8 }}>
+          <ArtworkPiece
+            accessibilityLabel="View artwork full screen"
+            artWidth={fitArtWidthToHeight(
+              Math.round(windowWidth * ARTWORK_SINGLE_WIDTH_RATIO),
+              artworkRatio(first.aspect_ratio),
+              ARTWORK_SINGLE_MAX_FRAME_HEIGHT,
+            )}
+            asset={first}
+            memoryId={memory.id}
+            onPress={() => onOpenFullScreen(0)}
+            onUrlError={() => void refetch()}
+            testID="memory-detail-artwork-frame"
+            url={urls[first.object_key]}
+          />
+        </View>
+      )}
+      <View style={isBatch ? styles.placardBatch : styles.placardSingle}>
+        <MuseumPlacard
+          caption={memory.content}
+          medium={memory.artwork_medium}
+          member={memory.taggedMembers[0]}
+          memoryDate={memory.memory_date}
+          pieceCount={assets.length}
+        />
+      </View>
+    </View>
+  );
+}
+
 // ── Detail A — Framed print (illustrated + media) ─────────────────────────────
 function MemoryDetailFramed({
   memory,
@@ -261,6 +342,7 @@ function MemoryDetailFramed({
 }) {
   const isMedia = memory.memory_type === 'media';
   const isArtwork = isArtworkMemory(memory);
+  const insets = useSafeAreaInsets();
   const showIllustrationGenerating = isIllustrationInProgress(memory.illustration_status);
   // Illustrations are generated square (1024×1024); measure on load so any
   // legacy or future sizes still render uncropped.
@@ -300,7 +382,7 @@ function MemoryDetailFramed({
         mutedVideos={false}
         onActiveIndexChange={setActiveMediaIndex}
         onPress={setFullScreenIndex}
-        style={isArtwork ? styles.artworkMedia : styles.framedMedia}
+        style={styles.framedMedia}
       />
     ) : (
       <View style={[styles.framedImage, styles.placeholderFrame]}>
@@ -311,8 +393,9 @@ function MemoryDetailFramed({
 
   // Everything under the media/illustration: engagement, caption, tagged
   // members (with ages), retry, metadata. Shared by the white framed card and
-  // the artwork layout, which hangs the picture on the emotion gradient with
-  // this block beneath it instead of inside a card.
+  // the artwork layout, which hangs the picture on the gallery wall with this
+  // block beneath it instead of inside a card. Artwork shows its caption on
+  // the museum placard (as the title), so the body skips the caption text.
   const detailBody = (
     <>
       <View testID="memory-detail-section-engagement">
@@ -325,7 +408,7 @@ function MemoryDetailFramed({
           isCurrentPageVideo={isActiveMediaVideo}
         />
       </View>
-      {memory.content ? (
+      {memory.content && !isArtwork ? (
         <MemoryContentText
           content={memory.content}
           linkPreviews={toLinkPreviewMap(memory.link_previews)}
@@ -352,15 +435,70 @@ function MemoryDetailFramed({
           <Text style={styles.retryBtnText}>{isRetrying ? 'Retrying…' : 'Retry illustration'}</Text>
         </Pressable>
       )}
-      <MemoryMetaFooter
-        artworkMedium={memory.artwork_medium}
-        date={memory.memory_date}
-        attributionName={attributionName}
-        emotion={memory.emotion}
-        isArtwork={isArtwork}
-      />
+      {isArtwork ? (
+        <View style={styles.artworkFooter}>
+          <MemoryMetaFooter
+            artworkMedium={memory.artwork_medium}
+            date={memory.memory_date}
+            attributionName={attributionName}
+            emotion={memory.emotion}
+            isArtwork
+          />
+        </View>
+      ) : (
+        <MemoryMetaFooter
+          date={memory.memory_date}
+          attributionName={attributionName}
+          emotion={memory.emotion}
+        />
+      )}
     </>
   );
+
+  const fullScreenViewer =
+    fullScreenIndex !== null && fullScreenItems.length > 0 ? (
+      <FullScreenMediaViewer
+        accessibilityLabel={isMedia ? 'Full-screen memory media' : 'Full-screen memory illustration'}
+        cacheVersion={memory.updated_at}
+        initialIndex={fullScreenIndex}
+        items={fullScreenItems}
+        onClose={() => setFullScreenIndex(null)}
+      />
+    ) : null;
+
+  if (isArtwork) {
+    return (
+      <GalleryWall testID="memory-detail-gallery-wall">
+        <SafeAreaView edges={['top']}>
+          <DetailChrome
+            isDeleting={isDeleting}
+            isRegeneratingIllustration={isRegeneratingIllustration}
+            regenerateIllustrationDisabled={regenerateIllustrationDisabled}
+            onBack={onBack}
+            onRegenerateIllustration={onRegenerateIllustration}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            onMore={onMore}
+          />
+        </SafeAreaView>
+        <ScrollView
+          contentContainerStyle={[
+            styles.artworkScrollContent,
+            { paddingBottom: insets.bottom + 32 },
+          ]}
+        >
+          <ArtworkDetailStage
+            initialMediaIndex={initialMediaIndex}
+            memory={memory}
+            onActiveIndexChange={setActiveMediaIndex}
+            onOpenFullScreen={setFullScreenIndex}
+          />
+          <View style={styles.artworkBody}>{detailBody}</View>
+        </ScrollView>
+        {fullScreenViewer}
+      </GalleryWall>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -383,76 +521,57 @@ function MemoryDetailFramed({
         />
       </SafeAreaView>
       <ScrollView contentContainerStyle={styles.detailScrollContent}>
-        {isArtwork ? (
-          <>
-            <View style={styles.artworkWall}>
-              <ArtworkFrame size="detail" testID="memory-detail-artwork-frame">
-                {mediaVisual}
-              </ArtworkFrame>
-            </View>
-            <View style={styles.artworkBody}>{detailBody}</View>
-          </>
-        ) : (
-          <View style={styles.framedCard}>
-            {/* Media / illustration */}
-            <View style={styles.framedMediaWrap}>
-              {isMedia ? (
-                mediaVisual
-              ) : isIllustrationHidden ? (
-                <ContentHiddenNotice
-                  label="Reported AI illustration hidden"
-                  onShow={onShowIllustration}
-                  style={styles.hiddenIllustration}
-                  testID="memory-illustration-hidden"
+        <View style={styles.framedCard}>
+          {/* Media / illustration */}
+          <View style={styles.framedMediaWrap}>
+            {isMedia ? (
+              mediaVisual
+            ) : isIllustrationHidden ? (
+              <ContentHiddenNotice
+                label="Reported AI illustration hidden"
+                onShow={onShowIllustration}
+                style={styles.hiddenIllustration}
+                testID="memory-illustration-hidden"
+              />
+            ) : showIllustrationGenerating || !illustrationUrl ? (
+              <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
+                <GeneratingVisualOverlay
+                  label={
+                    getIllustrationStatusLabel(memory.illustration_status as IllustrationStatus) ??
+                    'Illustrated memory'
+                  }
+                  sparkleSize={32}
+                  variant="inline"
                 />
-              ) : showIllustrationGenerating || !illustrationUrl ? (
-                <View style={[styles.framedImage, styles.placeholderFrame, { aspectRatio: 1 }]}>
-                  <GeneratingVisualOverlay
-                    label={
-                      getIllustrationStatusLabel(memory.illustration_status as IllustrationStatus) ??
-                      'Illustrated memory'
+              </View>
+            ) : (
+              <Pressable
+                accessibilityLabel="View illustration full screen"
+                accessibilityRole="button"
+                onPress={() => setFullScreenIndex(0)}
+                style={({ pressed }) => pressed && styles.mediaPressed}
+                testID="memory-detail-illustration"
+              >
+                <Image
+                  contentFit="cover"
+                  onLoad={(event) => {
+                    const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
+                    if (ratio) {
+                      setIllustrationRatio(clampMediaAspectRatio(ratio));
                     }
-                    sparkleSize={32}
-                    variant="inline"
-                  />
-                </View>
-              ) : (
-                <Pressable
-                  accessibilityLabel="View illustration full screen"
-                  accessibilityRole="button"
-                  onPress={() => setFullScreenIndex(0)}
-                  style={({ pressed }) => pressed && styles.mediaPressed}
-                  testID="memory-detail-illustration"
-                >
-                  <Image
-                    contentFit="cover"
-                    onLoad={(event) => {
-                      const ratio = aspectRatioFromDimensions(event.source.width, event.source.height);
-                      if (ratio) {
-                        setIllustrationRatio(clampMediaAspectRatio(ratio));
-                      }
-                    }}
-                    source={mediaImageSource(illustrationUrl, memory.illustration_key)}
-                    style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
-                  />
-                </Pressable>
-              )}
-            </View>
-
-            {/* Content inside card */}
-            <View style={styles.framedCardBody}>{detailBody}</View>
+                  }}
+                  source={mediaImageSource(illustrationUrl, memory.illustration_key)}
+                  style={[styles.framedImage, { aspectRatio: illustrationRatio }]}
+                />
+              </Pressable>
+            )}
           </View>
-        )}
+
+          {/* Content inside card */}
+          <View style={styles.framedCardBody}>{detailBody}</View>
+        </View>
       </ScrollView>
-      {fullScreenIndex !== null && fullScreenItems.length > 0 ? (
-        <FullScreenMediaViewer
-          accessibilityLabel={isMedia ? 'Full-screen memory media' : 'Full-screen memory illustration'}
-          cacheVersion={memory.updated_at}
-          initialIndex={fullScreenIndex}
-          items={fullScreenItems}
-          onClose={() => setFullScreenIndex(null)}
-        />
-      ) : null}
+      {fullScreenViewer}
     </View>
   );
 }
@@ -1307,21 +1426,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     overflow: 'hidden',
   },
-  // Artwork: the picture hangs directly on the emotion gradient inside an
-  // ArtworkFrame (square mat opening, so no corner radius), with the body
-  // beneath it rather than in a white card.
-  artworkWall: {
-    marginHorizontal: 20,
-    marginTop: 12,
+  // Artwork: the piece hangs on the gallery wall (GalleryWall), with the
+  // museum placard and the detail body beneath it, not in a white card.
+  artworkScrollContent: {
+    flexGrow: 1,
+    paddingTop: 4,
   },
-  artworkMedia: {
-    width: '100%',
-    backgroundColor: colors.surface,
+  artworkStage: {
+    alignItems: 'center',
+  },
+  artworkLoading: {
+    alignItems: 'center',
+    height: 240,
+    justifyContent: 'center',
+  },
+  placardSingle: {
+    marginTop: 36,
+  },
+  placardBatch: {
+    marginTop: 24,
   },
   artworkBody: {
-    gap: 14,
-    marginTop: 22,
+    gap: 18,
+    marginTop: 28,
     paddingHorizontal: 24,
+  },
+  artworkFooter: {
+    borderTopColor: 'rgba(138,106,74,0.2)',
+    borderTopWidth: 1,
+    paddingTop: 14,
   },
   mediaPressed: {
     opacity: 0.92,

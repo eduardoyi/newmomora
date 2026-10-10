@@ -1,6 +1,7 @@
 import {
   deriveMemoryType,
   formatDisplayDate,
+  formatLongDisplayDate,
   formatArtworkMedium,
   formatMemoryExcerpt,
   formatVideoDurationLabel,
@@ -64,6 +65,8 @@ describe('memories utils', () => {
     expect(formatMemoryExcerpt('short')).toBe('short');
     expect(formatMemoryExcerpt('x'.repeat(200)).endsWith('…')).toBe(true);
     expect(formatDisplayDate('2026-05-24')).toContain('2026');
+    expect(formatLongDisplayDate('2026-10-10')).toBe('October 10, 2026');
+    expect(formatLongDisplayDate('nope')).toBe('nope');
     expect(formatVideoDurationLabel(45_000)).toBe('0:45');
   });
 

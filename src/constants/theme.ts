@@ -32,16 +32,19 @@ export const colors = {
   sunSoft: '#FBE8B8',
   sunInk: '#7a560f',
 
-  // Artwork frame (src/components/artwork-frame.tsx): warm walnut band with a
-  // lit top/left edge, a cream mat, and a hairline shade at the mat opening.
-  // Tuned to sit with `ink`'s warm browns rather than a cold grey.
-  frameWood: '#8A6444',
-  frameWoodLight: '#B58F68',
-  frameWoodDark: '#5F412A',
-  frameMat: '#F7F1E4',
-  frameMatShade: '#C9BDA6',
-  frameMatLight: '#FFFCF4',
-  frameShadow: '#281E14',
+  // Artwork frames (src/components/artwork-frame.tsx, docs/plans/
+  // artwork-scanning-v2.md): six playful colors (any frame style in any color),
+  // the cream band the bobble beads sit on, the cream mat, and the warm brown
+  // the stacked cast-shadow copies are drawn in.
+  frameBlush: '#F2A7B8',
+  frameSky: '#4A8FD6',
+  frameMint: '#8FD1AA',
+  frameLilac: '#C4ADE6',
+  frameButter: '#F2C84B',
+  frameTomato: '#E2553F',
+  frameCream: '#FFF6DF',
+  frameMat: '#FFFDF7',
+  frameShadow: '#46301A',
 
   // Legacy aliases for backward compat
   background: '#FAFAFD',

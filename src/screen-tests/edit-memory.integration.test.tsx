@@ -1,6 +1,8 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { ARTWORK_INTRO_SEEN_STORAGE_KEY } from '@/components/artwork-scan-button';
 import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAutoMemoryTags } from '@/hooks/useAutoMemoryTags';
 import { useFamily } from '@/hooks/use-family';
@@ -558,8 +560,10 @@ describe('EditMemoryScreen artwork variant (docs/plans/artwork-scanning.md)', ()
     ...overrides,
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
+    // Returning user: the first-time artwork intro sheet has been seen.
+    await AsyncStorage.setItem(ARTWORK_INTRO_SEEN_STORAGE_KEY, '1');
     mockMediaPickerProps = null;
     mockMediaPreviewProps = null;
     mockIsArtworkScannerAvailable.mockReturnValue(false);

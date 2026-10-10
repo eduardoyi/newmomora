@@ -2,14 +2,13 @@ import { Image } from 'expo-image';
 import { memo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { ArtworkFrame } from '@/components/artwork-frame';
-import { ArtworkMediumTag } from '@/components/artwork-medium-chip';
+import { ArtworkCard } from '@/components/artwork/artwork-card';
 import { seedFromKey } from '@/components/audio/audio-seed';
 import { StubBand } from '@/components/audio/stub-band';
 import { StubTear } from '@/components/audio/stub-tear';
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
 import { ContentHiddenNotice } from '@/components/content-hidden-notice';
-import { FamilyMemberAvatar } from '@/components/family-member-avatar';
+import { CardFooter } from '@/components/memory-card-footer';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { colors, fonts, getEmotionColors, radius, spacing } from '@/constants/theme';
@@ -18,7 +17,6 @@ import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { MemoryWithTags } from '@/services/memories';
 import { toLinkPreviewMap } from '@/utils/links';
 import {
-  formatDisplayDate,
   formatMemoryExcerpt,
   getIllustrationStatusLabel,
   isArtworkMemory,
@@ -44,85 +42,6 @@ interface MemoryCardProps {
   isVideoActive?: boolean;
   isIllustrationHidden?: boolean;
   onShowIllustration?: () => void;
-}
-
-const MAX_TIMELINE_MEMBER_AVATARS = 6;
-
-// ── Emotion chip ──────────────────────────────────────────────────────────────
-function EmotionChip({ emotion }: { emotion: string }) {
-  const emo = getEmotionColors(emotion);
-  if (!emo) return null;
-  return (
-    <View style={[styles.emotionChip, { backgroundColor: emo.soft }]}>
-      <View style={[styles.emotionDot, { backgroundColor: emo.c }]} />
-      <Text style={[styles.emotionLabel, { color: emo.ink }]}>{emotion}</Text>
-    </View>
-  );
-}
-
-// ── Member avatar cluster ──────────────────────────────────────────────────────
-function AvatarCluster({ members }: { members: MemoryWithTags['taggedMembers'] }) {
-  const visibleMembers = members.slice(0, MAX_TIMELINE_MEMBER_AVATARS);
-  const hiddenMemberCount = members.length - visibleMembers.length;
-
-  return (
-    <View style={styles.avatarCluster}>
-      {visibleMembers.map((m, i) => (
-        <FamilyMemberAvatar
-          key={m.id}
-          member={m}
-          size={22}
-          style={[styles.avatarCircle, { marginLeft: i === 0 ? 0 : -7 }]}
-          testID={`memory-card-member-${m.id}`}
-        />
-      ))}
-      {hiddenMemberCount > 0 ? (
-        <View
-          accessibilityLabel={`${hiddenMemberCount} more tagged members`}
-          style={[styles.avatarCircle, styles.avatarOverflow, { marginLeft: -7 }]}
-          testID="memory-card-member-overflow"
-        >
-          <Text style={styles.avatarOverflowText}>+{hiddenMemberCount}</Text>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-// ── Shared card footer ────────────────────────────────────────────────────────
-function CardFooter({ memory }: { memory: MemoryWithTags }) {
-  const dayLabel = formatDisplayDate(memory.memory_date);
-  const isMedia = memory.memory_type === 'media';
-  const isArtwork = isArtworkMemory(memory);
-  const mediaTypes = memory.mediaAssets.map((asset) => asset.content_type);
-  const hasVideo = mediaTypes.some(isVideoContentType);
-  const hasPhoto = mediaTypes.some((contentType) => !isVideoContentType(contentType));
-  const mediaLabel = hasPhoto && hasVideo
-    ? 'Media'
-    : hasVideo
-      ? 'Video'
-      : 'Photo';
-
-  return (
-    <View style={styles.footer}>
-      <Text style={styles.footerDay}>{dayLabel}</Text>
-      {memory.taggedMembers.length > 0 && (
-        <AvatarCluster members={memory.taggedMembers} />
-      )}
-      <View style={styles.footerSpacer} />
-      {isArtwork ? (
-        // The medium chip (or "Artwork" fallback) replaces the emotion chip
-        // on artwork -- emotion is still stored, just not shown here.
-        <ArtworkMediumTag medium={memory.artwork_medium} />
-      ) : memory.emotion ? (
-        <EmotionChip emotion={memory.emotion} />
-      ) : isMedia ? (
-        <View style={styles.mediaBadge}>
-          <Text style={styles.mediaBadgeText}>{mediaLabel}</Text>
-        </View>
-      ) : null}
-    </View>
-  );
 }
 
 // ── Illustration visual ───────────────────────────────────────────────────────
@@ -232,9 +151,10 @@ function MediaVisual({
 // card (and QuoteCard/CardFooter/AvatarCluster below) server-side for the
 // share-card PNG. That file's own header comment points back here -- if you
 // change this card's visual design, check whether layout.ts needs the same
-// change, and vice versa. The artwork frame/medium chip below are the one
-// intentional exception: share cards render an artwork memory as a plain
-// photo (docs/plans/artwork-scanning.md decision 7), so don't mirror them.
+// change, and vice versa. The footer lives in memory-card-footer.tsx. Artwork
+// memories no longer render here at all (artwork/artwork-card.tsx): share cards
+// show them as a plain photo (docs/plans/artwork-scanning.md decision 7), so
+// don't mirror the wall card.
 function SpreadCard({
   memory,
   onPress,
@@ -259,30 +179,17 @@ function SpreadCard({
 
   if (memory.memory_type === 'media') {
     const activeAsset = memory.mediaAssets[activeMediaIndex] ?? memory.mediaAssets[0] ?? null;
-    const mediaVisual = (
-      <MediaVisual
-        memory={memory}
-        isActive={isVideoActive}
-        onActiveIndexChange={setActiveMediaIndex}
-        onPress={handleMediaPress}
-      />
-    );
     return (
       <View
         style={styles.card}
         testID={`memory-card-${memory.id}`}
       >
-        {isArtworkMemory(memory) ? (
-          // Inset on the card background (not full-bleed) so the frame and
-          // its shadow have room to breathe.
-          <View style={styles.artworkWrap} testID={`memory-card-${memory.id}-artwork`}>
-            <ArtworkFrame size="card" testID={`memory-card-${memory.id}-artwork-frame`}>
-              {mediaVisual}
-            </ArtworkFrame>
-          </View>
-        ) : (
-          mediaVisual
-        )}
+        <MediaVisual
+          memory={memory}
+          isActive={isVideoActive}
+          onActiveIndexChange={setActiveMediaIndex}
+          onPress={handleMediaPress}
+        />
         <View style={styles.engagementWrap}>
           <MemoryEngagementBar
             memory={memory}
@@ -530,6 +437,9 @@ export const MemoryCard = memo(function MemoryCard({
   if (memory.memory_type === 'audio') {
     return <SoundCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
   }
+  if (isArtworkMemory(memory)) {
+    return <ArtworkCard memory={memory} onPress={onPress} onOpenComments={onOpenComments} />;
+  }
   return (
     <SpreadCard
       memory={memory}
@@ -578,11 +488,6 @@ const styles = StyleSheet.create({
   },
   mediaVisual: {
     width: '100%',
-  },
-  artworkWrap: {
-    paddingBottom: 6,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
   },
   placeholderVisual: {
     alignItems: 'center',
@@ -639,81 +544,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansMedium,
     fontSize: 14,
     lineHeight: 1.4 * 14,
-    color: colors.ink3,
-  },
-  // Footer
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: spacing.md,
-    paddingTop: 9,
-    paddingBottom: 13,
-  },
-  footerDay: {
-    fontFamily: fonts.sansBold,
-    fontSize: 10,
-    letterSpacing: 0.14 * 10,
-    textTransform: 'uppercase',
-    color: colors.ink3,
-  },
-  footerSpacer: {
-    flex: 1,
-  },
-  avatarCluster: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 2,
-  },
-  avatarCircle: {
-    borderWidth: 1.5,
-    borderColor: colors.white,
-  },
-  avatarOverflow: {
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 11,
-    height: 22,
-    justifyContent: 'center',
-    width: 22,
-  },
-  avatarOverflowText: {
-    color: colors.ink3,
-    fontFamily: fonts.sansBold,
-    fontSize: 8,
-  },
-  emotionChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 3,
-    paddingLeft: 7,
-    paddingRight: 9,
-    borderRadius: 999,
-  },
-  emotionDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 999,
-  },
-  emotionLabel: {
-    fontFamily: fonts.sansBold,
-    fontSize: 10.5,
-    letterSpacing: 0.02 * 10.5,
-  },
-  mediaBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingVertical: 3,
-    paddingHorizontal: 9,
-  },
-  mediaBadgeText: {
-    fontFamily: fonts.sansBold,
-    fontSize: 11,
     color: colors.ink3,
   },
 });

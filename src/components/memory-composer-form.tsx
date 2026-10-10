@@ -10,7 +10,6 @@
 // new-memory/edit-memory behavior (off) -- new-memory and edit-memory pass
 // nothing for gallery-import-only props, so this is a pure extraction for
 // them; zero visual/behavior change.
-import { SymbolView } from 'expo-symbols';
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -24,6 +23,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DatePickerField } from '@/components/date-picker-field';
+import { SoundIcon } from '@/components/icons/composer-icons';
 import type { MediaAttachment } from '@/components/memory-media-picker';
 import { MemoryMediaPreview } from '@/components/memory-media-preview';
 import { MemoryTagPicker } from '@/components/memory-tag-picker';
@@ -329,12 +329,7 @@ export function MemoryComposerForm({
           ]}
           testID={voiceTestID}
         >
-          <SymbolView
-            name={{ ios: 'mic', android: 'mic' }}
-            size={20}
-            tintColor={colors.ink2}
-            fallback={<Text style={styles.toolbarIconFallback}>♪</Text>}
-          />
+          <SoundIcon disabled={voiceDisabled} />
         </Pressable>
 
         {toolbarMediaButton}
@@ -457,10 +452,6 @@ const styles = StyleSheet.create({
   },
   toolbarIconBtnPressed: {
     opacity: 0.7,
-  },
-  toolbarIconFallback: {
-    fontSize: 20,
-    color: colors.ink3,
   },
   errorText: {
     fontFamily: fonts.sans,

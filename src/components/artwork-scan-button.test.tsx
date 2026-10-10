@@ -1,12 +1,16 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AppState, Platform } from 'react-native';
+import { AppState, Modal, Platform } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { trackEvent } from '@/services/analytics';
 import { isArtworkScannerAvailable, scanArtwork } from '@/services/artwork-scanner';
 import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
 
 import {
+  ARTWORK_INTRO_DISMISS_TIMEOUT_MS,
+  ARTWORK_INTRO_SEEN_STORAGE_KEY,
   ARTWORK_SCAN_RESULT_GRACE_MS,
   ArtworkScanButton,
   ArtworkScanNotice,
@@ -74,7 +78,16 @@ function renderButton(props: Partial<React.ComponentProps<typeof ArtworkScanButt
     onError: jest.fn(),
     onNotice: jest.fn(),
   };
-  const screen = render(<ArtworkScanButton {...handlers} {...props} />);
+  const screen = render(
+    <SafeAreaProvider
+      initialMetrics={{
+        frame: { x: 0, y: 0, width: 390, height: 844 },
+        insets: { top: 47, left: 0, right: 0, bottom: 34 },
+      }}
+    >
+      <ArtworkScanButton {...handlers} {...props} />
+    </SafeAreaProvider>,
+  );
   return { screen, ...handlers };
 }
 
@@ -84,13 +97,22 @@ async function press(screen: ReturnType<typeof render>) {
   });
 }
 
+// Every suite below except "first-time intro" runs as a returning user: the
+// intro has already been seen on this device.
+async function seedIntroSeen() {
+  await AsyncStorage.clear();
+  await AsyncStorage.setItem(ARTWORK_INTRO_SEEN_STORAGE_KEY, '1');
+}
+
 describe('ArtworkScanButton', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    jest.restoreAllMocks();
     jest.clearAllMocks();
     jest.useFakeTimers();
     setPlatform('android');
     mockedIsAvailable.mockReturnValue(true);
     mockedScan.mockReset();
+    await seedIntroSeen();
   });
 
   afterEach(() => {
@@ -364,6 +386,204 @@ describe('ArtworkScanButton', () => {
 
     expect(mockedScan).not.toHaveBeenCalled();
     expect(onError).toHaveBeenLastCalledWith('A memory holds up to 10 pieces of artwork.');
+  });
+});
+
+describe('ArtworkScanButton first-time intro', () => {
+  const grantedCamera = {
+    granted: true,
+    canAskAgain: true,
+  } as ImagePicker.CameraPermissionResponse;
+
+  beforeEach(async () => {
+    jest.restoreAllMocks();
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    setPlatform('android');
+    mockedIsAvailable.mockReturnValue(true);
+    mockedScan.mockReset();
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue(grantedCamera);
+    await AsyncStorage.clear();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    setPlatform(originalPlatform as 'ios' | 'android');
+  });
+
+  const INTRO = 'new-memory-scan-artwork-intro';
+
+  it('the first tap shows the intro, marks it seen, and neither scans nor reports a scan result', async () => {
+    const { screen, onError } = renderButton();
+
+    await press(screen);
+
+    expect(screen.getByText('Let’s hang it on the wall')).toBeTruthy();
+    expect(screen.getByText('NEW · ARTWORK')).toBeTruthy();
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(mockedImagePicker.getCameraPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith('');
+    expect(await AsyncStorage.getItem(ARTWORK_INTRO_SEEN_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('does not show the intro when there is no room for a scan anyway', async () => {
+    const { screen, onError } = renderButton({ remainingSlots: 0 });
+
+    await press(screen);
+
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(onError).toHaveBeenLastCalledWith('A memory holds up to 10 pieces of artwork.');
+    expect(await AsyncStorage.getItem(ARTWORK_INTRO_SEEN_STORAGE_KEY)).toBeNull();
+  });
+
+  it('android: Start scanning closes the sheet and then scans', async () => {
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen, onScanned } = renderButton({ remainingSlots: 6 });
+    await press(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId(`${INTRO}-start`));
+    });
+
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(mockedScan).toHaveBeenCalledWith({ remainingSlots: 6 });
+    expect(onScanned).toHaveBeenCalledWith([page('a')]);
+    expect(mockedTrackEvent).toHaveBeenCalledTimes(1);
+    expect(mockedTrackEvent).toHaveBeenCalledWith('artwork_scan_result', { status: 'success', page_count: 1 });
+  });
+
+  it('ios: the scanner (and its permission check) waits for the sheet to fully dismiss', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue(grantedCamera);
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen, onNotice } = renderButton({ remainingSlots: 3 });
+    await press(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId(`${INTRO}-start`));
+    });
+    // Sheet told to close, but the Modal hasn't reported dismissal yet.
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(mockedImagePicker.getCameraPermissionsAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      screen.UNSAFE_getByType(Modal).props.onDismiss();
+    });
+
+    expect(mockedScan).toHaveBeenCalledWith({ remainingSlots: 3 });
+    expect(onNotice).toHaveBeenCalledWith('Scan up to 3 pieces. Extra pages are left out.');
+  });
+
+  it('ios: scans anyway if the Modal never reports its dismissal', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue(grantedCamera);
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen } = renderButton();
+    await press(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId(`${INTRO}-start`));
+    });
+    expect(mockedScan).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(ARTWORK_INTRO_DISMISS_TIMEOUT_MS + 10);
+    });
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+
+    // A late real callback must not start a second scan.
+    await act(async () => {
+      screen.UNSAFE_getByType(Modal).props.onDismiss();
+    });
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismissing the sheet any other way never scans, and the next tap scans directly', async () => {
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen, onScanned } = renderButton();
+    await press(screen);
+
+    await act(async () => {
+      // Hardware back / swipe-back closes through the Modal's onRequestClose.
+      screen.UNSAFE_getByType(Modal).props.onRequestClose();
+    });
+
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(mockedTrackEvent).not.toHaveBeenCalled();
+
+    await press(screen);
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+    expect(onScanned).toHaveBeenCalledWith([page('a')]);
+  });
+
+  it('the backdrop also dismisses without scanning', async () => {
+    const { screen } = renderButton();
+    await press(screen);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId(`${INTRO}-backdrop`, { includeHiddenElements: true }));
+    });
+
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+  });
+
+  it('a second tap while the intro is up does nothing extra', async () => {
+    const { screen } = renderButton();
+
+    await press(screen);
+    await press(screen);
+
+    expect(screen.getAllByText('Let’s hang it on the wall')).toHaveLength(1);
+    expect(mockedScan).not.toHaveBeenCalled();
+  });
+
+  it('a returning user scans directly with no sheet', async () => {
+    await AsyncStorage.setItem(ARTWORK_INTRO_SEEN_STORAGE_KEY, '1');
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen } = renderButton();
+
+    await press(screen);
+
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('a storage read error goes straight to the scan', async () => {
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('storage down'));
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen, onScanned } = renderButton();
+
+    await press(screen);
+
+    expect(screen.queryByText('Let’s hang it on the wall')).toBeNull();
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+    expect(onScanned).toHaveBeenCalledWith([page('a')]);
+  });
+
+  it('a storage write error still shows the intro', async () => {
+    jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('storage down'));
+    const { screen } = renderButton();
+
+    await press(screen);
+
+    expect(screen.getByText('Let’s hang it on the wall')).toBeTruthy();
+    expect(mockedScan).not.toHaveBeenCalled();
+  });
+
+  it('releases the guard when it unmounts with the sheet open', async () => {
+    const { screen } = renderButton();
+    await press(screen);
+
+    screen.unmount();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(ARTWORK_INTRO_DISMISS_TIMEOUT_MS + 10);
+    });
+
+    expect(mockedScan).not.toHaveBeenCalled();
   });
 });
 

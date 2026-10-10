@@ -1,6 +1,6 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { useState } from 'react';
-import { Pressable } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 
 import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { MemoryCard } from '@/components/memory-card';
@@ -34,6 +34,7 @@ jest.mock('@/components/memory-media-carousel', () => ({
 
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(() => ({ url: null })),
+  useMediaUrls: jest.fn(() => ({ data: {}, refetch: jest.fn() })),
 }));
 
 jest.mock('@/hooks/useAudioClipPlayback', () => ({
@@ -180,7 +181,9 @@ describe('MemoryCard artwork variant (docs/plans/artwork-scanning.md)', () => {
       ...overrides,
     }) as unknown as MemoryWithTags;
 
-  it('wraps the media carousel in the frame only for artwork memories', () => {
+  it('renders the wall card (not the media carousel) for artwork memories, and the carousel for photos', () => {
+    const mockedCarousel = MemoryMediaCarousel as jest.Mock;
+    mockedCarousel.mockClear();
     const artwork = render(
       <MemoryCard
         memory={mediaMemory({ media_variant: 'artwork' })}
@@ -188,13 +191,94 @@ describe('MemoryCard artwork variant (docs/plans/artwork-scanning.md)', () => {
         onPress={jest.fn()}
       />,
     );
+    expect(artwork.getByTestId('memory-card-memory-1')).toBeTruthy();
     expect(artwork.getByTestId('memory-card-memory-1-artwork-frame')).toBeTruthy();
+    expect(mockedCarousel).not.toHaveBeenCalled();
     artwork.unmount();
 
     const photo = render(
       <MemoryCard memory={mediaMemory()} onOpenComments={jest.fn()} onPress={jest.fn()} />,
     );
     expect(photo.queryByTestId('memory-card-memory-1-artwork-frame')).toBeNull();
+    expect(mockedCarousel).toHaveBeenCalled();
+  });
+
+  it('hangs the artwork on the Timeline background: no white card, border or clipping', () => {
+    const { getByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork' })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    const flat = StyleSheet.flatten(getByTestId('memory-card-memory-1').props.style);
+    expect(flat.backgroundColor).toBeUndefined();
+    expect(flat.borderWidth).toBeUndefined();
+    expect(flat.overflow).toBeUndefined();
+  });
+
+  it('shows the caption as a handwritten title and the artist with their age', () => {
+    const { getByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({
+          media_variant: 'artwork',
+          content: 'A dragon for Daddy',
+          taggedMembers: [{ ...createMember(1), name: 'Mara', date_of_birth: '2024-07-01' }],
+        })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(getByTestId('memory-card-memory-1-artwork-title')).toHaveTextContent(
+      '\u201CA dragon for Daddy\u201D',
+    );
+    expect(getByTestId('memory-card-memory-1-artwork-artist')).toHaveTextContent('Mara, 2 years');
+  });
+
+  it('leaves out the title without a caption and the artist line without a tagged member', () => {
+    const { queryByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork', content: '' })}
+        onOpenComments={jest.fn()}
+        onPress={jest.fn()}
+      />,
+    );
+
+    expect(queryByTestId('memory-card-memory-1-artwork-title')).toBeNull();
+    expect(queryByTestId('memory-card-memory-1-artwork-artist')).toBeNull();
+  });
+
+  it('renders the deck for a batch of artwork and opens the detail on the front piece', () => {
+    const second = { ...mediaAsset, id: 'asset-2', object_key: 'user-1/memories/memory-1/media/asset-2.jpg', position: 1 };
+    const onPress = jest.fn();
+    const { getByTestId, getByText } = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork', mediaAssets: [mediaAsset, second] })}
+        onOpenComments={jest.fn()}
+        onPress={onPress}
+      />,
+    );
+
+    expect(getByText('1 of 2')).toBeTruthy();
+    fireEvent.press(getByTestId('memory-card-memory-1-artwork-deck'));
+    expect(onPress).toHaveBeenCalledWith('memory-1', 0);
+  });
+
+  it('opens the detail on the first piece when the single frame is tapped', () => {
+    const onPress = jest.fn();
+    const { getByTestId } = render(
+      <MemoryCard
+        memory={mediaMemory({ media_variant: 'artwork' })}
+        onOpenComments={jest.fn()}
+        onPress={onPress}
+      />,
+    );
+
+    fireEvent.press(getByTestId('memory-card-memory-1-artwork'));
+
+    expect(onPress).toHaveBeenCalledWith('memory-1', 0);
   });
 
   it('does not frame a non-media memory even if media_variant is somehow set', () => {

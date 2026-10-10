@@ -1,6 +1,5 @@
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
-import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { seedFromKey } from '@/components/audio/audio-seed';
 import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
+import { PhotosIcon, ScanArtIcon } from '@/components/icons/composer-icons';
 import { ClipChip } from '@/components/audio/clip-chip';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
@@ -550,12 +550,7 @@ export default function EditMemoryScreen() {
             style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}
             testID="edit-memory-scan-artwork-disabled"
           >
-            <SymbolView
-              name={{ ios: 'doc.viewfinder', android: 'document_scanner' }}
-              size={20}
-              tintColor={colors.ink3}
-              fallback={<Text style={styles.toolbarIconFallback}>▣</Text>}
-            />
+            <ScanArtIcon disabled />
           </View>
         )
       ) : isMedia ? (
@@ -568,12 +563,7 @@ export default function EditMemoryScreen() {
         />
       ) : (
         <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
-          <SymbolView
-            name={{ ios: 'photo', android: 'photo_library' }}
-            size={20}
-            tintColor={colors.ink3}
-            fallback={<Text style={styles.toolbarIconFallback}>▣</Text>}
-          />
+          <PhotosIcon disabled />
         </View>
       )}
       toolbarTrailingSlot={isAudio ? (
@@ -719,10 +709,6 @@ const styles = StyleSheet.create({
   },
   toolbarIconBtnDisabled: {
     opacity: 0.4,
-  },
-  toolbarIconFallback: {
-    fontSize: 20,
-    color: colors.ink3,
   },
   toggleRow: {
     flex: 1,

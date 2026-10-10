@@ -1,18 +1,33 @@
-import { fireEvent, render } from '@testing-library/react-native';
-import { Alert, Animated } from 'react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { Alert, Animated, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
+import { MemoryCommentsDrawer } from '@/components/memory-comments-drawer';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
-import { useMediaUrl } from '@/hooks/useMediaUrls';
+import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
 import { trackEvent } from '@/services/analytics';
 
 import MemoryDetailScreen from '../../app/(app)/memory/[id]';
+
+// react-native-svg renders as RNSVG* host nodes in the test renderer.
+function findByType(node: any, typeName: string): any[] {
+  const json = node?.type ? node : node?.toJSON?.();
+  const found: any[] = [];
+  const walk = (n: any) => {
+    if (!n || typeof n === 'string') return;
+    if (n.type === typeName) found.push(n);
+    for (const child of n.children ?? []) walk(child);
+  };
+  walk(json);
+  return found;
+}
 
 // Mutable so a test can exercise the route params the screen reads (e.g. the
 // `mediaIndex` a timeline carousel tap passes through).
@@ -38,11 +53,11 @@ jest.mock('@/components/family-member-avatar', () => ({
 }));
 
 jest.mock('@/components/full-screen-media-viewer', () => ({
-  FullScreenMediaViewer: () => null,
+  FullScreenMediaViewer: jest.fn(() => null),
 }));
 
 jest.mock('@/components/memory-comments-drawer', () => ({
-  MemoryCommentsDrawer: () => null,
+  MemoryCommentsDrawer: jest.fn(() => null),
 }));
 
 jest.mock('@/components/memory-engagement-bar', () => ({
@@ -72,6 +87,7 @@ jest.mock('@/hooks/useMemories', () => ({
 
 jest.mock('@/hooks/useMediaUrls', () => ({
   useMediaUrl: jest.fn(),
+  useMediaUrls: jest.fn(),
 }));
 jest.mock('@/hooks/useAudioClipPlayback', () => ({
   useAudioClipPlayback: jest.fn(),
@@ -94,6 +110,7 @@ const mockedUseFamilyMemberProfiles = useFamilyMemberProfiles as jest.Mock;
 const mockedUseMemory = useMemory as jest.Mock;
 const mockedUseMemoryMutations = useMemoryMutations as jest.Mock;
 const mockedUseMediaUrl = useMediaUrl as jest.Mock;
+const mockedUseMediaUrls = useMediaUrls as jest.Mock;
 const mockedUseAudioClipPlayback = useAudioClipPlayback as jest.Mock;
 const mockedTrackEvent = trackEvent as jest.MockedFunction<typeof trackEvent>;
 
@@ -245,11 +262,13 @@ describe('MemoryDetailScreen hierarchy', () => {
   });
 });
 
-describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning.md)', () => {
+describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning-v2.md)', () => {
   const assets = [
-    { id: 'asset-1', object_key: 'scan-1.jpg', content_type: 'image/jpeg', position: 0 },
-    { id: 'asset-2', object_key: 'scan-2.jpg', content_type: 'image/jpeg', position: 1 },
+    { id: 'asset-1', object_key: 'scan-1.jpg', content_type: 'image/jpeg', position: 0, aspect_ratio: 0.75 },
+    { id: 'asset-2', object_key: 'scan-2.jpg', content_type: 'image/jpeg', position: 1, aspect_ratio: 1.5 },
+    { id: 'asset-3', object_key: 'scan-3.jpg', content_type: 'image/jpeg', position: 2, aspect_ratio: 1 },
   ];
+  const refetchUrls = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -268,56 +287,260 @@ describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning.md)', 
       isRegenerating: false,
     });
     mockedUseMediaUrl.mockReturnValue({ url: undefined });
+    mockedUseMediaUrls.mockReturnValue({
+      data: {
+        'scan-1.jpg': 'https://r2.test/scan-1.jpg',
+        'scan-2.jpg': 'https://r2.test/scan-2.jpg',
+        'scan-3.jpg': 'https://r2.test/scan-3.jpg',
+      },
+      refetch: refetchUrls,
+    });
   });
 
-  function mockMemory(overrides: Record<string, unknown>) {
+  function mockMemory(overrides: Record<string, unknown>, mediaAssets = assets.slice(0, 1)) {
     mockedUseMemory.mockReturnValue({
-      data: { ...baseMemory, mediaAssets: assets, ...overrides },
+      data: { ...baseMemory, mediaAssets, ...overrides },
       isLoading: false,
       isError: false,
     });
   }
 
-  it('hangs the carousel in the artwork frame and shows the medium chip instead of the emotion chip', () => {
-    mockMemory({ media_variant: 'artwork', artwork_medium: 'watercolor', emotion: 'joy' });
+  function lastEngagementProps() {
+    const calls = (MemoryEngagementBar as jest.Mock).mock.calls;
+    return calls[calls.length - 1]?.[0];
+  }
 
-    const screen = renderScreen();
+  describe('single piece', () => {
+    it('hangs the piece on the gallery wall from a nail, with no photo carousel', () => {
+      mockMemory({ media_variant: 'artwork', artwork_medium: 'watercolor', emotion: 'joy' });
 
-    expect(screen.getByTestId('memory-detail-artwork-frame')).toBeTruthy();
-    expect(screen.getByTestId('artwork-medium-chip')).toHaveTextContent('watercolor');
-    expect(screen.queryByText('joy')).toBeNull();
-    // Same carousel as the photo layout, so tapping still opens the full-screen viewer.
-    const carouselProps = (MemoryMediaCarousel as jest.Mock).mock.calls[0]?.[0];
-    expect(carouselProps).toEqual(expect.objectContaining({ onPress: expect.any(Function) }));
-    expect(screen.getByTestId('memory-detail-section-engagement')).toBeTruthy();
-  });
+      const screen = renderScreen();
 
-  it('falls back to the "Artwork" badge while the medium is not yet known', () => {
-    mockMemory({ media_variant: 'artwork', artwork_medium: null, emotion: 'joy' });
+      expect(screen.getByTestId('memory-detail-gallery-wall')).toBeTruthy();
+      expect(screen.getByTestId('memory-detail-artwork-frame')).toBeTruthy();
+      expect(screen.getByTestId('memory-media-image-asset-1')).toBeTruthy();
+      expect(MemoryMediaCarousel).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('memory-detail-gallery-walk')).toBeNull();
+      // Nail + string: the frame SVG draws the nail dot and its highlight.
+      const frame = screen.getByTestId('memory-detail-artwork-frame');
+      expect(findByType(frame, 'RNSVGCircle')).toHaveLength(2);
+    });
 
-    const screen = renderScreen();
-
-    expect(screen.getByTestId('artwork-badge')).toHaveTextContent('Artwork');
-    expect(screen.queryByTestId('artwork-medium-chip')).toBeNull();
-    expect(screen.queryByText('joy')).toBeNull();
-  });
-
-  it('keeps the tagged-member age row for artwork', () => {
-    jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-08-09T12:00:00'));
-    try {
+    it('shows the museum placard: caption title, artist with full age, medium and date', () => {
       mockMemory({
         media_variant: 'artwork',
+        artwork_medium: 'crayon',
+        content: 'A dragon for Daddy',
         memory_date: '2026-07-10',
         taggedMembers: [{ ...taggedMember, date_of_birth: '2022-11-10' }],
       });
 
       const screen = renderScreen();
 
-      expect(screen.getByText('Tomás, 3y 8m')).toBeTruthy();
-    } finally {
-      jest.useRealTimers();
+      expect(screen.getByTestId('memory-detail-artwork-placard-title')).toHaveTextContent('A dragon for Daddy');
+      expect(screen.getByTestId('memory-detail-artwork-placard-artist')).toHaveTextContent(
+        'Tomás, 3 years 8 months',
+      );
+      expect(screen.getByTestId('memory-detail-artwork-placard-detail')).toHaveTextContent(
+        'Crayon on paper · July 10, 2026',
+      );
+      // The caption is the placard title, not repeated as body text.
+      expect(screen.queryByTestId('memory-detail-section-content')).toBeNull();
+    });
+
+    it('shows the medium chip instead of the emotion chip, and the engagement row', () => {
+      mockMemory({ media_variant: 'artwork', artwork_medium: 'watercolor', emotion: 'joy' });
+
+      const screen = renderScreen();
+
+      expect(screen.getByTestId('artwork-medium-chip')).toHaveTextContent('watercolor');
+      expect(screen.queryByText('joy')).toBeNull();
+      expect(screen.getByTestId('memory-detail-section-engagement')).toBeTruthy();
+    });
+
+    it('falls back to the "Artwork" badge while the medium is not yet known', () => {
+      mockMemory({ media_variant: 'artwork', artwork_medium: null, emotion: 'joy' });
+
+      const screen = renderScreen();
+
+      expect(screen.getByTestId('artwork-badge')).toHaveTextContent('Artwork');
+      expect(screen.queryByTestId('artwork-medium-chip')).toBeNull();
+      expect(screen.queryByText('joy')).toBeNull();
+      // No medium: the placard detail drops it and keeps the date.
+      expect(screen.getByTestId('memory-detail-artwork-placard-detail')).toHaveTextContent('July 10, 2026');
+    });
+
+    it('keeps the tagged-member age pills for artwork', () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-08-09T12:00:00'));
+      try {
+        mockMemory({
+          media_variant: 'artwork',
+          memory_date: '2026-07-10',
+          taggedMembers: [{ ...taggedMember, date_of_birth: '2022-11-10' }],
+        });
+
+        const screen = renderScreen();
+
+        expect(screen.getByText('Tomás, 3y 8m')).toBeTruthy();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('opens the existing comments drawer from the engagement bar (no inline comment preview)', () => {
+      mockMemory({ media_variant: 'artwork' });
+
+      const screen = renderScreen();
+
+      const drawer = MemoryCommentsDrawer as jest.Mock;
+      expect(drawer.mock.calls[drawer.mock.calls.length - 1][0]).toEqual(
+        expect.objectContaining({ visible: false }),
+      );
+      expect(lastEngagementProps()).toEqual(
+        expect.objectContaining({ enableShare: true, onOpenComments: expect.any(Function) }),
+      );
+      expect(screen.queryByTestId('memory-detail-comment-preview')).toBeNull();
+
+      act(() => lastEngagementProps().onOpenComments());
+
+      expect(drawer.mock.calls[drawer.mock.calls.length - 1][0]).toEqual(
+        expect.objectContaining({ visible: true }),
+      );
+    });
+
+    it('opens the full-screen viewer when the piece is tapped', () => {
+      mockMemory({ media_variant: 'artwork' });
+
+      const screen = renderScreen();
+      expect(FullScreenMediaViewer).not.toHaveBeenCalled();
+
+      fireEvent.press(screen.getByLabelText('View artwork full screen'));
+
+      const viewer = FullScreenMediaViewer as jest.Mock;
+      expect(viewer.mock.calls[viewer.mock.calls.length - 1][0]).toEqual(
+        expect.objectContaining({
+          initialIndex: 0,
+          items: [expect.objectContaining({ id: 'asset-1', objectKey: 'scan-1.jpg' })],
+        }),
+      );
+    });
+
+    it('lays the frame out inside the screen width and the 480px height clamp', () => {
+      // A tall scan (ratio clamps at 0.5) must shrink rather than overflow.
+      mockMemory(
+        { media_variant: 'artwork' },
+        [{ ...assets[0], aspect_ratio: 0.5 }],
+      );
+
+      const screen = renderScreen();
+
+      const frame = StyleSheet.flatten(screen.getByTestId('memory-detail-artwork-frame').props.style);
+      expect(frame.height).toBeLessThanOrEqual(480);
+      expect(frame.width).toBeLessThanOrEqual(390);
+    });
+  });
+
+  describe('batch gallery walk', () => {
+    function mockBatch(overrides: Record<string, unknown> = {}) {
+      mockMemory(
+        { media_variant: 'artwork', artwork_medium: 'mixed media', content: 'From art camp', ...overrides },
+        assets,
+      );
     }
+
+    it('renders a horizontal walk with every piece and the current frame testID', () => {
+      mockBatch();
+
+      const screen = renderScreen();
+
+      const walk = screen.getByTestId('memory-detail-gallery-walk');
+      expect(walk.props.horizontal).toBe(true);
+      expect(walk.props.data).toHaveLength(3);
+      expect(screen.getAllByTestId(/^memory-media-image-/)).toHaveLength(3);
+      // Only the current slide carries the shared frame testID.
+      expect(screen.getAllByTestId('memory-detail-artwork-frame')).toHaveLength(1);
+      expect(MemoryMediaCarousel).not.toHaveBeenCalled();
+      // No per-piece "1 of 3" labels on the detail page.
+      expect(screen.queryByText(/\d of 3/)).toBeNull();
+    });
+
+    it('shows the batch placard: medium, piece count and date', () => {
+      mockBatch({ memory_date: '2026-10-06' });
+
+      const screen = renderScreen();
+
+      expect(screen.getByTestId('memory-detail-artwork-placard-detail')).toHaveTextContent(
+        'Mixed media · 3 pieces · October 6, 2026',
+      );
+    });
+
+    it('opens on the piece named by the route and points share at it', () => {
+      mockSearchParams.mediaIndex = '2';
+      mockBatch();
+
+      const screen = renderScreen();
+
+      expect(screen.getByTestId('memory-detail-gallery-walk').props.initialScrollIndex).toBe(2);
+      expect(lastEngagementProps()).toEqual(
+        expect.objectContaining({ currentMediaAssetId: 'asset-3' }),
+      );
+    });
+
+    it('starts at the first piece when no page is passed', () => {
+      mockBatch();
+
+      const screen = renderScreen();
+
+      expect(screen.getByTestId('memory-detail-gallery-walk').props.initialScrollIndex).toBeUndefined();
+      expect(lastEngagementProps()).toEqual(
+        expect.objectContaining({ currentMediaAssetId: 'asset-1' }),
+      );
+    });
+
+    it('updates the share target when the walk settles on another piece', () => {
+      mockBatch();
+
+      const screen = renderScreen();
+      const walk = screen.getByTestId('memory-detail-gallery-walk');
+      const spacing = Math.round(390 * 0.67);
+
+      fireEvent(walk, 'momentumScrollEnd', {
+        nativeEvent: { contentOffset: { x: spacing, y: 0 } },
+      });
+
+      expect(lastEngagementProps()).toEqual(
+        expect.objectContaining({ currentMediaAssetId: 'asset-2' }),
+      );
+      expect(screen.getByTestId('memory-detail-artwork-frame')).toBeTruthy();
+    });
+
+    it('opens the full-screen viewer at the current piece when it is tapped', () => {
+      mockSearchParams.mediaIndex = '1';
+      mockBatch();
+
+      const screen = renderScreen();
+
+      fireEvent.press(screen.getByLabelText('View artwork full screen'));
+
+      const viewer = FullScreenMediaViewer as jest.Mock;
+      expect(viewer.mock.calls[viewer.mock.calls.length - 1][0]).toEqual(
+        expect.objectContaining({ initialIndex: 1 }),
+      );
+    });
+
+    it('tapping a peeking piece scrolls to it instead of opening the viewer', () => {
+      mockBatch();
+
+      const screen = renderScreen();
+
+      fireEvent.press(screen.getByLabelText('Show piece 2 of 3'));
+
+      expect(FullScreenMediaViewer).not.toHaveBeenCalled();
+      expect(lastEngagementProps()).toEqual(
+        expect.objectContaining({ currentMediaAssetId: 'asset-2' }),
+      );
+    });
   });
 
   it('renders regular photo memories without the frame and with the emotion chip', () => {
@@ -326,6 +549,7 @@ describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning.md)', 
     const screen = renderScreen();
 
     expect(screen.queryByTestId('memory-detail-artwork-frame')).toBeNull();
+    expect(screen.queryByTestId('memory-detail-gallery-wall')).toBeNull();
     expect(screen.queryByTestId('artwork-badge')).toBeNull();
     expect(screen.getByText('joy')).toBeTruthy();
   });

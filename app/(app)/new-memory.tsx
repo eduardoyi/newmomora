@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
+import { PhotosIcon } from '@/components/icons/composer-icons';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
@@ -1034,12 +1035,7 @@ export default function NewMemoryScreen() {
             // media), so this is inert while isAudio rather than a real picker
             // (docs/plans/audio-memories-v1.md P2.3 "media picker ... hidden").
             <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
-              <SymbolView
-                name={{ ios: 'camera', android: 'photo_camera' }}
-                size={20}
-                tintColor={colors.ink3}
-                fallback={<Text style={styles.toolbarIconFallback}>📷</Text>}
-              />
+              <PhotosIcon disabled />
             </View>
           )}
           {/* Same element in both branches (stable position in the
@@ -1215,10 +1211,6 @@ const styles = StyleSheet.create({
   },
   toolbarIconBtnDisabled: {
     opacity: 0.4,
-  },
-  toolbarIconFallback: {
-    fontSize: 20,
-    color: colors.ink3,
   },
   audioNoteGenerating: {
     minHeight: 96,

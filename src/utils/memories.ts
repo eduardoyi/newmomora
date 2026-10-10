@@ -372,6 +372,24 @@ export function formatDisplayDate(dateValue: string): string {
 }
 
 /**
+ * Month-name date ("October 10, 2026") -- the artwork museum placard's date.
+ * Same parsing/fallback contract as formatDisplayDate above.
+ */
+export function formatLongDisplayDate(dateValue: string): string {
+  const parsed = new Date(`${dateValue}T00:00:00`);
+
+  if (Number.isNaN(parsed.getTime())) {
+    return dateValue;
+  }
+
+  return parsed.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+/**
  * Long-form date for set pieces ("Sunday, January 14, 2024") -- the
  * gallery-import deck card's date line (design: gi-review.jsx `dateLabel`).
  * Same parsing/fallback contract as formatDisplayDate above.

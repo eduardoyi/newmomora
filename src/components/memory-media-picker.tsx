@@ -12,6 +12,7 @@ import {
   Text,
 } from 'react-native';
 
+import { PhotosIcon } from '@/components/icons/composer-icons';
 import { colors } from '@/constants/theme';
 import { aspectRatioFromDimensions } from '@/utils/media-aspect';
 import { extractCaptureDateIso } from '@/utils/media-capture-date';
@@ -407,12 +408,7 @@ export function MemoryMediaPicker({
         ]}
         testID={testID}
       >
-        <SymbolView
-          name={{ ios: 'photo', android: 'photo_library' }}
-          size={20}
-          tintColor={colors.ink2}
-          fallback={<Text style={styles.compactBtnIcon}>▣</Text>}
-        />
+        <PhotosIcon disabled={disabled} />
       </Pressable>
     );
   }
@@ -484,9 +480,5 @@ const styles = StyleSheet.create({
   },
   compactBtnPressed: {
     opacity: 0.7,
-  },
-  compactBtnIcon: {
-    fontSize: 20,
-    color: colors.ink2,
   },
 });

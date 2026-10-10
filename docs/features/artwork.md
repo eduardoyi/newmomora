@@ -1,24 +1,24 @@
 # Feature: Artwork (scanned children's drawings)
 
 **Status:** `in-progress` (built on branch `artwork-scanning`; nothing ships until the audio-trim work has landed and the merge is device-verified — see [the plan](../plans/artwork-scanning.md))
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-10 (v2 "soul": frames, wall card, deck, gallery wall, intro, icons)
 **PRD reference:** §6.3 Journal Entries (Memories) — `media` type, scanned-artwork variant
 
 ## Overview
 
-A parent taps **Scan artwork** in the new-memory composer, scans 1–10 of their child's drawings with the platform's native document scanner (edges auto-detected, perspective corrected), and saves them as a `media` memory flagged as **artwork**. The memory renders inside a drawn picture frame and mat on the Timeline card and the memory detail screen, and an AI-suggested **medium** chip (crayon, watercolor, …) takes the emotion chip's place. Everything else reuses the existing composer and `media` plumbing: tagging = artist, caption = title (optional), tagged-member age = age at creation (the existing detail age row), memory date = scan date (today, editable).
+A parent taps **Scan artwork** in the new-memory composer, scans 1–10 of their child's drawings with the platform's native document scanner (edges auto-detected, perspective corrected), and saves them as a `media` memory flagged as **artwork**. The memory hangs in a playful scrapbook frame on the Timeline and on a gallery wall on the memory detail screen (see [Soul (v2)](#soul-v2-frames-wall-card-deck-gallery-wall)), and an AI-suggested **medium** chip (crayon, watercolor, …) takes the emotion chip's place. Everything else reuses the existing composer and `media` plumbing: tagging = artist, caption = title (optional), tagged-member age = age at creation (the existing detail age row), memory date = scan date (today, editable).
 
 Artwork is **not a new memory type**. It is `memory_type = 'media'` plus `memories.media_variant = 'artwork'`, so every existing media path (upload, queue, carousel, share, export, search) keeps working unchanged. Related: [media-memories.md](./media-memories.md), [memory-analysis.md](./memory-analysis.md), [data-export.md](./data-export.md).
 
 ## User-facing behavior
 
-- **Scan button** in the composer toolbar (mic · photo · **scan** · AI toggle). Hidden entirely when the binary has no native scanner (OTA-only older binaries, Expo Go, web, iOS simulator). `isArtworkScannerAvailable()` is the single gate.
+- **Scan button** in the composer toolbar (mic · photo · **scan** · AI toggle; the three buttons use the hand-drawn `SoundIcon` / `PhotosIcon` / `ScanArtIcon`). The first tap on a device shows the intro sheet before the scanner opens. Hidden entirely when the binary has no native scanner (OTA-only older binaries, Expo Go, web, iOS simulator). `isArtworkScannerAvailable()` is the single gate.
 - **One scan session → one memory**, up to 10 pieces (`MAX_MEMORY_MEDIA_ASSETS`), shown as a carousel inside one frame. More scans can be added to the same unsaved memory until 10.
 - **No mixing.** Scans and library photos/videos are mutually exclusive in a composer, and scans can't be combined with a kept sound: the photo button disables once a scan is attached; the scan button disables once a library photo or a sound is attached. A regular media memory can never get scans added. The mic still dictates the caption on artwork (Speak It opens in `dictate` mode — no "keep the sound" fork).
 - **Incoming OS share while scans are attached** is refused ("This memory is artwork. Save it first, then share photos.") rather than replacing the scans.
 - **Page cap.** Android's scanner enforces the remaining-slot cap in its own UI. iOS VisionKit has no limit, so the app truncates to the remaining slots and says so inline: a note "Scan up to N pieces. Extra pages are left out." appears when the button is tapped (iOS only) and stays until the scan resolves, and the result notice reports how many extra pages were dropped. Every platform also exposes the cap as the button's `accessibilityHint`.
 - **Errors are inline** (same red text as the media picker). Camera permission is checked first on iOS with the picker's Settings copy; Android needs no camera permission (Play services hosts the UI). Android can report `scanner_unavailable` transiently (first use downloads the ML Kit module and needs a connection), so the copy says "Check your connection and try again" and the button is never disabled because of it.
-- **Rendering.** Timeline card and memory detail wrap the carousel in `ArtworkFrame` (walnut band, bevel, cream mat, drawn in Views). The footer chip is the medium (`crayon`, `watercolor`, …) once analysis has produced one, else a neutral "Artwork" badge. The emotion chip is never shown on artwork (emotion is still computed and stored — books, films and the detail gradient use it). The full-screen viewer shows the bare scan. Every other surface (calendar stamp, profile grid, widget, share card, family activity, books, film, holiday cards, Looking Back, search) treats artwork as a normal photo memory in v1.
+- **Rendering.** The Timeline shows artwork as a framed piece on the page background (no white card), or as a swipeable deck for a batch; the detail screen hangs it on a plaster gallery wall with a museum placard. The footer chip is the medium (`crayon`, `watercolor`, …) once analysis has produced one, else a neutral "Artwork" badge. The emotion chip is never shown on artwork (emotion is still computed and stored — books, films and the detail gradient use it). The full-screen viewer shows the bare scan. Every other surface (calendar stamp, profile grid, widget, share card, family activity, books, film, holiday cards, Looking Back, search) treats artwork as a normal photo memory.
 - **Edit.** Artwork memories open with no photo picker. Binaries with the scanner get the live scan button (new pages append to the memory and upload through the normal synchronous edit save); OTA-only binaries get a disabled scan placeholder ("Update the app to scan more artwork"). `media_variant` is immutable; converting a photo memory to artwork (or back) is not possible.
 
 ## Architecture
@@ -63,6 +63,52 @@ flowchart LR
 
 **Caches.** Analysis lands asynchronously. `runMediaPhotoAnalysis` returns `{ emotion, artworkMedium }`; the queue, the edit mutation's re-analysis and the emotion-recovery effect patch `artwork_medium` via `patchMemoryInCaches`; `fetchMemoryGenerationStatuses` / `applyStatusPatches` and `useMemoriesRealtime` carry `artwork_medium` so a card swaps its "Artwork" badge for the medium chip without a refetch.
 
+## Soul (v2): frames, wall card, deck, gallery wall
+
+Design: [plan](../plans/artwork-scanning-v2.md). Artwork stops being "a photo with a border": it is a scrapbook object on the Timeline and a framed piece on a gallery wall.
+
+### Frame engine
+
+- `ArtworkFrame` (`src/components/artwork-frame.tsx`) draws the frame, mat, cast shadow and (optionally) nail + string in one SVG; the scan is an ordinary child in the mat opening. Props: `artWidth`, `aspectRatio`, `kind`, `color`, `tilt`, `nail`. Layout box = the frame (`getArtworkFrameSize`); shadow and string overflow it, so callers reserve `ARTWORK_NAIL_HEIGHT` above a nailed frame. Rotation pivots top-center (the nail when present).
+- `frame-geometry.ts` is pure (no RN): `frameMetrics(artW, artH)` and `framePaths(kind, metrics)`, memoized per `(kind, artW, artH)`. Six kinds: scallop, gingham, ricrac, wavy, bobble, chunky. Edges are exact arcs/curves, not sampled polylines (list performance).
+- `frame-style.ts`: `pickFrameStyle(key)` -> `{ kind, color, tilt }` from `seedFromKey(key)` (six colors, tilt in ±[1, 2.5] degrees). The key is the **media asset id** (the memory id for a legacy row with no asset), so a piece wears the same frame everywhere. See Extension guide for adding styles/colors and for a future "change frame".
+
+### Timeline
+
+- `MemoryCard` routes `isArtworkMemory` to `ArtworkCard` (SpreadCard no longer has an artwork branch). No white card: the piece hangs on the page background.
+- **Single piece:** frame (art width 196/358 of the content width, frame <= 420 tall), a Caveat title from the caption (curly-quoted, omitted when empty), "Artist, age" for the first tagged member (leading unit of `formatAgeFromDob`: "Mara, 2 years" / "7 months"; name only for adults or no birthday), then `MemoryEngagementBar` and the date footer with the medium chip.
+- **Batch (2+ pieces):** `ArtworkDeck`. Up to 3 frames stacked (front at its own tilt, back slots +6 and -7 degrees at (+70,-85) and (-89,-31), scaled by width/358); a paper tag "n of N" cycles through all N. A horizontal Pan (`activeOffsetX +-12`, `failOffsetY +-10`, so list scrolling wins) flings the front piece off (260ms) and it tucks in at the back (320ms). Cycling order is the pure `deckReducer`; the stack always draws the next three in cycle order. Accessibility: `increment` action + hint; reduce motion cuts without animating.
+- **Sizing is deterministic:** width = `useWindowDimensions().width - 32` (the list's `cardItem` padding), never measured. The deck is as tall as the worst case over all pieces so the row never changes height while cycling. `artwork-layout.ts` holds all of it.
+- **Taps:** frame/deck -> `onPress(id, assetIndex)` (the detail opens on that piece, same as SpreadCard's carousel); label and footer -> `onPress(id)`. The engagement bar's share target follows the deck's front piece.
+- testIDs: `memory-card-<id>` (root), `memory-card-<id>-artwork-frame` (front frame), `-artwork` (single tap target), `-artwork-deck`.
+- **Reveal:** `use-pending-memory-uploads` calls `markArtworkForReveal(memory.id)` just before `prependMemoryToListCaches` for artwork posts. The `ArtworkCard` that mounts consumes the mark once (`useState` initializer, so the first frame is already hidden) and plays: 40px drop + 9 degree tilt (380ms ease-out), a damped spring about the top-center (about two swings), label fades in at about 700ms; reduce motion (`AccessibilityInfo`) is a 250ms fade. The marks are in memory only: a refetch, a server-loaded memory or a cold start never replays it. Only revealing cards mount the Reanimated driver, so ordinary list cards carry no shared values.
+
+### Detail
+
+- The artwork branch of `MemoryDetailFramed` returns early into `GalleryWall` (plaster `#EEE3D3`, tiling `assets/textures/plaster-noise.png` at 0.09 opacity, diagonal light streak; the texture is regenerated by `scripts/generate-plaster-noise.py`) + `ArtworkDetailStage`.
+- **Single piece:** nailed frame, art about 64% of the screen width, frame <= 480 tall, `ARTWORK_NAIL_HEIGHT` reserved above. testID `memory-detail-artwork-frame`.
+- **Batch:** `GalleryWalk`, a horizontal `FlatList` (`snapToInterval` 0.67 x width so neighbours peek, 420px track, `initialScrollIndex` from the `mediaIndex` route param). `onMomentumScrollEnd` -> active index (drives share-current-page); tapping the current piece opens the full-screen viewer at that index; tapping a neighbour scrolls to it. testIDs `memory-detail-artwork-frame` (current) and `memory-detail-gallery-walk`.
+- **Placard** (`MuseumPlacard` / `buildPlacardContent`): title from the caption (the caption body is not repeated below for artwork); "Name, 2 years 4 months" (age at the memory date via `formatAgeFromDob` with the comma stripped, so it drops months from 5 years); "<Medium> on paper · <long date>" or "<Medium> · N pieces · <date>" (`formatLongDisplayDate`). Then the engagement bar (comments open `MemoryCommentsDrawer`; no inline preview), member pills and the meta footer.
+- The detail uses original asset keys (no previews); the full-screen viewer still shows the bare scan.
+
+### First-time intro
+
+`ArtworkIntroSheet` (copy in `ARTWORK_INTRO_COPY`; illustration = a bobble/butter `ArtworkFrame` around an SVG `CrayonDoodle` on a plaster panel). The gate lives in `ArtworkScanButton`, after the page-cap check and before the permission check: the first tap on a device sets AsyncStorage `momora.artwork.introSeen.v1`, shows the sheet, and scans only from the sheet's "Start scanning" **after its dismissed callback** (iOS won't present VisionKit over a dismissing Modal; 1.5s fallback). Dismissing without "Start scanning" does not scan. A storage error falls through to scanning. Tests that tap the scan button must seed the key.
+
+### Composer icons
+
+`src/components/icons/composer-icons.tsx`: `SoundIcon` (retro mic + waves), `PhotosIcon` (stacked instant photos), `ScanArtIcon` (scalloped frame, squiggle, sun). `disabled` turns every stroke and fill grey. Used by the composer form mic, `MemoryMediaPicker`'s compact button, `ArtworkScanButton` and the inert placeholders in `new-memory.tsx` / `edit.tsx`. Accessibility labels are unchanged.
+
+### v2 gotchas
+
+- `MemoryCard` is memoized in a virtualized list: keep `ArtworkCard` pure (geometry memoized, no state on scroll). `CardFooter` lives in `memory-card-footer.tsx` to avoid an import cycle.
+- Deck handoff: when the exit finishes, one UI-thread step moves the front index, hands the drag offset to the tuck and asks React to cycle `order`. Don't split it, or the leaving card flashes at the front slot.
+- The cast shadow is stacked offset copies of the body path (RN SVG has no blur). If it reads badly on a device, iOS-only `shadow*` on a transparent container is the fallback.
+- Device checks still owed: deck Pan vs list scroll vs swipe-back; `FlatList` `initialScrollIndex > 0` may pop earlier neighbours in late (fallback: a `ScrollView`); reveal timing; Android shadow look.
+- Adding a style/color reshuffles existing pieces (see Extension guide).
+- Jest: Reanimated is mocked in `jest.setup.ts`; its `withTiming` is a shared `jest.fn`, so tests `mockClear` it and override it to run completion callbacks (see `artwork-deck.test.tsx`).
+- `expo lint` caches results in `.expo/cache/eslint`; a stale cache can report `import/no-unresolved` for a newly added file (delete the directory).
+
 ## Data model
 
 | Table / column | Role |
@@ -90,7 +136,11 @@ No new endpoints. Artwork posts use the unchanged `upload-media` path.
 | Services | `src/services/artwork-scanner.ts`, `src/services/memory-posting.ts`, `src/services/memories.ts` | Scan wrapper (validation, truncation, custody); `mediaVariant` threading; trigger-error mapping |
 | Utils | `src/utils/artwork-scan-custody.ts`, `src/utils/artwork-medium.ts`, `isArtworkMemory` in `src/utils/memories.ts` | File custody; medium vocab/format; artwork predicate |
 | Hooks | `src/hooks/use-pending-memory-uploads.tsx`, `useGenerationStatusPolling.ts`, `useMemoriesRealtime.ts`, `useMemories.ts` | Queue cleanup + sweep; medium cache patches |
-| Components | `src/components/artwork-scan-button.tsx`, `artwork-frame.tsx`, `artwork-medium-chip.tsx`, `memory-card.tsx` | Toolbar button + inline notice; frame; footer chip |
+| Components | `src/components/artwork-scan-button.tsx`, `artwork-medium-chip.tsx`, `memory-card.tsx`, `memory-card-footer.tsx` | Toolbar button + inline notice (+ intro gate); footer chip; card dispatch; shared date/chip footer |
+| Frame engine | `src/components/artwork-frame.tsx`, `src/components/artwork/frame-geometry.ts`, `frame-style.ts` | SVG frame; pure geometry; deterministic style pick |
+| Timeline | `src/components/artwork/artwork-card.tsx`, `artwork-deck.tsx`, `artwork-deck-order.ts`, `artwork-layout.ts`, `artwork-pieces.ts`, `artwork-piece-image.tsx`, `artwork-reveal.tsx`, `src/utils/artwork-reveal.ts`, `src/hooks/use-reduce-motion.ts` | Wall card, deck, sizing, label, reveal |
+| Detail | `src/components/artwork/gallery-wall.tsx`, `gallery-walk.tsx`, `museum-placard.tsx`, `app/(app)/memory/[id]/index.tsx` (`ArtworkDetailStage`) | Plaster wall, batch carousel, placard |
+| Intro + icons | `src/components/artwork/artwork-intro-sheet.tsx`, `src/components/icons/composer-icons.tsx` | First-time sheet; toolbar icons |
 
 ### How to invoke from another feature
 
@@ -102,8 +152,9 @@ No new endpoints. Artwork posts use the unchanged `upload-media` path.
 
 **Safe to extend**
 
-- **A new surface that should draw the frame** (calendar stamp, profile grid, share card…): branch on `isArtworkMemory(memory)` and wrap the media in `ArtworkFrame` (`size="card" | "detail"`); use `ArtworkMediumTag` for the footer. Surfaces that render fixed-size tiles should leave the bare image (the frame adds fixed padding only, so list heights stay deterministic).
-- **A new frame style:** `ArtworkFrame`'s `FRAME_METRICS` and the wood/mat tokens in `src/constants/theme.ts`. There is one style today; add a style prop and store the choice in a new nullable column only if users should pick it.
+- **A new surface that should draw the frame** (calendar stamp, profile grid, share card…): branch on `isArtworkMemory(memory)` and wrap the media in `ArtworkFrame` with `pickFrameStyle(asset.id)`; use `ArtworkMediumTag` for the footer. Fixed-size tiles should leave the bare image. Frame size comes from `getArtworkFrameSize`, so list heights stay deterministic.
+- **A new frame style or color:** a style is a `FrameKind` in `frame-geometry.ts` (add its branch to `framePaths`: body/outer path, mat, lip, outline, bead data) plus an entry in `FRAME_KINDS` (`frame-style.ts`) and a geometry test; a color is a `frame*` token in `src/constants/theme.ts` plus an entry in `FRAME_COLORS`. Appending to either list **changes `pickFrameStyle` results for existing pieces** (the pick is `seed % kinds`, `floor(seed / kinds) % colors`), so existing artwork would re-dress. If that matters, add the new entry only behind a stored override.
+- **"Change frame" (not built):** the style is derived, not stored (`pickFrameStyle(asset.id)`, deterministic via `seedFromKey`, so no schema change and every device agrees). A user-chosen frame needs a nullable column (per asset, or per memory) that overrides the derived pick wherever `pickFrameStyle` is called (Timeline card, deck, detail stage/walk, intro); fall back to the derived pick when null.
 - **A user-editable medium:** add `grant update (artwork_medium)` (today service-role only) or an Edge Function, an edit-screen chip row built from `ARTWORK_MEDIUMS`, and make `runMemoryAnalysis` keep a user-set value (it currently overwrites on a non-null parse). Update the medium cache patch.
 - **Per-piece titles:** needs a `memory_media` column plus a per-tile caption UI; the carousel already knows the asset index.
 - **More mediums:** edit `ARTWORK_MEDIUMS` + synonym map in `_shared/artwork-medium.ts`, mirror in `src/utils/artwork-medium.ts` (the Deno sync test fails otherwise), and update the prompt text.
@@ -144,7 +195,11 @@ No new endpoints. Artwork posts use the unchanged `upload-media` path.
 | `src/services/artwork-scanner.test.ts` | Wrapper: availability, truncation, cancel, errors, validation |
 | `src/utils/artwork-scan-custody.test.ts` | Claim, directory guard, name-timestamp sweep |
 | `src/components/artwork-scan-button.test.tsx` | Hidden when unavailable, iOS permission + cap notice, outcome notices, error mapping, re-entry guard + AppState grace, unmount mid-scan |
-| `src/components/artwork-frame.test.tsx`, `src/components/memory-card.test.tsx` | Frame + medium chip / "Artwork" badge |
+| `src/components/artwork-frame.test.tsx`, `artwork/frame-geometry.test.ts`, `artwork/frame-style.test.ts` | SVG frame, closed paths and sizes, all 36 style/color combinations, tilt range, determinism |
+| `src/components/artwork/artwork-card.test.tsx`, `artwork-deck.test.tsx`, `artwork-deck-order.test.ts`, `artwork-layout.test.ts`, `artwork-pieces.test.ts`, `artwork-reveal.test.tsx`, `src/utils/artwork-reveal.test.ts` | Wall card, label variants, taps, deck gesture + reducer + a11y action, deterministic sizing, reveal (once, reduce motion) |
+| `src/components/memory-card.test.tsx` | Dispatch to the wall card/deck, no white card, medium chip / "Artwork" badge |
+| `src/components/artwork/gallery-wall.test.tsx`, `gallery-walk.test.tsx`, `museum-placard.test.tsx` | Wall backdrop, gallery walk, placard content |
+| `src/components/artwork/artwork-intro-sheet.test.tsx`, `src/components/icons/composer-icons.test.tsx` | Intro sheet; icon structure and disabled greying |
 | `src/services/memory-posting.test.ts` | Variant threaded into the insert; retried artwork post keeps it |
 
 ### Integration tests
@@ -153,10 +208,10 @@ No new endpoints. Artwork posts use the unchanged `upload-media` path.
 |------|-----------|
 | `src/screen-tests/new-memory.integration.test.tsx` ("artwork scanning") | Scan → preview → photo button disabled → save enqueues `mediaVariant: 'artwork'`; picker-first and sound disable scan; dictate mode; incoming-share refusal; refs re-check on resolve; cleanup on remove / unmount / after save; toolbar shrink |
 | `src/screen-tests/edit-memory.integration.test.tsx` | Live scan button vs placeholder; scans upload via the edit save without `media_variant`; file cleanup |
-| `src/hooks/use-pending-memory-uploads.test.tsx` | Scan-file deletion after success/discard, kept on failure; sweep at mount |
+| `src/hooks/use-pending-memory-uploads.test.tsx` | Scan-file deletion after success/discard, kept on failure; sweep at mount; reveal mark only for a posted artwork memory |
 | `src/services/memories.integration.test.ts` | `media_variant` insert; trigger-error mapping |
 | `src/components/gallery-import/gallery-import-approval.integration.test.tsx` | Composer toolbar renders without a scan button |
-| `src/screen-tests/memory-detail.integration.test.tsx` | Detail frame + chip |
+| `src/screen-tests/memory-detail.integration.test.tsx` | Detail stage: placard, nail, comments drawer, gallery walk, full-screen viewer |
 
 ### E2E (Maestro)
 
@@ -183,4 +238,5 @@ npm run test:db
 
 | Date | Change |
 |------|--------|
+| 2026-10-10 | v2 "soul" on branch `feature/audio-artwork-combined`: six frame styles x six colors (derived from the asset id), Timeline wall card + swipeable deck, swing-in reveal, detail gallery wall/walk + museum placard, first-time intro sheet, hand-drawn composer icons. Replaces the v1 walnut frame |
 | 2026-10-10 | Phase 3 on branch `artwork-scanning`: scan button, composer/edit wiring, custody cleanup, queue variant, analytics (`artwork_scan_result`, `memory_saved.is_artwork`), docs and flows. Phases 1–2 (schema, analysis medium axis, frame rendering) already on the branch |

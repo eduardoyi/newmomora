@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import * as memoryCache from '@/hooks/memory-cache';
 import {
   PendingMemoryUploadsProvider,
   usePendingMemoryUploads,
@@ -23,6 +24,7 @@ import {
   postMediaMemory,
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
+import { consumeArtworkReveal, resetArtworkReveals } from '@/utils/artwork-reveal';
 import { sweepStaleArtworkScans } from '@/utils/artwork-scan-custody';
 import * as FileSystem from 'expo-file-system/legacy';
 
@@ -1219,6 +1221,87 @@ describe('usePendingMemoryUploads', () => {
         expect(mockedDeleteAsync).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg', { idempotent: true });
       });
       expect(mockedDeleteAsync).toHaveBeenCalledTimes(2);
+    });
+
+    describe('Timeline reveal mark (docs/plans/artwork-scanning-v2.md B3)', () => {
+      beforeEach(() => resetArtworkReveals());
+
+      it('marks a posted artwork memory for the reveal, before its card replaces the pending one', async () => {
+        mockedPostMediaMemory.mockResolvedValue({ id: 'memory-art-1' } as never);
+        let markedWhenPrepended: boolean | null = null;
+        const prepend = jest.spyOn(memoryCache, 'prependMemoryToListCaches').mockImplementation(() => {
+          // The ArtworkCard that mounts for the prepended memory consumes the
+          // mark, so it has to exist by now.
+          markedWhenPrepended = consumeArtworkReveal('memory-art-1');
+        });
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(artworkInput);
+        });
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        expect(prepend).toHaveBeenCalledTimes(1);
+        expect(markedWhenPrepended).toBe(true);
+        prepend.mockRestore();
+      });
+
+      it('leaves a mark for a remount to consume exactly once', async () => {
+        mockedPostMediaMemory.mockResolvedValue({ id: 'memory-art-1' } as never);
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(artworkInput);
+        });
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        expect(consumeArtworkReveal('memory-art-1')).toBe(true);
+        expect(consumeArtworkReveal('memory-art-1')).toBe(false);
+      });
+
+      it('does not mark a regular photo memory', async () => {
+        mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(photoInput);
+        });
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        expect(consumeArtworkReveal('memory-1')).toBe(false);
+      });
+
+      it('does not mark an audio memory', async () => {
+        mockedPostAudioMemory.mockResolvedValue({ id: 'memory-audio-1' } as never);
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(audioInput);
+        });
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        expect(consumeArtworkReveal('memory-audio-1')).toBe(false);
+      });
+
+      it('does not mark a failed artwork post, and marks it once the retry posts', async () => {
+        mockedPostMediaMemory
+          .mockRejectedValueOnce(new Error('network down'))
+          .mockResolvedValueOnce({ id: 'memory-art-1' } as never);
+        const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+        act(() => {
+          result.current.enqueue(artworkInput);
+        });
+        await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+        expect(consumeArtworkReveal('memory-art-1')).toBe(false);
+
+        act(() => {
+          result.current.retry('memory-art-1');
+        });
+        await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+        expect(consumeArtworkReveal('memory-art-1')).toBe(true);
+      });
     });
 
     it('keeps the scan files while a failed post waits for Retry, and deletes them once the retry succeeds', async () => {

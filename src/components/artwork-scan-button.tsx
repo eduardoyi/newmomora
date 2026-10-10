@@ -6,11 +6,17 @@
 //
 // Hidden entirely when `isArtworkScannerAvailable()` is false (OTA bundles
 // reaching binaries built before the native module existed).
+//
+// The first tap on a device shows `ArtworkIntroSheet` (docs/plans/
+// artwork-scanning-v2.md decision 7) instead of scanning; "Start scanning"
+// opens the scanner once that sheet has fully dismissed.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { SymbolView } from 'expo-symbols';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text } from 'react-native';
 
+import { ArtworkIntroSheet } from '@/components/artwork/artwork-intro-sheet';
+import { ScanArtIcon } from '@/components/icons/composer-icons';
 import type { MediaAttachment } from '@/components/memory-media-picker';
 import { colors, fonts } from '@/constants/theme';
 import { trackEvent } from '@/services/analytics';
@@ -26,6 +32,32 @@ import {
  * result before concluding it was lost (Android activity death, iOS hang)
  * and releasing the re-entry guard. */
 export const ARTWORK_SCAN_RESULT_GRACE_MS = 1500;
+
+/** AsyncStorage flag: the first-time "hang it on the wall" intro has been
+ * shown on this device (docs/plans/artwork-scanning-v2.md decision 7). */
+export const ARTWORK_INTRO_SEEN_STORAGE_KEY = 'momora.artwork.introSeen.v1';
+
+/** Upper bound on waiting for the intro sheet's `onDismissed` before the
+ * scanner opens anyway (a Modal whose dismiss callback never arrives must not
+ * strand the "Start scanning" tap). */
+export const ARTWORK_INTRO_DISMISS_TIMEOUT_MS = 1500;
+
+/** Storage errors count as "seen": they must never block scanning. */
+async function readIntroSeen(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ARTWORK_INTRO_SEEN_STORAGE_KEY)) !== null;
+  } catch {
+    return true;
+  }
+}
+
+async function writeIntroSeen(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(ARTWORK_INTRO_SEEN_STORAGE_KEY, '1');
+  } catch {
+    // Best-effort: worst case the intro shows once more.
+  }
+}
 
 export interface ArtworkScanButtonProps {
   /** Receives validated pages whose files live in `artwork-scans/`. The
@@ -117,6 +149,16 @@ export function ArtworkScanButton({
   const isMountedRef = useRef(true);
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // First-time intro. The sheet is mounted lazily (first show) and then stays
+  // mounted so its dismissal callback can still arrive. The re-entry guard
+  // stays held (`introTokenRef`) from the tap until the sheet is dismissed
+  // without starting, or the scan it hands off to finishes.
+  const [introMounted, setIntroMounted] = useState(false);
+  const [introVisible, setIntroVisible] = useState(false);
+  const introTokenRef = useRef<number | null>(null);
+  const introStartRequestedRef = useRef(false);
+  const introTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     isMountedRef.current = true;
 
@@ -150,33 +192,33 @@ export function ArtworkScanButton({
     return () => {
       isMountedRef.current = false;
       activeScanRef.current = null;
+      introTokenRef.current = null;
+      if (introTimerRef.current) {
+        clearTimeout(introTimerRef.current);
+        introTimerRef.current = null;
+      }
       clearGraceTimer();
       subscription.remove();
     };
   }, []);
 
-  if (!isArtworkScannerAvailable()) {
-    return null;
-  }
-
   const pageLimit = Math.max(0, Math.min(Math.floor(remainingSlots), MAX_MEMORY_MEDIA_ASSETS));
+  const pageLimitRef = useRef(pageLimit);
+  useEffect(() => {
+    pageLimitRef.current = pageLimit;
+  });
 
-  const handlePress = async () => {
-    if (activeScanRef.current !== null) {
-      return;
+  const releaseGuard = (token: number) => {
+    if (activeScanRef.current === token) {
+      activeScanRef.current = null;
     }
-    const token = nextScanTokenRef.current;
-    nextScanTokenRef.current += 1;
-    activeScanRef.current = token;
+  };
 
+  // Permission pre-check + scanner + result handling. Owns `token`: releases
+  // the re-entry guard when it finishes.
+  const runScan = async (token: number) => {
+    const scanPageLimit = pageLimitRef.current;
     try {
-      onErrorRef.current('');
-
-      if (pageLimit <= 0) {
-        onErrorRef.current(`A memory holds up to ${MAX_MEMORY_MEDIA_ASSETS} pieces of artwork.`);
-        return;
-      }
-
       if (Platform.OS === 'ios') {
         // VisionKit shows a dead camera without permission, so ask first,
         // with the same Settings copy as the media picker's camera path.
@@ -196,12 +238,12 @@ export function ArtworkScanButton({
           await waitForNativePresentationToSettle();
         }
         // No page-limit API on iOS: state the cap before the scanner opens.
-        onNoticeRef.current?.(describeScanCap(pageLimit));
+        onNoticeRef.current?.(describeScanCap(scanPageLimit));
       }
 
       let result;
       try {
-        result = await scanArtwork({ remainingSlots: pageLimit });
+        result = await scanArtwork({ remainingSlots: scanPageLimit });
       } catch (error) {
         trackEvent('artwork_scan_result', { status: 'error', page_count: 0 });
         onNoticeRef.current?.('');
@@ -248,36 +290,135 @@ export function ArtworkScanButton({
         onErrorRef.current("Couldn't open the scanner. Please try again.");
       }
     } finally {
-      if (activeScanRef.current === token) {
-        activeScanRef.current = null;
+      releaseGuard(token);
+    }
+  };
+
+  const handlePress = async () => {
+    if (activeScanRef.current !== null) {
+      return;
+    }
+    const token = nextScanTokenRef.current;
+    nextScanTokenRef.current += 1;
+    activeScanRef.current = token;
+
+    let handedOff = false;
+    try {
+      onErrorRef.current('');
+
+      if (pageLimit <= 0) {
+        onErrorRef.current(`A memory holds up to ${MAX_MEMORY_MEDIA_ASSETS} pieces of artwork.`);
+        return;
+      }
+
+      // First tap on this device: show the intro instead of scanning. The
+      // guard stays held until the sheet resolves (see handleIntroDismissed).
+      if (!(await readIntroSeen())) {
+        await writeIntroSeen();
+        if (!isMountedRef.current) {
+          return;
+        }
+        introTokenRef.current = token;
+        introStartRequestedRef.current = false;
+        setIntroMounted(true);
+        setIntroVisible(true);
+        handedOff = true;
+        return;
+      }
+
+      handedOff = true;
+      await runScan(token);
+    } catch {
+      if (isMountedRef.current) {
+        onErrorRef.current("Couldn't open the scanner. Please try again.");
+      }
+    } finally {
+      if (!handedOff) {
+        releaseGuard(token);
       }
     }
   };
 
+  const clearIntroTimer = () => {
+    if (introTimerRef.current) {
+      clearTimeout(introTimerRef.current);
+      introTimerRef.current = null;
+    }
+  };
+
+  // The intro Modal has fully dismissed (iOS `onDismiss`; Android right after
+  // `visible` flips). Only now may the scanner open: iOS won't present
+  // VisionKit over a Modal that is still dismissing. Idempotent -- the
+  // fallback timer and the real callback can both land.
+  const handleIntroDismissed = () => {
+    clearIntroTimer();
+    const token = introTokenRef.current;
+    if (token === null) {
+      return;
+    }
+    introTokenRef.current = null;
+    if (introStartRequestedRef.current && isMountedRef.current) {
+      introStartRequestedRef.current = false;
+      void runScan(token);
+      return;
+    }
+    introStartRequestedRef.current = false;
+    releaseGuard(token);
+  };
+
+  const handleIntroStart = () => {
+    if (introStartRequestedRef.current) {
+      return;
+    }
+    introStartRequestedRef.current = true;
+    setIntroVisible(false);
+    clearIntroTimer();
+    introTimerRef.current = setTimeout(handleIntroDismissed, ARTWORK_INTRO_DISMISS_TIMEOUT_MS);
+  };
+
+  const handleIntroClose = () => {
+    // Already closing for "Start scanning": a stray backdrop tap mid-dismiss
+    // must not cancel the scan.
+    if (introStartRequestedRef.current) {
+      return;
+    }
+    setIntroVisible(false);
+  };
+
+  if (!isArtworkScannerAvailable()) {
+    return null;
+  }
+
   return (
-    <Pressable
-      accessibilityHint={`Scans up to ${pageLimit} ${pageLimit === 1 ? 'piece' : 'pieces'} of artwork`}
-      accessibilityLabel="Scan artwork"
-      accessibilityRole="button"
-      accessibilityState={{ disabled }}
-      disabled={disabled}
-      onPress={() => {
-        void handlePress();
-      }}
-      style={({ pressed }) => [
-        styles.compactBtn,
-        disabled && styles.compactBtnDisabled,
-        pressed && !disabled && styles.compactBtnPressed,
-      ]}
-      testID={testID}
-    >
-      <SymbolView
-        name={{ ios: 'doc.viewfinder', android: 'document_scanner' }}
-        size={20}
-        tintColor={colors.ink2}
-        fallback={<Text style={styles.compactBtnIcon}>▣</Text>}
-      />
-    </Pressable>
+    <>
+      <Pressable
+        accessibilityHint={`Scans up to ${pageLimit} ${pageLimit === 1 ? 'piece' : 'pieces'} of artwork`}
+        accessibilityLabel="Scan artwork"
+        accessibilityRole="button"
+        accessibilityState={{ disabled }}
+        disabled={disabled}
+        onPress={() => {
+          void handlePress();
+        }}
+        style={({ pressed }) => [
+          styles.compactBtn,
+          disabled && styles.compactBtnDisabled,
+          pressed && !disabled && styles.compactBtnPressed,
+        ]}
+        testID={testID}
+      >
+        <ScanArtIcon disabled={disabled} />
+      </Pressable>
+      {introMounted ? (
+        <ArtworkIntroSheet
+          onClose={handleIntroClose}
+          onDismissed={handleIntroDismissed}
+          onStart={handleIntroStart}
+          testID={`${testID}-intro`}
+          visible={introVisible}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -310,10 +451,6 @@ const styles = StyleSheet.create({
   },
   compactBtnPressed: {
     opacity: 0.7,
-  },
-  compactBtnIcon: {
-    fontSize: 20,
-    color: colors.ink2,
   },
   notice: {
     fontFamily: fonts.sans,

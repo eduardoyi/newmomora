@@ -15,6 +15,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { Alert, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { ARTWORK_INTRO_SEEN_STORAGE_KEY } from '@/components/artwork-scan-button';
 import { JOURNALING_PROMPTS } from '@/constants/journaling-prompts';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
@@ -2703,6 +2704,8 @@ describe('NewMemoryScreen -- artwork scanning', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     await AsyncStorage.clear();
+    // Returning user: the first-time artwork intro sheet has been seen.
+    await AsyncStorage.setItem(ARTWORK_INTRO_SEEN_STORAGE_KEY, '1');
     jest.useFakeTimers();
     Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
     jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);

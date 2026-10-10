@@ -36,6 +36,7 @@ import {
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
 import { deleteArtworkScanFile, sweepStaleArtworkScans } from '@/utils/artwork-scan-custody';
+import { markArtworkForReveal } from '@/utils/artwork-reveal';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
 
@@ -173,6 +174,12 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         const memory = isAudio
           ? await postAudioMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded })
           : await postMediaMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded });
+
+        // An artwork post gets the Timeline swing-in once (consumed by the
+        // ArtworkCard that mounts for it) -- mark BEFORE the prepend renders it.
+        if (!isAudio && input.mediaVariant === 'artwork') {
+          markArtworkForReveal(memory.id);
+        }
 
         // postMediaMemory/postAudioMemory already return the enriched row --
         // prepend it (sorted by memory_date desc, created_at desc) into
