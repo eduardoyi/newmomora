@@ -1,9 +1,11 @@
 import {
   deriveMemoryType,
   formatDisplayDate,
+  formatArtworkMedium,
   formatMemoryExcerpt,
   formatVideoDurationLabel,
   getIllustrationStatusLabel,
+  isArtworkMemory,
   isIllustrationInProgress,
   groupMemoriesByDate,
   ILLUSTRATION_GENERATION_STALE_MS,
@@ -250,5 +252,18 @@ describe('memories utils', () => {
         illustrationEnabled: false,
       }),
     ).toBe('text_only');
+  });
+
+  it('identifies artwork memories only for media memories flagged artwork', () => {
+    expect(isArtworkMemory({ memory_type: 'media', media_variant: 'artwork' })).toBe(true);
+    expect(isArtworkMemory({ memory_type: 'media', media_variant: null })).toBe(false);
+    expect(isArtworkMemory({ memory_type: 'media' })).toBe(false);
+    expect(isArtworkMemory({ memory_type: 'text_only', media_variant: 'artwork' })).toBe(false);
+  });
+
+  it('formats the artwork medium and treats blank as absent', () => {
+    expect(formatArtworkMedium('colored pencil')).toBe('colored pencil');
+    expect(formatArtworkMedium('  ')).toBeNull();
+    expect(formatArtworkMedium(null)).toBeNull();
   });
 });

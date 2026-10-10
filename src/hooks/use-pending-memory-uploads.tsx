@@ -23,7 +23,7 @@ import { fetchLinkPreviews } from '@/services/ai';
 import {
   patchAudioDescriptionIfEmpty,
   runAudioEmotionAnalysis,
-  runMediaPhotoEmotionAnalysis,
+  runMediaPhotoAnalysis,
   type MemoryWithTags,
 } from '@/services/memories';
 import {
@@ -35,8 +35,22 @@ import {
   type PendingMemoryUploadInput,
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
+import { deleteArtworkScanFile, sweepStaleArtworkScans } from '@/utils/artwork-scan-custody';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
+
+/** Scanned-artwork pages (docs/features/artwork.md) exist only as files in
+ * `artwork-scans/` until a post succeeds. Deletes this input's scan files;
+ * `deleteArtworkScanFile` is a no-op for any path outside that directory, so
+ * library photos and share files are never touched. */
+function deleteScanFilesForInput(input: PendingMemoryUploadInput): void {
+  if (isAudioUploadInput(input)) {
+    return;
+  }
+  for (const asset of input.mediaAssets) {
+    void deleteArtworkScanFile(asset.fileUri);
+  }
+}
 
 export type PendingMemoryUploadStatus = 'posting' | 'failed';
 
@@ -106,6 +120,39 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
     setUploads((current) => current.filter((upload) => upload.memoryId !== memoryId));
   }, []);
 
+  // User-facing Discard of a failed post: the queue is the last holder of its
+  // scanned pages, so they go with it.
+  const discardUpload = useCallback(
+    (memoryId: string) => {
+      const record = inputsRef.current.get(memoryId);
+      if (record) {
+        deleteScanFilesForInput(record.input);
+      }
+      removeUpload(memoryId);
+    },
+    [removeUpload],
+  );
+
+  // Best-effort sweep of orphaned scan files (a force-quit mid-upload loses
+  // the in-memory queue but not the files). Runs once when the provider
+  // mounts -- it lives in AppProviders for the whole app session, so this is
+  // app start. `keepUris` is every file a pending upload still references;
+  // the queue is empty at mount, but passing it keeps the sweep correct if
+  // this ever runs later or the queue is ever persisted.
+  useEffect(() => {
+    const keepUris: string[] = [];
+    for (const { input } of inputsRef.current.values()) {
+      if (!isAudioUploadInput(input)) {
+        for (const asset of input.mediaAssets) {
+          if (asset.fileUri) {
+            keepUris.push(asset.fileUri);
+          }
+        }
+      }
+    }
+    void sweepStaleArtworkScans({ keepUris });
+  }, []);
+
   const runUpload = useCallback(
     async (input: PendingMemoryUploadInput, userId: string, activeFamilyId: string) => {
       try {
@@ -140,6 +187,9 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         // The card is already replaced by the prepended memory, so there's
         // no gap to bridge by waiting on a refetch before removing it.
         removeUpload(input.memoryId);
+        // Posted: the scanned pages (if any) now live in R2. Retries re-read
+        // these files, so this is the only point they can go.
+        deleteScanFilesForInput(input);
 
         if (isAudio && input.pendingTranscription) {
           // Ordering fix (cross-seam bug): the memories row is created by
@@ -196,10 +246,16 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
               });
           }
         } else if (hasImageMediaAsset(input.mediaAssets)) {
-          void runMediaPhotoEmotionAnalysis(memory.id)
-            .then((emotion) => {
-              if (emotion) {
-                setMemoryEmotionInCache(queryClient, activeFamilyId, memory.id, emotion);
+          void runMediaPhotoAnalysis(memory.id)
+            .then((analysis) => {
+              // Emotion and (for artwork) medium land in one analysis write;
+              // patch both so the Timeline card swaps its "Artwork" fallback
+              // badge for the medium chip without a refetch.
+              if (analysis?.emotion) {
+                patchMemoryInCaches(queryClient, activeFamilyId, memory.id, {
+                  emotion: analysis.emotion,
+                  ...(analysis.artworkMedium ? { artwork_medium: analysis.artworkMedium } : {}),
+                });
               }
             })
             .finally(() => {
@@ -359,8 +415,8 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
   }, [retry]);
 
   const value = useMemo(
-    () => ({ uploads, enqueue, retry, discard: removeUpload }),
-    [uploads, enqueue, retry, removeUpload],
+    () => ({ uploads, enqueue, retry, discard: discardUpload }),
+    [uploads, enqueue, retry, discardUpload],
   );
 
   return (

@@ -109,7 +109,16 @@ export interface AnalyticsEventMap {
     has_media: boolean;
     tagged_count: number;
     illustration_enabled: boolean;
+    /** True only for a scanned-artwork media memory (docs/features/artwork.md). */
+    is_artwork: boolean;
     source: 'fab_timeline' | 'fab_calendar' | 'share_sheet' | 'notification' | 'other';
+  };
+  /** The native artwork scanner resolved (composer toolbar button). Scalars
+   * only -- never page content or paths. `page_count` is the number of
+   * validated pages handed to the composer (0 for cancel/error). */
+  artwork_scan_result: {
+    status: 'success' | 'cancel' | 'error';
+    page_count: number;
   };
   memory_save_failed: {
     code: 'validation_error' | 'media_upload_failed' | 'network_error' | 'other';

@@ -1,5 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
+  applyArtworkAnalysisMode,
   buildAnalysisInput,
   buildRelevantMilestoneCatalog,
   buildMemoryAnalysisSystemPrompt,
@@ -122,8 +123,19 @@ Deno.test('parseMemoryAnalysisModelOutput normalizes an unknown emotion to the t
   assertEquals(output.emotion, 'tender');
 });
 
+Deno.test('parseMemoryAnalysisModelOutput parses `medium` tolerantly (case, plural, synonym) and nulls the unknown', () => {
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 'Crayons' }).artworkMedium, 'crayon');
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 'water color' }).artworkMedium, 'watercolor');
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 'felt tip' }).artworkMedium, 'marker');
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 'oil pastel' }).artworkMedium, 'pastel');
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 'finger paint on canvas' }).artworkMedium, null);
+  assertEquals(parseMemoryAnalysisModelOutput({ medium: 7 }).artworkMedium, null);
+  assertEquals(parseMemoryAnalysisModelOutput({}).artworkMedium, null);
+});
+
 Deno.test('parseMemoryAnalysisModelOutput handles a completely malformed raw payload', () => {
   const output = parseMemoryAnalysisModelOutput('not an object');
+  assertEquals(output.artworkMedium, null);
   assertEquals(output.topics, []);
   assertEquals(output.labels, []);
   assertEquals(output.description, '');
@@ -377,7 +389,7 @@ Deno.test('runMemoryAnalysis: neither text nor images returns {skipped:true} wit
 
   try {
     const result = await runMemoryAnalysis({
-      memory: { id: 'm1', content: null, memoryType: 'text_only', memoryDate: '2026-06-15', audioTranscript: null },
+      memory: { id: 'm1', content: null, memoryType: 'text_only', memoryDate: '2026-06-15', audioTranscript: null, mediaVariant: null },
       taggedMembers: [],
       media: [],
     });
@@ -426,6 +438,7 @@ Deno.test('runMemoryAnalysis: a text-only memory produces a full analysis with d
         memoryType: 'text_only',
         memoryDate: '2026-06-15',
         audioTranscript: null,
+        mediaVariant: null,
       },
       taggedMembers: [{ id: 'a', name: 'Tomás', dateOfBirth: '2025-06-15' }], // 12 months old
       media: [],
@@ -477,7 +490,7 @@ Deno.test('runMemoryAnalysis: forwards real token usage from the provider respon
 
   try {
     const result = await runMemoryAnalysis({
-      memory: { id: 'm2', content: 'A quiet afternoon.', memoryType: 'text_only', memoryDate: '2026-06-15', audioTranscript: null },
+      memory: { id: 'm2', content: 'A quiet afternoon.', memoryType: 'text_only', memoryDate: '2026-06-15', audioTranscript: null, mediaVariant: null },
       taggedMembers: [],
       media: [],
     });
@@ -628,6 +641,7 @@ Deno.test('runMemoryAnalysis: a model milestone claim that fails the evidence ga
         memoryType: 'text_only',
         memoryDate: '2026-06-15',
         audioTranscript: null,
+        mediaVariant: null,
       },
       taggedMembers: [{ id: 'a', name: 'Tomás', dateOfBirth: '2024-06-15' }],
       media: [],
@@ -639,6 +653,252 @@ Deno.test('runMemoryAnalysis: a model milestone claim that fails the evidence ga
     assertEquals(logged[0], ['analyze-memory milestone dropped', 'm3', 'first-haircut', 'no_explicit_language']);
   } finally {
     console.log = originalLog;
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+// --- artwork mode (docs/plans/artwork-scanning.md 1.5) ---------------------------------
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+Deno.test('buildMemoryAnalysisSystemPrompt: the non-artwork prompt is byte-identical to the pre-artwork prompt', async () => {
+  // Hash of the prompt as it was before the artwork addendum existed, built
+  // with empty topic/milestone inputs so the pin covers only the fixed
+  // instruction text (not the evolving vocabulary). If you change the shared
+  // instructions on purpose, update this hash in the same change.
+  const baseline = buildMemoryAnalysisSystemPrompt({ topics: [], milestoneCatalog: [] });
+  assertEquals(baseline.length, 4443);
+  assertEquals(await sha256Hex(baseline), '9a714f92f5ae51c04aaad6b03f4d938786907d8fb25f3fb279b4f25fa95b9e72');
+  assertEquals(buildMemoryAnalysisSystemPrompt({ topics: [], milestoneCatalog: [], isArtwork: false }), baseline);
+  assertEquals(baseline.includes('ARTWORK'), false);
+  assertEquals(baseline.includes('medium'), false);
+});
+
+Deno.test('buildMemoryAnalysisSystemPrompt: artwork appends the medium field and the depicted-is-not-an-event rule', () => {
+  const baseline = buildMemoryAnalysisSystemPrompt({ topics: TOPICS, milestoneCatalog: [] });
+  const artwork = buildMemoryAnalysisSystemPrompt({ topics: TOPICS, milestoneCatalog: [], isArtwork: true });
+  assertEquals(artwork.startsWith(baseline), true);
+  const addendum = artwork.slice(baseline.length);
+  assertEquals(addendum.includes("scans of a child's artwork"), true);
+  assertEquals(addendum.includes('not where the family was or what it did'), true);
+  assertEquals(
+    addendum.includes(
+      '[crayon, marker, colored pencil, pencil, watercolor, paint, chalk, pastel, collage, mixed media]',
+    ),
+    true,
+  );
+  assertEquals(addendum.includes('`mixed media` when pieces differ or materials combine'), true);
+});
+
+Deno.test('applyArtworkAnalysisMode forces topics to arts-crafts, lowercases + prefixes labels, prefixes the description', () => {
+  const output = applyArtworkAnalysisMode({
+    topics: [
+      { id: 'beach', detail: null },
+      { id: 'travel', detail: null },
+      { id: 'arts-crafts', detail: 'sunny day' },
+    ],
+    labels: ['Disney Castle', 'Paris', 'Sun', 'sun'],
+    description: 'a castle with a flag',
+    artworkMedium: 'crayon',
+  });
+  assertEquals(output.topics, [{ id: 'arts-crafts', detail: 'sunny day' }]);
+  assertEquals(output.labels, ['artwork', 'crayon', 'disney castle', 'paris', 'sun']);
+  assertEquals(output.description, "a child's crayon drawing of a castle with a flag");
+});
+
+Deno.test('applyArtworkAnalysisMode without a medium falls back to the plain artwork prefixes and caps labels', () => {
+  const output = applyArtworkAnalysisMode({
+    topics: [{ id: 'camping', detail: null }],
+    labels: Array.from({ length: 10 }, (_, index) => `Label${index}`),
+    description: '',
+    artworkMedium: null,
+  });
+  assertEquals(output.topics, [{ id: 'arts-crafts', detail: null }]);
+  assertEquals(output.labels.length, 10);
+  assertEquals(output.labels.slice(0, 2), ['artwork', 'label0']);
+  assertEquals(output.description, "a child's artwork drawing");
+});
+
+function mockAnalysisFetch(modelOutput: Record<string, unknown>, captured: { body: string }) {
+  return async (_input: unknown, init?: RequestInit) => {
+    captured.body = String(init?.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(modelOutput) } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+}
+
+Deno.test('runMemoryAnalysis: an artwork media memory gets the artwork prompt, forced topics, lowercased labels and the medium', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  const captured = { body: '' };
+  globalThis.fetch = mockAnalysisFetch(
+    {
+      topics: ['travel', 'beach'],
+      labels: ['Disney Castle', 'Paris'],
+      description: 'a castle by the sea',
+      emotion: 'joy',
+      medium: 'Crayons',
+      milestone: null,
+    },
+    captured,
+  ) as typeof fetch;
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: {
+        id: 'art1',
+        content: 'Her castle',
+        memoryType: 'media',
+        memoryDate: '2026-06-15',
+        audioTranscript: null,
+        mediaVariant: 'artwork',
+      },
+      taggedMembers: [],
+      media: [],
+    });
+
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.topics, [{ id: 'arts-crafts', detail: null }]);
+    assertEquals(result.topicDetails, {});
+    assertEquals(result.labels, ['artwork', 'crayon', 'disney castle', 'paris']);
+    assertEquals(result.description, "a child's crayon drawing of a castle by the sea");
+    assertEquals(result.artworkMedium, 'crayon');
+    assertEquals(result.emotion, 'joy');
+    assertEquals(captured.body.includes('scans of a child'), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('runMemoryAnalysis: an artwork memory with an unparseable medium returns artworkMedium null and the plain artwork prefix', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  globalThis.fetch = mockAnalysisFetch(
+    { topics: [], labels: ['House'], description: 'a house', emotion: 'calm', medium: 'oil on canvas', milestone: null },
+    { body: '' },
+  ) as typeof fetch;
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: { id: 'art2', content: 'House', memoryType: 'media', memoryDate: '2026-06-15', audioTranscript: null, mediaVariant: 'artwork' },
+      taggedMembers: [],
+      media: [],
+    });
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.artworkMedium, null);
+    assertEquals(result.labels, ['artwork', 'house']);
+    assertEquals(result.description, "a child's artwork drawing of a house");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('runMemoryAnalysis: artwork mode leaves caption-stated milestones alone', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  globalThis.fetch = mockAnalysisFetch(
+    {
+      topics: [],
+      labels: [],
+      description: 'a stick figure',
+      emotion: 'joy',
+      medium: 'marker',
+      milestone: {
+        claim: 'first steps',
+        catalog_id: 'first-steps',
+        detail: null,
+        evidence: 'took her first steps',
+      },
+    },
+    { body: '' },
+  ) as typeof fetch;
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: {
+        id: 'art3',
+        content: 'She took her first steps and then drew this',
+        memoryType: 'media',
+        memoryDate: '2026-06-15',
+        audioTranscript: null,
+        mediaVariant: 'artwork',
+      },
+      taggedMembers: [{ id: 'a', name: 'Tomás', dateOfBirth: '2025-06-15' }],
+      media: [],
+    });
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.milestones.map((milestone) => milestone.milestoneId), ['first-steps']);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('runMemoryAnalysis: a regular media memory ignores a hallucinated medium and keeps the standard prompt and topics', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  const captured = { body: '' };
+  globalThis.fetch = mockAnalysisFetch(
+    { topics: ['beach'], labels: ['Sand'], description: 'A beach.', emotion: 'joy', medium: 'crayon', milestone: null },
+    captured,
+  ) as typeof fetch;
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: { id: 'm9', content: 'Beach day', memoryType: 'media', memoryDate: '2026-06-15', audioTranscript: null, mediaVariant: null },
+      taggedMembers: [],
+      media: [],
+    });
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.artworkMedium, null);
+    assertEquals(result.topics, [{ id: 'beach', detail: null }]);
+    assertEquals(result.labels, ['Sand']);
+    assertEquals(result.description, 'A beach.');
+    assertEquals(captured.body.includes('scans of a child'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
+Deno.test('runMemoryAnalysis: media_variant artwork on a non-media type does not enter artwork mode', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  Deno.env.set('OPENAI_API_KEY', 'test-key');
+  const captured = { body: '' };
+  globalThis.fetch = mockAnalysisFetch(
+    { topics: ['beach'], labels: ['Sand'], description: 'A beach.', emotion: 'joy', medium: 'crayon', milestone: null },
+    captured,
+  ) as typeof fetch;
+
+  try {
+    const result = await runMemoryAnalysis({
+      memory: { id: 'm10', content: 'Beach day', memoryType: 'text_only', memoryDate: '2026-06-15', audioTranscript: null, mediaVariant: 'artwork' },
+      taggedMembers: [],
+      media: [],
+    });
+    if (result.skipped) throw new Error('expected a completed analysis');
+    assertEquals(result.artworkMedium, null);
+    assertEquals(result.topics, [{ id: 'beach', detail: null }]);
+    assertEquals(captured.body.includes('scans of a child'), false);
+  } finally {
     globalThis.fetch = originalFetch;
     if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
     else Deno.env.set('OPENAI_API_KEY', originalKey);

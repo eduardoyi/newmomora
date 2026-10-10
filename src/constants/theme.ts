@@ -32,6 +32,17 @@ export const colors = {
   sunSoft: '#FBE8B8',
   sunInk: '#7a560f',
 
+  // Artwork frame (src/components/artwork-frame.tsx): warm walnut band with a
+  // lit top/left edge, a cream mat, and a hairline shade at the mat opening.
+  // Tuned to sit with `ink`'s warm browns rather than a cold grey.
+  frameWood: '#8A6444',
+  frameWoodLight: '#B58F68',
+  frameWoodDark: '#5F412A',
+  frameMat: '#F7F1E4',
+  frameMatShade: '#C9BDA6',
+  frameMatLight: '#FFFCF4',
+  frameShadow: '#281E14',
+
   // Legacy aliases for backward compat
   background: '#FAFAFD',
   text: '#2C2418',

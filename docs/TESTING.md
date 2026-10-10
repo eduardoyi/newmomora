@@ -286,6 +286,7 @@ Examples:
 - `memories/create-media-memory.yaml` — photo/video memory
 - `memories/create-audio-memory.yaml`, `memories/voice-turn-into-text.yaml`, `memories/edit-audio-description.yaml`, `memories/delete-audio-memory.yaml` — audio memories (the post-recording "Turn into text" / "Keep the sound" fork); CI simulators record silence, which is the intended babble-fallback exercise for these flows
 - `memories/trim-audio-memory.yaml` — record → keep the sound → trim (scissors → Done) → save; `memories/import-audio-memory.yaml` — attach → "A sound or voice note" → Files picker (manual-assisted: the audio fixture has to be put in the device's Files first, see the flow header). Both need a build with the `momora-audio` module (1.5.0+)
+- `memories/create-artwork-memory.android.yaml`, `memories/artwork-scan-absent.ios-simulator.yaml` — scanned artwork (see "Artwork scanner flows" below; both are platform-tagged and need a build that includes `modules/momora-artwork-scanner`)
 - `sharing/01-owner-create-invite.yaml` … `04-second-account-sees-timeline.yaml` — numbered sub-flows for the two-account invite → redeem → approve loop (see `.maestro/flows/sharing/README.md` for why it's split and the required run command)
 - `family-relationships/edit-role.yaml` — set Grandparent + side in Edit person, assert the profile subtitle, then clear it again; `family-relationships/whos-who.yaml` — open the Who's who card/sheet when present (read-only; confirm logic is in `src/screen-tests/whos-who.integration.test.tsx`)
 - `sharing/viewer-readonly.yaml` — viewer sees timeline but no create FAB / no edit affordances
@@ -303,6 +304,14 @@ Two flows cover different layers:
 | `add-family-member-with-picker.yaml` | Pre-release or manual — seeds gallery with `addMedia`, drives system picker |
 
 Fixture assets: `assets/e2e/profile-fixture.jpg` (bundled in app) and `.maestro/assets/profile-fixture.jpg` (Maestro `addMedia`). The fixture button is `__DEV__` only and never ships in production builds.
+
+### Artwork scanner flows (device caveat)
+
+The artwork scanner is the platform's own UI, outside the app's view hierarchy, so Maestro can only drive it by visible text:
+
+- **Android** (`memories/create-artwork-memory.android.yaml`): the ML Kit document scanner lives in Google Play services. Run on an emulator image **with Google Play** (not plain Google APIs) using the VirtualScene back camera, or on a physical device pointed at a drawing; first use downloads the ML Kit module, so the first run needs network. The in-scanner taps (capture, done) are best-effort `optional` text matches because Google owns those labels and they vary by Play-services version; if the flow stalls inside the scanner, drive that screen manually once. After the scanner closes the flow asserts the composer's artwork state, saves, then asserts `memory-card-<id>-artwork-frame` on the Timeline and `memory-detail-artwork-frame` on the detail screen.
+- **iOS**: VisionKit's document camera does not run on the simulator, so `memories/artwork-scan-absent.ios-simulator.yaml` only asserts the scan button is *absent* there. It must not run on a physical iPhone, where the button is present by design; verify the real scanner (permission prompt, page cap notice, perspective correction) by hand on a device.
+- Both flows are tagged (`android` / `ios`); when running the whole `.maestro/flows/` tree, filter with `--include-tags` / `--exclude-tags` for the platform under test.
 
 ### E2E principles
 

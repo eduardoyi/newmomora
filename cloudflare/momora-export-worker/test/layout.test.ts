@@ -65,4 +65,24 @@ describe('layout', () => {
       'Comments:', '- Tita (2026-09-10): Jajaja', '',
     ].join('\r\n'));
   });
+
+  it('adds an Artwork line after Feeling for artwork memories only', () => {
+    const ctx = { postedBy: 'Adrianita', taggedNames: ['Lucía'], comments: [] };
+    const base = { memory_type: 'media', content: 'My family', emotion: 'joy' };
+    expect(renderMemoryText(memory({ ...base, media_variant: 'artwork', artwork_medium: 'colored pencil' }), ctx)).toBe([
+      '2026-09-09', 'Added by Adrianita', 'With Lucía', 'Feeling: joy', 'Artwork: colored pencil', '', 'My family', '',
+    ].join('\r\n'));
+    expect(renderMemoryText(memory({ ...base, media_variant: 'artwork', artwork_medium: null, emotion: null }), ctx)).toBe([
+      '2026-09-09', 'Added by Adrianita', 'With Lucía', 'Artwork', '', 'My family', '',
+    ].join('\r\n'));
+  });
+
+  it('leaves non-artwork memory.txt byte-identical, even with stray artwork columns', () => {
+    const ctx = { postedBy: 'Adrianita', taggedNames: [], comments: [] };
+    const plain = renderMemoryText(memory({ memory_type: 'media', content: 'Beach', emotion: 'joy' }), ctx);
+    expect(renderMemoryText(memory({ memory_type: 'media', content: 'Beach', emotion: 'joy', media_variant: null, artwork_medium: null }), ctx)).toBe(plain);
+    // Medium without the artwork variant, or the variant on a non-media type, is not an artwork.
+    expect(renderMemoryText(memory({ memory_type: 'media', content: 'Beach', emotion: 'joy', artwork_medium: 'crayon' }), ctx)).toBe(plain);
+    expect(plain).not.toContain('Artwork');
+  });
 });

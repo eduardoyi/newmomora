@@ -2,6 +2,8 @@ import { Image } from 'expo-image';
 import { memo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ArtworkFrame } from '@/components/artwork-frame';
+import { ArtworkMediumTag } from '@/components/artwork-medium-chip';
 import { seedFromKey } from '@/components/audio/audio-seed';
 import { StubBand } from '@/components/audio/stub-band';
 import { StubTear } from '@/components/audio/stub-tear';
@@ -19,6 +21,7 @@ import {
   formatDisplayDate,
   formatMemoryExcerpt,
   getIllustrationStatusLabel,
+  isArtworkMemory,
   isIllustrationInProgress,
   isKnownMemoryType,
   UNSUPPORTED_MEMORY_TYPE_NOTICE,
@@ -90,6 +93,7 @@ function AvatarCluster({ members }: { members: MemoryWithTags['taggedMembers'] }
 function CardFooter({ memory }: { memory: MemoryWithTags }) {
   const dayLabel = formatDisplayDate(memory.memory_date);
   const isMedia = memory.memory_type === 'media';
+  const isArtwork = isArtworkMemory(memory);
   const mediaTypes = memory.mediaAssets.map((asset) => asset.content_type);
   const hasVideo = mediaTypes.some(isVideoContentType);
   const hasPhoto = mediaTypes.some((contentType) => !isVideoContentType(contentType));
@@ -106,7 +110,11 @@ function CardFooter({ memory }: { memory: MemoryWithTags }) {
         <AvatarCluster members={memory.taggedMembers} />
       )}
       <View style={styles.footerSpacer} />
-      {memory.emotion ? (
+      {isArtwork ? (
+        // The medium chip (or "Artwork" fallback) replaces the emotion chip
+        // on artwork -- emotion is still stored, just not shown here.
+        <ArtworkMediumTag medium={memory.artwork_medium} />
+      ) : memory.emotion ? (
         <EmotionChip emotion={memory.emotion} />
       ) : isMedia ? (
         <View style={styles.mediaBadge}>
@@ -224,7 +232,9 @@ function MediaVisual({
 // card (and QuoteCard/CardFooter/AvatarCluster below) server-side for the
 // share-card PNG. That file's own header comment points back here -- if you
 // change this card's visual design, check whether layout.ts needs the same
-// change, and vice versa.
+// change, and vice versa. The artwork frame/medium chip below are the one
+// intentional exception: share cards render an artwork memory as a plain
+// photo (docs/plans/artwork-scanning.md decision 7), so don't mirror them.
 function SpreadCard({
   memory,
   onPress,
@@ -249,17 +259,30 @@ function SpreadCard({
 
   if (memory.memory_type === 'media') {
     const activeAsset = memory.mediaAssets[activeMediaIndex] ?? memory.mediaAssets[0] ?? null;
+    const mediaVisual = (
+      <MediaVisual
+        memory={memory}
+        isActive={isVideoActive}
+        onActiveIndexChange={setActiveMediaIndex}
+        onPress={handleMediaPress}
+      />
+    );
     return (
       <View
         style={styles.card}
         testID={`memory-card-${memory.id}`}
       >
-        <MediaVisual
-          memory={memory}
-          isActive={isVideoActive}
-          onActiveIndexChange={setActiveMediaIndex}
-          onPress={handleMediaPress}
-        />
+        {isArtworkMemory(memory) ? (
+          // Inset on the card background (not full-bleed) so the frame and
+          // its shadow have room to breathe.
+          <View style={styles.artworkWrap} testID={`memory-card-${memory.id}-artwork`}>
+            <ArtworkFrame size="card" testID={`memory-card-${memory.id}-artwork-frame`}>
+              {mediaVisual}
+            </ArtworkFrame>
+          </View>
+        ) : (
+          mediaVisual
+        )}
         <View style={styles.engagementWrap}>
           <MemoryEngagementBar
             memory={memory}
@@ -555,6 +578,11 @@ const styles = StyleSheet.create({
   },
   mediaVisual: {
     width: '100%',
+  },
+  artworkWrap: {
+    paddingBottom: 6,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
   },
   placeholderVisual: {
     alignItems: 'center',

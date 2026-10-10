@@ -33,8 +33,41 @@ jest.mock('@/components/memory-media-picker', () => ({
   },
 }));
 
+let mockMediaPreviewProps: {
+  attachments: { id: string; uri: string; source?: string; objectKey?: string }[];
+  headerLabel?: string;
+  onRemove: (attachmentId: string) => void;
+} | null = null;
 jest.mock('@/components/memory-media-preview', () => ({
-  MemoryMediaPreview: () => null,
+  MemoryMediaPreview: (props: NonNullable<typeof mockMediaPreviewProps>) => {
+    mockMediaPreviewProps = props;
+    return null;
+  },
+}));
+
+// iOS (the jest default platform) checks camera permission before the
+// scanner opens.
+jest.mock('expo-image-picker', () => ({
+  getCameraPermissionsAsync: jest.fn().mockResolvedValue({ granted: true, canAskAgain: true }),
+  requestCameraPermissionsAsync: jest.fn().mockResolvedValue({ granted: true, canAskAgain: true }),
+}));
+
+// The native scanner boundary (wrapper has its own suite). Unavailable by
+// default -- the OTA-only-binary case; artwork tests flip it on.
+const mockScanArtwork = jest.fn();
+const mockIsArtworkScannerAvailable = jest.fn(() => false);
+jest.mock('@/services/artwork-scanner', () => ({
+  isArtworkScannerAvailable: () => mockIsArtworkScannerAvailable(),
+  scanArtwork: (...args: unknown[]) => mockScanArtwork(...args),
+}));
+
+const mockDeleteArtworkScanFile = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/utils/artwork-scan-custody', () => ({
+  deleteArtworkScanFile: (...args: unknown[]) => mockDeleteArtworkScanFile(...args),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
 }));
 
 jest.mock('@/components/memory-tag-picker', () => ({
@@ -497,5 +530,197 @@ describe('EditMemoryScreen audio variant', () => {
     expect(updateMemory).toHaveBeenCalledWith(
       expect.objectContaining({ content: '', memoryType: 'audio' }),
     );
+  });
+});
+
+describe('EditMemoryScreen artwork variant (docs/plans/artwork-scanning.md)', () => {
+  const mediaMemoryData = (overrides: Record<string, unknown> = {}) => ({
+    id: 'memory-1',
+    content: 'Rainbow house',
+    memory_date: '2026-07-14',
+    memory_type: 'media',
+    media_variant: 'artwork',
+    media_key: 'user-1/memories/memory-1/media/scan-1.jpg',
+    media_content_type: 'image/jpeg',
+    mediaAssets: [
+      {
+        id: 'scan-1',
+        object_key: 'user-1/memories/memory-1/media/scan-1.jpg',
+        content_type: 'image/jpeg',
+        duration_ms: null,
+        aspect_ratio: 1.33,
+      },
+    ],
+    taggedMembers: [],
+    illustration_key: null,
+    illustration_status: 'none',
+    updated_at: '2026-07-14T09:00:00.000Z',
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockMediaPickerProps = null;
+    mockMediaPreviewProps = null;
+    mockIsArtworkScannerAvailable.mockReturnValue(false);
+    mockScanArtwork.mockReset();
+    mockedUseFamily.mockReturnValue({ role: 'manager' });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ updateMemory, isUpdating: false });
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+    mockedUseMediaUrls.mockReturnValue({ data: undefined });
+    mockedUseAutoMemoryTags.mockReturnValue({
+      selectedMemberIds: [],
+      initializeTags,
+      applyForContent: jest.fn(),
+      toggleMember: jest.fn(),
+      applyVoiceResult: jest.fn(),
+    });
+  });
+
+  it('renders no media picker, a disabled scan placeholder, and the "Artwork" type pill', () => {
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData(),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(mockMediaPickerProps).toBeNull();
+    const placeholder = screen.getByTestId('edit-memory-scan-artwork-disabled');
+    expect(placeholder.props.accessibilityHint).toBe('Update the app to scan more artwork');
+    expect(placeholder.props.accessibilityState).toEqual({ disabled: true });
+    expect(screen.getByText('· Artwork')).toBeTruthy();
+    expect(mockMediaPreviewProps?.headerLabel).toBe('Artwork');
+    expect(screen.queryByTestId('edit-memory-ai-toggle')).toBeNull();
+  });
+
+  function scannedPage(id: string) {
+    return {
+      id,
+      uri: `file:///documents/artwork-scans/${id}.jpg`,
+      contentType: 'image/jpeg',
+      sizeBytes: 2048,
+      aspectRatio: 1.33,
+      source: 'scan' as const,
+    };
+  }
+
+  async function runScan(screen: ReturnType<typeof render>, ids: string[]) {
+    mockScanArtwork.mockResolvedValueOnce({
+      status: 'success',
+      attachments: ids.map(scannedPage),
+      droppedCount: 0,
+      rejectedCount: 0,
+      validationError: null,
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-scan-artwork'));
+    });
+  }
+
+  it('renders the live scan button (not the placeholder) when the native scanner is available', () => {
+    mockIsArtworkScannerAvailable.mockReturnValue(true);
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData(),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('edit-memory-scan-artwork')).toBeTruthy();
+    expect(screen.queryByTestId('edit-memory-scan-artwork-disabled')).toBeNull();
+    expect(mockMediaPickerProps).toBeNull();
+  });
+
+  it('appends scanned pages and uploads them through the normal edit save, never sending media_variant', async () => {
+    mockIsArtworkScannerAvailable.mockReturnValue(true);
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData(),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    const screen = renderScreen();
+
+    await runScan(screen, ['scan-2', 'scan-3']);
+
+    expect(mockScanArtwork).toHaveBeenCalledWith({ remainingSlots: 9 });
+    expect(mockMediaPreviewProps?.attachments.map((a) => a.id)).toEqual(['scan-1', 'scan-2', 'scan-3']);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+
+    expect(updateMemory).toHaveBeenCalledTimes(1);
+    const input = updateMemory.mock.calls[0][0];
+    expect(input.memoryType).toBe('media');
+    expect(input.mediaAssets).toHaveLength(3);
+    expect(input.mediaAssets[1]).toMatchObject({
+      fileUri: 'file:///documents/artwork-scans/scan-2.jpg',
+      mediaAssetId: 'scan-2',
+    });
+    expect(JSON.stringify(input)).not.toContain('media_variant');
+    expect(JSON.stringify(input)).not.toContain('mediaVariant');
+    // Uploaded: the scan files are no longer needed.
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg');
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-3.jpg');
+  });
+
+  it('keeps the scan files when the save fails, and deletes them when the screen is left unsaved', async () => {
+    mockIsArtworkScannerAvailable.mockReturnValue(true);
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData(),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    updateMemory.mockRejectedValueOnce(new Error('offline'));
+    const screen = renderScreen();
+    await runScan(screen, ['scan-2']);
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('edit-memory-save-btn'));
+    });
+    expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+
+    screen.unmount();
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg');
+  });
+
+  it('deletes the file of a removed scanned tile but never an uploaded one', async () => {
+    mockIsArtworkScannerAvailable.mockReturnValue(true);
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData(),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+    const screen = renderScreen();
+    await runScan(screen, ['scan-2']);
+
+    act(() => {
+      mockMediaPreviewProps?.onRemove('scan-2');
+    });
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg');
+
+    mockDeleteArtworkScanFile.mockClear();
+    act(() => {
+      mockMediaPreviewProps?.onRemove('scan-1');
+    });
+    expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+  });
+
+  it('still renders the media picker for a regular photo memory', () => {
+    mockedUseMemory.mockReturnValue({
+      data: mediaMemoryData({ media_variant: null }),
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const screen = renderScreen();
+
+    expect(mockMediaPickerProps).not.toBeNull();
+    expect(screen.queryByTestId('edit-memory-scan-artwork-disabled')).toBeNull();
+    expect(screen.getByText('· Photo')).toBeTruthy();
   });
 });

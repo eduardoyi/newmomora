@@ -93,6 +93,15 @@ describe('gallery import approval composer', () => {
     (galleryService.finalizeGalleryImportCandidate as jest.Mock).mockResolvedValue({ data: { memoryId: 'memory-1' }, error: null });
   });
 
+  it('renders the composer toolbar without any artwork scan button (docs/plans/artwork-scanning.md 3.7)', async () => {
+    const approval = render(<GalleryImportApproval runId="run-1" candidateId="candidate-1" />);
+    await waitFor(() => expect(approval.getByTestId('gallery-import-approve')).toBeTruthy());
+
+    expect(approval.queryByTestId('new-memory-scan-artwork')).toBeNull();
+    expect(approval.queryByLabelText('Scan artwork')).toBeNull();
+    expect(approval.getByTestId('gallery-import-approval-progress')).toBeTruthy();
+  });
+
   it('recovers an ambiguous late begin from an approving candidate without editing or completing the run', async () => {
     let resolveFirstBegin: ((value: unknown) => void) | undefined;
     (galleryService.beginGalleryImportApproval as jest.Mock).mockImplementationOnce(() => new Promise((resolve) => { resolveFirstBegin = resolve; }));

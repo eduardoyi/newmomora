@@ -2748,6 +2748,7 @@ export type Database = {
         Row: {
           analysis_version: number | null
           analyzed_at: string | null
+          artwork_medium: string | null
           audio_transcript: string | null
           content: string | null
           created_at: string
@@ -2766,6 +2767,7 @@ export type Database = {
           link_previews: Json
           media_content_type: string | null
           media_key: string | null
+          media_variant: string | null
           memory_date: string
           memory_type: string
           onboarding_attributed: boolean
@@ -2788,6 +2790,7 @@ export type Database = {
         Insert: {
           analysis_version?: number | null
           analyzed_at?: string | null
+          artwork_medium?: string | null
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
@@ -2806,6 +2809,7 @@ export type Database = {
           link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
+          media_variant?: string | null
           memory_date?: string
           memory_type?: string
           onboarding_attributed?: boolean
@@ -2828,6 +2832,7 @@ export type Database = {
         Update: {
           analysis_version?: number | null
           analyzed_at?: string | null
+          artwork_medium?: string | null
           audio_transcript?: string | null
           content?: string | null
           created_at?: string
@@ -2846,6 +2851,7 @@ export type Database = {
           link_previews?: Json
           media_content_type?: string | null
           media_key?: string | null
+          media_variant?: string | null
           memory_date?: string
           memory_type?: string
           onboarding_attributed?: boolean

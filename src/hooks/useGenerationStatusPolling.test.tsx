@@ -145,6 +145,56 @@ describe('useGenerationStatusPolling', () => {
     expect(mockedFetchStatuses).not.toHaveBeenCalled();
   });
 
+  it('patches an arriving artwork_medium into the list cache and stops polling (emotion and medium land together)', async () => {
+    queryClient.setQueryData(
+      memoriesQueryKey(FAMILY_ID),
+      buildInfiniteData([
+        buildMemory({
+          id: 'memory-1',
+          memory_type: 'media',
+          media_variant: 'artwork',
+          media_content_type: 'image/jpeg',
+          artwork_medium: null,
+          emotion: null,
+          illustration_status: 'none',
+          created_at: new Date().toISOString(),
+        }),
+      ]),
+    );
+    mockedFetchStatuses.mockResolvedValue({
+      data: [
+        {
+          id: 'memory-1',
+          illustration_status: 'none',
+          illustration_key: null,
+          illustration_generation_id: null,
+          illustration_generation_started_at: null,
+          emotion: 'joy',
+          artwork_medium: 'watercolor',
+          updated_at: '2026-05-24T00:00:01.000Z',
+        },
+      ],
+      error: null,
+    });
+
+    renderHook(() => useGenerationStatusPolling(), { wrapper });
+
+    await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalledWith(['memory-1']));
+
+    await waitFor(() => {
+      const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey(FAMILY_ID));
+      expect(list?.pages[0]?.memories[0]).toMatchObject({
+        emotion: 'joy',
+        artwork_medium: 'watercolor',
+      });
+    });
+
+    // Emotion now exists, so the memory no longer needs polling.
+    mockedFetchStatuses.mockClear();
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(mockedFetchStatuses).not.toHaveBeenCalled();
+  });
+
   it('reports illustration_completed({outcome: ready}) when a status transitions to ready', async () => {
     queryClient.setQueryData(
       memoriesQueryKey(FAMILY_ID),

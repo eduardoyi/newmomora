@@ -13,7 +13,7 @@ import { fetchLinkPreviews } from '@/services/ai';
 import {
   patchAudioDescriptionIfEmpty,
   runAudioEmotionAnalysis,
-  runMediaPhotoEmotionAnalysis,
+  runMediaPhotoAnalysis,
   type MemoriesPage,
   type MemoryWithTags,
 } from '@/services/memories';
@@ -23,6 +23,8 @@ import {
   postMediaMemory,
 } from '@/services/memory-posting';
 import { warmShareCardForMemoryFireAndForget } from '@/services/share-card';
+import { sweepStaleArtworkScans } from '@/utils/artwork-scan-custody';
+import * as FileSystem from 'expo-file-system/legacy';
 
 jest.mock('@/hooks/use-auth', () => ({
   useAuth: jest.fn(),
@@ -37,6 +39,7 @@ jest.mock('@/services/ai', () => ({
 }));
 
 jest.mock('@/services/memories', () => ({
+  runMediaPhotoAnalysis: jest.fn().mockResolvedValue(undefined),
   runMediaPhotoEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   runAudioEmotionAnalysis: jest.fn().mockResolvedValue(undefined),
   patchAudioDescriptionIfEmpty: jest.fn().mockResolvedValue(undefined),
@@ -55,6 +58,19 @@ jest.mock('@/services/share-card', () => ({
   warmShareCardForMemoryFireAndForget: jest.fn(),
 }));
 
+// Scan custody runs for real (its directory guard is what keeps library
+// photos safe) against a mocked filesystem; only the app-start sweep is
+// stubbed so its call shape can be asserted.
+jest.mock('expo-file-system/legacy', () => ({
+  documentDirectory: 'file:///documents/',
+  deleteAsync: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('@/utils/artwork-scan-custody', () => ({
+  ...jest.requireActual('@/utils/artwork-scan-custody'),
+  sweepStaleArtworkScans: jest.fn().mockResolvedValue(undefined),
+}));
+
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
 const mockedPostMediaMemory = postMediaMemory as jest.MockedFunction<typeof postMediaMemory>;
@@ -65,8 +81,8 @@ const mockedNotify = notifyFamilyActivityFireAndForget as jest.MockedFunction<
 const mockedWarmShareCard = warmShareCardForMemoryFireAndForget as jest.MockedFunction<
   typeof warmShareCardForMemoryFireAndForget
 >;
-const mockedRunMediaPhotoEmotionAnalysis = runMediaPhotoEmotionAnalysis as jest.MockedFunction<
-  typeof runMediaPhotoEmotionAnalysis
+const mockedRunMediaPhotoAnalysis = runMediaPhotoAnalysis as jest.MockedFunction<
+  typeof runMediaPhotoAnalysis
 >;
 const mockedRunAudioEmotionAnalysis = runAudioEmotionAnalysis as jest.MockedFunction<
   typeof runAudioEmotionAnalysis
@@ -194,7 +210,7 @@ describe('usePendingMemoryUploads', () => {
     });
 
     await waitFor(() => {
-      expect(mockedRunMediaPhotoEmotionAnalysis).toHaveBeenCalledWith('memory-1');
+      expect(mockedRunMediaPhotoAnalysis).toHaveBeenCalledWith('memory-1');
       expect(mockedNotify).toHaveBeenCalledWith('memory-1');
     });
   });
@@ -217,7 +233,90 @@ describe('usePendingMemoryUploads', () => {
     await waitFor(() => {
       expect(mockedNotify).toHaveBeenCalledWith('memory-video');
     });
-    expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+    expect(mockedRunMediaPhotoAnalysis).not.toHaveBeenCalled();
+  });
+
+  it('patches the analyzed emotion and artwork medium into the timeline cache', async () => {
+    const posted = {
+      id: 'memory-1',
+      memory_type: 'media',
+      media_variant: 'artwork',
+      artwork_medium: null,
+      emotion: null,
+      memory_date: '2026-07-12',
+      created_at: '2026-07-12T00:00:00Z',
+      taggedMembers: [],
+      mediaAssets: [],
+    } as unknown as MemoryWithTags;
+    mockedPostMediaMemory.mockResolvedValue(posted as never);
+    mockedRunMediaPhotoAnalysis.mockResolvedValue({ emotion: 'joy', artworkMedium: 'crayon' });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { gcTime: Infinity, retry: false },
+        mutations: { gcTime: Infinity, retry: false },
+      },
+    });
+    queryClient.setQueryData(memoriesQueryKey('family-1'), {
+      pages: [{ memories: [], nextCursor: null }],
+      pageParams: [null],
+    } satisfies InfiniteData<MemoriesPage>);
+
+    const { result } = renderHook(() => usePendingMemoryUploads(), {
+      wrapper: createWrapperWithClient(queryClient),
+    });
+
+    act(() => {
+      result.current.enqueue(photoInput);
+    });
+
+    await waitFor(() => {
+      const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+      expect(list?.pages[0]?.memories[0]).toMatchObject({
+        id: 'memory-1',
+        emotion: 'joy',
+        artwork_medium: 'crayon',
+      });
+    });
+  });
+
+  it('leaves the medium untouched when analysis returns none (regular photo)', async () => {
+    const posted = {
+      id: 'memory-1',
+      memory_type: 'media',
+      artwork_medium: null,
+      emotion: null,
+      memory_date: '2026-07-12',
+      created_at: '2026-07-12T00:00:00Z',
+      taggedMembers: [],
+      mediaAssets: [],
+    } as unknown as MemoryWithTags;
+    mockedPostMediaMemory.mockResolvedValue(posted as never);
+    mockedRunMediaPhotoAnalysis.mockResolvedValue({ emotion: 'calm', artworkMedium: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { gcTime: Infinity, retry: false },
+        mutations: { gcTime: Infinity, retry: false },
+      },
+    });
+    queryClient.setQueryData(memoriesQueryKey('family-1'), {
+      pages: [{ memories: [], nextCursor: null }],
+      pageParams: [null],
+    } satisfies InfiniteData<MemoriesPage>);
+
+    const { result } = renderHook(() => usePendingMemoryUploads(), {
+      wrapper: createWrapperWithClient(queryClient),
+    });
+
+    act(() => {
+      result.current.enqueue(photoInput);
+    });
+
+    await waitFor(() => {
+      const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
+      expect(list?.pages[0]?.memories[0]).toMatchObject({ emotion: 'calm', artwork_medium: null });
+    });
   });
 
   it('marks the upload failed and supports retrying it', async () => {
@@ -721,7 +820,7 @@ describe('usePendingMemoryUploads', () => {
       await waitFor(() => {
         expect(mockedRunAudioEmotionAnalysis).toHaveBeenCalledWith('memory-audio-1');
       });
-      expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+      expect(mockedRunMediaPhotoAnalysis).not.toHaveBeenCalled();
     });
 
     it('skips the emotion kick entirely when both content and transcript are empty (server no-ops it, but the call is still wasted)', async () => {
@@ -746,7 +845,7 @@ describe('usePendingMemoryUploads', () => {
         expect(mockedNotify).toHaveBeenCalledWith('memory-audio-empty');
       });
       expect(mockedRunAudioEmotionAnalysis).not.toHaveBeenCalled();
-      expect(mockedRunMediaPhotoEmotionAnalysis).not.toHaveBeenCalled();
+      expect(mockedRunMediaPhotoAnalysis).not.toHaveBeenCalled();
     });
 
     it('does not warm the share card for an audio memory (compose-share-card rejects audio in v1)', async () => {
@@ -1062,6 +1161,118 @@ describe('usePendingMemoryUploads', () => {
           'existing-1',
         ]);
       });
+    });
+  });
+
+  describe('scanned-artwork custody (docs/plans/artwork-scanning.md 3.4 / 3.5)', () => {
+    const mockedDeleteAsync = FileSystem.deleteAsync as jest.Mock;
+    const mockedSweep = sweepStaleArtworkScans as jest.Mock;
+
+    const artworkInput = {
+      memoryId: 'memory-art-1',
+      mediaAssets: [
+        { mediaAssetId: 'scan-1', fileUri: 'file:///documents/artwork-scans/scan-1.jpg', contentType: 'image/jpeg' },
+        { mediaAssetId: 'scan-2', fileUri: 'file:///documents/artwork-scans/scan-2.jpg', contentType: 'image/jpeg' },
+        // Never inside artwork-scans/ in practice; proves the directory guard.
+        { mediaAssetId: 'lib-1', fileUri: 'file:///photo.jpg', contentType: 'image/jpeg' },
+      ],
+      memoryDate: '2026-07-12',
+      taggedMemberIds: [],
+      mediaVariant: 'artwork' as const,
+    };
+
+    it('sweeps stale scan files once when the provider mounts, skipping files pending uploads reference', () => {
+      renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      expect(mockedSweep).toHaveBeenCalledTimes(1);
+      // The queue is in-memory only, so nothing is pending at mount.
+      expect(mockedSweep).toHaveBeenCalledWith({ keepUris: [] });
+    });
+
+    it('does not re-sweep on later renders or enqueues', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-art-1' } as never);
+      const { result, rerender } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(artworkInput);
+      });
+      rerender({});
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+      expect(mockedSweep).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes the variant to the post and deletes the scan files (only those inside artwork-scans/) after success', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-art-1' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(artworkInput);
+      });
+
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+      expect(mockedPostMediaMemory).toHaveBeenCalledWith(
+        expect.objectContaining({ input: expect.objectContaining({ mediaVariant: 'artwork' }) }),
+      );
+      await waitFor(() => {
+        expect(mockedDeleteAsync).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg', { idempotent: true });
+        expect(mockedDeleteAsync).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg', { idempotent: true });
+      });
+      expect(mockedDeleteAsync).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the scan files while a failed post waits for Retry, and deletes them once the retry succeeds', async () => {
+      mockedPostMediaMemory
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockResolvedValueOnce({ id: 'memory-art-1' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(artworkInput);
+      });
+      await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+      expect(mockedDeleteAsync).not.toHaveBeenCalled();
+
+      act(() => {
+        result.current.retry('memory-art-1');
+      });
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+
+      // The retry re-posted the same input, variant included.
+      expect(mockedPostMediaMemory).toHaveBeenLastCalledWith(
+        expect.objectContaining({ input: expect.objectContaining({ mediaVariant: 'artwork' }) }),
+      );
+      expect(mockedDeleteAsync).toHaveBeenCalledTimes(2);
+    });
+
+    it('deletes the scan files when a failed upload is discarded', async () => {
+      mockedPostMediaMemory.mockRejectedValue(new Error('network down'));
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(artworkInput);
+      });
+      await waitFor(() => expect(result.current.uploads[0]?.status).toBe('failed'));
+
+      act(() => {
+        result.current.discard('memory-art-1');
+      });
+
+      expect(result.current.uploads).toHaveLength(0);
+      expect(mockedDeleteAsync).toHaveBeenCalledTimes(2);
+      expect(mockedDeleteAsync).not.toHaveBeenCalledWith('file:///photo.jpg', expect.anything());
+    });
+
+    it('leaves a regular photo upload\'s files alone', async () => {
+      mockedPostMediaMemory.mockResolvedValue({ id: 'memory-1' } as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+
+      await waitFor(() => expect(result.current.uploads).toHaveLength(0));
+      expect(mockedDeleteAsync).not.toHaveBeenCalled();
     });
   });
 

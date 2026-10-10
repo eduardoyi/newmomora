@@ -81,7 +81,15 @@ export async function invokeEdgeFunction<TResponse>(
 
 export async function analyzeMemoryEmotion(
   memoryId: string,
-): Promise<{ data: { emotion: string; colorPalette: string } | null; error: ServiceError | null }> {
+): Promise<{
+  data: {
+    emotion: string;
+    colorPalette: string;
+    /** Present only for artwork memories; null when the medium didn't normalize. */
+    artworkMedium?: string | null;
+  } | null;
+  error: ServiceError | null;
+}> {
   return invokeEdgeFunction('analyze-emotion', { memoryId });
 }
 

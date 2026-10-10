@@ -16,6 +16,7 @@ import {
   regenerateMemoryIllustration,
   retryMemoryIllustration,
   runMemoryIllustrationPipeline,
+  runMediaPhotoAnalysis,
   runMediaPhotoEmotionAnalysis,
   fetchMemorySearchFacets,
   searchMemories,
@@ -259,6 +260,42 @@ describe('memories service integration', () => {
     await runMediaPhotoEmotionAnalysis('memory-photo-1');
 
     expect(analyzeMemoryEmotion).toHaveBeenCalledWith('memory-photo-1');
+  });
+
+  it('runMediaPhotoAnalysis returns the emotion and artwork medium from analyzeMemoryEmotion', async () => {
+    (analyzeMemoryEmotion as jest.Mock).mockResolvedValueOnce({
+      data: { emotion: 'joy', colorPalette: 'warm', artworkMedium: 'crayon' },
+      error: null,
+    });
+
+    await expect(runMediaPhotoAnalysis('memory-photo-1')).resolves.toEqual({
+      emotion: 'joy',
+      artworkMedium: 'crayon',
+    });
+  });
+
+  it('runMediaPhotoAnalysis reports a null medium when the response omits it, and null on failure', async () => {
+    (analyzeMemoryEmotion as jest.Mock).mockResolvedValueOnce({
+      data: { emotion: 'calm', colorPalette: 'cool' },
+      error: null,
+    });
+    await expect(runMediaPhotoAnalysis('memory-photo-1')).resolves.toEqual({
+      emotion: 'calm',
+      artworkMedium: null,
+    });
+
+    jest.useFakeTimers();
+    try {
+      (analyzeMemoryEmotion as jest.Mock).mockResolvedValue({
+        data: null,
+        error: { message: 'boom' },
+      });
+      const pending = runMediaPhotoAnalysis('memory-photo-1');
+      await jest.advanceTimersByTimeAsync(6000);
+      await expect(pending).resolves.toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('createMediaMemory does not invoke analyzeMemoryEmotion directly', async () => {
@@ -1391,6 +1428,108 @@ describe('memories service integration', () => {
     );
 
     consoleWarnSpy.mockRestore();
+  });
+
+  describe('artwork variant (docs/plans/artwork-scanning.md)', () => {
+    const artworkRow = {
+      id: 'memory-art-1',
+      user_id: 'user-1',
+      family_id: 'family-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      media_variant: 'artwork',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      media_key: 'user-1/memories/memory-art-1/media/scan-1.jpg',
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+
+    function mockCreateTables(memoriesBuilder: ReturnType<typeof createQueryBuilder>) {
+      const emptyBuilder = createQueryBuilder({ data: [], error: null });
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return memoriesBuilder;
+        if (table === 'memory_family_members' || table === 'memory_media') return emptyBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+    }
+
+    const baseInput = {
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-art-1',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-art-1/media/scan-1.jpg',
+        contentType: 'image/jpeg',
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    };
+
+    it('createMediaMemory inserts media_variant when the post is artwork', async () => {
+      const memoriesBuilder = createQueryBuilder({ data: artworkRow, error: null });
+      mockCreateTables(memoriesBuilder);
+
+      const result = await createMediaMemory({ ...baseInput, mediaVariant: 'artwork' });
+
+      expect(result.error).toBeNull();
+      expect(memoriesBuilder.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ memory_type: 'media', media_variant: 'artwork' }),
+      );
+    });
+
+    it('createMediaMemory leaves media_variant out of a regular media insert', async () => {
+      const memoriesBuilder = createQueryBuilder({
+        data: { ...artworkRow, media_variant: null },
+        error: null,
+      });
+      mockCreateTables(memoriesBuilder);
+
+      await createMediaMemory(baseInput);
+
+      const inserted = memoriesBuilder.insert.mock.calls[0][0];
+      expect(inserted).not.toHaveProperty('media_variant');
+    });
+
+    it('updateMemory maps the memory_media trigger error to friendly copy and never writes media_variant', async () => {
+      const existingBuilder = createQueryBuilder({
+        data: {
+          content: null,
+          memory_type: 'media',
+          illustration_key: null,
+          illustration_status: 'none',
+        },
+        error: null,
+      });
+      const emptyBuilder = createQueryBuilder({ data: [], error: null });
+      (supabase.from as jest.Mock).mockImplementation((table: string) => {
+        if (table === 'memories') return existingBuilder;
+        if (table === 'memory_media') return emptyBuilder;
+        throw new Error(`Unexpected table ${table}`);
+      });
+      (supabase.rpc as jest.Mock).mockResolvedValue({
+        data: null,
+        error: { message: 'artwork_media_must_be_image', code: '23514' },
+      });
+
+      const result = await updateMemory('memory-art-1', {
+        content: 'Rainbow house',
+        mediaAssets: [{
+          objectKey: 'user-1/memories/memory-art-1/media/clip.mp4',
+          contentType: 'video/mp4',
+        }],
+      });
+
+      expect(result.data).toBeNull();
+      expect(result.error).toEqual({
+        message: 'Artwork memories can only hold scanned photos, not videos.',
+        code: 'validation_error',
+      });
+      expect(JSON.stringify(existingBuilder.update.mock.calls)).not.toContain('media_variant');
+    });
   });
 
   it('deletes the preview alongside the original for a media asset removed on edit', async () => {
@@ -2732,7 +2871,7 @@ describe('memories service integration', () => {
 
       expect(error).toBeNull();
       expect(memoriesBuilder.select).toHaveBeenCalledWith(
-        'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, updated_at',
+        'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, artwork_medium, updated_at',
       );
       expect(memoriesBuilder.in).toHaveBeenCalledWith('id', ['memory-1']);
       expect(data).toHaveLength(1);

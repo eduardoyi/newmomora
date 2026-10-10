@@ -60,6 +60,10 @@ export interface PostMediaMemoryInput {
   content?: string;
   memoryDate: string;
   taggedMemberIds: string[];
+  /** Set only for scanned artwork (docs/features/artwork.md). Inserted once
+   * with the row and immutable afterwards; kept on the input so a Retry of
+   * a failed post re-creates the same artwork memory. */
+  mediaVariant?: 'artwork';
 }
 
 // Audio memories "keep the sound" (docs/plans/audio-memories-v1.md P2.4):
@@ -489,6 +493,7 @@ export async function postMediaMemory(params: {
       content: input.content,
       memoryDate: input.memoryDate,
       taggedMemberIds: input.taggedMemberIds,
+      mediaVariant: input.mediaVariant,
     });
 
     if (error) {

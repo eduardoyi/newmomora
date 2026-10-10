@@ -32,7 +32,6 @@ import {
   patchMemoryInCaches,
   prependMemoryToListCaches,
   removeMemoryFromListCaches,
-  setMemoryEmotionInCache,
   setMemoryIllustrationPendingInCache,
 } from '@/hooks/memory-cache';
 import { canEditFamilyContent } from '@/utils/roles';
@@ -48,7 +47,7 @@ import {
   regenerateMemoryIllustration,
   retryMemoryIllustration,
   runAudioEmotionAnalysis,
-  runMediaPhotoEmotionAnalysis,
+  runMediaPhotoAnalysis,
   runTextOnlyEmotionAnalysis,
   fetchMemorySearchFacets,
   searchMemories,
@@ -336,10 +335,13 @@ export function useMemoryMutations() {
       );
 
       if ((captionChanged || mediaChanged) && isPhotoMedia) {
-        void runMediaPhotoEmotionAnalysis(memory.id)
-          .then((emotion) => {
-            if (emotion) {
-              setMemoryEmotionInCache(queryClient, familyId, memory.id, emotion);
+        void runMediaPhotoAnalysis(memory.id)
+          .then((analysis) => {
+            if (analysis?.emotion) {
+              patchMemoryInCaches(queryClient, familyId, memory.id, {
+                emotion: analysis.emotion,
+                ...(analysis.artworkMedium ? { artwork_medium: analysis.artworkMedium } : {}),
+              });
             }
           })
           .catch(() => {});
@@ -794,19 +796,28 @@ export function useMemories(options?: {
 
       recoveringEmotionsRef.current.add(memory.id);
 
-      const analyze =
+      const analyze: (
+        memoryId: string,
+      ) => Promise<{ emotion: string | null; artworkMedium?: string | null } | null> =
         memory.memory_type === 'media'
-          ? runMediaPhotoEmotionAnalysis
-          : memory.memory_type === 'audio'
-            ? runAudioEmotionAnalysis
-            : runTextOnlyEmotionAnalysis;
+          ? runMediaPhotoAnalysis
+          : async (memoryId) => {
+              const emotion = await (memory.memory_type === 'audio'
+                ? runAudioEmotionAnalysis
+                : runTextOnlyEmotionAnalysis)(memoryId);
+              return emotion ? { emotion } : null;
+            };
 
-      // Patch the resolved emotion straight into the caches rather than
-      // invalidating every memory query per analyzed memory.
+      // Patch the resolved emotion (and artwork medium, when the analysis
+      // returned one) straight into the caches rather than invalidating
+      // every memory query per analyzed memory.
       void analyze(memory.id)
-        .then((emotion) => {
-          if (emotion) {
-            setMemoryEmotionInCache(queryClient, familyId, memory.id, emotion);
+        .then((analysis) => {
+          if (analysis?.emotion) {
+            patchMemoryInCaches(queryClient, familyId, memory.id, {
+              emotion: analysis.emotion,
+              ...(analysis.artworkMedium ? { artwork_medium: analysis.artworkMedium } : {}),
+            });
           }
         })
         .catch((error) => {

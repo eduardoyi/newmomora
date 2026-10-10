@@ -4,6 +4,7 @@ import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
+import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
@@ -33,6 +34,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
 import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
+import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
 import { sanitizeWaveform } from '@/utils/audio-waveform';
 import { isDocumentPickerAvailable, pickAudioDocument } from '@/utils/document-picker';
 import type { PrepareSharedMediaResult } from '@/utils/prepare-shared-media';
@@ -45,11 +47,16 @@ import {
 import {
   deriveMemoryType,
   MAX_ILLUSTRATION_MEMBERS,
+  MAX_MEMORY_MEDIA_ASSETS,
   validateMemoryContent,
   validateMemoryDate,
 } from '@/utils/memories';
 
 import * as MomoraAudio from '../../modules/momora-audio';
+
+// Incoming OS share while scanned artwork is attached (counterpart of
+// SHARE_PHOTOS_REFUSED_SOUND_COPY in use-composer-audio-clip.ts).
+const SHARE_PHOTOS_REFUSED_ARTWORK_COPY = 'This memory is artwork. Save it first, then share photos.';
 
 // Debounced draft-autosave write delay -- long enough to coalesce
 // keystrokes, short enough that an interruption rarely loses more than
@@ -90,6 +97,7 @@ const TYPE_CONFIGS = {
   media_photo:       { label: 'Photo',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_video:       { label: 'Video',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
   media_mixed:       { label: 'Media',        color: colors.ink2,    bg: colors.surface,     border: colors.border },
+  media_artwork:     { label: 'Artwork',      color: colors.ink2,    bg: colors.surface,     border: colors.border },
   audio:             { label: 'Sound',        color: colors.seaInk,  bg: colors.seaSoft,     border: colors.sea },
 } as const;
 
@@ -186,6 +194,8 @@ export default function NewMemoryScreen() {
   // before the next render still sees the keystroke.
   const contentRef = useRef(content);
   const attachedMediaRef = useRef(attachedMedia);
+  // Mirrors `audio.isImporting` (hook state) for the artwork scan re-check.
+  const audioImportingRef = useRef(false);
 
   // `memory_saved.used_voice` -- set once the Speak It modal ever hands back
   // a result, even if the user edits the transcribed text afterward. Imported
@@ -298,9 +308,20 @@ export default function NewMemoryScreen() {
       });
       return;
     }
+    // Scanned artwork can't be recovered once dropped, so an incoming share
+    // never replaces it (same refuse stance as a kept sound, below). Checked
+    // against the live attachments (a ref), not a render-time value.
+    const scansAttached = attachedMediaRef.current.some((attachment) => attachment.source === 'scan');
     if (result.kind === 'error') {
-      setAttachedMedia([]);
+      // A failed share must not wipe attached scans (their files would leak).
+      if (!scansAttached) {
+        setAttachedMedia([]);
+      }
       setErrorMessage(result.errorMessage);
+      return;
+    }
+    if (scansAttached) {
+      setErrorMessage(SHARE_PHOTOS_REFUSED_ARTWORK_COPY);
       return;
     }
     // A sound memory is a single clip with no mixed media: refuse photos
@@ -368,11 +389,70 @@ export default function NewMemoryScreen() {
   useEffect(() => {
     contentRef.current = content;
     attachedMediaRef.current = attachedMedia;
+    audioImportingRef.current = audio.isImporting;
   });
   const selectedMemberIdsRef = useRef(selectedMemberIds);
   useEffect(() => {
     selectedMemberIdsRef.current = selectedMemberIds;
   });
+
+  // ── Artwork scanning (docs/plans/artwork-scanning.md 3.4; feature doc
+  // docs/features/artwork.md) ──
+  // Scanned pages carry `source: 'scan'` and live in app-owned storage
+  // (`artwork-scans/`), so unlike library picks they exist nowhere else: this
+  // composer must delete the files it discards (removed tile, refused scan,
+  // cancel/unmount without save). After a successful enqueue the pending
+  // upload queue owns them (use-pending-memory-uploads.tsx).
+  const hasArtwork = attachedMedia.some((attachment) => attachment.source === 'scan');
+  const [scanNotice, setScanNotice] = useState('');
+
+  const deleteScanFiles = useCallback((attachments: MediaAttachment[]) => {
+    for (const attachment of attachments) {
+      if (attachment.source === 'scan') {
+        void deleteArtworkScanFile(attachment.uri);
+      }
+    }
+  }, []);
+
+  // A scan resolves long after it was started. Re-check the composer's
+  // CURRENT state through refs (never this render's closure): if a sound was
+  // kept (or is being imported), or non-scan media was attached meanwhile,
+  // the pages can't join -- discard them (and their files) with an inline
+  // explanation. The import side re-checks `attachedMediaRef` at its own
+  // completion, so exactly one of the two wins.
+  const handleArtworkScanned = useCallback(
+    (scanned: MediaAttachment[]) => {
+      const current = attachedMediaRef.current;
+      const hasSound = audioClipRef.current !== null || audioImportingRef.current;
+      if (hasSound || current.some((attachment) => attachment.source !== 'scan')) {
+        deleteScanFiles(scanned);
+        setScanNotice(
+          hasSound
+            ? 'This memory is a sound, so the scanned pages were discarded.'
+            : 'This memory already has photos, so the scanned pages were discarded.',
+        );
+        return;
+      }
+
+      const room = Math.max(0, MAX_MEMORY_MEDIA_ASSETS - current.length);
+      deleteScanFiles(scanned.slice(room));
+      setErrorMessage('');
+      setAttachedMedia((existing) => [...existing, ...scanned.slice(0, room)]);
+    },
+    [audioClipRef, deleteScanFiles],
+  );
+
+  // Leaving the composer without a successful enqueue (Cancel, system back,
+  // swipe-down) abandons the scans. `hasEnqueuedMediaRef` stays true after a
+  // successful enqueue, when the queue owns the files.
+  useEffect(() => {
+    return () => {
+      if (hasEnqueuedMediaRef.current) {
+        return;
+      }
+      deleteScanFiles(attachedMediaRef.current);
+    };
+  }, [deleteScanFiles]);
 
   const hasAttemptedDraftRestoreRef = useRef(false);
   const [isDraftRestoreReady, setIsDraftRestoreReady] = useState(false);
@@ -497,6 +577,7 @@ export default function NewMemoryScreen() {
 
   const typeKey =
     isAudio ? 'audio' :
+    hasArtwork ? 'media_artwork' :
     attachedMedia.length > 1 ? 'media_mixed' :
     attachedMedia[0]?.contentType?.startsWith('video/') ? 'media_video' :
     attachedMedia.length > 0 ? 'media_photo' :
@@ -534,7 +615,7 @@ export default function NewMemoryScreen() {
 
   const appendMedia = (attachments: MediaAttachment[]) => {
     setErrorMessage('');
-    setAttachedMedia((current) => [...current, ...attachments].slice(0, 10));
+    setAttachedMedia((current) => [...current, ...attachments].slice(0, MAX_MEMORY_MEDIA_ASSETS));
   };
 
   const moveMedia = (fromIndex: number, toIndex: number) => {
@@ -550,6 +631,11 @@ export default function NewMemoryScreen() {
   };
 
   const removeMedia = (attachmentId: string) => {
+    const removed = attachedMedia.find((attachment) => attachment.id === attachmentId);
+    if (removed) {
+      deleteScanFiles([removed]);
+    }
+    setScanNotice('');
     setAttachedMedia((current) => current.filter((attachment) => attachment.id !== attachmentId));
     setSelectedMediaId((current) => (current === attachmentId ? null : current));
   };
@@ -634,6 +720,7 @@ export default function NewMemoryScreen() {
         has_media: false,
         tagged_count: taggedMemberIds.length,
         illustration_enabled: false,
+        is_artwork: false,
         source: memorySavedSource,
       });
       trackEvent('audio_memory_saved', {
@@ -710,6 +797,9 @@ export default function NewMemoryScreen() {
           content: content.trim() || undefined,
           memoryDate: memoryDate.trim(),
           taggedMemberIds: selectedMemberIds,
+          // Scanned pages make this an artwork memory (immutable after
+          // insert; the DB only allows images on it).
+          mediaVariant: hasArtwork ? 'artwork' : undefined,
         });
         // `memory_saved` means the save gesture completed -- the media path
         // enqueues here and uploads in the background; a background upload
@@ -722,6 +812,7 @@ export default function NewMemoryScreen() {
           has_media: true,
           tagged_count: selectedMemberIds.length,
           illustration_enabled: illustrationEnabledForEvent,
+          is_artwork: hasArtwork,
           source: memorySavedSource,
         });
       } else {
@@ -737,6 +828,7 @@ export default function NewMemoryScreen() {
           has_media: false,
           tagged_count: selectedMemberIds.length,
           illustration_enabled: illustrationEnabledForEvent,
+          is_artwork: false,
           source: memorySavedSource,
         });
       }
@@ -849,17 +941,22 @@ export default function NewMemoryScreen() {
   return (
     <MemoryComposerForm
       attachments={attachedMedia}
-      belowErrorSlot={isPreparingIncomingShare ? (
-        <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
-          <ActivityIndicator color={colors.primary} size="small" />
-          <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
-        </View>
-      ) : isImportingAudio ? (
-        <View style={styles.sharedMediaLoading} testID="new-memory-audio-import-loading">
-          <ActivityIndicator color={colors.primary} size="small" />
-          <Text style={styles.sharedMediaLoadingText}>Bringing in your sound…</Text>
-        </View>
-      ) : null}
+      belowErrorSlot={(
+        <>
+          {scanNotice ? <ArtworkScanNotice message={scanNotice} testID="new-memory-scan-notice" /> : null}
+          {isPreparingIncomingShare ? (
+            <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
+              <ActivityIndicator color={colors.primary} size="small" />
+              <Text style={styles.sharedMediaLoadingText}>Preparing shared media…</Text>
+            </View>
+          ) : isImportingAudio ? (
+            <View style={styles.sharedMediaLoading} testID="new-memory-audio-import-loading">
+              <ActivityIndicator color={colors.primary} size="small" />
+              <Text style={styles.sharedMediaLoadingText}>Bringing in your sound…</Text>
+            </View>
+          ) : null}
+        </>
+      )}
       canSave={canSave}
       cancelTestID="new-memory-cancel"
       contentKey={isAudio ? 'audio-note' : 'text-note'}
@@ -882,6 +979,7 @@ export default function NewMemoryScreen() {
       hasMediaRegion={hasMediaRegion}
       isSaving={isSaving}
       maxSelectedMembers={undefined}
+      mediaHeaderLabel={hasArtwork ? 'Artwork' : undefined}
       members={members}
       noticeSlot={noticeSlot}
       onAddMediaPress={undefined}
@@ -905,42 +1003,73 @@ export default function NewMemoryScreen() {
       saveTestID="new-memory-save"
       selectedMediaId={selectedMediaId}
       selectedMemberIds={selectedMemberIds}
-      toolbarMediaButton={!isAudio ? (
-        <MemoryMediaPicker
-          compact
-          disabled={isSaving || attachedMedia.length >= 10 || isImportingAudio}
-          includeCaptureDate
-          onError={setErrorMessage}
-          // "A sound or voice note" only when it can work: nothing attached
-          // (a sound is single-clip, no mixed media), the native module is in
-          // this binary, and so is the document picker. Older binaries
-          // receiving this JS by OTA simply don't get the option.
-          onPickSound={
-            attachedMedia.length === 0 && MomoraAudio.isAvailable() && isDocumentPickerAvailable()
-              ? handleOpenBringIn
-              : undefined
-          }
-          onSelect={appendMedia}
-          remainingSlots={10 - attachedMedia.length}
-        />
-      ) : (
-        // Attach -- a sound memory is exclusive (single clip, no mixed
-        // media), so this is inert while isAudio rather than a real picker
-        // (docs/plans/audio-memories-v1.md P2.3 "media picker ... hidden").
-        <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
-          <SymbolView
-            name={{ ios: 'camera', android: 'photo_camera' }}
-            size={20}
-            tintColor={colors.ink3}
-            fallback={<Text style={styles.toolbarIconFallback}>📷</Text>}
+      toolbarMediaButton={(
+        <>
+          {!isAudio ? (
+            <MemoryMediaPicker
+              compact
+              disabled={
+                isSaving ||
+                hasArtwork ||
+                attachedMedia.length >= MAX_MEMORY_MEDIA_ASSETS ||
+                isImportingAudio
+              }
+              includeCaptureDate
+              onError={setErrorMessage}
+              // "A sound or voice note" only when it can work: nothing attached
+              // (a sound is single-clip, no mixed media -- scanned artwork
+              // counts as attached media), the native module is in this
+              // binary, and so is the document picker. Older binaries
+              // receiving this JS by OTA simply don't get the option.
+              onPickSound={
+                attachedMedia.length === 0 && MomoraAudio.isAvailable() && isDocumentPickerAvailable()
+                  ? handleOpenBringIn
+                  : undefined
+              }
+              onSelect={appendMedia}
+              remainingSlots={MAX_MEMORY_MEDIA_ASSETS - attachedMedia.length}
+            />
+          ) : (
+            // Attach -- a sound memory is exclusive (single clip, no mixed
+            // media), so this is inert while isAudio rather than a real picker
+            // (docs/plans/audio-memories-v1.md P2.3 "media picker ... hidden").
+            <View style={[styles.toolbarIconBtn, styles.toolbarIconBtnDisabled]}>
+              <SymbolView
+                name={{ ios: 'camera', android: 'photo_camera' }}
+                size={20}
+                tintColor={colors.ink3}
+                fallback={<Text style={styles.toolbarIconFallback}>📷</Text>}
+              />
+            </View>
+          )}
+          {/* Same element in both branches (stable position in the
+              fragment) so a scan still in flight when a sound is kept
+              keeps its mounted button and reaches handleArtworkScanned's
+              refs re-check instead of being silently dropped. Scanning and
+              library media are mutually exclusive; sound is too -- including
+              while a sound is being imported or its trim is rendering
+              (`audio.isProcessing`). */}
+          <ArtworkScanButton
+            disabled={
+              isSaving ||
+              isAudio ||
+              audio.isProcessing ||
+              (attachedMedia.length > 0 && !hasArtwork) ||
+              attachedMedia.length >= MAX_MEMORY_MEDIA_ASSETS
+            }
+            onError={setErrorMessage}
+            onNotice={setScanNotice}
+            onScanned={handleArtworkScanned}
+            remainingSlots={MAX_MEMORY_MEDIA_ASSETS - attachedMedia.length}
+            testID="new-memory-scan-artwork"
           />
-        </View>
+        </>
       )}
       toolbarTrailingSlot={isAudio ? (
         <Text style={styles.audioToolbarHint}>Recording again replaces this sound.</Text>
       ) : !hasMediaRegion ? (
         <View style={styles.toggleRow}>
-          <View style={styles.toggleCopy}>
+          <View style={styles.toggleCopy} testID="new-memory-ai-toggle-copy">
             <Text style={[styles.toggleLabel, !isIllustrationEnabled && styles.toggleLabelOff]}>
               AI illustration
             </Text>
@@ -967,7 +1096,9 @@ export default function NewMemoryScreen() {
       voiceModalSlot={(
         <>
         <VoiceSpeakItModal
-          captureMode={isAudio ? 'keepOnly' : 'fork'}
+          // Artwork can't carry a kept sound, so the mic only dictates the
+          // caption there (no fork).
+          captureMode={isAudio ? 'keepOnly' : hasArtwork ? 'dictate' : 'fork'}
           familyMembers={voiceMembers}
           onDismiss={() => setShowVoiceModal(false)}
           onKeepSound={handleKeepSound}
@@ -1041,11 +1172,17 @@ const styles = StyleSheet.create({
   toggleCopy: {
     alignItems: 'flex-end',
     gap: 2,
+    // RN's default flexShrink is 0. With the scan button added to the
+    // toolbar (mic + photo + scan = 3 x 46 + gaps) the row is ~56pt
+    // narrower, so the copy must shrink/wrap rather than push the Switch
+    // off-screen at 360-375pt widths.
+    flexShrink: 1,
   },
   toggleLabel: {
     fontFamily: fonts.sansBold,
     fontSize: 12.5,
     color: colors.ink,
+    textAlign: 'right',
   },
   toggleLabelOff: {
     color: colors.ink3,
@@ -1054,6 +1191,7 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sans,
     fontSize: 11,
     color: colors.ink3,
+    textAlign: 'right',
   },
   sharedMediaLoading: {
     alignItems: 'center',

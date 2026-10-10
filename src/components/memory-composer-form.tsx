@@ -111,6 +111,8 @@ export interface MemoryComposerFormProps {
   /** gallery-import only -- see MemoryMediaPreview's own prop docs. */
   mediaUnavailableIds?: string[];
   mediaDisabled?: boolean;
+  /** Overrides the media grid header ("Photos & videos"); artwork passes "Artwork". */
+  mediaHeaderLabel?: string;
   onAddMediaPress?: () => void;
   onMediaImageError?: (attachmentId: string) => void;
 
@@ -187,6 +189,7 @@ export function MemoryComposerForm({
   onSelectMedia,
   mediaUnavailableIds,
   mediaDisabled = false,
+  mediaHeaderLabel,
   onAddMediaPress,
   onMediaImageError,
   members,
@@ -283,6 +286,7 @@ export function MemoryComposerForm({
             <MemoryMediaPreview
               attachments={attachments}
               disabled={mediaDisabled}
+              headerLabel={mediaHeaderLabel}
               onAddPress={onAddMediaPress}
               onImageError={onMediaImageError}
               onMove={onMoveMedia}

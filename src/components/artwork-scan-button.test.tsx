@@ -1,0 +1,378 @@
+import * as ImagePicker from 'expo-image-picker';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { AppState, Platform } from 'react-native';
+
+import { trackEvent } from '@/services/analytics';
+import { isArtworkScannerAvailable, scanArtwork } from '@/services/artwork-scanner';
+import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
+
+import {
+  ARTWORK_SCAN_RESULT_GRACE_MS,
+  ArtworkScanButton,
+  ArtworkScanNotice,
+} from './artwork-scan-button';
+
+jest.mock('expo-image-picker', () => ({
+  getCameraPermissionsAsync: jest.fn(),
+  requestCameraPermissionsAsync: jest.fn(),
+}));
+
+jest.mock('@/services/analytics', () => ({
+  trackEvent: jest.fn(),
+}));
+
+jest.mock('@/services/artwork-scanner', () => ({
+  isArtworkScannerAvailable: jest.fn(),
+  scanArtwork: jest.fn(),
+}));
+
+jest.mock('@/utils/artwork-scan-custody', () => ({
+  deleteArtworkScanFile: jest.fn().mockResolvedValue(undefined),
+}));
+
+const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
+const mockedIsAvailable = isArtworkScannerAvailable as jest.Mock;
+const mockedScan = scanArtwork as jest.Mock;
+const mockedDeleteFile = deleteArtworkScanFile as jest.Mock;
+const mockedTrackEvent = trackEvent as jest.Mock;
+
+const originalPlatform = Platform.OS;
+
+function setPlatform(os: 'ios' | 'android') {
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: os });
+}
+
+function page(id: string) {
+  return {
+    id,
+    uri: `file:///documents/artwork-scans/${id}.jpg`,
+    contentType: 'image/jpeg',
+    sizeBytes: 1024,
+    aspectRatio: 1.3,
+    source: 'scan' as const,
+  };
+}
+
+function success(ids: string[], overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'success' as const,
+    attachments: ids.map(page),
+    droppedCount: 0,
+    rejectedCount: 0,
+    validationError: null,
+    ...overrides,
+  };
+}
+
+function scanError(code: string) {
+  return Object.assign(new Error(code), { code });
+}
+
+function renderButton(props: Partial<React.ComponentProps<typeof ArtworkScanButton>> = {}) {
+  const handlers = {
+    onScanned: jest.fn(),
+    onError: jest.fn(),
+    onNotice: jest.fn(),
+  };
+  const screen = render(<ArtworkScanButton {...handlers} {...props} />);
+  return { screen, ...handlers };
+}
+
+async function press(screen: ReturnType<typeof render>) {
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+  });
+}
+
+describe('ArtworkScanButton', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    setPlatform('android');
+    mockedIsAvailable.mockReturnValue(true);
+    mockedScan.mockReset();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    setPlatform(originalPlatform as 'ios' | 'android');
+  });
+
+  it('renders nothing when the native scanner is unavailable', () => {
+    mockedIsAvailable.mockReturnValue(false);
+    const { screen } = renderButton();
+
+    expect(screen.queryByTestId('new-memory-scan-artwork')).toBeNull();
+  });
+
+  it('is a labelled 46pt toolbar button with the page cap as its hint', () => {
+    const { screen } = renderButton({ remainingSlots: 7, testID: 'edit-memory-scan-artwork' });
+
+    const button = screen.getByTestId('edit-memory-scan-artwork');
+    expect(button.props.accessibilityLabel).toBe('Scan artwork');
+    expect(button.props.accessibilityRole).toBe('button');
+    expect(button.props.accessibilityHint).toBe('Scans up to 7 pieces of artwork');
+  });
+
+  it('does nothing while disabled', () => {
+    const { screen } = renderButton({ disabled: true });
+
+    fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(screen.getByTestId('new-memory-scan-artwork').props.accessibilityState).toEqual({ disabled: true });
+  });
+
+  it('android: scans without a permission check and hands the pages to onScanned', async () => {
+    mockedScan.mockResolvedValueOnce(success(['a', 'b']));
+    const { screen, onScanned, onNotice, onError } = renderButton({ remainingSlots: 8 });
+
+    await press(screen);
+
+    expect(mockedImagePicker.getCameraPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedScan).toHaveBeenCalledWith({ remainingSlots: 8 });
+    expect(onScanned).toHaveBeenCalledWith([page('a'), page('b')]);
+    expect(onNotice).toHaveBeenLastCalledWith('');
+    expect(onError).toHaveBeenLastCalledWith('');
+    expect(mockedTrackEvent).toHaveBeenCalledWith('artwork_scan_result', { status: 'success', page_count: 2 });
+  });
+
+  it('ios: asks for camera permission first and stops with Settings copy when it can no longer ask', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: false,
+    } as ImagePicker.CameraPermissionResponse);
+    const { screen, onError } = renderButton();
+
+    await press(screen);
+
+    expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith(
+      'Camera permission is required to scan artwork. Enable it in Settings.',
+    );
+  });
+
+  it('ios: a refused (but re-askable) request shows the short permission copy', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    const { screen, onError } = renderButton();
+
+    await press(screen);
+
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith('Camera permission is required to scan artwork.');
+  });
+
+  it('ios: states the page cap before the scanner opens, then clears it on success', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    const order: string[] = [];
+    const onNotice = jest.fn((message: string) => order.push(`notice:${message}`));
+    mockedScan.mockImplementationOnce(async () => {
+      order.push('scan');
+      return success(['a']);
+    });
+    const { screen } = renderButton({ onNotice, remainingSlots: 4 });
+
+    await press(screen);
+
+    expect(order).toEqual([
+      'notice:Scan up to 4 pieces. Extra pages are left out.',
+      'scan',
+      'notice:',
+    ]);
+  });
+
+  it('ios: waits for the system dialog to settle after a fresh permission grant', async () => {
+    setPlatform('ios');
+    mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.CameraPermissionResponse);
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen } = renderButton();
+
+    fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedScan).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(300);
+    });
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports pages the scanner returned beyond the cap and pages that failed validation', async () => {
+    mockedScan.mockResolvedValueOnce(
+      success(['a'], { droppedCount: 2, rejectedCount: 1, validationError: 'File is too large.' }),
+    );
+    const { screen, onScanned, onNotice } = renderButton();
+
+    await press(screen);
+
+    expect(onScanned).toHaveBeenCalledWith([page('a')]);
+    expect(onNotice).toHaveBeenLastCalledWith(
+      "A memory holds up to 10 pieces, so 2 extra pages were left out. 1 page couldn't be added. File is too large.",
+    );
+  });
+
+  it('shows the validation message as an error when every page was rejected', async () => {
+    mockedScan.mockResolvedValueOnce(
+      success([], { rejectedCount: 2, validationError: 'File is too large.' }),
+    );
+    const { screen, onScanned, onError } = renderButton();
+
+    await press(screen);
+
+    expect(onScanned).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith('File is too large.');
+  });
+
+  it('cancel adds nothing and reports a cancel event', async () => {
+    mockedScan.mockResolvedValueOnce({
+      status: 'cancel',
+      attachments: [],
+      droppedCount: 0,
+      rejectedCount: 0,
+      validationError: null,
+    });
+    const { screen, onScanned } = renderButton();
+
+    await press(screen);
+
+    expect(onScanned).not.toHaveBeenCalled();
+    expect(mockedTrackEvent).toHaveBeenCalledWith('artwork_scan_result', { status: 'cancel', page_count: 0 });
+  });
+
+  it.each([
+    ['scanner_unavailable', /try again/i],
+    ['scanner_busy', /already open/i],
+    ['scanner_failed', /try again/i],
+  ])('maps %s to inline copy and keeps the button retryable', async (code, copy) => {
+    mockedScan.mockRejectedValueOnce(scanError(code));
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    const { screen, onError, onScanned } = renderButton();
+
+    await press(screen);
+
+    expect(onError).toHaveBeenLastCalledWith(expect.stringMatching(copy));
+    expect(mockedTrackEvent).toHaveBeenCalledWith('artwork_scan_result', { status: 'error', page_count: 0 });
+
+    // Not cached as permanent: a second tap scans again.
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(2);
+    expect(onScanned).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a second tap while a scan is in flight', async () => {
+    let resolveScan: ((value: ReturnType<typeof success>) => void) | undefined;
+    mockedScan.mockImplementationOnce(() => new Promise((resolve) => { resolveScan = resolve; }));
+    const { screen } = renderButton();
+
+    await press(screen);
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveScan?.(success(['a']));
+    });
+    mockedScan.mockResolvedValueOnce(success(['b']));
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the guard when the app returns to active and no result arrives within the grace period', async () => {
+    let appStateListener: ((state: string) => void) | undefined;
+    const remove = jest.fn();
+    jest.spyOn(AppState, 'addEventListener').mockImplementation(((_event: string, listener: (state: string) => void) => {
+      appStateListener = listener;
+      return { remove };
+    }) as never);
+    mockedScan.mockImplementationOnce(() => new Promise(() => undefined)); // lost activity result
+    const { screen } = renderButton();
+
+    await press(screen);
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      appStateListener?.('active');
+    });
+    // Still inside the grace period: the result may yet arrive.
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(ARTWORK_SCAN_RESULT_GRACE_MS - 100);
+    });
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(200);
+    });
+    mockedScan.mockResolvedValueOnce(success(['a']));
+    await press(screen);
+    expect(mockedScan).toHaveBeenCalledTimes(2);
+  });
+
+  it('unsubscribes from AppState on unmount', () => {
+    const remove = jest.fn();
+    jest.spyOn(AppState, 'addEventListener').mockReturnValue({ remove } as never);
+    const { screen } = renderButton();
+
+    screen.unmount();
+
+    expect(remove).toHaveBeenCalled();
+  });
+
+  it('deletes the pages instead of delivering them when unmounted mid-scan', async () => {
+    let resolveScan: ((value: ReturnType<typeof success>) => void) | undefined;
+    mockedScan.mockImplementationOnce(() => new Promise((resolve) => { resolveScan = resolve; }));
+    const { screen, onScanned } = renderButton();
+
+    await press(screen);
+    screen.unmount();
+    await act(async () => {
+      resolveScan?.(success(['a', 'b']));
+    });
+
+    expect(onScanned).not.toHaveBeenCalled();
+    expect(mockedDeleteFile).toHaveBeenCalledWith('file:///documents/artwork-scans/a.jpg');
+    expect(mockedDeleteFile).toHaveBeenCalledWith('file:///documents/artwork-scans/b.jpg');
+  });
+
+  it('with no slots left it says so and never opens the scanner', async () => {
+    const { screen, onError } = renderButton({ remainingSlots: 0 });
+
+    await press(screen);
+
+    expect(mockedScan).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenLastCalledWith('A memory holds up to 10 pieces of artwork.');
+  });
+});
+
+describe('ArtworkScanNotice', () => {
+  it('renders the message and nothing for an empty one', () => {
+    const shown = render(<ArtworkScanNotice message="Two pages were left out." testID="notice" />);
+    expect(shown.getByTestId('notice')).toBeTruthy();
+
+    const hidden = render(<ArtworkScanNotice message="" testID="notice-empty" />);
+    expect(hidden.queryByTestId('notice-empty')).toBeNull();
+  });
+});

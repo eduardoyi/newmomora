@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { buildFamilyManifest } from '../src/manifest';
 import { buildExportPlan, type ExportRows } from '../src/plan';
 
 function rows(): ExportRows {
@@ -74,5 +75,37 @@ describe('buildExportPlan', () => {
   it('never plans the same object twice across the family', () => {
     const keys = plan.groups.flatMap((group) => group.entries).flatMap((entry) => (entry.type === 'object' ? [entry.objectKey] : []));
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe('artwork memories', () => {
+  const art = {
+    id: 'm-art', family_id: 'f1', user_id: 'u-adri', memory_type: 'media', content: 'My dragon', audio_transcript: null, link_previews: null,
+    memory_date: '2026-08-01', emotion: 'joy', illustration_key: null, illustration_status: 'none', media_key: 'u/m/art.jpg', media_content_type: 'image/jpeg',
+    media_variant: 'artwork', artwork_medium: 'crayon', created_at: '2026-08-01T10:00:00Z',
+  };
+  const withArt = (): ExportRows => ({ ...rows(), memories: [...rows().memories, art] });
+
+  it('writes the Artwork line to memory.txt and artwork.medium to the manifest', () => {
+    const plan = buildExportPlan('job', 'owner', withArt(), '2026-09-26T00:00:00Z');
+    const y2026 = plan.groups.find((group) => group.baseName.endsWith('2026'));
+    const entry = y2026?.entries.find((candidate) => candidate.path.includes('My dragon') && candidate.path.endsWith('memory.txt'));
+    expect(entry?.type === 'text' ? entry.text : '').toContain('Feeling: joy\r\nArtwork: crayon\r\n');
+
+    const manifest = buildFamilyManifest(plan, 'f1', []) as { memories: Array<Record<string, unknown>> };
+    const byId = (id: string) => manifest.memories.find((memory) => memory.id === id)!;
+    expect(byId('m-art').artwork).toEqual({ medium: 'crayon' });
+    expect(byId('m-art')).not.toHaveProperty('media_variant');
+    expect(byId('m-art')).not.toHaveProperty('artwork_medium');
+  });
+
+  it('keeps non-artwork manifest entries and memory.txt unchanged', () => {
+    const baseline = buildExportPlan('job', 'owner', rows(), '2026-09-26T00:00:00Z');
+    // Real PostgREST rows carry the new columns as null on every other memory.
+    const nulled = rows();
+    nulled.memories = nulled.memories.map((memory) => ({ ...memory, media_variant: null, artwork_medium: null }));
+    const withNulls = buildExportPlan('job', 'owner', nulled, '2026-09-26T00:00:00Z');
+    expect(JSON.stringify(buildFamilyManifest(withNulls, 'f1', []))).toBe(JSON.stringify(buildFamilyManifest(baseline, 'f1', [])));
+    expect(JSON.stringify(withNulls.groups)).toBe(JSON.stringify(baseline.groups));
   });
 });

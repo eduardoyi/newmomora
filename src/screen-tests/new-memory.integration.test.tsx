@@ -12,7 +12,7 @@ import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
-import { Alert, Platform } from 'react-native';
+import { Alert, Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { JOURNALING_PROMPTS } from '@/constants/journaling-prompts';
@@ -276,6 +276,28 @@ jest.mock('@/hooks/use-incoming-memory-share', () => ({
 
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
+}));
+
+// The native scanner boundary. Availability defaults to true so the toolbar
+// renders the scan button in every suite below; `scanArtwork` is driven per
+// test. The wrapper itself has its own suite (artwork-scanner.test.ts).
+const mockScanArtwork = jest.fn();
+const mockIsArtworkScannerAvailable = jest.fn(() => true);
+jest.mock('@/services/artwork-scanner', () => ({
+  ArtworkScanError: class ArtworkScanError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.code = code;
+    }
+  },
+  isArtworkScannerAvailable: () => mockIsArtworkScannerAvailable(),
+  scanArtwork: (...args: unknown[]) => mockScanArtwork(...args),
+}));
+
+const mockDeleteArtworkScanFile = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/utils/artwork-scan-custody', () => ({
+  deleteArtworkScanFile: (...args: unknown[]) => mockDeleteArtworkScanFile(...args),
 }));
 
 const mockedImagePicker = ImagePicker as jest.Mocked<typeof ImagePicker>;
@@ -923,6 +945,7 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
       has_media: false,
       tagged_count: 0,
       illustration_enabled: true,
+      is_artwork: false,
       source: 'other',
     });
   });
@@ -982,6 +1005,7 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
       has_media: true,
       tagged_count: 0,
       illustration_enabled: false,
+      is_artwork: false,
       source: 'other',
     });
   });
@@ -2629,6 +2653,543 @@ describe('NewMemoryScreen -- audio trim and import', () => {
       expect(screen.getByText('Update Momora to bring in voice notes.')).toBeTruthy();
       expect(mockImportAudioFile).not.toHaveBeenCalled();
       expect(trackEvent).toHaveBeenCalledWith('audio_import_failed', { entry: 'share', code: 'unavailable' });
+    });
+  });
+});
+
+// docs/plans/artwork-scanning.md 3.4 / 3.8 -- scanned artwork in the composer.
+describe('NewMemoryScreen -- artwork scanning', () => {
+  const enqueue = jest.fn();
+  const createMemory = jest.fn();
+  const updateProfile = jest.fn().mockResolvedValue(undefined);
+
+  function scannedPage(id: string) {
+    return {
+      id,
+      uri: `file:///documents/artwork-scans/${id}.jpg`,
+      contentType: 'image/jpeg',
+      sizeBytes: 2048,
+      aspectRatio: 1.33,
+      source: 'scan' as const,
+    };
+  }
+
+  function scanResult(ids: string[], overrides: Record<string, unknown> = {}) {
+    return {
+      status: 'success' as const,
+      attachments: ids.map(scannedPage),
+      droppedCount: 0,
+      rejectedCount: 0,
+      validationError: null,
+      ...overrides,
+    };
+  }
+
+  async function runScan(screen: ReturnType<typeof render>, ids: string[]) {
+    mockScanArtwork.mockResolvedValueOnce(scanResult(ids));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+    });
+  }
+
+  async function renderReady() {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+    return screen;
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+    jest.useFakeTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockLatestOnKeepSound = undefined;
+    mockLatestCaptureMode = undefined;
+    mockIsArtworkScannerAvailable.mockReturnValue(true);
+    mockScanArtwork.mockReset();
+    mockDeleteArtworkScanFile.mockClear();
+
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: true,
+      canAskAgain: true,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseFamily.mockReturnValue({
+      role: 'manager',
+      familyId: 'family-1',
+      family: { id: 'family-1', name: 'Test family' },
+      memberships: [],
+      isLoading: false,
+      setActiveFamily: jest.fn(),
+      refetchMemberships: jest.fn(),
+      justLostAccess: false,
+    });
+    mockedUseFamilyMembers.mockReturnValue({ members: [] });
+    mockedUseMemoryMutations.mockReturnValue({ createMemory, isCreating: false });
+    mockedUseUserProfile.mockReturnValue({ updateProfile });
+    mockedUsePendingMemoryUploads.mockReturnValue({ enqueue, retry: jest.fn(), discard: jest.fn(), uploads: [] });
+    mockedUseIncomingMemoryShare.mockReturnValue(false);
+    mockedUseLocalSearchParams.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    mockAudioIsAvailable.mockReturnValue(false);
+    mockIsDocumentPickerAvailable.mockReturnValue(false);
+    mockImportAudioFile.mockReset();
+    mockPickerOnPickSound = undefined;
+    jest.useRealTimers();
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  });
+
+  it('hides the scan button entirely when the native scanner is unavailable', async () => {
+    mockIsArtworkScannerAvailable.mockReturnValue(false);
+    const screen = await renderReady();
+
+    expect(screen.queryByTestId('new-memory-scan-artwork')).toBeNull();
+    expect(screen.getByTestId('new-memory-attach-media')).toBeTruthy();
+  });
+
+  it('scan -> preview -> photo button disabled -> save enqueues mediaVariant "artwork"', async () => {
+    const screen = await renderReady();
+
+    await runScan(screen, ['scan-1', 'scan-2']);
+
+    expect(mockScanArtwork).toHaveBeenCalledWith({ remainingSlots: 10 });
+    expect(screen.getByTestId('memory-media-tile-0')).toBeTruthy();
+    expect(screen.getByTestId('memory-media-tile-1')).toBeTruthy();
+    expect(screen.getByText('· Artwork')).toBeTruthy();
+    expect(screen.getByText('Artwork')).toBeTruthy(); // media grid header
+    expect(screen.queryByText('Photos & videos')).toBeNull();
+    expect(screen.getByTestId('new-memory-attach-media').props.accessibilityState).toEqual({ disabled: true });
+    expect(screen.getByTestId('new-memory-scan-artwork').props.accessibilityState).toEqual({ disabled: false });
+    // More scans may join the same artwork memory.
+    mockScanArtwork.mockClear();
+    await runScan(screen, ['scan-3']);
+    expect(mockScanArtwork).toHaveBeenCalledWith({ remainingSlots: 8 });
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const input = enqueue.mock.calls[0][0];
+    expect(input.mediaVariant).toBe('artwork');
+    expect(input.mediaAssets.map((asset: { fileUri: string }) => asset.fileUri)).toEqual([
+      'file:///documents/artwork-scans/scan-1.jpg',
+      'file:///documents/artwork-scans/scan-2.jpg',
+      'file:///documents/artwork-scans/scan-3.jpg',
+    ]);
+    expect(JSON.stringify(input)).not.toContain('"source"');
+    expect(mockedTrackEvent).toHaveBeenCalledWith(
+      'memory_saved',
+      expect.objectContaining({ memory_type: 'media', has_media: true, is_artwork: true }),
+    );
+    // The queue owns the files after a successful enqueue.
+    expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+  });
+
+  it('a regular photo memory enqueues without a mediaVariant', async () => {
+    const screen = await renderReady();
+    await attachPhoto(screen, buildImageAsset());
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue.mock.calls[0][0].mediaVariant).toBeUndefined();
+  });
+
+  it('picker-first disables the scan button', async () => {
+    const screen = await renderReady();
+    await attachPhoto(screen, buildImageAsset());
+
+    const scanButton = screen.getByTestId('new-memory-scan-artwork');
+    expect(scanButton.props.accessibilityState).toEqual({ disabled: true });
+    fireEvent.press(scanButton);
+    expect(mockScanArtwork).not.toHaveBeenCalled();
+  });
+
+  it('a kept sound disables the scan button (inert toolbar branch)', async () => {
+    const screen = await renderReady();
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.({
+        localUri: 'file:///documents/audio-recordings/clip-1.m4a',
+        durationMs: 4200,
+        transcriptionStatus: 'done',
+        transcriptionResult: null,
+        pendingTranscription: null,
+      });
+    });
+
+    const scanButton = screen.getByTestId('new-memory-scan-artwork');
+    expect(scanButton.props.accessibilityState).toEqual({ disabled: true });
+    fireEvent.press(scanButton);
+    expect(mockScanArtwork).not.toHaveBeenCalled();
+  });
+
+  it('opens the mic in dictate mode (no fork) once artwork is attached', async () => {
+    const screen = await renderReady();
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    expect(mockLatestCaptureMode).toBe('fork');
+
+    await runScan(screen, ['scan-1']);
+
+    expect(mockLatestCaptureMode).toBe('dictate');
+  });
+
+  it('refuses an incoming share while scans are attached and keeps the scans', async () => {
+    let onPrepared:
+      | ((attachments: { id: string; uri: string; contentType: string; sizeBytes: number }[], message: string | null) => void)
+      | undefined;
+    mockedUseIncomingMemoryShare.mockImplementation((options) => {
+      onPrepared = options.onPrepared;
+      return false;
+    });
+    const screen = await renderReady();
+    await runScan(screen, ['scan-1']);
+
+    act(() => {
+      onPrepared?.(
+        [{ id: 'shared-1', uri: 'file:///shared.jpg', contentType: 'image/jpeg', sizeBytes: 10 }],
+        null,
+      );
+    });
+
+    expect(screen.getByText('This memory is artwork. Save it first, then share photos.')).toBeTruthy();
+    expect(screen.getByTestId('memory-media-tile-0')).toBeTruthy();
+    expect(screen.queryByTestId('memory-media-tile-1')).toBeNull();
+    expect(screen.getByText('· Artwork')).toBeTruthy();
+    expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+  });
+
+  it('discards scanned pages (and their files) if a sound was kept while the scanner was open', async () => {
+    const screen = await renderReady();
+    let resolveScan: ((value: ReturnType<typeof scanResult>) => void) | undefined;
+    mockScanArtwork.mockImplementationOnce(() => new Promise((resolve) => { resolveScan = resolve; }));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+    });
+
+    fireEvent.press(screen.getByTestId('new-memory-voice-trigger'));
+    act(() => {
+      mockLatestOnKeepSound?.({
+        localUri: 'file:///documents/audio-recordings/clip-1.m4a',
+        durationMs: 4200,
+        transcriptionStatus: 'done',
+        transcriptionResult: null,
+        pendingTranscription: null,
+      });
+    });
+
+    await act(async () => {
+      resolveScan?.(scanResult(['scan-1', 'scan-2']));
+    });
+
+    expect(screen.queryByTestId('memory-media-tile-0')).toBeNull();
+    expect(screen.getByTestId('new-memory-scan-notice')).toBeTruthy();
+    expect(screen.getByText('This memory is a sound, so the scanned pages were discarded.')).toBeTruthy();
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg');
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg');
+  });
+
+  it('discards scanned pages if a library photo was attached while the scanner was open', async () => {
+    const screen = await renderReady();
+    let resolveScan: ((value: ReturnType<typeof scanResult>) => void) | undefined;
+    mockScanArtwork.mockImplementationOnce(() => new Promise((resolve) => { resolveScan = resolve; }));
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+    });
+
+    await attachPhoto(screen, buildImageAsset());
+    await act(async () => {
+      resolveScan?.(scanResult(['scan-1']));
+    });
+
+    // Only the library photo remains; no artwork.
+    expect(screen.getByTestId('memory-media-tile-0')).toBeTruthy();
+    expect(screen.queryByTestId('memory-media-tile-1')).toBeNull();
+    expect(screen.getByText('· Photo')).toBeTruthy();
+    expect(screen.getByText('This memory already has photos, so the scanned pages were discarded.')).toBeTruthy();
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg');
+  });
+
+  it('deletes the scan file of a removed tile', async () => {
+    const screen = await renderReady();
+    await runScan(screen, ['scan-1', 'scan-2']);
+
+    fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledTimes(1);
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg');
+    expect(screen.queryByTestId('memory-media-tile-1')).toBeNull();
+    // Removing the last scan returns the composer to a normal one.
+    fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+    expect(screen.getByTestId('new-memory-attach-media').props.accessibilityState).toEqual({ disabled: false });
+  });
+
+  it('deletes unsaved scan files when the composer unmounts without saving', async () => {
+    const screen = await renderReady();
+    await runScan(screen, ['scan-1', 'scan-2']);
+
+    screen.unmount();
+
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg');
+    expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-2.jpg');
+  });
+
+  it('leaves the scan files to the upload queue when the composer unmounts after a save', async () => {
+    const screen = await renderReady();
+    await runScan(screen, ['scan-1']);
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    screen.unmount();
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+  });
+
+  it('shows the scanner error inline and keeps the button usable (transient unavailable)', async () => {
+    const screen = await renderReady();
+    mockScanArtwork.mockRejectedValueOnce(Object.assign(new Error('scanner_unavailable'), { code: 'scanner_unavailable' }));
+
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+    });
+
+    expect(screen.getByText(/try again/i)).toBeTruthy();
+    expect(screen.getByTestId('new-memory-scan-artwork').props.accessibilityState).toEqual({ disabled: false });
+    expect(mockedTrackEvent).not.toHaveBeenCalledWith('memory_saved', expect.anything());
+  });
+
+  it('lets the AI-toggle copy shrink so mic + photo + scan + toggle fit narrow widths', async () => {
+    // toolbar content width at 360pt = 320: 3 x 46 buttons + 3 x 10 gaps
+    // leaves ~152pt for the toggle row, less than its longest hint at 11pt.
+    const screen = await renderReady();
+    const copy = screen.getByTestId('new-memory-ai-toggle-copy');
+    const flattened = StyleSheet.flatten(copy.props.style) as { flexShrink?: number };
+    expect(flattened.flexShrink).toBe(1);
+  });
+
+  // ── Interplay with audio trim + import (docs/plans/audio-trim-import.md) ──
+  // Scans are attached media, so the sound entry points that refuse photos
+  // refuse scans too; and a sound in flight blocks scanning.
+  describe('with the audio import entry points', () => {
+    const PHOTO_ERROR = 'This memory already has photos. Save it first, then share the voice note.';
+    const SOUND_ARTWORK_ERROR = 'This memory is artwork. Save it first, then add a sound.';
+    const SHARE_ARTWORK_ERROR = 'This memory is artwork. Save it first, then share photos.';
+    const IMPORT_URI = 'file:///documents/audio-recordings/imp-1.m4a';
+    const sharedAudio = {
+      kind: 'audio' as const,
+      uri: 'file:///cache/shared.opus',
+      mimeType: 'audio/ogg',
+      fileName: 'PTT.opus',
+      sizeBytes: 1234,
+    };
+
+    function enableAudio() {
+      mockAudioIsAvailable.mockReturnValue(true);
+      mockIsDocumentPickerAvailable.mockReturnValue(true);
+      mockAudioAnalyze.mockResolvedValue({ durationMs: 10_000, bucketMs: 100, energies: [0.1] });
+      mockTranscribeClip.mockResolvedValue({ cleanedText: 'hi', description: 'A hi', mentionedMemberIds: [] });
+    }
+
+    function importedClipResult() {
+      return {
+        kind: 'clip' as const,
+        clip: {
+          localUri: IMPORT_URI,
+          durationMs: 20_000,
+          sizeBytes: 200_000,
+          waveform: Array.from({ length: 64 }, () => 100),
+          source: 'imported' as const,
+        },
+        original: {
+          localUri: IMPORT_URI,
+          durationMs: 20_000,
+          sizeBytes: 200_000,
+          energies: { durationMs: 20_000, bucketMs: 100, energies: [0.1] },
+          uploadable: true,
+          transcription: null,
+        },
+        suggestedDateIso: null,
+      };
+    }
+
+    function captureShare() {
+      let onPrepared: ((result: unknown) => void) | undefined;
+      mockedUseIncomingMemoryShare.mockImplementation((options) => {
+        onPrepared = options.onPrepared as never;
+        return false;
+      });
+      return (result: unknown) => {
+        act(() => {
+          onPrepared?.(result);
+        });
+      };
+    }
+
+    it('refuses a shared voice note while scans are attached: scans stay, the shared file goes, nothing imports', async () => {
+      enableAudio();
+      const prepared = captureShare();
+      const screen = await renderReady();
+      await runScan(screen, ['scan-1', 'scan-2']);
+
+      prepared(sharedAudio);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByText(SOUND_ARTWORK_ERROR)).toBeTruthy();
+      expect(mockImportAudioFile).not.toHaveBeenCalled();
+      expect(screen.queryByTestId('new-memory-audio-clip')).toBeNull();
+      expect(screen.getByTestId('memory-media-tile-1')).toBeTruthy();
+      expect(screen.queryByText(PHOTO_ERROR)).toBeNull();
+      expect(screen.getByText('· Artwork')).toBeTruthy();
+      expect(mockDiscardAudioClip).toHaveBeenCalledWith(sharedAudio.uri);
+      expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps the photos copy when a voice note is refused because library photos (not scans) are attached', async () => {
+      enableAudio();
+      const prepared = captureShare();
+      const screen = await renderReady();
+      await attachPhoto(screen, buildImageAsset());
+
+      prepared(sharedAudio);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByText(PHOTO_ERROR)).toBeTruthy();
+      expect(screen.queryByText(SOUND_ARTWORK_ERROR)).toBeNull();
+      expect(mockImportAudioFile).not.toHaveBeenCalled();
+    });
+
+    it('a failed incoming share shows its error but does not wipe attached scans', async () => {
+      const prepared = captureShare();
+      const screen = await renderReady();
+      await runScan(screen, ['scan-1']);
+
+      prepared({ kind: 'error', errorMessage: 'Momora can only attach shared photos and videos.' });
+
+      expect(screen.getByText('Momora can only attach shared photos and videos.')).toBeTruthy();
+      expect(screen.getByTestId('memory-media-tile-0')).toBeTruthy();
+      expect(screen.getByText('· Artwork')).toBeTruthy();
+    });
+
+    it('refuses shared photos with the artwork copy (kind: media) and keeps the scans', async () => {
+      const prepared = captureShare();
+      const screen = await renderReady();
+      await runScan(screen, ['scan-1']);
+
+      prepared({
+        kind: 'media',
+        attachments: [{ id: 'shared-1', uri: 'file:///shared.jpg', contentType: 'image/jpeg', sizeBytes: 10 }],
+        errorMessage: null,
+      });
+
+      expect(screen.getByText(SHARE_ARTWORK_ERROR)).toBeTruthy();
+      expect(screen.queryByTestId('memory-media-tile-1')).toBeNull();
+      expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+    });
+
+    it('offers no "bring in a sound" option once scans are attached, and restores it when they are removed', async () => {
+      enableAudio();
+      const screen = await renderReady();
+      expect(mockPickerOnPickSound).toBeDefined();
+
+      await runScan(screen, ['scan-1']);
+      expect(mockPickerOnPickSound).toBeUndefined();
+      expect(screen.getByTestId('new-memory-attach-media').props.accessibilityState).toEqual({ disabled: true });
+
+      fireEvent.press(screen.getByTestId('memory-media-remove-0'));
+      expect(mockPickerOnPickSound).toBeDefined();
+    });
+
+    it('holds the scan button while a voice note is being imported, and the import lands normally', async () => {
+      enableAudio();
+      let resolveImport: ((value: ReturnType<typeof importedClipResult>) => void) | undefined;
+      mockImportAudioFile.mockImplementation(
+        () => new Promise((resolve) => { resolveImport = resolve; }),
+      );
+      const prepared = captureShare();
+      const screen = await renderReady();
+      prepared(sharedAudio);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      // The scan button is held while the import is in flight.
+      expect(screen.getByTestId('new-memory-scan-artwork').props.accessibilityState).toEqual({ disabled: true });
+
+      await act(async () => {
+        resolveImport?.(importedClipResult());
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+      expect(mockDeleteArtworkScanFile).not.toHaveBeenCalled();
+    });
+
+    it('discards pages from a scan that resolves while a voice note is being imported (and the import wins)', async () => {
+      enableAudio();
+      let resolveImport: ((value: ReturnType<typeof importedClipResult>) => void) | undefined;
+      mockImportAudioFile.mockImplementation(
+        () => new Promise((resolve) => { resolveImport = resolve; }),
+      );
+      const prepared = captureShare();
+      const screen = await renderReady();
+
+      // Scanner already open when the share arrives.
+      let resolveScan: ((value: ReturnType<typeof scanResult>) => void) | undefined;
+      mockScanArtwork.mockImplementationOnce(() => new Promise((resolve) => { resolveScan = resolve; }));
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('new-memory-scan-artwork'));
+      });
+      prepared(sharedAudio);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      await act(async () => {
+        resolveScan?.(scanResult(['scan-1']));
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.queryByTestId('memory-media-tile-0')).toBeNull();
+      expect(screen.getByText('This memory is a sound, so the scanned pages were discarded.')).toBeTruthy();
+      expect(mockDeleteArtworkScanFile).toHaveBeenCalledWith('file:///documents/artwork-scans/scan-1.jpg');
+
+      await act(async () => {
+        resolveImport?.(importedClipResult());
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+    });
+
+    it('keeps the scan button disabled for a kept imported sound, not just a recording', async () => {
+      enableAudio();
+      mockImportAudioFile.mockResolvedValue(importedClipResult());
+      const prepared = captureShare();
+      const screen = await renderReady();
+
+      prepared(sharedAudio);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByTestId('new-memory-audio-clip')).toBeTruthy();
+      const scanButton = screen.getByTestId('new-memory-scan-artwork');
+      expect(scanButton.props.accessibilityState).toEqual({ disabled: true });
+      fireEvent.press(scanButton);
+      expect(mockScanArtwork).not.toHaveBeenCalled();
     });
   });
 });

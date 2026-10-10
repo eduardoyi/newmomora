@@ -94,7 +94,7 @@ export async function fetchExportRows(env: Env, ownerUserId: string): Promise<Ex
   }
 
   const familyMembers = await listRowsByIds<ExportMember>(env, 'family_members', 'id,family_id,user_id,name,nicknames,date_of_birth,gender,profile_picture_key,illustrated_profile_key,illustrated_profile_status,additional_info,is_user_profile,relationship,family_side,side_member_id,created_at', 'family_id', familyIds, { order: 'created_at.asc' });
-  const memories = await listRowsByIds<ExportMemory>(env, 'memories', 'id,family_id,user_id,memory_type,content,audio_transcript,link_previews,memory_date,emotion,illustration_key,illustration_status,media_key,media_content_type,created_at', 'family_id', familyIds, { order: 'memory_date.asc,created_at.asc' });
+  const memories = await listRowsByIds<ExportMemory>(env, 'memories', 'id,family_id,user_id,memory_type,content,audio_transcript,link_previews,memory_date,emotion,illustration_key,illustration_status,media_key,media_content_type,media_variant,artwork_medium,created_at', 'family_id', familyIds, { order: 'memory_date.asc,created_at.asc' });
   const yearFilms = await listRowsByIds<ExportYearFilm>(env, 'year_films', 'id,family_id,kind,scope_start_date,scope_label,video_key,ready_at', 'family_id', familyIds, {
     video_key: 'not.is.null',
     blocked: 'is.false',

@@ -233,6 +233,32 @@ Deno.test('chatJsonWithVisionMulti sends up to 4 images at detail:low alongside 
   }
 });
 
+Deno.test("chatJsonWithVisionMulti honors an explicit detail:'high' option (artwork-medium eval only)", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  let capturedContent: Array<{ type: string; image_url?: { detail?: string } }> = [];
+
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse((init as RequestInit).body as string);
+    capturedContent = body.messages[1].content;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    await chatJsonWithVisionMulti('system', 'context text', [{ base64: 'aaaa', contentType: 'image/jpeg' as const }], {
+      detail: 'high',
+    });
+    assertEquals(capturedContent[1].image_url?.detail, 'high');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});
+
 Deno.test('chatJsonWithVisionMulti supports zero images (text-only memories share the same call path)', async () => {
   const originalFetch = globalThis.fetch;
   const originalKey = Deno.env.get('OPENAI_API_KEY');

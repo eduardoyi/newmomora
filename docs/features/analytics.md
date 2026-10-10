@@ -1,7 +1,7 @@
 # Feature: Analytics (PostHog)
 
 **Status:** `done`
-**Last updated:** 2026-08-02
+**Last updated:** 2026-10-10
 **PRD reference:** none (operational/growth instrumentation, not a product feature)
 **Implementation plan:** [docs/plans/analytics-implementation.md](../plans/analytics-implementation.md) — work packages, decisions, execution log
 **Event spec:** [docs/plans/analytics-tracking.md](../plans/analytics-tracking.md) — original Tier 1/Tier 2 proposal (superseded by this doc for exact shapes; see "Where the spec docs lag" below)
@@ -70,7 +70,8 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 
 | Event | Properties | Fires from |
 |---|---|---|
-| `memory_saved` | `memory_type: MemoryType`, `used_voice: boolean`, `has_media: boolean`, `tagged_count: number`, `illustration_enabled: boolean`, `source: 'fab_timeline'\|'fab_calendar'\|'share_sheet'\|'notification'\|'other'` | `app/(app)/new-memory.tsx` — both save paths: the text `createMemory` success branch, and the media enqueue-accepted branch (see semantics note below) |
+| `memory_saved` | `memory_type: MemoryType`, `used_voice: boolean`, `has_media: boolean`, `tagged_count: number`, `illustration_enabled: boolean`, `is_artwork: boolean` (true only for a scanned-artwork media memory; false for text and audio), `source: 'fab_timeline'\|'fab_calendar'\|'share_sheet'\|'notification'\|'other'` | `app/(app)/new-memory.tsx` — both save paths: the text `createMemory` success branch, and the media enqueue-accepted branch (see semantics note below) |
+| `artwork_scan_result` | `status: 'success'\|'cancel'\|'error'`, `page_count: number` (validated pages handed to the composer; 0 for cancel/error) | `src/components/artwork-scan-button.tsx` — fires once per scanner resolution, from both the new-memory and edit-memory scan buttons. Scalars only: never page content, paths, or the medium |
 | `memory_save_failed` | `code: 'validation_error'\|'media_upload_failed'\|'network_error'\|'other'` | `app/(app)/new-memory.tsx` (`validation_error` on content/date/media-missing checks, `network_error` on the save-path catch) and `src/hooks/use-pending-memory-uploads.tsx` (`media_upload_failed`, the queue's terminal-failure transition) |
 | `illustration_completed` | `outcome: 'ready'\|'failed'` | `src/hooks/useGenerationStatusPolling.ts` **and** `src/hooks/useMemoriesRealtime.ts` — both gated through the shared dedupe singleton (see below); no `intent` property (the polled row doesn't carry `request_intent`) |
 | `illustration_retry_requested` | `intent: 'recovery'\|'manual_regenerate'` | `app/(app)/memory/[id]/index.tsx` — the two client-initiated retry/regenerate buttons, where intent *is* known |

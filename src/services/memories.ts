@@ -341,6 +341,20 @@ function mediaAssetInputStorageKeys(assets: MemoryMediaAssetInput[]): string[] {
   );
 }
 
+// The memory_media trigger (20261014120000_artwork_memories.sql) rejects
+// non-image rows on an artwork memory with this message. Old app versions can
+// still reach it from their edit screen, and so can a race with another
+// device; map it to copy instead of surfacing the raw Postgres error.
+const ARTWORK_MEDIA_TRIGGER_MESSAGE = 'artwork_media_must_be_image';
+const ARTWORK_MEDIA_IMAGES_ONLY_MESSAGE = 'Artwork memories can only hold scanned photos, not videos.';
+
+function mapArtworkMediaTriggerError(error: ServiceError): ServiceError {
+  if (error.message?.includes(ARTWORK_MEDIA_TRIGGER_MESSAGE)) {
+    return { message: ARTWORK_MEDIA_IMAGES_ONLY_MESSAGE, code: 'validation_error' };
+  }
+  return error;
+}
+
 async function replaceMemoryMediaAssets(
   memoryId: string,
   mediaAssets: MemoryMediaAssetInput[],
@@ -709,6 +723,10 @@ export interface MemoryGenerationStatusRow {
   illustration_generation_id: string | null;
   illustration_generation_started_at: string | null;
   emotion: string | null;
+  // Medium lands in the same analysis write as emotion, so the poll that
+  // waits for emotion also carries it to artwork cards
+  // (docs/plans/artwork-scanning.md 2.5b).
+  artwork_medium: string | null;
   updated_at: string;
 }
 
@@ -723,7 +741,7 @@ export async function fetchMemoryGenerationStatuses(memoryIds: string[]): Promis
   const { data, error } = await supabase
     .from('memories')
     .select(
-      'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, updated_at',
+      'id, illustration_status, illustration_key, illustration_generation_id, illustration_generation_started_at, emotion, artwork_medium, updated_at',
     )
     .in('id', memoryIds);
 
@@ -1071,6 +1089,25 @@ export async function runMediaPhotoEmotionAnalysis(memoryId: string): Promise<st
   return data?.emotion ?? null;
 }
 
+// Photo analysis that also returns the artwork medium (null for non-artwork
+// memories or when the model's pick didn't normalize). Same retry policy and
+// null-on-failure contract as runMediaPhotoEmotionAnalysis, which stays for
+// callers that only need the emotion string.
+export interface MediaPhotoAnalysisResult {
+  emotion: string | null;
+  artworkMedium: string | null;
+}
+
+export async function runMediaPhotoAnalysis(
+  memoryId: string,
+): Promise<MediaPhotoAnalysisResult | null> {
+  const { data } = await analyzeEmotionWithRetry(memoryId);
+  if (!data) {
+    return null;
+  }
+  return { emotion: data.emotion ?? null, artworkMedium: data.artworkMedium ?? null };
+}
+
 export async function runTextOnlyEmotionAnalysis(memoryId: string): Promise<string | null> {
   const { data } = await analyzeEmotionWithRetry(memoryId);
   return data?.emotion ?? null;
@@ -1353,6 +1390,10 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
       media_key: coverAsset.objectKey,
       media_content_type: coverAsset.contentType,
       illustration_status: 'none',
+      // INSERT-only: clients have no UPDATE grant on media_variant. The
+      // insert-conflict retry below re-reads the existing row, which already
+      // carries the variant from the first attempt.
+      ...(input.mediaVariant ? { media_variant: input.mediaVariant } : {}),
     })
     .select('*')
     .single();
@@ -1610,7 +1651,7 @@ export async function updateMemory(
   if (input.mediaAssets !== undefined) {
     const mediaReplaceError = await replaceMemoryMediaAssets(memoryId, input.mediaAssets);
     if (mediaReplaceError) {
-      return { data: null, error: mediaReplaceError };
+      return { data: null, error: mapArtworkMediaTriggerError(mediaReplaceError) };
     }
 
     const nextKeys = new Set(input.mediaAssets.map((asset) => asset.objectKey));

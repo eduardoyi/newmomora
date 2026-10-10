@@ -78,6 +78,9 @@ export interface ExportMemory {
   illustration_status: string;
   media_key: string | null;
   media_content_type: string | null;
+  /** Docs: features/artwork.md. Null/absent unless an artwork scan; optional for older fixtures. */
+  media_variant?: string | null;
+  artwork_medium?: string | null;
   created_at: string;
 }
 

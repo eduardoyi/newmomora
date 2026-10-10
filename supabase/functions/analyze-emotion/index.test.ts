@@ -1,5 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import {
+  buildAnalyzeMemoryResponse,
   handleAnalyzeEmotion,
   updateMemoryAnalysisIfSnapshotMatches,
   validateMediaPhotoMemoryRow,
@@ -135,7 +136,7 @@ Deno.test('updateMemoryAnalysisIfSnapshotMatches returns false when no row match
   const updated = await updateMemoryAnalysisIfSnapshotMatches(
     supabase as never,
     '22222222-2222-4222-8222-222222222222',
-    { emotion: 'joy', topics: [], topicDetails: {}, labels: [], description: '' },
+    { emotion: 'joy', topics: [], topicDetails: {}, labels: [], description: '', artworkMedium: null },
     {
       updated_at: '2026-05-26T00:00:00Z',
       content: 'caption',
@@ -181,6 +182,7 @@ Deno.test('updateMemoryAnalysisIfSnapshotMatches persists the write when the sna
       topicDetails: {},
       labels: ['sand'],
       description: 'A beach day.',
+      artworkMedium: null,
     },
     {
       updated_at: '2026-05-26T00:00:00Z',
@@ -189,4 +191,107 @@ Deno.test('updateMemoryAnalysisIfSnapshotMatches persists the write when the sna
   );
 
   assertEquals(updated, true);
+});
+
+// --- artwork_medium on the CAS write (docs/plans/artwork-scanning.md 1.5) -------------
+
+/** Captures the object passed to `.update()` and reports a landed write. */
+function captureUpdatePayload() {
+  const captured: { payload: Record<string, unknown> | null } = { payload: null };
+  const client = {
+    from: () => ({
+      update: (payload: Record<string, unknown>) => {
+        captured.payload = payload;
+        return {
+          eq: () => ({
+            eq: () => ({
+              select: () => ({ maybeSingle: async () => ({ data: { id: 'memory-1' }, error: null }) }),
+            }),
+          }),
+        };
+      },
+    }),
+  };
+  return { captured, client };
+}
+
+const baseWrite = {
+  emotion: 'joy',
+  topics: [{ id: 'arts-crafts', detail: null }],
+  topicDetails: {},
+  labels: ['artwork', 'crayon'],
+  description: "a child's crayon drawing",
+};
+
+Deno.test('updateMemoryAnalysisIfSnapshotMatches writes artwork_medium for an artwork memory with a parsed medium', async () => {
+  const { captured, client } = captureUpdatePayload();
+  const updated = await updateMemoryAnalysisIfSnapshotMatches(
+    client as never,
+    'memory-1',
+    { ...baseWrite, artworkMedium: 'crayon' },
+    { updated_at: '2026-05-26T00:00:00Z', content: null, media_variant: 'artwork' },
+  );
+  assertEquals(updated, true);
+  assertEquals(captured.payload?.artwork_medium, 'crayon');
+});
+
+Deno.test('updateMemoryAnalysisIfSnapshotMatches omits artwork_medium for an artwork memory whose medium parsed to null (never erases a good medium)', async () => {
+  const { captured, client } = captureUpdatePayload();
+  await updateMemoryAnalysisIfSnapshotMatches(
+    client as never,
+    'memory-1',
+    { ...baseWrite, artworkMedium: null },
+    { updated_at: '2026-05-26T00:00:00Z', content: null, media_variant: 'artwork' },
+  );
+  assertEquals('artwork_medium' in (captured.payload ?? {}), false);
+});
+
+Deno.test('updateMemoryAnalysisIfSnapshotMatches omits artwork_medium for non-artwork memories even if a medium is passed (check constraint safety)', async () => {
+  for (const mediaVariant of [null, undefined]) {
+    const { captured, client } = captureUpdatePayload();
+    await updateMemoryAnalysisIfSnapshotMatches(
+      client as never,
+      'memory-1',
+      { ...baseWrite, artworkMedium: 'crayon' },
+      { updated_at: '2026-05-26T00:00:00Z', content: null, media_variant: mediaVariant },
+    );
+    assertEquals('artwork_medium' in (captured.payload ?? {}), false);
+    assertEquals(captured.payload?.emotion, 'joy');
+  }
+});
+
+// --- response contract (1.7): additive `artworkMedium` ----------------------------------
+
+const completedResult = {
+  skipped: false as const,
+  emotion: 'joy',
+  colorPalette: 'warm',
+  topics: [{ id: 'arts-crafts', detail: null }],
+  topicDetails: {},
+  labels: ['artwork'],
+  description: "a child's artwork drawing",
+  milestones: [],
+  artworkMedium: 'watercolor' as string | null,
+  usage: null,
+};
+
+Deno.test('buildAnalyzeMemoryResponse includes artworkMedium for artwork memories (string or null)', () => {
+  assertEquals(buildAnalyzeMemoryResponse(completedResult, 'artwork', true).artworkMedium, 'watercolor');
+  const unparsed = buildAnalyzeMemoryResponse({ ...completedResult, artworkMedium: null }, 'artwork', true);
+  assertEquals('artworkMedium' in unparsed, true);
+  assertEquals(unparsed.artworkMedium, null);
+});
+
+Deno.test('buildAnalyzeMemoryResponse omits artworkMedium for non-artwork memories and keeps the existing fields', () => {
+  const response = buildAnalyzeMemoryResponse({ ...completedResult, artworkMedium: null }, null, true);
+  assertEquals('artworkMedium' in response, false);
+  assertEquals(response, {
+    emotion: 'joy',
+    colorPalette: 'warm',
+    topics: ['arts-crafts'],
+    labels: ['artwork'],
+    description: "a child's artwork drawing",
+    skipped: undefined,
+  });
+  assertEquals(buildAnalyzeMemoryResponse(completedResult, null, false).skipped, true);
 });

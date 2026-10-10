@@ -129,6 +129,10 @@ Contracts are in [TECH_SPEC §4.19](../TECH_SPEC.md#419-owner-data-export).
 
 - Add data to `memory.txt` (`renderMemoryText`) or `manifest.json`
   (`buildFamilyManifest`, bump `version` for breaking shape changes).
+  Artwork scans (`media_variant = 'artwork'`) get an `Artwork: <medium>` line
+  after `Feeling:` in `memory.txt` and `artwork: { medium }` in the manifest
+  (the raw `media_variant`/`artwork_medium` columns are folded into it so other
+  memories' JSON is unchanged); see [artwork.md](artwork.md).
 - Add a new kind of file: add a planned `object` entry in `buildExportPlan`,
   pick its path in `layout.ts`, extend `ExportAssetKind`, cover it in
   `test/plan.test.ts`.
@@ -200,3 +204,4 @@ npm run typecheck && npm test
 | 2026-08-01 | Owner-scoped manifest + private R2 streaming ZIP export shipped |
 | 2026-08-02 | Connected the owner Settings action to the export service |
 | 2026-09-26 | Rebuilt as background Workflow + emailed 7-day link; per-year archives with readable folders and memory.txt; fixed nonexistent-column queries that made every export return a ~100-byte error file |
+| 2026-10-10 | Artwork memories: `Artwork: <medium>` line in memory.txt + `artwork` in manifest |

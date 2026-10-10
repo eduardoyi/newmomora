@@ -82,10 +82,19 @@ const SAME_RANGE_TOLERANCE_MS = 50;
 
 export const AUDIO_IMPORT_REFUSED_PHOTOS_COPY =
   'This memory already has photos. Save it first, then share the voice note.';
+export const AUDIO_IMPORT_REFUSED_ARTWORK_COPY =
+  'This memory is artwork. Save it first, then add a sound.';
 export const SHARE_PHOTOS_REFUSED_SOUND_COPY =
   'This memory is a sound. Save it first, then share photos.';
 export const AUDIO_IMPORT_UPDATE_COPY = 'Update Momora to bring in voice notes.';
 export const AUDIO_TRIM_FAILED_COPY = "Couldn't trim that sound. Try again.";
+
+/** Refusal copy for an import blocked by attached media: scanned artwork gets its own wording. */
+function importRefusedCopy(attached: readonly unknown[]): string {
+  return attached.some((item) => (item as { source?: string } | null)?.source === 'scan')
+    ? AUDIO_IMPORT_REFUSED_ARTWORK_COPY
+    : AUDIO_IMPORT_REFUSED_PHOTOS_COPY;
+}
 
 type ComposerAudioRange = { startMs: number; endMs: number };
 
@@ -804,7 +813,7 @@ export function useComposerAudioClip(options: UseComposerAudioClipOptions) {
       // The payload (share) / cache copy (picker) is ours to remove when we
       // refuse before importAudioFile gets to own it.
       if (attachedMediaRef.current.length > 0) {
-        setErrorMessage(AUDIO_IMPORT_REFUSED_PHOTOS_COPY);
+        setErrorMessage(importRefusedCopy(attachedMediaRef.current));
         void discardAudioClip(input.uri);
         return;
       }
@@ -850,7 +859,9 @@ export function useComposerAudioClip(options: UseComposerAudioClipOptions) {
         // Mutual exclusion is re-checked at completion: photos may have been
         // attached while the file was being read.
         if (optionsRef.current.attachedMediaRef.current.length > 0) {
-          optionsRef.current.setErrorMessage(AUDIO_IMPORT_REFUSED_PHOTOS_COPY);
+          optionsRef.current.setErrorMessage(
+            importRefusedCopy(optionsRef.current.attachedMediaRef.current),
+          );
           discardStale(resultUris);
           return;
         }

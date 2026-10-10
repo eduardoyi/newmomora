@@ -41,6 +41,9 @@ export interface MediaAttachment {
    * container metadata (`src/utils/video-capture-date.ts`). Never the raw
    * EXIF object or any other container metadata. */
   capturedAtIso?: string;
+  /** Where the attachment came from. Only `'scan'` (artwork scanner) is read;
+   * unset means library/camera/share and behaves as before. */
+  source?: 'library' | 'camera' | 'share' | 'scan';
 }
 
 interface MemoryMediaPickerProps {
