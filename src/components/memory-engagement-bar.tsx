@@ -1,12 +1,12 @@
 import * as Haptics from 'expo-haptics';
-import { Heart, MessageCircle, Send } from 'lucide-react-native';
+import { MessageCircle, Send, SmilePlus } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MemoryReactionsSheet } from '@/components/memory-reactions-sheet';
 import { ReactionEmojiPicker } from '@/components/reaction-emoji-picker';
 import { ReactionTray, type ReactionTrayAnchor } from '@/components/reaction-tray';
-import { colors, fonts } from '@/constants/theme';
+import { colors, fonts, radius } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
 import { useShareMemoryCard } from '@/hooks/useShareMemoryCard';
@@ -54,7 +54,8 @@ export function MemoryEngagementBar({
   const { shareMemoryCard, isSharing } = useShareMemoryCard();
   const [scale] = useState(() => new Animated.Value(1));
   const previousReaction = useRef(engagement.myReaction);
-  const reactionButtonRef = useRef<View>(null);
+  const addButtonRef = useRef<View>(null);
+  const pillRef = useRef<View>(null);
   const [trayAnchor, setTrayAnchor] = useState<ReactionTrayAnchor | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMounted, setPickerMounted] = useState(false);
@@ -81,14 +82,8 @@ export function MemoryEngagementBar({
     [],
   );
 
-  const handleLike = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    void engagement.toggleLike().catch(() => {});
-  };
-
-  const handleLongPress = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    const node = reactionButtonRef.current;
+  const openTrayFrom = (node: View | null, haptic: Haptics.ImpactFeedbackStyle) => {
+    void Haptics.impactAsync(haptic).catch(() => {});
     if (!node) return;
     node.measureInWindow((x, y, width, height) => {
       setTrayAnchor({ x, y, width, height });
@@ -122,6 +117,14 @@ export function MemoryEngagementBar({
     applyReaction(emoji);
   };
 
+  // Each emoji gets its own <Text>: a joined multi-emoji string was laid out
+  // but not drawn on Android. Fallback when the server sent no top list.
+  const pillEmojis = (
+    engagement.topReactions.length > 0
+      ? engagement.topReactions
+      : [engagement.myReaction ?? '❤️']
+  ).slice(0, 3);
+
   const openReactionsSheet = () => {
     setSheetMounted(true);
     setSheetOpen(true);
@@ -144,46 +147,53 @@ export function MemoryEngagementBar({
 
   return (
     <View style={styles.row}>
-      <Pressable
-        accessibilityHint="Touch and hold for more reactions"
-        accessibilityLabel={
-          engagement.myReaction ? `Remove reaction ${engagement.myReaction}` : 'React to memory'
-        }
-        accessibilityRole="button"
-        accessibilityState={{ selected: engagement.likedByMe, busy: engagement.isUpdatingLike }}
-        delayLongPress={300}
-        onLongPress={handleLongPress}
-        onPress={handleLike}
-        ref={reactionButtonRef}
-        style={({ pressed }) => [styles.action, pressed && styles.pressed]}
-        testID={`memory-like-${memory.id}`}
-      >
-        <Animated.View style={{ transform: [{ scale }] }}>
-          {engagement.myReaction ? (
-            <Text style={[styles.reactionEmoji, { fontSize: iconSize - 2, lineHeight: iconSize + 2 }]}>
-              {engagement.myReaction}
-            </Text>
-          ) : (
-            <Heart color={colors.ink2} fill="transparent" size={iconSize} strokeWidth={1.9} />
-          )}
-        </Animated.View>
-      </Pressable>
-
       {engagement.likeCount > 0 ? (
         <Pressable
-          accessibilityLabel={`${engagement.likeCount} ${engagement.likeCount === 1 ? 'reaction' : 'reactions'}, see who reacted`}
+          accessibilityHint="Touch and hold to change your reaction"
+          accessibilityLabel={`${engagement.likeCount} ${engagement.likeCount === 1 ? 'reaction' : 'reactions'}, ${
+            engagement.myReaction ? `you reacted ${engagement.myReaction}` : 'not reacted'
+          }. Double tap to see who reacted`}
           accessibilityRole="button"
-          hitSlop={6}
+          accessibilityState={{ selected: engagement.myReaction != null, busy: engagement.isUpdatingLike }}
+          delayLongPress={300}
+          onLongPress={() => openTrayFrom(pillRef.current, Haptics.ImpactFeedbackStyle.Medium)}
           onPress={openReactionsSheet}
-          style={({ pressed }) => [styles.action, styles.summary, pressed && styles.pressed]}
+          ref={pillRef}
           testID={`memory-reactions-${memory.id}`}
         >
-          {engagement.topReactions.length > 0 ? (
-            <Text style={styles.summaryEmoji}>{engagement.topReactions.join('')}</Text>
-          ) : null}
-          <Text style={[styles.count, engagement.likedByMe && styles.likedCount]}>
-            {engagement.likeCount}
-          </Text>
+          {({ pressed }) => (
+            <Animated.View
+              style={[
+                styles.pill,
+                engagement.myReaction ? styles.pillMine : styles.pillNeutral,
+                pressed && styles.pressed,
+                { transform: [{ scale }] },
+              ]}
+            >
+              {pillEmojis.map((emoji, index) => (
+                <Text key={`${emoji}-${index}`} style={styles.pillEmoji}>
+                  {emoji}
+                </Text>
+              ))}
+              <Text style={[styles.count, engagement.myReaction != null && styles.likedCount]}>
+                {engagement.likeCount}
+              </Text>
+            </Animated.View>
+          )}
+        </Pressable>
+      ) : null}
+
+      {engagement.myReaction == null ? (
+        <Pressable
+          accessibilityLabel="Add reaction"
+          accessibilityRole="button"
+          accessibilityState={{ busy: engagement.isUpdatingLike }}
+          onPress={() => openTrayFrom(addButtonRef.current, Haptics.ImpactFeedbackStyle.Light)}
+          ref={addButtonRef}
+          style={({ pressed }) => [styles.action, pressed && styles.pressed]}
+          testID={`memory-react-${memory.id}`}
+        >
+          <SmilePlus color={colors.ink2} size={iconSize} strokeWidth={1.9} />
         </Pressable>
       ) : null}
 
@@ -259,15 +269,26 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.65,
   },
-  reactionEmoji: {
-    textAlign: 'center',
+  pill: {
+    alignItems: 'center',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 32,
+    paddingHorizontal: 10,
   },
-  summary: {
-    // Sits right next to the reaction button, tighter than the 20pt action gap.
-    marginLeft: -12,
+  pillNeutral: {
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
   },
-  summaryEmoji: {
-    fontSize: 14,
+  pillMine: {
+    backgroundColor: colors.primaryTint,
+    borderColor: colors.primary,
+  },
+  pillEmoji: {
+    fontSize: 15,
+    lineHeight: 19,
   },
   count: {
     color: colors.ink2,

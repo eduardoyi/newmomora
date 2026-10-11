@@ -1,6 +1,9 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 
+import { Animated, StyleSheet } from 'react-native';
+
 import { MemoryEngagementBar } from './memory-engagement-bar';
+import { colors } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
 import { useShareMemoryCard } from '@/hooks/useShareMemoryCard';
@@ -100,10 +103,9 @@ describe('MemoryEngagementBar', () => {
     expect(queryByText('0')).toBeNull();
   });
 
-  it('shows non-zero counts and delegates both actions', () => {
-    const toggleLike = jest.fn().mockResolvedValue(undefined);
+  it('shows non-zero counts and delegates the comments action', () => {
     const openComments = jest.fn();
-    mockEngagement({ likeCount: 3, commentCount: 2, toggleLike });
+    mockEngagement({ likeCount: 3, commentCount: 2, topReactions: ['❤️'] });
 
     const { getByTestId, getByText } = render(
       <MemoryEngagementBar memory={memory} onOpenComments={openComments} />,
@@ -111,9 +113,7 @@ describe('MemoryEngagementBar', () => {
 
     expect(getByText('3')).toBeTruthy();
     expect(getByText('2')).toBeTruthy();
-    fireEvent.press(getByTestId('memory-like-memory-1'));
     fireEvent.press(getByTestId('memory-comments-memory-1'));
-    expect(toggleLike).toHaveBeenCalledTimes(1);
     expect(openComments).toHaveBeenCalledTimes(1);
   });
 
@@ -125,34 +125,86 @@ describe('MemoryEngagementBar', () => {
         callback(20, 400, 30, 36);
     };
 
-    it('shows my emoji instead of the heart and a summary that opens the sheet', () => {
-      mockEngagement({
-        likedByMe: true,
-        myReaction: '😂',
-        topReactions: ['😂', '❤️'],
-        likeCount: 2,
-      });
-      const { getByTestId, getByText, queryByTestId } = render(
+    it('no reactions: only the smiley-plus button (no pill, no heart)', () => {
+      const { getByTestId, queryByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+      expect(queryByTestId('memory-reactions-memory-1')).toBeNull();
+      expect(queryByTestId('memory-like-memory-1')).toBeNull();
+      expect(getByTestId('memory-react-memory-1').props.accessibilityLabel).toBe('Add reaction');
+      expect(getByTestId('memory-comments-memory-1')).toBeTruthy();
+    });
+
+    it('others reacted, not me: neutral pill with each emoji in its own Text, plus the smiley button', () => {
+      mockEngagement({ topReactions: ['😂', '❤️', '🙏', '👍'], likeCount: 4 });
+      const { getByTestId, getByText, queryByText } = render(
         <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
       );
 
+      const pill = getByTestId('memory-reactions-memory-1');
+      expect(pill.props.accessibilityLabel).toBe(
+        '4 reactions, not reacted. Double tap to see who reacted',
+      );
+      expect(pill.props.accessibilityHint).toBe('Touch and hold to change your reaction');
       expect(getByText('😂')).toBeTruthy();
-      expect(getByTestId('memory-like-memory-1').props.accessibilityLabel).toBe('Remove reaction 😂');
-      expect(getByText('😂❤️')).toBeTruthy();
+      expect(getByText('❤️')).toBeTruthy();
+      expect(getByText('🙏')).toBeTruthy();
+      expect(queryByText('👍')).toBeNull(); // capped at 3
+      expect(queryByText('😂❤️🙏')).toBeNull(); // never a joined string
+      expect(getByText('4')).toBeTruthy();
+      expect(getByTestId('memory-react-memory-1')).toBeTruthy();
+    });
+
+    it('i reacted: mine-styled pill, smiley button hidden', () => {
+      mockEngagement({ likedByMe: true, myReaction: '😂', topReactions: ['😂'], likeCount: 1 });
+      const { getByTestId, queryByTestId, UNSAFE_getAllByType } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+
+      expect(queryByTestId('memory-react-memory-1')).toBeNull();
+      expect(getByTestId('memory-reactions-memory-1').props.accessibilityLabel).toBe(
+        '1 reaction, you reacted 😂. Double tap to see who reacted',
+      );
+      const backgrounds = UNSAFE_getAllByType(Animated.View).map(
+        (node) => StyleSheet.flatten(node.props.style)?.backgroundColor,
+      );
+      expect(backgrounds).toContain(colors.primaryTint);
+    });
+
+    it('neutral pill uses the neutral background', () => {
+      mockEngagement({ topReactions: ['😂'], likeCount: 1 });
+      const { UNSAFE_getAllByType } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+      const backgrounds = UNSAFE_getAllByType(Animated.View).map(
+        (node) => StyleSheet.flatten(node.props.style)?.backgroundColor,
+      );
+      expect(backgrounds).toContain(colors.surface);
+      expect(backgrounds).not.toContain(colors.primaryTint);
+    });
+
+    it('falls back to my emoji, then a heart, when topReactions is empty', () => {
+      mockEngagement({ myReaction: '🙏', likedByMe: true, topReactions: [], likeCount: 1 });
+      const mine = render(<MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />);
+      expect(mine.getByText('🙏')).toBeTruthy();
+      mine.unmount();
+
+      mockEngagement({ myReaction: null, topReactions: [], likeCount: 2 });
+      const other = render(<MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />);
+      expect(other.getByText('❤️')).toBeTruthy();
+    });
+
+    it('pill tap opens the who-reacted sheet', () => {
+      mockEngagement({ topReactions: ['😂'], likeCount: 1 });
+      const { getByTestId, queryByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
       expect(queryByTestId('mock-reactions-sheet')).toBeNull();
       fireEvent.press(getByTestId('memory-reactions-memory-1'));
       expect(getByTestId('mock-reactions-sheet')).toBeTruthy();
     });
 
-    it('does not render the summary when there are no reactions', () => {
-      const { queryByTestId, getByTestId } = render(
-        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
-      );
-      expect(queryByTestId('memory-reactions-memory-1')).toBeNull();
-      expect(getByTestId('memory-like-memory-1').props.accessibilityLabel).toBe('React to memory');
-    });
-
-    it('long-press opens the tray and picking an emoji sets it', () => {
+    it('smiley tap opens the tray and picking an emoji sets it', () => {
       measure();
       const setReaction = jest.fn().mockResolvedValue(undefined);
       mockEngagement({ setReaction });
@@ -161,7 +213,7 @@ describe('MemoryEngagementBar', () => {
       );
 
       expect(queryByTestId('reaction-tray')).toBeNull();
-      fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+      fireEvent.press(getByTestId('memory-react-memory-1'));
       expect(getByTestId('reaction-tray')).toBeTruthy();
 
       fireEvent.press(getByTestId('reaction-tray-😂'));
@@ -169,7 +221,7 @@ describe('MemoryEngagementBar', () => {
       expect(queryByTestId('reaction-tray')).toBeNull();
     });
 
-    it('picking my current emoji from the tray removes it', () => {
+    it('pill long-press opens the tray; picking my current emoji removes it', () => {
       measure();
       const setReaction = jest.fn().mockResolvedValue(undefined);
       mockEngagement({ setReaction, myReaction: '😂', likedByMe: true, likeCount: 1, topReactions: ['😂'] });
@@ -177,7 +229,8 @@ describe('MemoryEngagementBar', () => {
         <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
       );
 
-      fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+      fireEvent(getByTestId('memory-reactions-memory-1'), 'longPress');
+      expect(getByTestId('reaction-tray')).toBeTruthy();
       fireEvent.press(getByTestId('reaction-tray-😂'));
       expect(setReaction).toHaveBeenCalledWith(null);
     });
@@ -192,7 +245,7 @@ describe('MemoryEngagementBar', () => {
           <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
         );
 
-        fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+        fireEvent.press(getByTestId('memory-react-memory-1'));
         fireEvent.press(getByTestId('reaction-tray-more'));
         expect(queryByTestId('reaction-tray')).toBeNull();
         act(() => {

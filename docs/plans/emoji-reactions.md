@@ -148,3 +148,7 @@ TECH_SPEC (§2 schema and §4.14 / wherever `set_memory_like` and `get_memory_en
 - Deno tests for the notify function.
 - pgTAP if `supabase start` works; otherwise CI.
 - Device QA by the user before commit (the usual workflow).
+
+## 2026-10-11 revision: option C (merged pill)
+
+After device testing, the separate my-reaction button beside the summary looked like a duplicate action. The bar now has one pill (up to 3 top emoji, each its own `<Text>`, plus count; pink "mine" style when you reacted) and a smiley-plus button shown only when you haven't reacted. Tap-to-heart is removed; `memory-like-<id>` is replaced by `memory-react-<id>` (smiley, opens the tray) and `memory-reactions-<id>` (pill: tap = who-reacted sheet, long-press = tray). `toggleLike` stays in the hook but the bar no longer uses it.

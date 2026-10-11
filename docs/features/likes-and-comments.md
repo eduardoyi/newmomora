@@ -17,21 +17,19 @@ including viewer, may participate.
 
 ## User-facing behavior
 
-- **Emoji reactions (2026-10-11).** Likes became WhatsApp-style reactions: one
-  reaction per person per memory, any emoji. Tap the button = toggle ❤️ (or
-  remove whatever you reacted with). Long-press (~300ms, cancelled by
-  scrolling) opens `ReactionTray` (❤️ 😂 😮 😢 🙏 👍 plus "+" for the full
-  `rn-emoji-keyboard` picker, pure JS so it ships over OTA). Picking your
-  current emoji removes it. When you've reacted the button shows your emoji
-  instead of the outline heart. Next to it a summary (top ≤3 emoji + total)
-  opens `MemoryReactionsSheet`, listing every member's emoji with filter chips;
-  your own row says "You / Tap to remove". The paragraphs below that mention
-  "heart"/"like" describe the same button; "like" is kept in code names
+- **Emoji reactions (2026-10-11), merged pill.** Likes became WhatsApp-style
+  reactions: one reaction per person per memory, any emoji. There is no heart
+  button and no tap-to-heart. The bar reads, in order: a **reaction pill** (only
+  when `likeCount > 0`: up to 3 `topReactions`, each in its own `<Text>`, then
+  the count), a **smiley-plus** button (`memory-react-<id>`, only when you
+  haven't reacted), comments, and share. The pill is neutral when others
+  reacted, and pink-tinted ("mine") when you did. Tap the pill = who-reacted
+  sheet (`MemoryReactionsSheet`, filter chips, "You / Tap to remove" row).
+  Long-press the pill (~300ms, cancelled by scrolling) or tap the smiley opens
+  `ReactionTray` (❤️ 😂 😮 😢 🙏 👍 plus "+" for the full `rn-emoji-keyboard`
+  picker, pure JS so it ships over OTA). Picking your current emoji removes it.
+  The pill pops when your reaction changes. "like" survives in code names
   (`likeCount`, `likedByMe`, `memory_likes`) for compatibility.
-
-- Timeline and memory detail show an outline heart and comment icon below the
-  memory content. A selected heart fills pink, pops briefly, and gives light
-  haptic feedback.
 - The same bar also carries a share icon on the timeline card and the memory
   detail screen (never the full-screen viewer) — see
   [memory-sharing.md](./memory-sharing.md) for its full behavior, visibility
@@ -260,7 +258,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
-| 2026-10-11 | Likes became emoji reactions (one per person, any emoji): tray + full picker, who-reacted sheet, `set_memory_reaction`, reaction-aware push and activity copy. |
+| 2026-10-11 | Likes became emoji reactions (one per person, any emoji): merged reaction pill + smiley-plus button (no heart; `memory-like-<id>` replaced by `memory-react-<id>` / `memory-reactions-<id>`), tray + full picker, who-reacted sheet, `set_memory_reaction`, reaction-aware push and activity copy. |
 | 2026-08-21 | Likes are now household-visible: `memory_likes`' select policy was replaced with a household select policy mirroring comments (reversing the 2026-07-13 "liker identities are not exposed" decision). Scope is the read policy only — insert/delete stay self-only, and no liker-list UI was added to the engagement bar; the only place a liker's identity now surfaces is the new [Family activity](./family-activity.md) feed. |
 | 2026-10-06 | Android: dropped double keyboard compensation (`height` behavior) that hid the sheet behind the keyboard; measured-inset fallback, now a shared hook also used by the roster and report sheets |
 | 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |
