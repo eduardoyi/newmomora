@@ -37,6 +37,8 @@ function buildMemory(overrides: Partial<MemoryWithTags> = {}): MemoryWithTags {
     likeCount: 0,
     commentCount: 0,
     likedByMe: false,
+    myReaction: null,
+    topReactions: [],
     ...overrides,
   } as MemoryWithTags;
 }

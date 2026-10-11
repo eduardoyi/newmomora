@@ -97,6 +97,8 @@ function candidateResult(memoryId = 'memory-a', familyId = 'family-a') {
         likeCount: 0,
         commentCount: 0,
         likedByMe: false,
+        myReaction: null,
+        topReactions: [],
       }],
     },
     error: null,

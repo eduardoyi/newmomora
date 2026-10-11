@@ -65,7 +65,7 @@ const memories = Array.from({ length: 4 }, (_, index) => ({
   user_id: index === 3 ? 'blocked-user' : 'author-1',
   memory_type: index === 1 ? 'text_illustration' : 'text_only',
   illustration_generation_id: index === 1 ? 'generation-2' : null,
-  taggedMembers: [], mediaAssets: [], likeCount: 0, commentCount: 0, likedByMe: false,
+  taggedMembers: [], mediaAssets: [], likeCount: 0, commentCount: 0, likedByMe: false, myReaction: null, topReactions: [],
 }) as never);
 
 function packageResponse(

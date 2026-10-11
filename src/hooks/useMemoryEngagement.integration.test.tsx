@@ -13,7 +13,7 @@ import {
   deleteMemoryComment,
   fetchMemoryComments,
   notifyMemoryEngagementFireAndForget,
-  setMemoryLike,
+  setMemoryReaction,
 } from '@/services/engagement';
 import type { MemoriesPage, MemoryWithTags } from '@/services/memories';
 
@@ -33,13 +33,15 @@ jest.mock('@/services/engagement', () => ({
   createMemoryComment: jest.fn(),
   deleteMemoryComment: jest.fn(),
   fetchMemoryComments: jest.fn(),
+  fetchMemoryReactions: jest.fn(),
   notifyMemoryEngagementFireAndForget: jest.fn(),
-  setMemoryLike: jest.fn(),
+  setMemoryReaction: jest.fn(),
+  DEFAULT_REACTION: '❤️',
 }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
-const mockedSetMemoryLike = setMemoryLike as jest.MockedFunction<typeof setMemoryLike>;
+const mockedSetReaction = setMemoryReaction as jest.MockedFunction<typeof setMemoryReaction>;
 const mockedFetchComments = fetchMemoryComments as jest.MockedFunction<typeof fetchMemoryComments>;
 const mockedCreateComment = createMemoryComment as jest.MockedFunction<typeof createMemoryComment>;
 const mockedDeleteComment = deleteMemoryComment as jest.MockedFunction<typeof deleteMemoryComment>;
@@ -51,6 +53,8 @@ const memory = {
   id: 'memory-1',
   family_id: 'family-1',
   likedByMe: false,
+  myReaction: null,
+  topReactions: [],
   likeCount: 2,
   commentCount: 0,
   taggedMembers: [],
@@ -75,8 +79,8 @@ describe('useMemoryEngagement integration', () => {
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as never);
     mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'viewer' } as never);
     mockedFetchComments.mockResolvedValue({ data: [], error: null });
-    mockedSetMemoryLike.mockResolvedValue({
-      data: { liked: true, changed: true, likeCount: 3 },
+    mockedSetReaction.mockResolvedValue({
+      data: { reaction: '❤️', changed: true, inserted: true, likeCount: 3, topReactions: ['❤️'] },
       error: null,
     });
     mockedCreateComment.mockResolvedValue({
@@ -98,22 +102,114 @@ describe('useMemoryEngagement integration', () => {
     queryClient.clear();
   });
 
-  it('patches timeline and detail caches and notifies after a new like', async () => {
+  it('patches timeline and detail caches and notifies after a new heart', async () => {
     const { result } = renderHook(() => useMemoryEngagement(memory), { wrapper });
 
     await act(async () => {
       await result.current.toggleLike();
     });
 
+    expect(mockedSetReaction).toHaveBeenCalledWith(memory.id, '❤️');
     await waitFor(() => {
       const list = queryClient.getQueryData<InfiniteData<MemoriesPage>>(memoriesQueryKey('family-1'));
-      expect(list?.pages[0]?.memories[0]).toMatchObject({ likedByMe: true, likeCount: 3 });
+      expect(list?.pages[0]?.memories[0]).toMatchObject({
+        likedByMe: true,
+        likeCount: 3,
+        myReaction: '❤️',
+        topReactions: ['❤️'],
+      });
     });
     expect(queryClient.getQueryData(memoryDetailQueryKey('family-1', memory.id))).toMatchObject({
       likedByMe: true,
       likeCount: 3,
+      myReaction: '❤️',
     });
     expect(mockedNotify).toHaveBeenCalledWith(memory.id, 'like');
+  });
+
+  it('optimistically applies the reaction before the server answers', async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof setMemoryReaction>>) => void;
+    mockedSetReaction.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const { result } = renderHook(() => useMemoryEngagement(memory), { wrapper });
+
+    let pending!: Promise<unknown>;
+    act(() => {
+      pending = result.current.setReaction('😂');
+    });
+
+    await waitFor(() => {
+      const detail = queryClient.getQueryData<MemoryWithTags>(memoryDetailQueryKey('family-1', memory.id));
+      expect(detail).toMatchObject({ myReaction: '😂', likedByMe: true, likeCount: 3, topReactions: ['😂'] });
+    });
+
+    await act(async () => {
+      resolve({
+        data: { reaction: '😂', changed: true, inserted: true, likeCount: 3, topReactions: ['😂', '❤️'] },
+        error: null,
+      });
+      await pending;
+    });
+    expect(
+      queryClient.getQueryData<MemoryWithTags>(memoryDetailQueryKey('family-1', memory.id))?.topReactions,
+    ).toEqual(['😂', '❤️']);
+  });
+
+  it('changing a reaction keeps the count and does not notify', async () => {
+    const reacted = { ...memory, likedByMe: true, myReaction: '❤️', likeCount: 2, topReactions: ['❤️'] };
+    queryClient.setQueryData(memoryDetailQueryKey('family-1', memory.id), reacted);
+    mockedSetReaction.mockResolvedValue({
+      data: { reaction: '😮', changed: true, inserted: false, likeCount: 2, topReactions: ['😮'] },
+      error: null,
+    });
+    const { result } = renderHook(() => useMemoryEngagement(reacted), { wrapper });
+
+    await act(async () => {
+      await result.current.setReaction('😮');
+    });
+
+    expect(queryClient.getQueryData(memoryDetailQueryKey('family-1', memory.id))).toMatchObject({
+      myReaction: '😮',
+      likeCount: 2,
+    });
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it('toggleLike removes an existing reaction and decrements the count', async () => {
+    const reacted = { ...memory, likedByMe: true, myReaction: '😂', likeCount: 2, topReactions: ['😂'] };
+    queryClient.setQueryData(memoryDetailQueryKey('family-1', memory.id), reacted);
+    mockedSetReaction.mockResolvedValue({
+      data: { reaction: null, changed: true, inserted: false, likeCount: 1, topReactions: ['❤️'] },
+      error: null,
+    });
+    const { result } = renderHook(() => useMemoryEngagement(reacted), { wrapper });
+
+    await act(async () => {
+      await result.current.toggleLike();
+    });
+
+    expect(mockedSetReaction).toHaveBeenCalledWith(memory.id, null);
+    expect(queryClient.getQueryData(memoryDetailQueryKey('family-1', memory.id))).toMatchObject({
+      myReaction: null,
+      likedByMe: false,
+      likeCount: 1,
+    });
+    expect(mockedNotify).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the optimistic reaction on error', async () => {
+    mockedSetReaction.mockResolvedValue({ data: null, error: { message: 'boom' } });
+    const { result } = renderHook(() => useMemoryEngagement(memory), { wrapper });
+
+    await act(async () => {
+      await result.current.setReaction('😂').catch(() => {});
+    });
+
+    expect(queryClient.getQueryData(memoryDetailQueryKey('family-1', memory.id))).toMatchObject({
+      myReaction: null,
+      likedByMe: false,
+      likeCount: 2,
+    });
+    expect(mockedNotify).not.toHaveBeenCalled();
   });
 
   it('optimistically increments comment counts and replaces the temporary comment', async () => {

@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
 
 import { MemoryEngagementBar } from './memory-engagement-bar';
 import { useFamily } from '@/hooks/use-family';
@@ -10,8 +10,27 @@ jest.mock('@/hooks/use-family', () => ({ useFamily: jest.fn() }));
 jest.mock('@/hooks/useShareMemoryCard', () => ({ useShareMemoryCard: jest.fn() }));
 jest.mock('expo-haptics', () => ({
   impactAsync: jest.fn(() => Promise.resolve()),
-  ImpactFeedbackStyle: { Light: 'light' },
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' },
 }));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+}));
+// The sheet pulls in auth/profile hooks (supabase chain) and the picker the
+// whole emoji dataset; both are covered by their own tests / the E2E flow.
+jest.mock('@/components/memory-reactions-sheet', () => {
+  const { Text } = jest.requireActual('react-native');
+  return {
+    MemoryReactionsSheet: ({ visible }: { visible: boolean }) =>
+      visible ? <Text testID="mock-reactions-sheet">sheet</Text> : null,
+  };
+});
+jest.mock('@/components/reaction-emoji-picker', () => {
+  const { Pressable } = jest.requireActual('react-native');
+  return {
+    ReactionEmojiPicker: ({ open, onPick }: { open: boolean; onPick: (emoji: string) => void }) =>
+      open ? <Pressable onPress={() => onPick('🥰')} testID="mock-emoji-picker" /> : null,
+  };
+});
 
 const mockedUseMemoryEngagement = useMemoryEngagement as jest.MockedFunction<typeof useMemoryEngagement>;
 const mockedUseFamily = useFamily as jest.Mock;
@@ -20,8 +39,11 @@ const mockedUseShareMemoryCard = useShareMemoryCard as jest.Mock;
 function mockEngagement(overrides: Record<string, unknown> = {}) {
   mockedUseMemoryEngagement.mockReturnValue({
     likedByMe: false,
+    myReaction: null,
+    topReactions: [],
     likeCount: 0,
     commentCount: 0,
+    setReaction: jest.fn().mockResolvedValue(undefined),
     toggleLike: jest.fn().mockResolvedValue(undefined),
     isUpdatingLike: false,
     likeError: null,
@@ -93,6 +115,95 @@ describe('MemoryEngagementBar', () => {
     fireEvent.press(getByTestId('memory-comments-memory-1'));
     expect(toggleLike).toHaveBeenCalledTimes(1);
     expect(openComments).toHaveBeenCalledTimes(1);
+  });
+
+  describe('reactions', () => {
+    const measure = () => {
+      // View.prototype.measureInWindow isn't implemented by the RN jest mock.
+      const original = jest.requireActual('react-native').View.prototype;
+      original.measureInWindow = (callback: (x: number, y: number, w: number, h: number) => void) =>
+        callback(20, 400, 30, 36);
+    };
+
+    it('shows my emoji instead of the heart and a summary that opens the sheet', () => {
+      mockEngagement({
+        likedByMe: true,
+        myReaction: '😂',
+        topReactions: ['😂', '❤️'],
+        likeCount: 2,
+      });
+      const { getByTestId, getByText, queryByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+
+      expect(getByText('😂')).toBeTruthy();
+      expect(getByTestId('memory-like-memory-1').props.accessibilityLabel).toBe('Remove reaction 😂');
+      expect(getByText('😂❤️')).toBeTruthy();
+      expect(queryByTestId('mock-reactions-sheet')).toBeNull();
+      fireEvent.press(getByTestId('memory-reactions-memory-1'));
+      expect(getByTestId('mock-reactions-sheet')).toBeTruthy();
+    });
+
+    it('does not render the summary when there are no reactions', () => {
+      const { queryByTestId, getByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+      expect(queryByTestId('memory-reactions-memory-1')).toBeNull();
+      expect(getByTestId('memory-like-memory-1').props.accessibilityLabel).toBe('React to memory');
+    });
+
+    it('long-press opens the tray and picking an emoji sets it', () => {
+      measure();
+      const setReaction = jest.fn().mockResolvedValue(undefined);
+      mockEngagement({ setReaction });
+      const { getByTestId, queryByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+
+      expect(queryByTestId('reaction-tray')).toBeNull();
+      fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+
+      fireEvent.press(getByTestId('reaction-tray-😂'));
+      expect(setReaction).toHaveBeenCalledWith('😂');
+      expect(queryByTestId('reaction-tray')).toBeNull();
+    });
+
+    it('picking my current emoji from the tray removes it', () => {
+      measure();
+      const setReaction = jest.fn().mockResolvedValue(undefined);
+      mockEngagement({ setReaction, myReaction: '😂', likedByMe: true, likeCount: 1, topReactions: ['😂'] });
+      const { getByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+
+      fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+      fireEvent.press(getByTestId('reaction-tray-😂'));
+      expect(setReaction).toHaveBeenCalledWith(null);
+    });
+
+    it('the "+" button opens the full picker and its pick is applied', () => {
+      jest.useFakeTimers();
+      try {
+        measure();
+        const setReaction = jest.fn().mockResolvedValue(undefined);
+        mockEngagement({ setReaction });
+        const { getByTestId, queryByTestId } = render(
+          <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+        );
+
+        fireEvent(getByTestId('memory-like-memory-1'), 'longPress');
+        fireEvent.press(getByTestId('reaction-tray-more'));
+        expect(queryByTestId('reaction-tray')).toBeNull();
+        act(() => {
+          jest.advanceTimersByTime(300);
+        });
+        fireEvent.press(getByTestId('mock-emoji-picker'));
+        expect(setReaction).toHaveBeenCalledWith('🥰');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('share icon prop gating (Workstream S4)', () => {

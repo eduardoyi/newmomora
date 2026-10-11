@@ -59,6 +59,8 @@ export function artworkMemory(
     likeCount: 0,
     commentCount: 0,
     likedByMe: false,
+    myReaction: null,
+    topReactions: [],
     ...overrides,
   } as unknown as MemoryWithTags;
 }

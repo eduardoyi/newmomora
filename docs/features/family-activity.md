@@ -31,7 +31,7 @@ the bell shows there's something new since the viewer last opened it.
   suggestions are ready, a **Review** pill — see
   [Extension guide](#extension-guide) for why this row is not a real event.
 - **Row anatomy:** a sentence with the actor's name(s) in bold ("**Ana** added 3 memories," "**Grandma** and
-  **Luis** liked a memory"), a muted second line (the comment snippet for a
+  **Luis** reacted ❤️😂 to a memory"), a muted second line (the comment snippet for a
   comment row, otherwise a short excerpt of the memory), a timestamp, and — for
   memories — up to 3 stacked 44px thumbnails on the right (illustration first,
   then the cover asset's list-sized preview / video poster
@@ -205,7 +205,11 @@ their already newest-first order:
 2. **`memory_liked`:** rows on the *same memory* within a 24-hour window
    collapse into one group, even if not adjacent (an unrelated event can sit
    between two likes on the same memory and the group still forms) — tracked
-   by memory id, not list position.
+   by memory id, not list position. Copy (2026-10-11, emoji reactions): "**Grandma**
+   reacted 😂 to a memory" / "**A** and **B** reacted ❤️😂 to a memory", listing up
+   to 3 distinct emoji in event order from `reaction_emoji` (the actor's *current*
+   reaction, joined by the RPC; a reaction change is an UPDATE and never creates a
+   second event). With no emoji known the original "liked a memory" copy is used.
 3. Everything else (`memory_commented`, `member_joined`, `member_pending`,
    `film_ready`) is always 1:1. `film_ready` rows have a null actor, so they
    are skipped by the actor comparisons above and never join or split a
@@ -408,3 +412,4 @@ maestro test .maestro/flows/engagement/family-activity.yaml
 | 2026-08-23 | Continuous gallery-import sweep re-entry (docs/plans/gallery-import-continuous.md I4a): the bell's dot also lights for an unseen ready batch, and the sheet gains a non-persisted, non-grouped pinned row above the sections/empty state pointing at the review deck or progress screen. Not a new event kind — see Extension guide. |
 | 2026-09-30 | Year Film P2 backend: actor-less `film_ready` kind (`actor_id` nullable + `film_id`), `get_family_activity_v2` / `get_family_activity_unread_v2`, v1 RPCs exclude `film_ready`; `year_film_notifications_due` writes the event with the push. Client wiring is the next entry. |
 | 2026-09-30 | Year Film P2 client (Step 8): service calls the v2 RPCs; `FamilyActivityKind` + `film_ready`, nullable `actorId`, `film*` fields; "{title} is ready" copy; `FilmCover` thumbnail row; sheet `onOpenFilm` prop (wired by the timeline host); the bell's unread boolean now comes from `get_family_activity_unread_v2`. |
+| 2026-10-11 | `memory_liked` copy now reads "reacted <emoji> to a memory" using `reaction_emoji` from `get_family_activity_v2`; falls back to "liked" when no emoji. See [likes-and-comments.md](./likes-and-comments.md). |

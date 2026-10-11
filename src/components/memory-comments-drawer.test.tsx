@@ -66,6 +66,8 @@ describe('MemoryCommentsDrawer', () => {
     mockedUseUserProfile.mockReturnValue({ profile: { name: 'Sam' } } as never);
     mockedUseEngagement.mockReturnValue({
       likedByMe: false,
+      myReaction: null,
+      topReactions: [],
       likeCount: 0,
       commentCount: 1,
       toggleLike: jest.fn(),

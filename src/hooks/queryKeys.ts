@@ -22,6 +22,7 @@ export const familySuggestionsQueryKeyBase = 'family-suggestions' as const;
 export const familyMembershipLinksQueryKeyBase = 'family-membership-links' as const;
 export const familyInvitesQueryKeyBase = 'family-invites' as const;
 export const memoryCommentsQueryKeyBase = 'memory-comments' as const;
+export const memoryReactionsQueryKeyBase = 'memory-reactions' as const;
 export const familyActivityQueryKeyBase = 'family-activity' as const;
 export const familyActivityUnreadQueryKeyBase = 'family-activity-unread' as const;
 export const portraitVersionsQueryKeyBase = 'portrait-versions' as const;
@@ -155,6 +156,13 @@ export function memoryCommentsQueryKey(
   memoryId: string | undefined,
 ) {
   return [memoryCommentsQueryKeyBase, familyId, memoryId] as const;
+}
+
+export function memoryReactionsQueryKey(
+  familyId: string | null | undefined,
+  memoryId: string | undefined,
+) {
+  return [memoryReactionsQueryKeyBase, familyId, memoryId] as const;
 }
 
 export function galleryImportQueryKey(

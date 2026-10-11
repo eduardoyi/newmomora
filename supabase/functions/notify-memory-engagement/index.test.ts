@@ -144,7 +144,7 @@ Deno.test('comment notification validation requires an engagement id', () => {
   );
 });
 
-Deno.test('a viewer can send a generic like notification to the memory creator', async () => {
+Deno.test('a viewer can send a like notification without an emoji to the memory creator', async () => {
   const state = baseState();
   const client = createFakeClient(state);
   const calls = await withPushCapture(async () => {
@@ -158,6 +158,23 @@ Deno.test('a viewer can send a generic like notification to the memory creator',
 
   assertEquals(calls.length, 1);
   assertEquals(calls[0].body, 'Vera liked a memory');
+  assertEquals(calls[0].data, { route: 'memory', familyId: FAMILY_ID, memoryId: MEMORY_ID });
+});
+
+Deno.test('a reaction notification names the emoji and nothing else', async () => {
+  const state = baseState();
+  state.likes = [{ memory_id: MEMORY_ID, user_id: VIEWER_ID, emoji: '\u{1F602}' }];
+  const calls = await withPushCapture(async () => {
+    const response = await processNotifyMemoryEngagement(
+      createFakeClient(state) as never,
+      VIEWER_ID,
+      { memoryId: MEMORY_ID, kind: 'like' },
+    );
+    assertEquals(await response.json(), { sent: true });
+  });
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].body, 'Vera reacted \u{1F602} to a memory');
   assertEquals(calls[0].data, { route: 'memory', familyId: FAMILY_ID, memoryId: MEMORY_ID });
 });
 

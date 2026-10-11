@@ -429,6 +429,12 @@ create table public.memory_likes (
   memory_id uuid not null references public.memories on delete cascade,
   user_id uuid not null references auth.users on delete cascade,
   created_at timestamptz not null default now(),
+  -- Emoji reactions (20261015120000_memory_reactions.sql): a "like" is a
+  -- reaction row; existing rows backfill to the heart.
+  emoji text not null default '❤️'
+    constraint memory_likes_emoji_valid
+    check (char_length(emoji) between 1 and 16 and emoji !~ '[[:space:][:cntrl:]]'),
+  updated_at timestamptz not null default now(),
   primary key (memory_id, user_id)
 );
 
@@ -1634,7 +1640,9 @@ create policy "Users can insert own profile"
 
 -- Engagement (all checks resolve memory.family_id):
 -- memory_likes select/insert/delete = own row + active family membership;
--- aggregate counts/liked_by_me come from get_memory_engagement(uuid[]).
+-- aggregate counts/liked_by_me/my_reaction/top_reactions come from
+-- get_memory_engagement(uuid[]). There is no memory_likes UPDATE policy:
+-- changing a reaction goes through the security-definer set_memory_reaction.
 -- memory_comments select/insert = active family member (insert must be own);
 -- delete = own while active, or owner/manager of that specific family.
 -- There is no comment UPDATE policy: comments are immutable.
@@ -1645,7 +1653,8 @@ Engagement RPCs (migration `20260713200000_memory_engagement.sql`):
 ```sql
 get_memory_engagement(memory_ids uuid[])
   returns table (memory_id uuid, like_count bigint,
-                 comment_count bigint, liked_by_me boolean)
+                 comment_count bigint, liked_by_me boolean,
+                 my_reaction text, top_reactions text[])   -- last two: 20261015120000
 
 set_memory_like(target_memory_id uuid, should_like boolean)
   returns table (liked boolean, changed boolean, like_count bigint)
@@ -1656,6 +1665,43 @@ their own family-membership check. The batch aggregate returns only authorized
 memories and never exposes liker identities. `set_memory_like` is an atomic,
 idempotent set operation; `changed` is true only when a row was inserted or
 deleted, allowing notification delivery to ignore stale/repeated writes.
+
+**Emoji reactions (`20261015120000_memory_reactions.sql`).** A reaction is
+still one `memory_likes` row (one per person per memory); `memory_likes` gains
+`emoji text not null default '❤️'` (check `memory_likes_emoji_valid`: 1-16
+characters, no whitespace/control characters) and `updated_at`. Old app builds
+keep calling `set_memory_like` and reading `like_count`/`liked_by_me`
+unchanged: `should_like = true` on an existing row (any emoji) is a no-op, a
+new row gets the heart, `false` deletes. New RPCs (both `security definer`,
+`search_path = public`):
+
+```sql
+set_memory_reaction(target_memory_id uuid, reaction text)
+  returns table (my_reaction text, changed boolean, inserted boolean,
+                 like_count bigint, top_reactions text[])
+
+memory_top_reactions(target_memory_id uuid) returns text[]  -- internal
+```
+
+`set_memory_reaction` carries the same guards as `set_memory_like`
+(unauthenticated/anonymous -> `42501`, unknown memory -> `P0002`, non-member
+-> `42501`; `billing_engagement_allowed` -> `P0001`, checked only when
+`reaction is not null`). `reaction = null` removes the caller's row. Otherwise
+the value is trimmed and validated with the constraint's rule (`22023
+Invalid reaction` on failure) and upserted; the trimmed emoji is stored.
+`my_reaction` is the caller's current emoji (null after removal), `inserted`
+is true only when a new row was created, `changed` when a row was inserted,
+updated to a different emoji, or deleted. (The OUT column is `my_reaction`,
+not `reaction`, because Postgres forbids an OUT column sharing an input
+parameter's name.) A change is an UPDATE, so the insert-only
+`trg_activity_memory_liked` does not fire again: one `memory_liked` activity
+event per person per memory regardless of changes.
+`memory_top_reactions` returns up to 3 distinct emojis ordered by count desc,
+then most recent `max(updated_at)` desc; it is revoked from every client role
+and called only from the definer RPCs. `workflow-memory-book-bridge` still
+reads `memory_likes (memory_id, user_id)` rows as the best-of signal and is
+intentionally unchanged. The who-reacted list reads `memory_likes` directly
+(`user_id, emoji, updated_at`) under the household select policy.
 
 **Looking Back package access (2026-08-08):**
 
@@ -1783,6 +1829,12 @@ deleted, allowing notification delivery to ignore stale/repeated writes.
   `film_id, film_kind, film_member_id, film_age_year, film_scope_start`
   (ids and dates only — no content, no title). The retention prune has no
   actor predicate and is unchanged.
+- **Reactions (`20261015120000_memory_reactions.sql`).** Both
+  `get_family_activity` and `get_family_activity_v2` (the app calls v2) append
+  a trailing output column `reaction_emoji text`: a left join to
+  `memory_likes` on `e.kind = 'memory_liked'`, `memory_id`, and
+  `like_user_id = actor`, so the feed shows the person's *current* emoji
+  (null for non-reaction events). Everything else is unchanged.
 - `year_film_notifications_due` (service role) inserts exactly one
   `film_ready` event per notified film **in the same statement** that stamps
   `notified_at` (a CTE over `update … returning`), so the drawer entry exists
@@ -4328,9 +4380,9 @@ full lifecycle, RPC list, and Edge Function call order.
 ### 5.7 Like and comment on a memory
 
 ```
-1. Timeline/detail query batches get_memory_engagement(memoryIds) for counts + liked_by_me
-2. Like: optimistically patch family-scoped list/detail caches → set_memory_like RPC
-3. Reconcile to exact returned state; if liked && changed, fire-and-forget notify-memory-engagement
+1. Timeline/detail query batches get_memory_engagement(memoryIds) for counts + liked_by_me + my_reaction + top_reactions
+2. React: optimistically patch family-scoped list/detail caches → set_memory_reaction RPC (null removes)
+3. Reconcile to exact returned state; if inserted, fire-and-forget notify-memory-engagement (kind 'like'; push body "<name> reacted <emoji> to a memory")
 4. Comment: open detail drawer → fetch memory_comments oldest-first
 5. Add/delete: optimistically patch drawer + comment count → PostgREST write under RLS
 6. After a successful add, fire-and-forget notify-memory-engagement with the comment id

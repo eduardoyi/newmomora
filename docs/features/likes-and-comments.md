@@ -1,8 +1,8 @@
-# Feature: Likes & comments
+# Feature: Reactions & comments
 
 **Status:** `done`
-**Last updated:** 2026-08-21
-**PRD reference:** §6.8 Likes & Comments
+**Last updated:** 2026-10-11
+**PRD reference:** §6.8 Reactions & Comments
 
 ## Overview
 
@@ -17,6 +17,18 @@ including viewer, may participate.
 
 ## User-facing behavior
 
+- **Emoji reactions (2026-10-11).** Likes became WhatsApp-style reactions: one
+  reaction per person per memory, any emoji. Tap the button = toggle ❤️ (or
+  remove whatever you reacted with). Long-press (~300ms, cancelled by
+  scrolling) opens `ReactionTray` (❤️ 😂 😮 😢 🙏 👍 plus "+" for the full
+  `rn-emoji-keyboard` picker, pure JS so it ships over OTA). Picking your
+  current emoji removes it. When you've reacted the button shows your emoji
+  instead of the outline heart. Next to it a summary (top ≤3 emoji + total)
+  opens `MemoryReactionsSheet`, listing every member's emoji with filter chips;
+  your own row says "You / Tap to remove". The paragraphs below that mention
+  "heart"/"like" describe the same button; "like" is kept in code names
+  (`likeCount`, `likedByMe`, `memory_likes`) for compatibility.
+
 - Timeline and memory detail show an outline heart and comment icon below the
   memory content. A selected heart fills pink, pops briefly, and gives light
   haptic feedback.
@@ -26,14 +38,10 @@ including viewer, may participate.
   rules, and permission matrix. It's a separate opt-in prop
   (`enableShare`) on `MemoryEngagementBar`, not a fourth engagement metric —
   it has no count and isn't part of the like/comment data model below.
-- Counts are passive and appear only when greater than zero. There is still
-  no liker-list UI on the engagement bar or memory detail — the only place a
-  liker's identity surfaces client-side is the [Family activity](./family-activity.md)
-  feed ("**Grandma** liked a memory"), which is a household-visible feed by
-  design. The underlying read policy is household-wide (see
-  [Data model](#data-model) below), so a liker list could be added to the
-  engagement bar later without a further RLS change — that UI simply doesn't
-  exist yet.
+- Counts are passive and appear only when greater than zero. Reactor identity
+  surfaces in the who-reacted sheet (read directly from `memory_likes` under the
+  household select policy) and in the [Family activity](./family-activity.md)
+  feed ("**Grandma** reacted 😂 to a memory").
 - Timeline comment taps navigate to memory detail with `?comments=1`; detail
   comment taps open an 80%-height bottom drawer directly. A deliberate
   downward drag on its handle/header dismisses it; short, slow drags spring
@@ -77,7 +85,7 @@ fire-and-forget and never rolls back engagement.
 
 | Table / field | Role in this feature |
 |----------------|----------------------|
-| `memory_likes` | `(memory_id, user_id)` primary key; one like per account; both FKs cascade on memory/account hard delete |
+| `memory_likes` | `(memory_id, user_id)` primary key; one reaction per account with `emoji text not null default '❤️'` (1-16 chars, no whitespace/control) and `updated_at`; both FKs cascade on memory/account hard delete |
 | `memory_comments` | Immutable plain-text comments with `id`, `memory_id`, `user_id`, `content`, `created_at`; DB enforces trimmed length 1–1000 |
 | `user_profiles.notify_engagement` | Global per-account engagement push preference, `not null default true` |
 | `family_activity_log` | Service-only notification attempt/debounce rows; kind contains memory or comment identity |
@@ -101,13 +109,15 @@ engagement belonging to it.
 
 | Function / endpoint | Input | Output | Auth |
 |---------------------|-------|--------|------|
-| `get_memory_engagement` RPC | `memory_ids uuid[]` | rows of `memory_id`, `like_count`, `comment_count`, `liked_by_me` | JWT; active family member, only authorized memories returned |
-| `set_memory_like` RPC | `target_memory_id`, `should_like` | `liked`, `changed`, exact `like_count` | JWT; active family member |
+| `get_memory_engagement` RPC | `memory_ids uuid[]` | rows of `memory_id`, `like_count`, `comment_count`, `liked_by_me`, `my_reaction`, `top_reactions` | JWT; active family member, only authorized memories returned |
+| `set_memory_reaction` RPC | `target_memory_id`, `reaction` (null removes) | `my_reaction`, `changed`, `inserted`, `like_count`, `top_reactions` | JWT; active family member; billing-gated when setting |
+| `set_memory_like` RPC | `target_memory_id`, `should_like` | `liked`, `changed`, exact `like_count` | Legacy, for old app builds; the UI no longer calls it |
 | `memory_comments` PostgREST | select/insert/delete | comment rows | JWT + RLS described above |
 | `notify-memory-engagement` | `{ memoryId, kind, engagementId? }` | `{ sent, reason? }` | JWT; active member and verified caller-owned engagement row |
 
-`set_memory_like` is an idempotent set operation. Its `changed` flag prevents a
-stale/repeated request from asking for another notification. The Edge Function
+`set_memory_reaction` is an idempotent set operation. Only its `inserted` flag
+(a brand-new reaction row) triggers a notification (`kind: 'like'` on the wire,
+body "reacted <emoji> to a memory"); changing or removing a reaction is silent. The Edge Function
 re-verifies the stored like/comment, recipient membership, creator preference,
 and no-self rule before logging an attempt and sending. Likes debounce for 24
 hours per actor/memory so a quick unlike/re-like does not repeat the push;
@@ -120,7 +130,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 | Layer | Files | Responsibility |
 |-------|-------|----------------|
 | Routes | `app/(app)/(tabs)/timeline.tsx`, `app/(app)/memory/[id]/index.tsx`, `app/(app)/(tabs)/settings.tsx` | Entry points, focus refresh, drawer deep link, preference UI |
-| Hooks | `src/hooks/useMemoryEngagement.ts`, `src/hooks/queryKeys.ts` | Queries, optimistic mutations, cache reconciliation |
+| Hooks | `src/hooks/useMemoryEngagement.ts` (`setReaction`, `toggleLike`, reactions list), `src/hooks/queryKeys.ts` (`memoryReactionsQueryKey`) | Queries, optimistic mutations, cache reconciliation |
 | Services | `src/services/engagement.ts`, `src/services/memories.ts`, `src/services/user-profile.ts` | Validation, PostgREST/RPC calls, batched aggregates, preference persistence |
 | Components | `src/components/memory-engagement-bar.tsx`, `memory-comments-drawer.tsx`, `memory-card.tsx` | Instagram-style actions, drawer/composer, timeline placement |
 | Utils | `src/utils/engagement.ts`, `src/lib/routes.ts` | Timestamp formatting and comment deep-link route |
@@ -137,6 +147,10 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 ## Extension guide
 
 **Safe to extend**
+
+- Quick-tray emoji: edit `QUICK_REACTIONS` in `src/services/engagement.ts`.
+- Validation lives in `isValidReaction` and must stay in lockstep with the DB
+  constraint `memory_likes_emoji_valid`.
 
 - Additional presentation around existing counts or timestamp formatting.
 - A comment character counter that keeps the same 1000-character backend cap.
@@ -155,6 +169,12 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 
 ## Constraints & gotchas
 
+- `MemoryWithTags` keeps `likedByMe`/`likeCount` (other readers, Memory Book
+  best-of) alongside `myReaction`/`topReactions`; `likedByMe === (myReaction != null)`.
+- The bar is rendered once per timeline card: the sheet and picker mount lazily
+  on first open, and the tray reads safe-area insets only while visible.
+- The emoji picker's search field is a `TextInput` inside the library's own
+  Modal; verify keyboard behavior on Android/iOS when upgrading it.
 - Never render counts with `{count && ...}`; zero is intentionally hidden via
   `count > 0`.
 - Comment text is user content: never include it in push copy, analytics, or
@@ -195,14 +215,15 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 | File | Covers |
 |------|--------|
 | `src/utils/engagement.test.ts` | Relative/calendar timestamp boundaries |
-| `src/components/memory-engagement-bar.test.tsx` | Hidden zero counts, selected state, action wiring (share-icon prop gating/visibility/tap wiring documented in [memory-sharing.md](./memory-sharing.md), same file) |
+| `src/components/reaction-tray.test.tsx` / `memory-reactions-sheet.test.tsx` | Tray positioning/selection, reactors list, filters, remove-own, states |
+| `src/components/memory-engagement-bar.test.tsx` | Hidden zero counts, reaction display, tray/picker wiring, action wiring (share-icon prop gating/visibility/tap wiring documented in [memory-sharing.md](./memory-sharing.md), same file) |
 | `src/components/memory-comments-drawer.test.tsx` | Drawer/composer behavior, keyboard avoidance, handle drag dismissal/snapback, posting and moderation affordances |
 
 ### Integration tests
 
 | File | Scenarios |
 |------|-----------|
-| `src/services/engagement.integration.test.ts` | Validation, like RPC mapping, chronological comments, insert/delete/notification calls |
+| `src/services/engagement.integration.test.ts` | Validation, reaction + legacy like RPC mapping, reactor list, chronological comments, insert/delete/notification calls |
 | `src/hooks/useMemoryEngagement.integration.test.tsx` | Optimistic timeline/detail caches, exact reconciliation, rollback, notification trigger |
 | `src/services/memories.integration.test.ts` | Aggregate mapping and 100-id batch behavior |
 | `src/screen-tests/settings.notifications.test.tsx` | Combined preference rendering, persistence, and permission registration |
@@ -211,7 +232,7 @@ See TECH_SPEC §2 and §4.14 for canonical contracts.
 
 | Flow | Scenario |
 |------|----------|
-| `.maestro/flows/engagement/like-and-comment.yaml` | Create a memory, like it from Timeline, open comments via detail, post a comment, and pull the drawer down to dismiss |
+| `.maestro/flows/engagement/like-and-comment.yaml` | Create a memory, react ❤️ then 😂 via long-press tray, check the who-reacted sheet, open comments via detail, post a comment, and pull the drawer down to dismiss |
 
 ### Edge Function tests (Deno)
 
@@ -226,6 +247,8 @@ npm test -- --runInBand \
   src/services/engagement.integration.test.ts \
   src/hooks/useMemoryEngagement.integration.test.tsx \
   src/components/memory-engagement-bar.test.tsx \
+  src/components/reaction-tray.test.tsx \
+  src/components/memory-reactions-sheet.test.tsx \
   src/components/memory-comments-drawer.test.tsx \
   src/utils/engagement.test.ts
 npx deno test --allow-env --allow-net --allow-read=supabase/functions \
@@ -237,6 +260,7 @@ maestro test .maestro/flows/engagement/like-and-comment.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-10-11 | Likes became emoji reactions (one per person, any emoji): tray + full picker, who-reacted sheet, `set_memory_reaction`, reaction-aware push and activity copy. |
 | 2026-08-21 | Likes are now household-visible: `memory_likes`' select policy was replaced with a household select policy mirroring comments (reversing the 2026-07-13 "liker identities are not exposed" decision). Scope is the read policy only — insert/delete stay self-only, and no liker-list UI was added to the engagement bar; the only place a liker's identity now surfaces is the new [Family activity](./family-activity.md) feed. |
 | 2026-10-06 | Android: dropped double keyboard compensation (`height` behavior) that hid the sheet behind the keyboard; measured-inset fallback, now a shared hook also used by the roster and report sheets |
 | 2026-07-29 | Added reliable handle/header pull-down dismissal with Android modal gesture support and snapback coverage |

@@ -1,8 +1,11 @@
 import * as Haptics from 'expo-haptics';
 import { Heart, MessageCircle, Send } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { MemoryReactionsSheet } from '@/components/memory-reactions-sheet';
+import { ReactionEmojiPicker } from '@/components/reaction-emoji-picker';
+import { ReactionTray, type ReactionTrayAnchor } from '@/components/reaction-tray';
 import { colors, fonts } from '@/constants/theme';
 import { useFamily } from '@/hooks/use-family';
 import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
@@ -50,22 +53,78 @@ export function MemoryEngagementBar({
   const { role, family } = useFamily();
   const { shareMemoryCard, isSharing } = useShareMemoryCard();
   const [scale] = useState(() => new Animated.Value(1));
-  const previousLiked = useRef(engagement.likedByMe);
+  const previousReaction = useRef(engagement.myReaction);
+  const reactionButtonRef = useRef<View>(null);
+  const [trayAnchor, setTrayAnchor] = useState<ReactionTrayAnchor | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMounted, setPickerMounted] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetMounted, setSheetMounted] = useState(false);
+  const pickerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (engagement.likedByMe && !previousLiked.current) {
+    // Pop whenever a reaction is set or changed (not on removal).
+    if (engagement.myReaction && engagement.myReaction !== previousReaction.current) {
       scale.setValue(1);
       Animated.sequence([
         Animated.timing(scale, { toValue: 1.32, duration: 120, useNativeDriver: true }),
         Animated.spring(scale, { toValue: 1, friction: 4, tension: 180, useNativeDriver: true }),
       ]).start();
     }
-    previousLiked.current = engagement.likedByMe;
-  }, [engagement.likedByMe, scale]);
+    previousReaction.current = engagement.myReaction;
+  }, [engagement.myReaction, scale]);
+
+  useEffect(
+    () => () => {
+      if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+    },
+    [],
+  );
 
   const handleLike = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     void engagement.toggleLike().catch(() => {});
+  };
+
+  const handleLongPress = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    const node = reactionButtonRef.current;
+    if (!node) return;
+    node.measureInWindow((x, y, width, height) => {
+      setTrayAnchor({ x, y, width, height });
+    });
+  };
+
+  const closeTray = useCallback(() => setTrayAnchor(null), []);
+
+  // Picking the caller's current emoji removes it (WhatsApp-style toggle).
+  const applyReaction = (emoji: string) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    void engagement.setReaction(emoji === engagement.myReaction ? null : emoji).catch(() => {});
+  };
+
+  const handleTraySelect = (emoji: string) => {
+    closeTray();
+    applyReaction(emoji);
+  };
+
+  const handleOpenPicker = () => {
+    closeTray();
+    setPickerMounted(true);
+    // Let the tray modal finish dismissing first -- iOS drops a Modal that
+    // is presented while another is still animating out.
+    if (pickerTimerRef.current) clearTimeout(pickerTimerRef.current);
+    pickerTimerRef.current = setTimeout(() => setPickerOpen(true), 250);
+  };
+
+  const handlePickerPick = (emoji: string) => {
+    setPickerOpen(false);
+    applyReaction(emoji);
+  };
+
+  const openReactionsSheet = () => {
+    setSheetMounted(true);
+    setSheetOpen(true);
   };
 
   // Visibility (S4): a viewer is blocked ONLY when the family has
@@ -86,32 +145,47 @@ export function MemoryEngagementBar({
   return (
     <View style={styles.row}>
       <Pressable
-        accessibilityLabel={engagement.likedByMe ? 'Unlike memory' : 'Like memory'}
+        accessibilityHint="Touch and hold for more reactions"
+        accessibilityLabel={
+          engagement.myReaction ? `Remove reaction ${engagement.myReaction}` : 'React to memory'
+        }
         accessibilityRole="button"
         accessibilityState={{ selected: engagement.likedByMe, busy: engagement.isUpdatingLike }}
+        delayLongPress={300}
+        onLongPress={handleLongPress}
         onPress={handleLike}
+        ref={reactionButtonRef}
         style={({ pressed }) => [styles.action, pressed && styles.pressed]}
         testID={`memory-like-${memory.id}`}
       >
         <Animated.View style={{ transform: [{ scale }] }}>
-          <Heart
-            color={engagement.likedByMe ? colors.primary : colors.ink2}
-            fill={engagement.likedByMe ? colors.primary : 'transparent'}
-            size={iconSize}
-            strokeWidth={1.9}
-          />
+          {engagement.myReaction ? (
+            <Text style={[styles.reactionEmoji, { fontSize: iconSize - 2, lineHeight: iconSize + 2 }]}>
+              {engagement.myReaction}
+            </Text>
+          ) : (
+            <Heart color={colors.ink2} fill="transparent" size={iconSize} strokeWidth={1.9} />
+          )}
         </Animated.View>
-        {engagement.likeCount > 0 ? (
-          <Text
-            style={[
-              styles.count,
-              engagement.likedByMe && styles.likedCount,
-            ]}
-          >
+      </Pressable>
+
+      {engagement.likeCount > 0 ? (
+        <Pressable
+          accessibilityLabel={`${engagement.likeCount} ${engagement.likeCount === 1 ? 'reaction' : 'reactions'}, see who reacted`}
+          accessibilityRole="button"
+          hitSlop={6}
+          onPress={openReactionsSheet}
+          style={({ pressed }) => [styles.action, styles.summary, pressed && styles.pressed]}
+          testID={`memory-reactions-${memory.id}`}
+        >
+          {engagement.topReactions.length > 0 ? (
+            <Text style={styles.summaryEmoji}>{engagement.topReactions.join('')}</Text>
+          ) : null}
+          <Text style={[styles.count, engagement.likedByMe && styles.likedCount]}>
             {engagement.likeCount}
           </Text>
-        ) : null}
-      </Pressable>
+        </Pressable>
+      ) : null}
 
       <Pressable
         accessibilityLabel="Open comments"
@@ -143,6 +217,29 @@ export function MemoryEngagementBar({
           )}
         </Pressable>
       ) : null}
+
+      <ReactionTray
+        anchor={trayAnchor}
+        currentEmoji={engagement.myReaction}
+        onClose={closeTray}
+        onOpenPicker={handleOpenPicker}
+        onSelect={handleTraySelect}
+        visible={trayAnchor !== null}
+      />
+      {pickerMounted ? (
+        <ReactionEmojiPicker
+          onClose={() => setPickerOpen(false)}
+          onPick={handlePickerPick}
+          open={pickerOpen}
+        />
+      ) : null}
+      {sheetMounted ? (
+        <MemoryReactionsSheet
+          memory={memory}
+          onClose={() => setSheetOpen(false)}
+          visible={sheetOpen}
+        />
+      ) : null}
     </View>
   );
 }
@@ -161,6 +258,16 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.65,
+  },
+  reactionEmoji: {
+    textAlign: 'center',
+  },
+  summary: {
+    // Sits right next to the reaction button, tighter than the 20pt action gap.
+    marginLeft: -12,
+  },
+  summaryEmoji: {
+    fontSize: 14,
   },
   count: {
     color: colors.ink2,

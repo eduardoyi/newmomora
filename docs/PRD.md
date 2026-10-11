@@ -499,17 +499,17 @@ sequenceDiagram
 
 ---
 
-### 6.8 Likes & Comments
+### 6.8 Reactions & Comments
 
 **User stories**
 
-- As any household member, including a viewer, I can like and comment on a memory so I can respond without changing the journal entry.
+- As any household member, including a viewer, I can react to (any emoji, one per person) and comment on a memory so I can respond without changing the journal entry.
 - As a memory creator, I can receive an optional engagement notification and open the relevant memory directly.
 
 **Acceptance criteria**
 
-- Timeline and memory detail show outline heart and comment actions; tapping the heart fills it with a lightweight animation and haptic feedback.
-- Non-zero like/comment counts appear beside their icons; zero counts stay hidden and counts are not tappable liker lists.
+- Timeline and memory detail show a heart (reaction) and comment actions; tapping the heart reacts ❤️ (tap again removes it) with a lightweight animation and haptic feedback. Long-pressing opens a tray of six quick emoji plus a full emoji picker; one reaction per person, and picking a different emoji replaces it.
+- Non-zero like/comment counts appear beside their icons; zero counts stay hidden. Tapping the reaction summary (top emoji + count) opens a who-reacted sheet listing each member's emoji.
 - Comment from Timeline opens memory detail and its bottom drawer. Comment from detail opens the same drawer in place.
 - The drawer lists comments oldest-to-newest with household account name and compact relative timestamp, and keeps its plain-text composer visible above the keyboard.
 - Comments are 1–1000 trimmed characters. There are no replies, mentions, attachments, or edits.

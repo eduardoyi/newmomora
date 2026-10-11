@@ -103,7 +103,7 @@ const mockRouter = require('expo-router').router as { push: jest.Mock };
 
 const timelineMemory = {
   id: 'recent-memory', content: 'Recent', memory_date: '2026-08-08', memory_type: 'text_only', emotion: 'joy',
-  taggedMembers: [], mediaAssets: [], likeCount: 0, commentCount: 0, likedByMe: false,
+  taggedMembers: [], mediaAssets: [], likeCount: 0, commentCount: 0, likedByMe: false, myReaction: null, topReactions: [],
 };
 const lookingBackPackage = {
   id: 'package-1', familyId: 'family-a', dailySetId: 'set-a', packageType: 'archive_mix',

@@ -88,6 +88,8 @@ const createMemory = (memberCount: number) => ({
   likeCount: 0,
   commentCount: 0,
   likedByMe: false,
+  myReaction: null,
+  topReactions: [],
 }) as MemoryWithTags;
 
 describe('MemoryCard media (Workstream C6)', () => {

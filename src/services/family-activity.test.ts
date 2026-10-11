@@ -79,6 +79,11 @@ function makeEvent(overrides: Partial<FamilyActivityEvent> = {}): FamilyActivity
 }
 
 describe('mapFamilyActivityRow', () => {
+  it('maps reaction_emoji to reactionEmoji (null when absent)', () => {
+    expect(mapFamilyActivityRow(makeRow({ kind: 'memory_liked', reaction_emoji: '😂' })).reactionEmoji).toBe('😂');
+    expect(mapFamilyActivityRow(makeRow()).reactionEmoji).toBeNull();
+  });
+
   it('maps snake_case RPC columns to a camelCase event', () => {
     const event = mapFamilyActivityRow(makeRow());
 
@@ -107,6 +112,7 @@ describe('mapFamilyActivityRow', () => {
       filmMemberId: null,
       filmAgeYear: null,
       filmScopeStart: null,
+      reactionEmoji: null,
     });
   });
 
@@ -444,6 +450,40 @@ describe('buildFamilyActivityCopy', () => {
     ];
     const copy = buildFamilyActivityCopy(group('memory_liked', events));
     expect(familyActivityCopyPlainText(copy)).toBe('Grandma, Luis and 1 other liked a memory');
+  });
+
+  it('renders a single reaction as "reacted <emoji> to a memory"', () => {
+    const copy = buildFamilyActivityCopy(
+      group('memory_liked', [
+        makeEvent({ actorName: 'Grandma', kind: 'memory_liked', reactionEmoji: '😂' }),
+      ]),
+    );
+    expect(familyActivityCopyPlainText(copy)).toBe('Grandma reacted 😂 to a memory');
+  });
+
+  it('renders two reactors with their distinct emoji, ignoring events without one', () => {
+    const events = [
+      makeEvent({ id: 'e3', actorId: 'actor-3', actorName: 'Zed', kind: 'memory_liked', reactionEmoji: null }),
+      makeEvent({ id: 'e2', actorId: 'actor-2', actorName: 'Luis', kind: 'memory_liked', reactionEmoji: '😂' }),
+      makeEvent({ id: 'e1', actorId: 'actor-1', actorName: 'Ana', kind: 'memory_liked', reactionEmoji: '❤️' }),
+      makeEvent({ id: 'e0', actorId: 'actor-4', actorName: 'Kim', kind: 'memory_liked', reactionEmoji: '😂' }),
+    ];
+    const copy = buildFamilyActivityCopy(group('memory_liked', events));
+    expect(familyActivityCopyPlainText(copy)).toBe('Zed, Luis and 2 others reacted 😂❤️ to a memory');
+
+    const two = buildFamilyActivityCopy(group('memory_liked', events.slice(1, 3)));
+    expect(familyActivityCopyPlainText(two)).toBe('Luis and Ana reacted 😂❤️ to a memory');
+  });
+
+  it('caps the emoji summary at three distinct emoji', () => {
+    const emojis = ['❤️', '😂', '😮', '😢'];
+    const events = emojis.map((emoji, index) =>
+      makeEvent({ id: `e${index}`, actorId: `a${index}`, actorName: `P${index}`, kind: 'memory_liked', reactionEmoji: emoji }),
+    );
+    const copy = buildFamilyActivityCopy(group('memory_liked', events.slice(0, 2)));
+    expect(familyActivityCopyPlainText(copy)).toBe('P0 and P1 reacted ❤️😂 to a memory');
+    const many = buildFamilyActivityCopy(group('memory_liked', events));
+    expect(familyActivityCopyPlainText(many)).toBe('P0, P1 and 2 others reacted ❤️😂😮 to a memory');
   });
 
   it('renders member_joined as "joined the family"', () => {

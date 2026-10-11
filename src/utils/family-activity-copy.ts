@@ -100,11 +100,20 @@ export function buildFamilyActivityCopy(
 
     case 'memory_liked': {
       const names = uniqueActorNames(group.events);
+      // Distinct emoji in event order (up to 3). With none known (older
+      // server rows) keep the original "liked" copy.
+      const emojis: string[] = [];
+      for (const event of group.events) {
+        const emoji = event.reactionEmoji;
+        if (emoji && !emojis.includes(emoji)) emojis.push(emoji);
+        if (emojis.length === 3) break;
+      }
+      const tail = emojis.length > 0 ? `reacted ${emojis.join('')} to a memory` : 'liked a memory';
       if (names.length === 1) {
         return {
           segments: [
             { text: names[0], bold: true },
-            { text: ' liked a memory' },
+            { text: ` ${tail}` },
           ],
         };
       }
@@ -114,7 +123,7 @@ export function buildFamilyActivityCopy(
             { text: names[0], bold: true },
             { text: ' and ' },
             { text: names[1], bold: true },
-            { text: ' liked a memory' },
+            { text: ` ${tail}` },
           ],
         };
       }
@@ -124,7 +133,7 @@ export function buildFamilyActivityCopy(
           { text: names[0], bold: true },
           { text: ', ' },
           { text: names[1], bold: true },
-          { text: ` and ${others} other${others === 1 ? '' : 's'} liked a memory` },
+          { text: ` and ${others} other${others === 1 ? '' : 's'} ${tail}` },
         ],
       };
     }

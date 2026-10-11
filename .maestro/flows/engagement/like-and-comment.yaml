@@ -1,9 +1,40 @@
 appId: com.memora.app
 ---
 - runFlow: ../memories/create-memory.yaml
+# Tap = heart reaction (toggle); the reactions summary appears with a count.
 - tapOn:
     id: "memory-like-.*"
-- assertVisible: "Unlike memory"
+- assertVisible: "Remove reaction ❤️"
+- assertVisible:
+    id: "memory-reactions-.*"
+# Long-press opens the tray; picking a different emoji replaces the reaction.
+- longPressOn:
+    id: "memory-like-.*"
+- extendedWaitUntil:
+    visible:
+      id: reaction-tray
+    timeout: 5000
+- tapOn:
+    id: "reaction-tray-😂"
+- extendedWaitUntil:
+    visible: "Remove reaction 😂"
+    timeout: 5000
+# The summary opens the who-reacted sheet with my row.
+- tapOn:
+    id: "memory-reactions-.*"
+- extendedWaitUntil:
+    visible:
+      id: reactions-sheet
+    timeout: 5000
+- assertVisible: "You"
+- assertVisible: "Tap to remove"
+- assertVisible: "😂"
+- tapOn:
+    id: reactions-sheet-close
+- extendedWaitUntil:
+    notVisible:
+      id: reactions-sheet
+    timeout: 5000
 - tapOn:
     id: "memory-comments-.*"
 - extendedWaitUntil:

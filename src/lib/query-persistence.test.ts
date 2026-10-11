@@ -210,6 +210,8 @@ describe('serializePersistedClient', () => {
           likeCount: 999,
           commentCount: 999,
           likedByMe: true,
+          myReaction: null,
+          topReactions: [],
           isIllustrationHidden: false,
         };
       }),

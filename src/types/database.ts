@@ -3326,17 +3326,23 @@ export type Database = {
       memory_likes: {
         Row: {
           created_at: string
+          emoji: string
           memory_id: string
+          updated_at: string
           user_id: string
         }
         Insert: {
           created_at?: string
+          emoji?: string
           memory_id: string
+          updated_at?: string
           user_id: string
         }
         Update: {
           created_at?: string
+          emoji?: string
           memory_id?: string
+          updated_at?: string
           user_id?: string
         }
         Relationships: [
@@ -5072,6 +5078,7 @@ export type Database = {
           memory_media_key: string
           memory_media_preview_key: string
           memory_type: string
+          reaction_emoji: string
         }[]
       }
       get_family_activity_unread: {
@@ -5109,6 +5116,7 @@ export type Database = {
           memory_media_key: string
           memory_media_preview_key: string
           memory_type: string
+          reaction_emoji: string
         }[]
       }
       get_family_billing_status: {
@@ -5190,6 +5198,8 @@ export type Database = {
           like_count: number
           liked_by_me: boolean
           memory_id: string
+          my_reaction: string
+          top_reactions: string[]
         }[]
       }
       get_my_ai_usage_limit_notices: {
@@ -5398,6 +5408,10 @@ export type Database = {
       memory_tags_all_members: {
         Args: { p_member_ids: string[]; p_memory_id: string }
         Returns: boolean
+      }
+      memory_top_reactions: {
+        Args: { target_memory_id: string }
+        Returns: string[]
       }
       owner_has_billing_access: {
         Args: { p_now?: string; p_owner_user_id: string }
@@ -5968,6 +5982,16 @@ export type Database = {
           changed: boolean
           like_count: number
           liked: boolean
+        }[]
+      }
+      set_memory_reaction: {
+        Args: { reaction: string; target_memory_id: string }
+        Returns: {
+          changed: boolean
+          inserted: boolean
+          like_count: number
+          my_reaction: string
+          top_reactions: string[]
         }[]
       }
       set_my_family_member: {

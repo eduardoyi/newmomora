@@ -2,7 +2,10 @@ import {
   createMemoryComment,
   deleteMemoryComment,
   fetchMemoryComments,
+  fetchMemoryReactions,
+  isValidReaction,
   setMemoryLike,
+  setMemoryReaction,
   validateCommentContent,
 } from './engagement';
 
@@ -49,6 +52,88 @@ describe('memory engagement service', () => {
       should_like: true,
     });
     expect(result.data).toEqual({ liked: true, changed: true, likeCount: 4 });
+  });
+
+  it('validates reactions like the DB constraint', () => {
+    expect(isValidReaction('❤️')).toBe(true);
+    expect(isValidReaction('👨‍👩‍👧‍👦')).toBe(true);
+    expect(isValidReaction('')).toBe(false);
+    expect(isValidReaction('   ')).toBe(false);
+    expect(isValidReaction('a b')).toBe(false);
+    expect(isValidReaction(' ❤️')).toBe(false);
+    expect(isValidReaction('a\nb')).toBe(false);
+    expect(isValidReaction('a'.repeat(17))).toBe(false);
+    expect(isValidReaction('a'.repeat(16))).toBe(true);
+  });
+
+  it('maps the set-reaction RPC response', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({
+      data: [{ my_reaction: '😂', changed: true, inserted: true, like_count: '4', top_reactions: ['😂', '❤️'] }],
+      error: null,
+    });
+
+    const result = await setMemoryReaction('memory-1', '😂');
+
+    expect(supabase.rpc).toHaveBeenCalledWith('set_memory_reaction', {
+      target_memory_id: 'memory-1',
+      reaction: '😂',
+    });
+    expect(result.data).toEqual({
+      reaction: '😂',
+      changed: true,
+      inserted: true,
+      likeCount: 4,
+      topReactions: ['😂', '❤️'],
+    });
+  });
+
+  it('sends null to remove a reaction and tolerates a missing top_reactions', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({
+      data: [{ my_reaction: null, changed: true, inserted: false, like_count: 0 }],
+      error: null,
+    });
+
+    const result = await setMemoryReaction('memory-1', null);
+
+    expect(supabase.rpc).toHaveBeenCalledWith('set_memory_reaction', {
+      target_memory_id: 'memory-1',
+      reaction: null,
+    });
+    expect(result.data).toEqual({
+      reaction: null,
+      changed: true,
+      inserted: false,
+      likeCount: 0,
+      topReactions: [],
+    });
+  });
+
+  it('rejects invalid reactions without calling the RPC and surfaces RPC errors', async () => {
+    const invalid = await setMemoryReaction('memory-1', 'a b');
+    expect(invalid.error?.code).toBe('validation_error');
+    expect(supabase.rpc).not.toHaveBeenCalled();
+
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: { message: 'nope', code: '42501' } });
+    const failed = await setMemoryReaction('memory-1', '❤️');
+    expect(failed.error).toEqual({ message: 'nope', code: '42501' });
+  });
+
+  it('lists who reacted, newest first', async () => {
+    const builder = createBuilder({
+      data: [{ user_id: 'user-1', emoji: '😂', updated_at: '2026-10-11T12:00:00Z' }],
+      error: null,
+    });
+    (supabase.from as jest.Mock).mockReturnValue(builder);
+
+    const result = await fetchMemoryReactions('memory-1');
+
+    expect(supabase.from).toHaveBeenCalledWith('memory_likes');
+    expect(builder.select).toHaveBeenCalledWith('user_id, emoji, updated_at');
+    expect(builder.eq).toHaveBeenCalledWith('memory_id', 'memory-1');
+    expect(builder.order).toHaveBeenCalledWith('updated_at', { ascending: false });
+    expect(result.data).toEqual([
+      { userId: 'user-1', emoji: '😂', updatedAt: '2026-10-11T12:00:00Z' },
+    ]);
   });
 
   it('fetches comments chronologically for one memory', async () => {

@@ -59,6 +59,10 @@ export interface MemoryWithTags extends Memory {
   likeCount: number;
   commentCount: number;
   likedByMe: boolean;
+  /** The caller's own emoji reaction, or null. `likedByMe` === (myReaction != null). */
+  myReaction: string | null;
+  /** Up to 3 most common distinct reaction emojis on this memory. */
+  topReactions: string[];
 }
 
 export interface ServiceError {
@@ -134,6 +138,8 @@ function attachTags(memories: Memory[], tagMap: Map<string, FamilyMember[]>): Me
     likeCount: 0,
     commentCount: 0,
     likedByMe: false,
+    myReaction: null,
+    topReactions: [],
   }));
 }
 
@@ -145,6 +151,8 @@ function attachCalendarPreviewTags(memories: Memory[]): MemoryWithTags[] {
     likeCount: 0,
     commentCount: 0,
     likedByMe: false,
+    myReaction: null,
+    topReactions: [],
   }));
 }
 
@@ -153,6 +161,8 @@ interface MemoryEngagementRow {
   like_count: number | string;
   comment_count: number | string;
   liked_by_me: boolean;
+  my_reaction?: string | null;
+  top_reactions?: string[] | null;
 }
 
 async function fetchEngagementForMemories(
@@ -194,6 +204,9 @@ function attachEngagement(
       likeCount: Number(engagement?.like_count ?? 0),
       commentCount: Number(engagement?.comment_count ?? 0),
       likedByMe: engagement?.liked_by_me ?? false,
+      // Defensive for a server that predates reactions: a like is a heart.
+      myReaction: engagement?.my_reaction ?? (engagement?.liked_by_me ? '❤️' : null),
+      topReactions: engagement?.top_reactions ?? [],
     };
   });
 }

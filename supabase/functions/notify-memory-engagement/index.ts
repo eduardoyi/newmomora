@@ -67,8 +67,9 @@ export async function processNotifyMemoryEngagement(
   const callerRole = await getCallerFamilyRole(serviceClient, memory.family_id, callerId);
   if (!callerRole) return errorResponse('Not authorized', 403, 'forbidden');
 
-  const engagementKey = await verifyEngagement(serviceClient, callerId, input);
-  if (!engagementKey) return errorResponse('Engagement not found', 404, 'not_found');
+  const engagement = await verifyEngagement(serviceClient, callerId, input);
+  if (!engagement) return errorResponse('Engagement not found', 404, 'not_found');
+  const engagementKey = engagement.key;
 
   if (!memory.user_id) {
     return jsonResponse({ sent: false, reason: 'no_recipient' } satisfies NotifyMemoryEngagementResponse);
@@ -170,8 +171,13 @@ export async function processNotifyMemoryEngagement(
 
   const actorName = (actorProfile?.name as string | undefined) ?? 'Someone';
   const familyName = (family?.name as string | undefined) ?? 'Momora';
+  // A like is an emoji reaction; the wire kind stays 'like' for old clients.
+  // Only the emoji (validated server-side: trimmed, <=16 chars, no whitespace)
+  // is included -- never memory content.
   const body = input.kind === 'like'
-    ? `${actorName} liked a memory`
+    ? (engagement.emoji
+      ? `${actorName} reacted ${engagement.emoji} to a memory`
+      : `${actorName} liked a memory`)
     : `${actorName} commented on a memory`;
 
   try {
@@ -195,15 +201,17 @@ async function verifyEngagement(
   serviceClient: SupabaseClient,
   callerId: string,
   input: NotifyMemoryEngagementRequest,
-): Promise<string | null> {
+): Promise<{ key: string; emoji: string | null } | null> {
   if (input.kind === 'like') {
     const { data } = await serviceClient
       .from('memory_likes')
-      .select('memory_id')
+      .select('memory_id, emoji')
       .eq('memory_id', input.memoryId)
       .eq('user_id', callerId)
       .maybeSingle();
-    return data ? `like:${input.memoryId}` : null;
+    if (!data) return null;
+    const emoji = typeof data.emoji === 'string' && data.emoji.length > 0 ? data.emoji : null;
+    return { key: `like:${input.memoryId}`, emoji };
   }
 
   if (!input.engagementId) return null;
@@ -214,7 +222,7 @@ async function verifyEngagement(
     .eq('memory_id', input.memoryId)
     .eq('user_id', callerId)
     .maybeSingle();
-  return data ? `comment:${input.engagementId}` : null;
+  return data ? { key: `comment:${input.engagementId}`, emoji: null } : null;
 }
 
 export async function handleNotifyMemoryEngagement(req: Request): Promise<Response> {

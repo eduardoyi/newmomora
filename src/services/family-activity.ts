@@ -53,6 +53,7 @@ export type FamilyActivityRpcRow = Omit<
   | 'film_member_id'
   | 'film_age_year'
   | 'film_scope_start'
+  | 'reaction_emoji'
 > & {
   kind: FamilyActivityKind;
   // Null only for `film_ready` rows (system events with no actor).
@@ -81,6 +82,9 @@ export type FamilyActivityRpcRow = Omit<
   film_member_id: string | null;
   film_age_year: number | null;
   film_scope_start: string | null;
+  // Set on `memory_liked` rows: the liker's current emoji (null/absent for
+  // rows from an older server, or non-like events).
+  reaction_emoji?: string | null;
 };
 
 export interface FamilyActivityEvent {
@@ -110,6 +114,8 @@ export interface FamilyActivityEvent {
   filmAgeYear: number | null;
   /** `YYYY-MM-DD`. */
   filmScopeStart: string | null;
+  /** `memory_liked` only: the actor's current reaction emoji, if known. */
+  reactionEmoji?: string | null;
 }
 
 export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityEvent {
@@ -141,6 +147,7 @@ export function mapFamilyActivityRow(row: FamilyActivityRpcRow): FamilyActivityE
     filmMemberId: row.film_member_id ?? null,
     filmAgeYear: row.film_age_year ?? null,
     filmScopeStart: row.film_scope_start ?? null,
+    reactionEmoji: row.reaction_emoji ?? null,
   };
 }
 

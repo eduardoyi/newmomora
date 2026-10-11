@@ -2364,6 +2364,8 @@ describe('memories service integration', () => {
           like_count: 4,
           comment_count: 2,
           liked_by_me: true,
+          my_reaction: '😂',
+          top_reactions: ['😂', '❤️'],
         },
       ],
       error: null,
@@ -2375,7 +2377,13 @@ describe('memories service integration', () => {
     expect(memoriesBuilder.eq).toHaveBeenCalledWith('family_id', 'family-1');
     expect(data?.memories[0]?.taggedMembers).toHaveLength(1);
     expect(data?.memories[0]?.taggedMembers[0]?.name).toBe('Emma');
-    expect(data?.memories[0]).toMatchObject({ likeCount: 4, commentCount: 2, likedByMe: true });
+    expect(data?.memories[0]).toMatchObject({
+      likeCount: 4,
+      commentCount: 2,
+      likedByMe: true,
+      myReaction: '😂',
+      topReactions: ['😂', '❤️'],
+    });
   });
 
   it('fetchMemoryById enriches a single memory with tags and media', async () => {

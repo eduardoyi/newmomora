@@ -2,20 +2,24 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import { memoryCommentsQueryKey } from '@/hooks/queryKeys';
+import { memoryCommentsQueryKey, memoryReactionsQueryKey } from '@/hooks/queryKeys';
 import { patchMemoryInCaches, type MemoryPatch } from '@/hooks/memory-cache';
 import {
   createMemoryComment,
   deleteMemoryComment,
+  DEFAULT_REACTION,
   fetchMemoryComments,
+  fetchMemoryReactions,
   notifyMemoryEngagementFireAndForget,
-  setMemoryLike,
+  setMemoryReaction,
   type MemoryComment,
 } from '@/services/engagement';
 import type { MemoryWithTags } from '@/services/memories';
 
 interface UseMemoryEngagementOptions {
   commentsEnabled?: boolean;
+  /** Load the who-reacted list (only while the reactions sheet is open). */
+  reactionsEnabled?: boolean;
 }
 
 function toError(error: unknown, fallback: string): Error {
@@ -61,32 +65,65 @@ export function useMemoryEngagement(
     staleTime: 0,
   });
 
-  const likeMutation = useMutation({
-    mutationFn: async (shouldLike: boolean) => {
-      const { data, error } = await setMemoryLike(memory.id, shouldLike);
-      if (error || !data) throw toError(error, 'Could not update like');
+  const reactionsKey = memoryReactionsQueryKey(familyId, memory.id);
+
+  const reactionsQuery = useQuery({
+    queryKey: reactionsKey,
+    queryFn: async () => {
+      const { data, error } = await fetchMemoryReactions(memory.id);
+      if (error) throw toError(error, 'Could not load reactions');
+      return data ?? [];
+    },
+    enabled: Boolean(user && options.reactionsEnabled),
+    staleTime: 0,
+  });
+
+  const reactionMutation = useMutation({
+    mutationFn: async (reaction: string | null) => {
+      const { data, error } = await setMemoryReaction(memory.id, reaction);
+      if (error || !data) throw toError(error, 'Could not update reaction');
       return data;
     },
-    onMutate: async (shouldLike) => {
+    onMutate: async (reaction) => {
       const previous = {
         likedByMe: memory.likedByMe,
         likeCount: memory.likeCount,
+        myReaction: memory.myReaction,
+        topReactions: memory.topReactions,
       };
+      const hadReaction = memory.myReaction != null;
+      const hasReaction = reaction != null;
+      const likeCount = Math.max(
+        0,
+        memory.likeCount + (hasReaction && !hadReaction ? 1 : !hasReaction && hadReaction ? -1 : 0),
+      );
+      // Best effort only -- the server's top_reactions replaces this on success.
+      const topReactions = hasReaction
+        ? [reaction, ...memory.topReactions.filter((emoji) => emoji !== reaction)].slice(0, 3)
+        : likeCount === 0
+          ? []
+          : memory.topReactions;
       patchMemoryEngagement(queryClient, familyId, memory.id, {
-        likedByMe: shouldLike,
-        likeCount: Math.max(0, memory.likeCount + (shouldLike ? 1 : -1)),
+        likedByMe: hasReaction,
+        likeCount,
+        myReaction: reaction,
+        topReactions,
       });
       return previous;
     },
-    onError: (_error, _shouldLike, previous) => {
+    onError: (_error, _reaction, previous) => {
       if (previous) patchMemoryEngagement(queryClient, familyId, memory.id, previous);
     },
     onSuccess: (result) => {
       patchMemoryEngagement(queryClient, familyId, memory.id, {
-        likedByMe: result.liked,
+        likedByMe: result.reaction != null,
         likeCount: result.likeCount,
+        myReaction: result.reaction,
+        topReactions: result.topReactions,
       });
-      if (result.liked && result.changed) {
+      void queryClient.invalidateQueries({ queryKey: reactionsKey });
+      // Only a brand-new reaction notifies; changing or removing one stays silent.
+      if (result.inserted) {
         notifyMemoryEngagementFireAndForget(memory.id, 'like');
       }
     },
@@ -161,9 +198,17 @@ export function useMemoryEngagement(
     likedByMe: memory.likedByMe,
     likeCount: memory.likeCount,
     commentCount: memory.commentCount,
-    toggleLike: () => likeMutation.mutateAsync(!memory.likedByMe),
-    isUpdatingLike: likeMutation.isPending,
-    likeError: likeMutation.error,
+    myReaction: memory.myReaction,
+    topReactions: memory.topReactions,
+    setReaction: reactionMutation.mutateAsync,
+    // Tap behavior: no reaction yet -> heart, otherwise remove whatever it is.
+    toggleLike: () => reactionMutation.mutateAsync(memory.myReaction == null ? DEFAULT_REACTION : null),
+    isUpdatingLike: reactionMutation.isPending,
+    likeError: reactionMutation.error,
+    reactions: reactionsQuery.data ?? [],
+    areReactionsLoading: reactionsQuery.isLoading,
+    reactionsError: reactionsQuery.error,
+    refetchReactions: reactionsQuery.refetch,
     comments: commentsQuery.data ?? [],
     areCommentsLoading: commentsQuery.isLoading,
     commentsError: commentsQuery.error,
