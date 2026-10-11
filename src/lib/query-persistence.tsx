@@ -6,9 +6,8 @@ import {
   type PersistedClient,
 } from '@tanstack/react-query-persist-client';
 import type { ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { colors } from '@/constants/theme';
+import { BrandSplash } from '@/components/brand-splash';
 import { isMemoriesListQueryKey } from '@/hooks/memory-cache';
 import {
   ANCHORED_MEMORIES_KEY_SEGMENT,
@@ -171,18 +170,14 @@ function RestoreGate({ children }: { children: ReactNode }) {
   const isRestoring = useIsRestoring();
 
   if (isRestoring) {
-    return (
-      <View style={styles.restoring}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
+    return <BrandSplash />;
   }
 
   return <>{children}</>;
 }
 
 // Swaps QueryClientProvider for PersistQueryClientProvider (AppProviders)
-// and holds `children` on a splash-equivalent spinner until the persisted
+// and holds `children` on the branded splash (BrandSplash) until the persisted
 // cache has been restored (or definitively failed to restore) -- restore
 // from AsyncStorage is fast (<100ms typical), so this removes the
 // empty-state-flash risk that would otherwise come from AuthProvider/
@@ -203,12 +198,3 @@ export function PersistedQueryProvider({ children }: { children: ReactNode }) {
     </PersistQueryClientProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  restoring: {
-    alignItems: 'center',
-    backgroundColor: colors.background,
-    flex: 1,
-    justifyContent: 'center',
-  },
-});

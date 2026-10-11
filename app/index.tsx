@@ -1,9 +1,8 @@
 import { Redirect } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { BillingStatusGate } from '@/components/billing-status-gate';
-import { colors } from '@/constants/theme';
+import { BrandSplash } from '@/components/brand-splash';
 import { useAuth } from '@/hooks/use-auth';
 import { useBilling } from '@/hooks/use-billing';
 import { useFamily } from '@/hooks/use-family';
@@ -148,11 +147,7 @@ export default function IndexScreen() {
   }, [billingStatus, destination, memberships.length, role]);
 
   if (isAuthLoading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
+    return <BrandSplash />;
   }
 
   if (!session) {
@@ -160,11 +155,7 @@ export default function IndexScreen() {
   }
 
   if (isFamilyLoading || !deviceState.isHydrated || isBillingBlocked) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
+    return <BrandSplash />;
   }
 
   if (isBillingFailed) {
@@ -174,11 +165,7 @@ export default function IndexScreen() {
   if (!destination) {
     // Unreachable in practice -- isReady mirrors every check above -- kept
     // as a defensive fallback instead of a non-null assertion.
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
-    );
+    return <BrandSplash />;
   }
 
   switch (destination.kind) {
@@ -210,12 +197,3 @@ export default function IndexScreen() {
     }
   }
 }
-
-const styles = StyleSheet.create({
-  loading: {
-    alignItems: 'center',
-    backgroundColor: colors.background,
-    flex: 1,
-    justifyContent: 'center',
-  },
-});
