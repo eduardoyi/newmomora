@@ -7,11 +7,10 @@ import { colors } from '@/constants/theme';
 
 // Must match `imageWidth` on the expo-splash-screen plugin in app.json, so the
 // hand-off from the native launch screen is pixel-identical (same file, same
-// size, same centre). See scripts/generate-app-icons.py.
-export const SPLASH_IMAGE_WIDTH = 200;
-// The ivory album paper behind the photo-corner mark (scripts/generate-app-icons.py
-// PAPER); matches the plugin's backgroundColor in app.json.
-export const SPLASH_BACKGROUND = '#F5EFE6';
+// size, same centre). See scripts/generate-splash-icon.py.
+export const SPLASH_IMAGE_WIDTH = 150;
+// The app icon's magenta; matches the plugin's backgroundColor in app.json.
+export const SPLASH_BACKGROUND = colors.primary;
 
 // Delay before the spinner appears, so a normal cold start (restore + auth +
 // family in well under a second) reads as one continuous launch screen.
@@ -34,14 +33,14 @@ export function BrandSplash() {
 
   return (
     <View style={styles.root} testID="brand-splash">
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       <Image
         accessibilityLabel="Momora"
         contentFit="contain"
         source={require('../../assets/images/splash-icon.png')}
         style={styles.logo}
       />
-      {showSpinner ? <ActivityIndicator color={colors.primary} style={styles.spinner} /> : null}
+      {showSpinner ? <ActivityIndicator color="#FFFFFF" style={styles.spinner} /> : null}
     </View>
   );
 }
