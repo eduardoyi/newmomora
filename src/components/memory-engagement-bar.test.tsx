@@ -152,7 +152,9 @@ describe('MemoryEngagementBar', () => {
       expect(queryByText('👍')).toBeNull(); // capped at 3
       expect(queryByText('😂❤️🙏')).toBeNull(); // never a joined string
       expect(getByText('4')).toBeTruthy();
-      expect(getByTestId('memory-react-memory-1')).toBeTruthy();
+      // The plus is a segment of the pill (with a divider), not a standalone button.
+      expect(getByTestId('memory-react-memory-1').props.accessibilityLabel).toBe('Add reaction');
+      expect(getByTestId('memory-reactions-divider-memory-1')).toBeTruthy();
     });
 
     it('i reacted: mine-styled pill, smiley button hidden', () => {
@@ -162,6 +164,7 @@ describe('MemoryEngagementBar', () => {
       );
 
       expect(queryByTestId('memory-react-memory-1')).toBeNull();
+      expect(queryByTestId('memory-reactions-divider-memory-1')).toBeNull();
       expect(getByTestId('memory-reactions-memory-1').props.accessibilityLabel).toBe(
         '1 reaction, you reacted 😂. Double tap to see who reacted',
       );
@@ -200,6 +203,24 @@ describe('MemoryEngagementBar', () => {
         <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
       );
       expect(queryByTestId('mock-reactions-sheet')).toBeNull();
+      fireEvent.press(getByTestId('memory-reactions-memory-1'));
+      expect(getByTestId('mock-reactions-sheet')).toBeTruthy();
+    });
+
+    it('plus segment inside the pill opens the tray; the left segment opens the sheet', () => {
+      measure();
+      const setReaction = jest.fn().mockResolvedValue(undefined);
+      mockEngagement({ setReaction, topReactions: ['😂'], likeCount: 1 });
+      const { getByTestId, queryByTestId } = render(
+        <MemoryEngagementBar memory={memory} onOpenComments={jest.fn()} />,
+      );
+
+      fireEvent.press(getByTestId('memory-react-memory-1'));
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+      expect(queryByTestId('mock-reactions-sheet')).toBeNull();
+      fireEvent.press(getByTestId('reaction-tray-❤️'));
+      expect(setReaction).toHaveBeenCalledWith('❤️');
+
       fireEvent.press(getByTestId('memory-reactions-memory-1'));
       expect(getByTestId('mock-reactions-sheet')).toBeTruthy();
     });

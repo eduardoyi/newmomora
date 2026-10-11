@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { MessageCircle, Send, SmilePlus } from 'lucide-react-native';
+import { MessageCircle, Plus, Send, SmilePlus } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -148,42 +148,59 @@ export function MemoryEngagementBar({
   return (
     <View style={styles.row}>
       {engagement.likeCount > 0 ? (
-        <Pressable
-          accessibilityHint="Touch and hold to change your reaction"
-          accessibilityLabel={`${engagement.likeCount} ${engagement.likeCount === 1 ? 'reaction' : 'reactions'}, ${
-            engagement.myReaction ? `you reacted ${engagement.myReaction}` : 'not reacted'
-          }. Double tap to see who reacted`}
-          accessibilityRole="button"
-          accessibilityState={{ selected: engagement.myReaction != null, busy: engagement.isUpdatingLike }}
-          delayLongPress={300}
-          onLongPress={() => openTrayFrom(pillRef.current, Haptics.ImpactFeedbackStyle.Medium)}
-          onPress={openReactionsSheet}
-          ref={pillRef}
-          testID={`memory-reactions-${memory.id}`}
+        <Animated.View
+          collapsable={false}
+          ref={pillRef as never}
+          style={[
+            styles.pill,
+            engagement.myReaction ? styles.pillMine : styles.pillNeutral,
+            { transform: [{ scale }] },
+          ]}
         >
-          {({ pressed }) => (
-            <Animated.View
-              style={[
-                styles.pill,
-                engagement.myReaction ? styles.pillMine : styles.pillNeutral,
-                pressed && styles.pressed,
-                { transform: [{ scale }] },
-              ]}
-            >
-              {pillEmojis.map((emoji, index) => (
-                <Text key={`${emoji}-${index}`} style={styles.pillEmoji}>
-                  {emoji}
-                </Text>
-              ))}
-              <Text style={[styles.count, engagement.myReaction != null && styles.likedCount]}>
-                {engagement.likeCount}
+          <Pressable
+            accessibilityHint="Touch and hold to change your reaction"
+            accessibilityLabel={`${engagement.likeCount} ${engagement.likeCount === 1 ? 'reaction' : 'reactions'}, ${
+              engagement.myReaction ? `you reacted ${engagement.myReaction}` : 'not reacted'
+            }. Double tap to see who reacted`}
+            accessibilityRole="button"
+            accessibilityState={{ selected: engagement.myReaction != null, busy: engagement.isUpdatingLike }}
+            delayLongPress={300}
+            onLongPress={() => openTrayFrom(pillRef.current, Haptics.ImpactFeedbackStyle.Medium)}
+            onPress={openReactionsSheet}
+            style={({ pressed }) => [
+              styles.pillSegment,
+              engagement.myReaction == null && styles.pillSegmentWithPlus,
+              pressed && styles.pressed,
+            ]}
+            testID={`memory-reactions-${memory.id}`}
+          >
+            {pillEmojis.map((emoji, index) => (
+              <Text key={`${emoji}-${index}`} style={styles.pillEmoji}>
+                {emoji}
               </Text>
-            </Animated.View>
-          )}
-        </Pressable>
-      ) : null}
-
-      {engagement.myReaction == null ? (
+            ))}
+            <Text style={[styles.count, engagement.myReaction != null && styles.likedCount]}>
+              {engagement.likeCount}
+            </Text>
+          </Pressable>
+          {engagement.myReaction == null ? (
+            <>
+              <View style={styles.pillDivider} testID={`memory-reactions-divider-${memory.id}`} />
+              <Pressable
+                accessibilityLabel="Add reaction"
+                accessibilityRole="button"
+                accessibilityState={{ busy: engagement.isUpdatingLike }}
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
+                onPress={() => openTrayFrom(pillRef.current, Haptics.ImpactFeedbackStyle.Light)}
+                style={({ pressed }) => [styles.plusSegment, pressed && styles.pressed]}
+                testID={`memory-react-${memory.id}`}
+              >
+                <Plus color={colors.ink2} size={16} strokeWidth={2} />
+              </Pressable>
+            </>
+          ) : null}
+        </Animated.View>
+      ) : (
         <Pressable
           accessibilityLabel="Add reaction"
           accessibilityRole="button"
@@ -195,7 +212,7 @@ export function MemoryEngagementBar({
         >
           <SmilePlus color={colors.ink2} size={iconSize} strokeWidth={1.9} />
         </Pressable>
-      ) : null}
+      )}
 
       <Pressable
         accessibilityLabel="Open comments"
@@ -274,9 +291,29 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 4,
     minHeight: 32,
+    overflow: 'hidden',
+  },
+  pillSegment: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    gap: 4,
     paddingHorizontal: 10,
+  },
+  pillSegmentWithPlus: {
+    paddingRight: 8,
+  },
+  pillDivider: {
+    alignSelf: 'stretch',
+    backgroundColor: colors.border,
+    width: 1,
+  },
+  plusSegment: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    paddingHorizontal: 9,
   },
   pillNeutral: {
     backgroundColor: colors.surface,

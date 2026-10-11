@@ -19,13 +19,15 @@ including viewer, may participate.
 
 - **Emoji reactions (2026-10-11), merged pill.** Likes became WhatsApp-style
   reactions: one reaction per person per memory, any emoji. There is no heart
-  button and no tap-to-heart. The bar reads, in order: a **reaction pill** (only
-  when `likeCount > 0`: up to 3 `topReactions`, each in its own `<Text>`, then
-  the count), a **smiley-plus** button (`memory-react-<id>`, only when you
-  haven't reacted), comments, and share. The pill is neutral when others
-  reacted, and pink-tinted ("mine") when you did. Tap the pill = who-reacted
+  button and no tap-to-heart. With no reactions the bar shows a **smiley-plus**
+  button (`memory-react-<id>`); once anyone has reacted it shows a single
+  rounded **reaction pill** (up to 3 `topReactions`, each in its own `<Text>`,
+  then the count), then comments and share. While you haven't reacted the pill
+  is a split shape: the left segment (`memory-reactions-<id>`) plus a hairline
+  divider and a **Plus** segment (`memory-react-<id>`). Once you react it turns
+  pink ("mine") and the plus disappears. Tap the left segment = who-reacted
   sheet (`MemoryReactionsSheet`, filter chips, "You / Tap to remove" row).
-  Long-press the pill (~300ms, cancelled by scrolling) or tap the smiley opens
+  Long-press it (~300ms, cancelled by scrolling) or tap the smiley / plus opens
   `ReactionTray` (❤️ 😂 😮 😢 🙏 👍 plus "+" for the full `rn-emoji-keyboard`
   picker, pure JS so it ships over OTA). Picking your current emoji removes it.
   The pill pops when your reaction changes. "like" survives in code names
