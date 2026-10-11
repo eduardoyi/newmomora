@@ -132,6 +132,26 @@ describe('useAudioClipPlayback -- player lifecycle', () => {
     expect(player.replace).not.toHaveBeenCalled();
   });
 
+  it('never passes null to replace() when the source clears (native replace requires a source)', () => {
+    const { rerender, result } = renderHook(
+      ({ source }: { source: string | null }) => useAudioClipPlayback(source),
+      { initialProps: { source: 'https://example.test/clip-1.m4a' as string | null } },
+    );
+    const player = createdPlayers[0];
+    player.replace.mockClear();
+
+    rerender({ source: null });
+
+    expect(player.replace).not.toHaveBeenCalled();
+    expect(player.pause).toHaveBeenCalled();
+    expect(result.current.playing).toBe(false);
+
+    rerender({ source: 'https://example.test/clip-2.m4a' });
+
+    expect(mockCreateAudioPlayer).toHaveBeenCalledTimes(1);
+    expect(player.replace).toHaveBeenCalledWith({ uri: 'https://example.test/clip-2.m4a' });
+  });
+
   it('never removes the player while the component stays mounted', () => {
     const { rerender } = renderHook(
       ({ source }) => useAudioClipPlayback(source),

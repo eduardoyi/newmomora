@@ -115,12 +115,24 @@ export function useAudioClipPlayback(source: string | null | undefined): UseAudi
       return;
     }
     loadedSourceRef.current = nextSource;
-    setLoading(true);
     setError(null);
     setPosition(0);
     stopAtSecondsRef.current = null;
-    player.replace(nextSource ? { uri: nextSource } : null);
-  }, [player, source]);
+    if (!nextSource) {
+      // Native replace() only accepts a real AudioSource on both platforms
+      // (replace(null) throws an ArgumentCastException, e.g. when the voice
+      // modal's fork is cancelled and its preview clip clears). Stop the
+      // old clip instead; the next real source swaps in via replace().
+      player.pause();
+      endAudioPlayback(clipId);
+      setPlaying(false);
+      setDuration(0);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    player.replace({ uri: nextSource });
+  }, [clipId, player, source]);
 
   useEffect(() => {
     if (!player) {
