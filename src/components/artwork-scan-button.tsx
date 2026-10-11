@@ -12,7 +12,7 @@
 // opens the scanner once that sheet has fully dismissed.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { AppState, Platform, Pressable, StyleSheet, Text } from 'react-native';
 
 import { ArtworkIntroSheet } from '@/components/artwork/artwork-intro-sheet';
@@ -57,6 +57,12 @@ async function writeIntroSeen(): Promise<void> {
   } catch {
     // Best-effort: worst case the intro shows once more.
   }
+}
+
+/** Imperative entry point for callers that skip the button tap (app shortcuts). */
+export interface ArtworkScanButtonHandle {
+  /** Runs the button's press handler; a no-op while disabled or when the scanner is unavailable. */
+  startScan: () => void;
 }
 
 export interface ArtworkScanButtonProps {
@@ -123,14 +129,14 @@ function describeScanOutcome(params: {
   return parts.join(' ');
 }
 
-export function ArtworkScanButton({
+export const ArtworkScanButton = forwardRef<ArtworkScanButtonHandle, ArtworkScanButtonProps>(function ArtworkScanButton({
   onScanned,
   onError,
   onNotice,
   disabled = false,
   remainingSlots = MAX_MEMORY_MEDIA_ASSETS,
   testID = 'new-memory-scan-artwork',
-}: ArtworkScanButtonProps) {
+}, ref) {
   // Always call the latest parent callbacks: the scan can take minutes and
   // resolves long after the render that created this closure.
   const onScannedRef = useRef(onScanned);
@@ -385,6 +391,14 @@ export function ArtworkScanButton({
     setIntroVisible(false);
   };
 
+  // No deps: re-bound each render so the handle sees the latest props.
+  useImperativeHandle(ref, () => ({
+    startScan: () => {
+      if (disabled || !isArtworkScannerAvailable()) return;
+      void handlePress();
+    },
+  }));
+
   if (!isArtworkScannerAvailable()) {
     return null;
   }
@@ -420,7 +434,7 @@ export function ArtworkScanButton({
       ) : null}
     </>
   );
-}
+});
 
 /** One-line inline note for `ArtworkScanButton`'s `onNotice` text. Neutral
  * (not error red) -- these are hints and "some pages left out" facts. */

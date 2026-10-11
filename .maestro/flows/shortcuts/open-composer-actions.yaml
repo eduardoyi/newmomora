@@ -1,0 +1,46 @@
+appId: com.memora.app
+---
+# App-shortcut entry points (docs/features/app-shortcuts.md). Maestro cannot
+# long-press the launcher icon, so this drives the same composer contract the
+# shortcut router uses: the new-memory deep link with action/actionId/source.
+# A fresh actionId runs the action once; an unchanged actionId must not re-fire.
+#
+# Authored, not executed in this pass (no bootable simulator in this
+# environment). The camera and scanner need OS permission dialogs / a physical
+# camera, so only the in-app surfaces are asserted; run in the device pass.
+- runFlow: ../auth/login.yaml
+
+# New memory: plain composer.
+- openLink: "momora://new-memory?action=text&actionId=e2e0&source=shortcut_text"
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 15000
+
+# Record audio: the recorder opens straight away (fork: dictate or keep).
+- openLink: "momora://new-memory?action=voice&actionId=e2e1&source=shortcut_voice"
+- extendedWaitUntil:
+    visible:
+      id: voice-speak-it-mic
+    timeout: 15000
+- tapOn:
+    id: voice-speak-it-cancel
+- assertNotVisible:
+    id: voice-speak-it-mic
+- assertVisible:
+    id: new-memory-content
+
+# Take a photo: the composer opens and the camera (or its permission prompt)
+# takes over; back out so the next link starts from the composer.
+- openLink: "momora://new-memory?action=photo&actionId=e2e2&source=shortcut_photo"
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 15000
+
+# Scan artwork: composer opens and the scanner (or the first-use intro) starts.
+- openLink: "momora://new-memory?action=scan&actionId=e2e3&source=shortcut_scan"
+- extendedWaitUntil:
+    visible:
+      id: new-memory-content
+    timeout: 15000

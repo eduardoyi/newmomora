@@ -84,6 +84,8 @@ human must confirm them against the live project.
 | Image display | `expo-image` + presigned R2 URLs (via Edge Function) |
 | Builds | EAS Build + development client |
 
+**App shortcuts** (`expo-quick-actions`, [features/app-shortcuts.md](features/app-shortcuts.md)). Long-press-icon actions (New memory, Take a photo, Record audio, Scan artwork) are set at runtime for signed-in editors and routed by `QuickActionRouter` to `/(app)/new-memory?action=&actionId=&source=shortcut_*`; the composer runs each `actionId` once. The module is loaded lazily behind a guard in `src/services/quick-actions.ts` because OTA JS reaches binaries built before it existed.
+
 **`momora-audio` native module** (audio memories v2, [features/audio-memories.md](features/audio-memories.md)). A local Expo module, autolinked from `modules/` and imported by relative path (`modules/momora-audio`; no root `package.json` entry, same as `momora-widget`). It decodes and measures only; all dB/normalization math is TypeScript (`src/utils/audio-waveform.ts`), shared with the waveform backfill script. It ships in the 1.5.0 store build; OTA JS reaching older binaries resolves it with `requireOptionalNativeModule('MomoraAudio')` (`isAvailable()`), so every caller must feature-detect.
 
 | Function | Contract |

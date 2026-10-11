@@ -111,7 +111,16 @@ export interface AnalyticsEventMap {
     illustration_enabled: boolean;
     /** True only for a scanned-artwork media memory (docs/features/artwork.md). */
     is_artwork: boolean;
-    source: 'fab_timeline' | 'fab_calendar' | 'share_sheet' | 'notification' | 'other';
+    source:
+      | 'fab_timeline'
+      | 'fab_calendar'
+      | 'share_sheet'
+      | 'notification'
+      | 'shortcut_text'
+      | 'shortcut_photo'
+      | 'shortcut_voice'
+      | 'shortcut_scan'
+      | 'other';
   };
   /** The native artwork scanner resolved (composer toolbar button). Scalars
    * only -- never page content or paths. `page_count` is the number of

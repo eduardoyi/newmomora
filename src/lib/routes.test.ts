@@ -1,4 +1,11 @@
-import { keepsakeProductRoute, keepsakeRecapsRoute, keepsakesTabRoute, newMemoryRoute, yearFilmRoute } from '@/lib/routes';
+import {
+  keepsakeProductRoute,
+  keepsakeRecapsRoute,
+  keepsakesTabRoute,
+  newMemoryRoute,
+  parseNewMemoryAction,
+  yearFilmRoute,
+} from '@/lib/routes';
 
 // `newMemoryRoute` gained an optional `source` param
 // (docs/plans/analytics-implementation.md WP3 item 1) so `memory_saved`
@@ -25,6 +32,38 @@ describe('newMemoryRoute', () => {
       pathname: '/(app)/new-memory',
       params: { source: 'notification' },
     });
+  });
+});
+
+describe('newMemoryRoute with a shortcut action', () => {
+  it('carries action and actionId alongside the source', () => {
+    expect(newMemoryRoute('shortcut_voice', { action: 'voice', actionId: 'a1' })).toEqual({
+      pathname: '/(app)/new-memory',
+      params: { source: 'shortcut_voice', action: 'voice', actionId: 'a1' },
+    });
+  });
+
+  it('carries an action without a source', () => {
+    expect(newMemoryRoute(undefined, { action: 'scan', actionId: 'a2' })).toEqual({
+      pathname: '/(app)/new-memory',
+      params: { action: 'scan', actionId: 'a2' },
+    });
+  });
+});
+
+describe('parseNewMemoryAction', () => {
+  it('accepts the four known actions', () => {
+    expect(parseNewMemoryAction('text')).toBe('text');
+    expect(parseNewMemoryAction('photo')).toBe('photo');
+    expect(parseNewMemoryAction('voice')).toBe('voice');
+    expect(parseNewMemoryAction('scan')).toBe('scan');
+  });
+
+  it('rejects unknown, empty and non-string values', () => {
+    expect(parseNewMemoryAction('video')).toBeUndefined();
+    expect(parseNewMemoryAction('')).toBeUndefined();
+    expect(parseNewMemoryAction(undefined)).toBeUndefined();
+    expect(parseNewMemoryAction(['voice'])).toBeUndefined();
   });
 });
 

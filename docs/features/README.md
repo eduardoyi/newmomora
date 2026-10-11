@@ -57,6 +57,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Offline awareness | [offline.md](./offline.md) | done |
 | Looking Back | [looking-back.md](./looking-back.md) | in-progress |
 | Home-screen widget | [home-screen-widget.md](./home-screen-widget.md) | in-progress |
+| App shortcuts (long-press icon) | [app-shortcuts.md](./app-shortcuts.md) | in-progress |
 | Memory Book generation | [memory-book-generation.md](./memory-book-generation.md) | in-progress |
 
 ## Template

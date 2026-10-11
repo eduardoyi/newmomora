@@ -69,6 +69,17 @@
       "./plugins/withAndroidLaunchMode",
       "./plugins/withMomoraWidget",
       "expo-background-task",
+      [
+        "expo-quick-actions",
+        {
+          "androidIcons": {
+            "shortcut_compose": { "foregroundImage": "./assets/images/shortcuts/shortcut-compose.png", "monochromeImage": "./assets/images/shortcuts/shortcut-compose.png", "backgroundColor": "#FFFFFF" },
+            "shortcut_camera": { "foregroundImage": "./assets/images/shortcuts/shortcut-camera.png", "monochromeImage": "./assets/images/shortcuts/shortcut-camera.png", "backgroundColor": "#FFFFFF" },
+            "shortcut_mic": { "foregroundImage": "./assets/images/shortcuts/shortcut-mic.png", "monochromeImage": "./assets/images/shortcuts/shortcut-mic.png", "backgroundColor": "#FFFFFF" },
+            "shortcut_scan": { "foregroundImage": "./assets/images/shortcuts/shortcut-scan.png", "monochromeImage": "./assets/images/shortcuts/shortcut-scan.png", "backgroundColor": "#FFFFFF" }
+          }
+        }
+      ],
       "expo-router",
       [
         "expo-widgets",

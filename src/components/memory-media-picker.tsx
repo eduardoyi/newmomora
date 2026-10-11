@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { SymbolView } from 'expo-symbols';
-import { useRef } from 'react';
+import { forwardRef, useImperativeHandle, useRef } from 'react';
 import {
   ActionSheetIOS,
   Alert,
@@ -50,6 +50,12 @@ export interface MediaAttachment {
    * once the attachment is removed, abandoned or uploaded -- see
    * `src/utils/shared-file-cleanup.ts`. Never set for picker/camera files. */
   isShareCopy?: boolean;
+}
+
+/** Imperative entry points for callers that skip the Add media menu (app shortcuts). */
+export interface MemoryMediaPickerHandle {
+  /** Runs the menu's "Take photo" path; a no-op while the picker is disabled. */
+  takePhoto: () => void;
 }
 
 interface MemoryMediaPickerProps {
@@ -153,7 +159,7 @@ async function resolveFileSize(asset: ImagePicker.ImagePickerAsset): Promise<num
   return null;
 }
 
-export function MemoryMediaPicker({
+export const MemoryMediaPicker = forwardRef<MemoryMediaPickerHandle, MemoryMediaPickerProps>(function MemoryMediaPicker({
   onSelect,
   onError,
   disabled = false,
@@ -163,7 +169,7 @@ export function MemoryMediaPicker({
   onPress,
   onPickSound,
   testID = 'new-memory-attach-media',
-}: MemoryMediaPickerProps) {
+}, ref) {
   const isPickerOpeningRef = useRef(false);
 
   const runPicker = async (picker: () => Promise<void>, fallbackError: string) => {
@@ -398,6 +404,15 @@ export function MemoryMediaPicker({
     Alert.alert('Add media', undefined, [...alertButtons, { text: 'Cancel', style: 'cancel' }]);
   };
 
+  // No deps: re-bound each render so the handle always sees the latest
+  // `disabled` / `remainingSlots` / callbacks.
+  useImperativeHandle(ref, () => ({
+    takePhoto: () => {
+      if (disabled) return;
+      void handleTakePhoto();
+    },
+  }));
+
   if (compact) {
     return (
       <Pressable
@@ -440,7 +455,7 @@ export function MemoryMediaPicker({
       <Text style={styles.buttonText}>Attach photo or video</Text>
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   button: {

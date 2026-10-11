@@ -20,6 +20,7 @@ import 'react-native-reanimated';
 
 import { AppProviders } from '@/components/app-providers';
 import { IncomingShareRouter } from '@/components/incoming-share-router';
+import { QuickActionRouter } from '@/components/quick-action-router';
 import { captureException, initSentry } from '@/lib/sentry';
 
 initSentry();
@@ -78,6 +79,7 @@ export default function RootLayout() {
           <Stack.Screen name="widget" />
         </Stack>
         <IncomingShareRouter />
+        <QuickActionRouter />
       </AppProviders>
     </GestureHandlerRootView>
   );

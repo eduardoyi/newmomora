@@ -27,16 +27,44 @@ export function addFamilyMemberRouteFor(options: { name?: string; requestId?: st
 // component state, since the FAB, the incoming-share router, and the push
 // notification handler each navigate here from a different module with no
 // shared state to stash it in.
-export type NewMemorySource = 'fab_timeline' | 'fab_calendar' | 'share_sheet' | 'notification';
+export type NewMemorySource =
+  | 'fab_timeline'
+  | 'fab_calendar'
+  | 'share_sheet'
+  | 'notification'
+  | 'shortcut_text'
+  | 'shortcut_photo'
+  | 'shortcut_voice'
+  | 'shortcut_scan';
 
-export function newMemoryRoute(source?: NewMemorySource): Href {
-  if (!source) {
+// Home-screen app shortcut actions (docs/features/app-shortcuts.md). The
+// composer runs `action` once per `actionId` after it is ready to accept it.
+export const NEW_MEMORY_ACTIONS = ['text', 'photo', 'voice', 'scan'] as const;
+export type NewMemoryAction = (typeof NEW_MEMORY_ACTIONS)[number];
+
+/** Narrows a raw route param; unknown/stale values are inert. */
+export function parseNewMemoryAction(raw: unknown): NewMemoryAction | undefined {
+  return typeof raw === 'string' && (NEW_MEMORY_ACTIONS as readonly string[]).includes(raw)
+    ? (raw as NewMemoryAction)
+    : undefined;
+}
+
+export interface NewMemoryRouteAction {
+  action: NewMemoryAction;
+  actionId: string;
+}
+
+export function newMemoryRoute(source?: NewMemorySource, action?: NewMemoryRouteAction): Href {
+  if (!source && !action) {
     return '/(app)/new-memory' as Href;
   }
 
   return {
     pathname: '/(app)/new-memory',
-    params: { source },
+    params: {
+      ...(source ? { source } : {}),
+      ...(action ? { action: action.action, actionId: action.actionId } : {}),
+    },
   } as Href;
 }
 

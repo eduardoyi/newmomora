@@ -1,15 +1,20 @@
 import { navigateBack } from '@/lib/navigation';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { ArtworkScanButton, ArtworkScanNotice } from '@/components/artwork-scan-button';
+import {
+  ArtworkScanButton,
+  ArtworkScanNotice,
+  type ArtworkScanButtonHandle,
+} from '@/components/artwork-scan-button';
 import { PhotosIcon } from '@/components/icons/composer-icons';
 import { MemoryComposerForm, type MemoryComposerTypeBadge } from '@/components/memory-composer-form';
 import {
   MemoryMediaPicker,
   type MediaAttachment,
+  type MemoryMediaPickerHandle,
 } from '@/components/memory-media-picker';
 import { VoiceSpeakItModal, type VoiceKeptClip } from '@/components/voice-speak-it-modal';
 import { BringInSoundSheet } from '@/components/audio/bring-in-sound-sheet';
@@ -33,6 +38,7 @@ import { useIncomingMemoryShare } from '@/hooks/use-incoming-memory-share';
 import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
+import { parseNewMemoryAction } from '@/lib/routes';
 import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
@@ -65,6 +71,10 @@ const SHARE_PHOTOS_REFUSED_ARTWORK_COPY = 'This memory is artwork. Save it first
 // half a second of typing.
 const DRAFT_SAVE_DEBOUNCE_MS = 500;
 
+// Upper bound on waiting for the modal's `transitionEnd` before app-shortcut
+// actions run anyway (the event may never fire on Android or without animation).
+const PRESENTATION_SETTLE_FALLBACK_MS = 700;
+
 function createMemoryId(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
@@ -87,6 +97,10 @@ function normalizeMemorySavedSource(raw: string | undefined): AnalyticsEventMap[
     case 'fab_calendar':
     case 'share_sheet':
     case 'notification':
+    case 'shortcut_text':
+    case 'shortcut_photo':
+    case 'shortcut_voice':
+    case 'shortcut_scan':
       return raw;
     default:
       return 'other';
@@ -126,7 +140,11 @@ function seedFromUri(uri: string): number {
 }
 
 export default function NewMemoryScreen() {
-  const { source: rawSource } = useLocalSearchParams<{ source?: string }>();
+  const { source: rawSource, action: rawAction, actionId } = useLocalSearchParams<{
+    source?: string;
+    action?: string;
+    actionId?: string;
+  }>();
   const memorySavedSource = useMemo(() => normalizeMemorySavedSource(rawSource), [rawSource]);
   const { user } = useAuth();
   const { role, familyId } = useFamily();
@@ -631,6 +649,57 @@ export default function NewMemoryScreen() {
       ? !audioClipRemoved
       : memoryType === 'media' ? attachedMedia.length > 0 : content.trim().length > 0);
 
+  // ── App shortcut action (docs/features/app-shortcuts.md) ──
+  // `QuickActionRouter` hands over `action` + `actionId` as route params. Run
+  // each actionId at most once -- back navigation, re-renders, resume and
+  // remounting with the same params must never reopen the camera/recorder.
+  // Waits until the screen will not bounce (billing / role) and the draft
+  // restore has settled (it only applies to an otherwise-empty form).
+  const mediaPickerRef = useRef<MemoryMediaPickerHandle>(null);
+  const scanButtonRef = useRef<ArtworkScanButtonHandle>(null);
+  const consumedActionIdRef = useRef<string | null>(null);
+  const shortcutAction = parseNewMemoryAction(rawAction);
+  // The route is a native modal: presenting the camera, scanner or recorder
+  // while it is still animating in fails silently on iOS. Settle on the
+  // stack's `transitionEnd` (fallback timer for Android / no animation) and
+  // stay settled, so an action set on an already-open composer fires at once.
+  const navigation = useNavigation();
+  const [isPresentationSettled, setIsPresentationSettled] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setIsPresentationSettled(true), PRESENTATION_SETTLE_FALLBACK_MS);
+    const unsubscribe = navigation.addListener(
+      'transitionEnd' as never,
+      ((event: { data?: { closing?: boolean } }) => {
+        if (!event.data?.closing) setIsPresentationSettled(true);
+      }) as never,
+    );
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [navigation]);
+  const isShortcutReady =
+    isPresentationSettled &&
+    canEditFamilyContent(role) &&
+    !isBillingLoading &&
+    billingStatus?.has_write_access === true &&
+    !isLoadingMembers &&
+    isDraftRestoreReady;
+  useEffect(() => {
+    if (!shortcutAction || !actionId || !isShortcutReady) return;
+    if (consumedActionIdRef.current === actionId) return;
+    consumedActionIdRef.current = actionId;
+
+    if (shortcutAction === 'voice') {
+      if (!(isSaving || audio.isProcessing)) setShowVoiceModal(true);
+    } else if (shortcutAction === 'photo') {
+      mediaPickerRef.current?.takePhoto();
+    } else if (shortcutAction === 'scan') {
+      scanButtonRef.current?.startScan();
+    }
+    router.setParams({ action: undefined, actionId: undefined });
+  }, [shortcutAction, actionId, isShortcutReady, isSaving, audio.isProcessing]);
+
   const handleContentChange = (text: string) => {
     contentRef.current = text;
     setContent(text);
@@ -1046,6 +1115,7 @@ export default function NewMemoryScreen() {
         <>
           {!isAudio ? (
             <MemoryMediaPicker
+              ref={mediaPickerRef}
               compact
               disabled={
                 isSaving ||
@@ -1084,6 +1154,7 @@ export default function NewMemoryScreen() {
               while a sound is being imported or its trim is rendering
               (`audio.isProcessing`). */}
           <ArtworkScanButton
+            ref={scanButtonRef}
             disabled={
               isSaving ||
               isAudio ||
