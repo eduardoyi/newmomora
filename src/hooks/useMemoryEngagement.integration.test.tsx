@@ -127,6 +127,19 @@ describe('useMemoryEngagement integration', () => {
     expect(mockedNotify).toHaveBeenCalledWith(memory.id, 'like');
   });
 
+  it('tolerates a memory without reaction fields (pre-reactions persisted cache)', () => {
+    const legacy = { ...memory, likedByMe: true, likeCount: 2 } as Record<string, unknown>;
+    delete legacy.myReaction;
+    delete legacy.topReactions;
+    const { result } = renderHook(
+      () => useMemoryEngagement(legacy as unknown as MemoryWithTags),
+      { wrapper },
+    );
+
+    expect(result.current.topReactions).toEqual([]);
+    expect(result.current.myReaction).toBe('❤️');
+  });
+
   it('optimistically applies the reaction before the server answers', async () => {
     let resolve!: (value: Awaited<ReturnType<typeof setMemoryReaction>>) => void;
     mockedSetReaction.mockReturnValue(new Promise((r) => { resolve = r; }));

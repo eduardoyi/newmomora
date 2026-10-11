@@ -45,10 +45,23 @@ function patchMemoryEngagement(
   patchMemoryInCaches(queryClient, familyId, memoryId, patch);
 }
 
+// Memories can reach this hook without the reaction fields -- e.g. hydrated
+// from a persisted query cache written before reactions shipped -- so never
+// assume they're present (an undefined topReactions crashed the bar).
+function withReactionDefaults(memory: MemoryWithTags): MemoryWithTags {
+  if (Array.isArray(memory.topReactions) && memory.myReaction !== undefined) return memory;
+  return {
+    ...memory,
+    myReaction: memory.myReaction ?? (memory.likedByMe ? DEFAULT_REACTION : null),
+    topReactions: Array.isArray(memory.topReactions) ? memory.topReactions : [],
+  };
+}
+
 export function useMemoryEngagement(
-  memory: MemoryWithTags,
+  rawMemory: MemoryWithTags,
   options: UseMemoryEngagementOptions = {},
 ) {
+  const memory = withReactionDefaults(rawMemory);
   const { user } = useAuth();
   const { familyId } = useFamily();
   const queryClient = useQueryClient();

@@ -45,7 +45,8 @@ export const PERSISTED_QUERY_CACHE_KEY = 'momora-query-cache';
 // tale this guards against). A buster mismatch makes the library discard
 // the whole persisted cache instead of feeding stale-shaped data into a
 // hook that assumes the new one.
-export const PERSISTED_QUERY_CACHE_BUSTER = 'v2';
+// v3: memories gained myReaction/topReactions (emoji reactions).
+export const PERSISTED_QUERY_CACHE_BUSTER = 'v3';
 
 export const PERSISTED_QUERY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
