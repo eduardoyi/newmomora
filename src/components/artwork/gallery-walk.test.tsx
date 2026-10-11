@@ -1,6 +1,8 @@
 import { fireEvent, render } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 
-import { getArtworkFrameSize } from '@/components/artwork-frame';
+import { ARTWORK_NAIL_HEIGHT, getArtworkFrameSize } from '@/components/artwork-frame';
+import { frameBodyBounds, frameVisualBounds } from '@/components/artwork/artwork-bounds';
 import { fitArtWidthToHeight } from '@/components/artwork/artwork-piece';
 import {
   GALLERY_WALK_TRACK_HEIGHT,
@@ -9,7 +11,12 @@ import {
   getGalleryWalkLayout,
   indexForOffset,
 } from '@/components/artwork/gallery-walk';
-import { pickFrameStyle } from '@/components/artwork/frame-style';
+import {
+  DETAIL_TILT_MAX,
+  pickDetailTilt,
+  pickFrameStyle,
+  walkLeanDirection,
+} from '@/components/artwork/frame-style';
 import type { MemoryMediaAsset } from '@/services/memories';
 
 function asset(index: number, aspectRatio: number | null = 0.75): MemoryMediaAsset {
@@ -60,14 +67,14 @@ describe('getGalleryWalkLayout', () => {
     expect(layout.trackHeight).toBe(GALLERY_WALK_TRACK_HEIGHT);
   });
 
-  it('leaves roughly 55px of each neighbour visible', () => {
+  it('leaves 30-80px of each neighbour visible (tall pieces give a little to the lean)', () => {
     const layout = getGalleryWalkLayout(390);
     for (const ratio of [0.667, 1, 1.5]) {
       const frame = getArtworkFrameSize(getGalleryWalkArtWidth(layout, ratio), ratio);
       // The neighbour is one slide pitch away; its near edge sits this far
       // from the screen's edge.
       const visible = 390 - (390 / 2 + layout.slideSpacing - frame.width / 2);
-      expect(visible).toBeGreaterThan(40);
+      expect(visible).toBeGreaterThan(30);
       expect(visible).toBeLessThan(80);
     }
   });
@@ -78,6 +85,42 @@ describe('getGalleryWalkLayout', () => {
       const frame = getArtworkFrameSize(getGalleryWalkArtWidth(layout, ratio), ratio);
       expect(frame.width).toBeLessThan(layout.slideSpacing);
       expect(frame.height).toBeLessThan(layout.trackHeight);
+    }
+  });
+});
+
+describe('leaning frames fit their slide and the track', () => {
+  const SCREENS = [320, 360, 390, 430];
+  const RATIOS = [0.5, 0.667, 1, 1.5, 2];
+
+  it('keeps a frame leaning the full DETAIL_TILT_MAX either way inside its half of the slide', () => {
+    for (const screen of SCREENS) {
+      const layout = getGalleryWalkLayout(screen);
+      for (const ratio of RATIOS) {
+        const size = getArtworkFrameSize(getGalleryWalkArtWidth(layout, ratio), ratio);
+        for (const tilt of [-DETAIL_TILT_MAX, DETAIL_TILT_MAX]) {
+          const body = frameBodyBounds(size.width, size.height, tilt, true);
+          const halfExtent = Math.max(size.width / 2 - body.left, body.right - size.width / 2);
+          // Neighbours lean opposite ways, so each gets half the pitch.
+          expect(halfExtent * 2).toBeLessThanOrEqual(layout.slideSpacing);
+        }
+      }
+    }
+  });
+
+  it('keeps the leaning frame, nail, string and shadow inside the track (the list clips)', () => {
+    for (const screen of SCREENS) {
+      const layout = getGalleryWalkLayout(screen);
+      for (const ratio of RATIOS) {
+        const size = getArtworkFrameSize(getGalleryWalkArtWidth(layout, ratio), ratio);
+        // The slide centers [nail room + frame] in the track.
+        const frameTop = (layout.trackHeight - ARTWORK_NAIL_HEIGHT - size.height) / 2 + ARTWORK_NAIL_HEIGHT;
+        for (const tilt of [-DETAIL_TILT_MAX, DETAIL_TILT_MAX, 0]) {
+          const visual = frameVisualBounds(size.width, size.height, tilt, true);
+          expect(frameTop + visual.top).toBeGreaterThanOrEqual(0);
+          expect(frameTop + visual.bottom).toBeLessThanOrEqual(layout.trackHeight);
+        }
+      }
     }
   });
 });
@@ -133,6 +176,37 @@ describe('GalleryWalk', () => {
     expect(getByTestId('memory-detail-gallery-walk-slide-2')).toBeTruthy();
     // Same deterministic pick the Timeline makes.
     expect(pickFrameStyle('asset-1')).toEqual(pickFrameStyle('asset-1'));
+  });
+
+  it('leans every frame its own 1.5 to 4 degrees and neighbours opposite ways', () => {
+    const { getByTestId } = renderWalk();
+    const rotation = (testID: string) => {
+      const transform = StyleSheet.flatten(getByTestId(testID).props.style).transform;
+      return parseFloat(transform?.[0]?.rotate ?? 'NaN');
+    };
+    const tilts = [
+      rotation('memory-detail-artwork-frame'),
+      rotation('memory-detail-gallery-walk-slide-1'),
+      rotation('memory-detail-gallery-walk-slide-2'),
+    ];
+    const first = ASSETS[0].id;
+    expect(tilts).toEqual(
+      ASSETS.map((a, index) => pickDetailTilt(a.id, walkLeanDirection(first, index))),
+    );
+    expect(Math.sign(tilts[0])).toBe(-Math.sign(tilts[1]));
+    expect(Math.sign(tilts[1])).toBe(-Math.sign(tilts[2]));
+    for (const tilt of tilts) {
+      expect(Math.abs(tilt)).toBeGreaterThanOrEqual(1.5);
+      expect(Math.abs(tilt)).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it('wears a lean of its own on the wall, not the Timeline tilt', () => {
+    const { getByTestId } = renderWalk();
+    const frame = getByTestId('memory-detail-artwork-frame');
+    const timeline = pickFrameStyle(ASSETS[0].id);
+    // Kind and color are the Timeline's pick; the tilt is replaced (bolder on the wall).
+    expect(StyleSheet.flatten(frame.props.style).transform?.[0].rotate).not.toBe(`${timeline.tilt}deg`);
   });
 
   it('reports the initial index on mount and opens on it', () => {

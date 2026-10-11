@@ -42,7 +42,8 @@ export interface ArtworkFrameProps {
 }
 
 /** Nail position relative to the frame's top edge (negative = above). */
-const NAIL_Y = -30;
+export const ARTWORK_NAIL_Y = -30;
+const NAIL_Y = ARTWORK_NAIL_Y;
 /** Room above the frame box the nail + string occupy, for layout. */
 export const ARTWORK_NAIL_HEIGHT = 36;
 
@@ -52,6 +53,17 @@ const PAD_LEFT = 6;
 const PAD_RIGHT = 14;
 const PAD_BOTTOM = 18;
 const PAD_TOP = 6;
+
+/** How far the drawn SVG reaches beyond the frame's layout box (the viewport
+ * clips anything past it, so it is the frame's full visual extent). `top` is
+ * the no-nail value; a nailed frame reaches `ARTWORK_NAIL_HEIGHT` up. Layout
+ * code that must keep a rotated frame inside its own box reads these. */
+export const ARTWORK_FRAME_PAD = {
+  left: PAD_LEFT,
+  right: PAD_RIGHT,
+  bottom: PAD_BOTTOM,
+  top: PAD_TOP,
+} as const;
 
 // Cast shadow: stacked, offset copies of the body (RN SVG has no reliable
 // blur, and Android elevation shadows are rectangular).

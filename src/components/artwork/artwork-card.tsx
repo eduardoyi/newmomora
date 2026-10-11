@@ -7,9 +7,14 @@ import { ArtworkDeck } from '@/components/artwork/artwork-deck';
 import {
   artworkContentWidth,
   deckLayout,
-  singleArtWidth,
+  singleLayout,
 } from '@/components/artwork/artwork-layout';
-import { ArtworkPieceImage, useArtworkPieceUrls } from '@/components/artwork/artwork-piece-image';
+import {
+  ArtworkPieceImage,
+  useArtworkPieceUrls,
+  useArtworkUrlRecovery,
+  type ArtworkUrlErrorHandler,
+} from '@/components/artwork/artwork-piece-image';
 import {
   artworkLabelContent,
   artworkPieces,
@@ -91,6 +96,7 @@ function SinglePiece({
   artWidth,
   url,
   onUrlError,
+  onUrlLoad,
   onPress,
   revealStyle,
   accessibilityLabel,
@@ -100,7 +106,8 @@ function SinglePiece({
   piece: ArtworkPiece;
   artWidth: number;
   url: string | undefined;
-  onUrlError: () => void;
+  onUrlError: ArtworkUrlErrorHandler;
+  onUrlLoad: ArtworkUrlErrorHandler;
   onPress: () => void;
   revealStyle: ArtworkRevealStyles['frame'] | null;
 }) {
@@ -116,6 +123,7 @@ function SinglePiece({
       <ArtworkPieceImage
         objectKey={piece.displayKey}
         onError={onUrlError}
+        onLoad={onUrlLoad}
         testID={`memory-card-${memoryId}-artwork-image-0`}
         url={piece.displayKey ? url : undefined}
       />
@@ -149,13 +157,14 @@ function ArtworkCardBase({ memory, onPress, onOpenComments }: ArtworkCardProps) 
   const isBatch = pieces.length > 1;
   const [frontIndex, setFrontIndex] = useState(0);
   const { urls, refetch } = useArtworkPieceUrls(pieces, memory.updated_at);
-  const handleUrlError = useCallback(() => void refetch(), [refetch]);
+  // Bounded: one re-sign per piece until an image loads (see the hook).
+  const { onError: handleUrlError, onLoad: handleUrlLoad } = useArtworkUrlRecovery(refetch);
   const shouldReveal = useShouldRevealArtwork(memory.id);
 
   const single = useMemo(() => {
     if (isBatch) return null;
     const piece = pieces[0];
-    return { piece, artWidth: singleArtWidth(contentWidth, piece.ratio) };
+    return { piece, layout: singleLayout(contentWidth, piece.ratio) };
   }, [contentWidth, isBatch, pieces]);
   const deck = useMemo(
     () => (isBatch ? deckLayout(contentWidth, pieces.map((piece) => piece.ratio)) : null),
@@ -175,7 +184,9 @@ function ArtworkCardBase({ memory, onPress, onOpenComments }: ArtworkCardProps) 
 
   const renderBody = (reveal: ArtworkRevealStyles | null): ReactNode => (
     <View
-      style={[styles.root, isBatch ? styles.rootBatch : styles.rootSingle]}
+      // A single piece reserves its full reach above the frame (tilt lift +
+      // reveal drop and swing); a deck reserves its own inside its container.
+      style={[styles.root, isBatch ? styles.rootBatch : { paddingTop: single?.layout.topPad }]}
       testID={`memory-card-${memoryId}`}
     >
       {deck ? (
@@ -185,6 +196,7 @@ function ArtworkCardBase({ memory, onPress, onOpenComments }: ArtworkCardProps) 
           onFrontChange={setFrontIndex}
           onOpen={handleOpenFront}
           onUrlError={handleUrlError}
+          onUrlLoad={handleUrlLoad}
           pieces={pieces}
           reveal={reveal}
           urls={urls}
@@ -192,10 +204,11 @@ function ArtworkCardBase({ memory, onPress, onOpenComments }: ArtworkCardProps) 
       ) : single ? (
         <SinglePiece
           accessibilityLabel={labelContent.title ? `Artwork, ${labelContent.title}` : 'Artwork'}
-          artWidth={single.artWidth}
+          artWidth={single.layout.artWidth}
           memoryId={memoryId}
           onPress={handleOpenSingle}
           onUrlError={handleUrlError}
+          onUrlLoad={handleUrlLoad}
           piece={single.piece}
           revealStyle={reveal ? reveal.frame : null}
           url={single.piece.displayKey ? urls[single.piece.displayKey] : undefined}
@@ -243,13 +256,11 @@ const styles = StyleSheet.create({
   root: {
     alignItems: 'stretch',
   },
-  // Canvas padding above the first frame (the nail-less frame hangs from the
-  // top, so this is the gap under the previous card).
-  rootSingle: {
-    paddingTop: 18,
-  },
+  // The deck's container already includes room for every pose (artwork-layout
+  // `deckLayout`), so this is only the gap under the previous card. (A single
+  // piece's top padding is `singleLayout().topPad`.)
   rootBatch: {
-    paddingTop: 14,
+    paddingTop: 6,
   },
   singlePress: {
     alignSelf: 'center',
@@ -261,7 +272,7 @@ const styles = StyleSheet.create({
     marginTop: 26,
   },
   labelBatch: {
-    marginTop: 22,
+    marginTop: 14,
   },
   title: {
     color: colors.ink,

@@ -8,8 +8,15 @@ import {
 } from 'react-native';
 
 import { ARTWORK_NAIL_HEIGHT, getArtworkFrameSize } from '@/components/artwork-frame';
+import { frameBodyBounds, frameVisualBounds } from '@/components/artwork/artwork-bounds';
 import { artworkRatio } from '@/components/artwork/artwork-layout';
-import { ArtworkPiece, fitArtWidthToHeight } from '@/components/artwork/artwork-piece';
+import type { ArtworkUrlErrorHandler } from '@/components/artwork/artwork-piece-image';
+import {
+  ArtworkPiece,
+  artworkFrameKey,
+  fitArtWidthToHeight,
+} from '@/components/artwork/artwork-piece';
+import { DETAIL_TILT_MAX, walkLeanDirection } from '@/components/artwork/frame-style';
 import type { MemoryMediaAsset } from '@/services/memories';
 
 // The batch detail view (docs/plans/artwork-scanning-v2.md decision 6): a
@@ -26,6 +33,8 @@ const ART_WIDTH_RATIO = 0.46;
 export const GALLERY_WALK_TRACK_HEIGHT = 420;
 /** Gap kept between a frame and the neighbour's frame / track edge. */
 const FRAME_MARGIN = 8;
+/** Smallest gap between two neighbours' leaning bodies at their closest. */
+const NEIGHBOUR_GAP = 8;
 
 export interface GalleryWalkLayout {
   slideSpacing: number;
@@ -44,15 +53,33 @@ export function getGalleryWalkLayout(screenWidth: number): GalleryWalkLayout {
   };
 }
 
-/** Art width for one slide: capped so the frame fits both the slide pitch and the track. */
+/** Whether a frame leaning up to DETAIL_TILT_MAX either way (neighbours lean
+ * opposite ways, so each one needs its own half of the slide) stays inside its
+ * slide horizontally and inside the track vertically. The track clips, and the
+ * frame leans about its nail, so the lift above and the swing below count. */
+function fitsSlide(layout: GalleryWalkLayout, artWidth: number, aspectRatio: number): boolean {
+  const size = getArtworkFrameSize(artWidth, aspectRatio);
+  // The slide centers [nail room + frame] in the track.
+  const free = (layout.trackHeight - ARTWORK_NAIL_HEIGHT - size.height) / 2;
+  if (free < 0) return false;
+  for (const tilt of [-DETAIL_TILT_MAX, DETAIL_TILT_MAX]) {
+    const body = frameBodyBounds(size.width, size.height, tilt, true);
+    const halfExtent = Math.max(size.width / 2 - body.left, body.right - size.width / 2);
+    // Converging neighbours (every second pair) meet at their lower corners.
+    if (halfExtent > layout.slideSpacing / 2 - NEIGHBOUR_GAP / 2) return false;
+    const visual = frameVisualBounds(size.width, size.height, tilt, true);
+    if (-visual.top > ARTWORK_NAIL_HEIGHT + free - FRAME_MARGIN / 2) return false;
+    if (visual.bottom - size.height > free - FRAME_MARGIN / 2) return false;
+  }
+  return true;
+}
+
+/** Art width for one slide: capped so the leaning frame (nail, string and
+ * shadow included) fits both the slide pitch and the track. */
 export function getGalleryWalkArtWidth(layout: GalleryWalkLayout, aspectRatio: number): number {
   const maxFrameHeight = layout.trackHeight - ARTWORK_NAIL_HEIGHT - FRAME_MARGIN * 2;
-  const byHeight = fitArtWidthToHeight(layout.artWidth, aspectRatio, maxFrameHeight);
-  let artWidth = byHeight;
-  while (
-    artWidth > 1 &&
-    getArtworkFrameSize(artWidth, aspectRatio).width > layout.slideSpacing - FRAME_MARGIN * 2
-  ) {
+  let artWidth = fitArtWidthToHeight(layout.artWidth, aspectRatio, maxFrameHeight);
+  while (artWidth > 1 && !fitsSlide(layout, artWidth, aspectRatio)) {
     artWidth -= 1;
   }
   return artWidth;
@@ -77,7 +104,8 @@ interface GalleryWalkProps {
   onActiveIndexChange?: (index: number) => void;
   /** Tap on the current piece. */
   onOpen: (index: number) => void;
-  onUrlError?: () => void;
+  onUrlError?: ArtworkUrlErrorHandler;
+  onUrlLoad?: ArtworkUrlErrorHandler;
 }
 
 export function GalleryWalk({
@@ -89,8 +117,17 @@ export function GalleryWalk({
   onActiveIndexChange,
   onOpen,
   onUrlError,
+  onUrlLoad,
 }: GalleryWalkProps) {
   const layout = useMemo(() => getGalleryWalkLayout(screenWidth), [screenWidth]);
+  // Fitting a leaning frame to its slide is a small search: once per piece.
+  const artWidths = useMemo(
+    () => assets.map((asset) => getGalleryWalkArtWidth(layout, artworkRatio(asset.aspect_ratio))),
+    [assets, layout],
+  );
+  // Every piece's lean flips from the first piece's seed sign, so neighbours
+  // lean opposite ways.
+  const firstKey = artworkFrameKey(assets[0], memoryId);
   const startIndex = Math.min(Math.max(Math.trunc(initialIndex) || 0, 0), Math.max(assets.length - 1, 0));
   const [activeIndex, setActiveIndex] = useState(startIndex);
   const listRef = useRef<FlatList<MemoryMediaAsset>>(null);
@@ -154,11 +191,13 @@ export function GalleryWalk({
                     ? 'View artwork full screen'
                     : `Show piece ${index + 1} of ${assets.length}`
                 }
-                artWidth={getGalleryWalkArtWidth(layout, artworkRatio(item.aspect_ratio))}
+                artWidth={artWidths[index] ?? 1}
                 asset={item}
                 memoryId={memoryId}
                 onPress={isCurrent ? () => onOpen(index) : () => goTo(index)}
                 onUrlError={onUrlError}
+                onUrlLoad={onUrlLoad}
+                leanDirection={walkLeanDirection(firstKey, index)}
                 testID={
                   isCurrent
                     ? 'memory-detail-artwork-frame'

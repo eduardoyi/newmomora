@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { FlatList } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -92,7 +92,16 @@ jest.mock('@/components/memory-fab', () => {
       React.createElement(Pressable, { onPress, testID: 'memory-fab' }),
   };
 });
-jest.mock('@/components/pending-memory-uploads-banner', () => ({ PendingMemoryUploadsBanner: () => null }));
+jest.mock('@/components/pending-memory-uploads-banner', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { View } = require('react-native');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require('react');
+  // The real banner's root test id, so tests can see where it is mounted.
+  return {
+    PendingMemoryUploadsBanner: () => React.createElement(View, { testID: 'pending-memory-uploads-banner' }),
+  };
+});
 jest.mock('@/components/looking-back/package-rail', () => ({ LookingBackPackageRail: () => null }));
 jest.mock('@/components/family-activity-sheet', () => ({ FamilyActivitySheet: () => null }));
 // The Calendar view renders the real month items; only their data and
@@ -341,6 +350,19 @@ describe('Timeline Calendar view', () => {
     });
     layoutTopContent(screen);
   }
+
+  it('keeps the pending-upload card in the header in Calendar view (its getItemLayout offsets assume a row-height first cell) and under the row in List view', async () => {
+    const screen = renderTimeline();
+    layoutTopContent(screen);
+    expect(within(screen.getByTestId('timeline-control-row-cell')).getByTestId('pending-memory-uploads-banner')).toBeTruthy();
+    expect(within(screen.getByTestId('timeline-top-sections')).queryByTestId('pending-memory-uploads-banner')).toBeNull();
+
+    await switchToCalendar(screen);
+
+    expect(within(screen.getByTestId('timeline-top-sections')).getByTestId('pending-memory-uploads-banner')).toBeTruthy();
+    expect(screen.queryByTestId('timeline-control-row-cell')).toBeTruthy();
+    expect(within(screen.getByTestId('timeline-control-row-cell')).queryByTestId('pending-memory-uploads-banner')).toBeNull();
+  });
 
   it('swaps what is below the control row for month grids, keeping the top content, and remembers the choice', async () => {
     const screen = renderTimeline();

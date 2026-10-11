@@ -2,6 +2,7 @@ import { act, fireEvent, render } from '@testing-library/react-native';
 import { Alert, Animated, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { pickDetailTilt, pickFrameStyle } from '@/components/artwork/frame-style';
 import { FullScreenMediaViewer } from '@/components/full-screen-media-viewer';
 import { MemoryCommentsDrawer } from '@/components/memory-comments-drawer';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
@@ -424,6 +425,19 @@ describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning-v2.md)
           items: [expect.objectContaining({ id: 'asset-1', objectKey: 'scan-1.jpg' })],
         }),
       );
+    });
+
+    it('leans the frame 1.5 to 4 degrees, in the direction of its Timeline seed', () => {
+      mockMemory({ media_variant: 'artwork' });
+
+      const screen = renderScreen();
+
+      const frame = StyleSheet.flatten(screen.getByTestId('memory-detail-artwork-frame').props.style);
+      const tilt = parseFloat(frame.transform?.[0]?.rotate ?? 'NaN');
+      expect(tilt).toBe(pickDetailTilt(assets[0].id));
+      expect(Math.abs(tilt)).toBeGreaterThanOrEqual(1.5);
+      expect(Math.abs(tilt)).toBeLessThanOrEqual(4);
+      expect(Math.sign(tilt)).toBe(Math.sign(pickFrameStyle(assets[0].id).tilt));
     });
 
     it('lays the frame out inside the screen width and the 480px height clamp', () => {

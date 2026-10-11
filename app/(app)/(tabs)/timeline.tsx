@@ -914,8 +914,21 @@ export default function TimelineScreen() {
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<TimelineRow>) => {
       if (item.kind === 'controls') {
-        // An empty slot: the real row is the overlay above the list.
-        return <View style={{ height: controlRowHeight }} testID="timeline-control-row-slot" />;
+        // An empty slot: the real row is the overlay above the list. In List
+        // view the pending-upload card sits UNDER the row, in this cell:
+        // above the row it would live in the measured header, so an upload
+        // starting or finishing resized the header and the pinned overlay
+        // (placed from the header's onLayout via JS state) lagged the list
+        // content by the JS round trip -- a stale row over the first card, a
+        // blank gap. Here only this cell's own height changes; the overlay's
+        // slot never moves. (Calendar view keeps it in the header: its
+        // getItemLayout offsets assume this cell is exactly the row's height.)
+        return (
+          <View testID="timeline-control-row-cell">
+            <View style={{ height: controlRowHeight }} testID="timeline-control-row-slot" />
+            {view === 'list' && showTopContent ? <PendingMemoryUploadsBanner /> : null}
+          </View>
+        );
       }
       if (item.kind === 'month') {
         return (
@@ -978,7 +991,7 @@ export default function TimelineScreen() {
     },
     [
       activeVideoId, contentSafety, controlRowHeight, filmDates, gridSummaries, handleCardPress, handleFilmPress,
-      handleGridDayPress, handleOpenComments, isFilmViewsLoading, members, tileSize, viewedIds,
+      handleGridDayPress, handleOpenComments, isFilmViewsLoading, members, showTopContent, tileSize, view, viewedIds,
     ],
   );
 
@@ -1006,7 +1019,9 @@ export default function TimelineScreen() {
           showStreak
         />
         <LookingBackPackageRail packages={lookingBack.packages} onOpen={handleOpenLookingBackPackage} />
-        <PendingMemoryUploadsBanner />
+        {/* List view: the pending-upload card is in the control row's cell
+            (renderItem), so the header's height never changes with uploads. */}
+        {view === 'calendar' ? <PendingMemoryUploadsBanner /> : null}
         {/* The invite renders above the first memory when there is exactly
             one memory, matching its empty-state placement below --
             visibleMemories.length <= 1 is the one condition both branches

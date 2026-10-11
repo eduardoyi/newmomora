@@ -1,8 +1,9 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AccessibilityInfo, StyleSheet } from 'react-native';
+import { AccessibilityInfo, Dimensions, StyleSheet } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 
 import { ArtworkCard } from '@/components/artwork/artwork-card';
+import { artworkContentWidth, singleLayout } from '@/components/artwork/artwork-layout';
 import { artworkMemory } from '@/components/artwork/artwork-test-fixtures';
 import { pickFrameStyle } from '@/components/artwork/frame-style';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
@@ -40,8 +41,8 @@ jest.mock('@/hooks/useMediaUrls', () => ({
 jest.mock('expo-image', () => {
   const { View: MockView } = jest.requireActual<typeof import('react-native')>('react-native');
   return {
-    Image: (props: { testID?: string; onError?: () => void }) => (
-      <MockView onTouchCancel={props.onError} testID={props.testID} />
+    Image: (props: { testID?: string; onError?: () => void; onLoad?: () => void }) => (
+      <MockView onTouchCancel={props.onError} onTouchEnd={props.onLoad} testID={props.testID} />
     ),
   };
 });
@@ -86,6 +87,16 @@ describe('ArtworkCard', () => {
       expect(flat.borderWidth).toBeUndefined();
     });
 
+    it('reserves the frame\'s full reach above it (tilt lift + reveal drop and swing)', () => {
+      const { getByTestId } = renderCard();
+      const { width } = Dimensions.get('window');
+      const root = StyleSheet.flatten(getByTestId('memory-card-memory-1').props.style);
+      // Never less than the canvas gap; enough for the reveal (artwork-layout tests
+      // prove the bounds never exceed topPad for every ratio and width).
+      expect(root.paddingTop).toBeGreaterThanOrEqual(18);
+      expect(root.paddingTop).toBe(singleLayout(artworkContentWidth(width), 0.75).topPad);
+    });
+
     it('draws the scan from the list-sized preview key', () => {
       const { getByTestId } = renderCard();
       expect(getByTestId('memory-card-memory-1-artwork-image-0')).toBeTruthy();
@@ -122,6 +133,26 @@ describe('ArtworkCard', () => {
       const { getByTestId } = renderCard();
       fireEvent(getByTestId('memory-card-memory-1-artwork-image-0'), 'touchCancel');
       expect(mockRefetch).toHaveBeenCalledTimes(1);
+      // Joins an in-flight request instead of cancelling and restarting it.
+      expect(mockRefetch).toHaveBeenCalledWith({ cancelRefetch: false });
+    });
+
+    it('re-signs only once while the piece keeps failing (no error -> refetch loop)', () => {
+      const { getByTestId } = renderCard();
+      const image = getByTestId('memory-card-memory-1-artwork-image-0');
+      fireEvent(image, 'touchCancel');
+      fireEvent(image, 'touchCancel');
+      fireEvent(image, 'touchCancel');
+      expect(mockRefetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-signs again for a later expiry once the piece has loaded', () => {
+      const { getByTestId } = renderCard();
+      const image = getByTestId('memory-card-memory-1-artwork-image-0');
+      fireEvent(image, 'touchCancel');
+      fireEvent(image, 'touchEnd');
+      fireEvent(image, 'touchCancel');
+      expect(mockRefetch).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -17,9 +17,9 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ARTWORK_NAIL_HEIGHT } from '@/components/artwork-frame';
 import { artworkRatio } from '@/components/artwork/artwork-layout';
-import { ArtworkPiece, fitArtWidthToHeight } from '@/components/artwork/artwork-piece';
+import { ArtworkPiece, getDetailSingleLayout } from '@/components/artwork/artwork-piece';
+import { useArtworkUrlRecovery } from '@/components/artwork/artwork-piece-image';
 import { GalleryWalk } from '@/components/artwork/gallery-walk';
 import { GalleryWall } from '@/components/artwork/gallery-wall';
 import { MuseumPlacard } from '@/components/artwork/museum-placard';
@@ -229,8 +229,8 @@ function MemoryMetaFooter({
 // Single piece: the frame hangs from a nail ~64% of the screen wide, height
 // clamped so tall art shrinks. Batch: the snapping gallery walk. Both sit above
 // a museum placard (docs/plans/artwork-scanning-v2.md decisions 5-6).
-const ARTWORK_SINGLE_WIDTH_RATIO = 0.64;
-const ARTWORK_SINGLE_MAX_FRAME_HEIGHT = 480;
+// (Sizes: DETAIL_SINGLE_WIDTH_RATIO / DETAIL_SINGLE_MAX_FRAME_HEIGHT in
+// artwork-piece.tsx, which also reserves room for the frame's lean.)
 
 function ArtworkDetailStage({
   memory,
@@ -249,8 +249,12 @@ function ArtworkDetailStage({
     assets.map((asset) => asset.object_key),
     memory.updated_at,
   );
+  // Bounded: one re-sign per piece until an image loads (a failing URL must not
+  // loop error -> refetch -> error).
+  const { onError: handleUrlError, onLoad: handleUrlLoad } = useArtworkUrlRecovery(refetch);
   const first = assets[0];
   const isBatch = assets.length > 1;
+  const singleLayout = first ? getDetailSingleLayout(windowWidth, artworkRatio(first.aspect_ratio)) : null;
 
   return (
     <View style={styles.artworkStage} testID="memory-detail-artwork-stage">
@@ -265,23 +269,21 @@ function ArtworkDetailStage({
           memoryId={memory.id}
           onActiveIndexChange={onActiveIndexChange}
           onOpen={onOpenFullScreen}
-          onUrlError={() => void refetch()}
+          onUrlError={handleUrlError}
+          onUrlLoad={handleUrlLoad}
           screenWidth={windowWidth}
           urls={urls}
         />
       ) : (
-        <View style={{ paddingTop: ARTWORK_NAIL_HEIGHT + 8 }}>
+        <View style={{ paddingTop: singleLayout?.topPad }}>
           <ArtworkPiece
             accessibilityLabel="View artwork full screen"
-            artWidth={fitArtWidthToHeight(
-              Math.round(windowWidth * ARTWORK_SINGLE_WIDTH_RATIO),
-              artworkRatio(first.aspect_ratio),
-              ARTWORK_SINGLE_MAX_FRAME_HEIGHT,
-            )}
+            artWidth={singleLayout?.artWidth ?? 1}
             asset={first}
             memoryId={memory.id}
             onPress={() => onOpenFullScreen(0)}
-            onUrlError={() => void refetch()}
+            onUrlError={handleUrlError}
+            onUrlLoad={handleUrlLoad}
             testID="memory-detail-artwork-frame"
             url={urls[first.object_key]}
           />

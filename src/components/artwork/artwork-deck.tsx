@@ -20,11 +20,11 @@ import {
   visibleDeckIndices,
 } from '@/components/artwork/artwork-deck-order';
 import {
-  DECK_SIDE_BLEED,
+  DECK_EXIT_TILT_DEG,
   deckSlotPose,
   type DeckLayout,
 } from '@/components/artwork/artwork-layout';
-import { ArtworkPieceImage } from '@/components/artwork/artwork-piece-image';
+import { ArtworkPieceImage, type ArtworkUrlErrorHandler } from '@/components/artwork/artwork-piece-image';
 import type { ArtworkPiece } from '@/components/artwork/artwork-pieces';
 import { revealPivot, type ArtworkRevealStyles } from '@/components/artwork/artwork-reveal';
 import { colors, fonts } from '@/constants/theme';
@@ -51,14 +51,15 @@ const RETURN_MS = 200;
 const TUCK_MS = 320;
 const SLOT_MS = 320;
 const EXIT_DISTANCE_FACTOR = 1.2;
-const EXIT_TILT_DEG = 16;
+const EXIT_TILT_DEG = DECK_EXIT_TILT_DEG;
 
 export interface ArtworkDeckProps {
   memoryId: string;
   pieces: readonly ArtworkPiece[];
   layout: DeckLayout;
   urls: Record<string, string>;
-  onUrlError: () => void;
+  onUrlError: ArtworkUrlErrorHandler;
+  onUrlLoad?: ArtworkUrlErrorHandler;
   /** Tap: open the detail screen on this asset index (the front piece). */
   onOpen: (assetIndex: number) => void;
   /** The front piece changed (initial value included). */
@@ -89,7 +90,8 @@ interface DeckCardProps {
   zIndex: number;
   memoryId: string;
   url: string | undefined;
-  onUrlError: () => void;
+  onUrlError: ArtworkUrlErrorHandler;
+  onUrlLoad?: ArtworkUrlErrorHandler;
   reduceMotion: boolean;
   shared: DeckSharedValues;
   revealStyle: ArtworkRevealStyles['frame'] | ArtworkRevealStyles['fade'] | null;
@@ -112,6 +114,7 @@ const DeckCard = memo(function DeckCard({
   memoryId,
   url,
   onUrlError,
+  onUrlLoad,
   reduceMotion,
   shared,
   revealStyle,
@@ -165,6 +168,7 @@ const DeckCard = memo(function DeckCard({
       <ArtworkPieceImage
         objectKey={piece.displayKey}
         onError={onUrlError}
+        onLoad={onUrlLoad}
         testID={`memory-card-${memoryId}-artwork-image-${index}`}
         url={piece.displayKey ? url : undefined}
       />
@@ -206,6 +210,7 @@ export function ArtworkDeck({
   layout,
   urls,
   onUrlError,
+  onUrlLoad,
   onOpen,
   onFrontChange,
   reveal = null,
@@ -342,9 +347,10 @@ export function ArtworkDeck({
                 index={assetIndex}
                 isRevealFront={isRevealFront}
                 key={assetIndex}
-                maxShiftX={Math.max(0, width / 2 + DECK_SIDE_BLEED - pieceLayout.width / 2)}
+                maxShiftX={pieceLayout.maxShiftX}
                 memoryId={memoryId}
                 onUrlError={onUrlError}
+                onUrlLoad={onUrlLoad}
                 piece={piece}
                 pieceHeight={pieceLayout.height}
                 pieceWidth={pieceLayout.width}

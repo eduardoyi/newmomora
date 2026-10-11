@@ -10,10 +10,11 @@ import {
   withTiming,
 } from 'react-native-reanimated';
 
+import { REVEAL_DROP_PX, REVEAL_START_TILT } from '@/components/artwork/artwork-layout';
 import { consumeArtworkReveal } from '@/utils/artwork-reveal';
 
 // The Timeline reveal (docs/plans/artwork-scanning-v2.md decision 8, canvas
-// Moments.dc.html): a freshly posted piece drops in from 40px above, tilted 9
+// Moments.dc.html): a freshly posted piece drops in from `REVEAL_DROP_PX` (40) above, tilted 9
 // degrees (380ms ease-out), swings about its top-center in two damped swings
 // (~900ms) and settles at its own tilt; the label fades in last. Reduced motion
 // gets a plain fade.
@@ -22,8 +23,9 @@ import { consumeArtworkReveal } from '@/utils/artwork-reveal';
 // mark (`consumeArtworkReveal`), so ordinary cards in the virtualized list
 // carry no shared values or animated styles at all.
 
-export const REVEAL_DROP_PX = 40;
-export const REVEAL_START_TILT = 9;
+// The drop and start tilt live in artwork-layout.ts next to the other pose
+// numbers. They are not reserved in any layout (a ~1s transient may overlap).
+export { REVEAL_DROP_PX, REVEAL_START_TILT };
 export const REVEAL_DROP_MS = 380;
 export const REVEAL_LABEL_DELAY_MS = 700;
 export const REVEAL_LABEL_FADE_MS = 240;

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import { StyleSheet } from 'react-native';
 
 import TimelineScreen from '../../app/(app)/(tabs)/timeline';
@@ -132,9 +132,11 @@ jest.mock('@/components/memory-card', () => ({
 jest.mock('@/components/memory-fab', () => ({
   MemoryFab: () => null,
 }));
-jest.mock('@/components/pending-memory-uploads-banner', () => ({
-  PendingMemoryUploadsBanner: () => null,
-}));
+jest.mock('@/components/pending-memory-uploads-banner', () => {
+  const { View: MockView } = jest.requireActual<typeof import('react-native')>('react-native');
+  // Renders the real banner's root test id so tests can see WHERE it is mounted.
+  return { PendingMemoryUploadsBanner: () => <MockView testID="pending-memory-uploads-banner" /> };
+});
 jest.mock('@/components/looking-back/package-rail', () => ({
   LookingBackPackageRail: () => null,
 }));
@@ -406,6 +408,18 @@ describe('TimelineScreen', () => {
     expect(getByTestId('timeline-today-button')).toBeTruthy();
     fireEvent.scroll(list, scrollEvent(0));
     expect(queryByTestId('timeline-today-button')).toBeNull();
+  });
+
+  it('mounts the pending-upload card under the control row, not in the measured header', () => {
+    // An upload starting or finishing must not resize the header that places
+    // the pinned control row (JS round trip -> overlay lags the list content).
+    const { getByTestId } = render(<TimelineScreen />);
+
+    const cell = getByTestId('timeline-control-row-cell');
+    expect(within(cell).getByTestId('pending-memory-uploads-banner')).toBeTruthy();
+    // ...after the row's own slot, so it sits below the row.
+    expect(within(cell).getByTestId('timeline-control-row-slot')).toBeTruthy();
+    expect(within(getByTestId('timeline-top-sections')).queryByTestId('pending-memory-uploads-banner')).toBeNull();
   });
 
   it('shows a footer spinner while fetching the next page', () => {
