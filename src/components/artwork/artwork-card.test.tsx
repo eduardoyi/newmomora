@@ -7,6 +7,7 @@ import { artworkContentWidth, singleLayout } from '@/components/artwork/artwork-
 import { artworkMemory } from '@/components/artwork/artwork-test-fixtures';
 import { pickFrameStyle } from '@/components/artwork/frame-style';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
+import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
 import {
   consumeArtworkReveal,
   markArtworkForReveal,
@@ -25,6 +26,34 @@ jest.mock('@/components/family-member-avatar', () => {
 jest.mock('@/components/memory-engagement-bar', () => ({
   MemoryEngagementBar: jest.fn(() => null),
 }));
+
+// Only the "emoji reactions" describe renders the real bar (via
+// requireActual); these keep its data/native dependencies out of the suite.
+jest.mock('@/hooks/useMemoryEngagement', () => ({ useMemoryEngagement: jest.fn() }));
+jest.mock('@/hooks/use-family', () => ({
+  useFamily: jest.fn(() => ({
+    role: 'owner',
+    family: { id: 'family-1', name: 'The Family', viewerSharingEnabled: true },
+  })),
+}));
+jest.mock('@/hooks/useShareMemoryCard', () => ({
+  useShareMemoryCard: () => ({ shareMemoryCard: jest.fn(), isSharing: false }),
+}));
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn(() => Promise.resolve()),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' },
+}));
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+}));
+jest.mock('@/components/memory-reactions-sheet', () => {
+  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+  return {
+    MemoryReactionsSheet: ({ visible }: { visible: boolean }) =>
+      visible ? <Text testID="mock-reactions-sheet">sheet</Text> : null,
+  };
+});
+jest.mock('@/components/reaction-emoji-picker', () => ({ ReactionEmojiPicker: () => null }));
 
 const mockRefetch = jest.fn();
 jest.mock('@/hooks/useMediaUrls', () => ({
@@ -48,6 +77,20 @@ jest.mock('expo-image', () => {
 });
 
 const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+const mockedUseMemoryEngagement = useMemoryEngagement as jest.Mock;
+
+function mockEngagement(overrides: Record<string, unknown> = {}) {
+  mockedUseMemoryEngagement.mockReturnValue({
+    likedByMe: false,
+    myReaction: null,
+    topReactions: [],
+    likeCount: 0,
+    commentCount: 0,
+    setReaction: jest.fn().mockResolvedValue(undefined),
+    isUpdatingLike: false,
+    ...overrides,
+  });
+}
 
 function renderCard(
   memory = artworkMemory(1),
@@ -323,6 +366,82 @@ describe('ArtworkCard', () => {
 
       expect(withSpring).toHaveBeenCalledTimes(1);
       expect(getByText('1 of 3')).toBeTruthy();
+    });
+  });
+  // The bar is mocked everywhere else in this file; here the real one renders
+  // inside the card (docs/features/likes-and-comments.md, emoji reactions) so
+  // the wrapper styles, the deck's Pan gesture and the tray Modal are exercised
+  // together with an artwork memory.
+  describe('emoji reactions', () => {
+    const measure = () => {
+      // View.prototype.measureInWindow isn't implemented by the RN jest mock.
+      jest.requireActual('react-native').View.prototype.measureInWindow = (
+        callback: (x: number, y: number, w: number, h: number) => void,
+      ) => callback(20, 400, 120, 32);
+    };
+
+    beforeEach(() => {
+      mockedEngagementBar.mockImplementation(
+        jest.requireActual('@/components/memory-engagement-bar').MemoryEngagementBar,
+      );
+      mockEngagement();
+      measure();
+    });
+    afterEach(() => {
+      mockedEngagementBar.mockImplementation(() => null);
+    });
+
+    it('single piece: shows the add-reaction button, and tapping it opens the tray', () => {
+      const setReaction = jest.fn().mockResolvedValue(undefined);
+      mockEngagement({ setReaction });
+      const { getByTestId, queryByTestId } = renderCard(artworkMemory(1));
+
+      expect(queryByTestId('memory-reactions-memory-1')).toBeNull();
+      expect(queryByTestId('reaction-tray')).toBeNull();
+      fireEvent.press(getByTestId('memory-react-memory-1'));
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+
+      fireEvent.press(getByTestId('reaction-tray-😂'));
+      expect(setReaction).toHaveBeenCalledWith('😂');
+    });
+
+    it('single piece: the merged pill (with its + segment) and the comments button render', () => {
+      mockEngagement({ topReactions: ['😂', '❤️'], likeCount: 2 });
+      const { getByTestId } = renderCard(artworkMemory(1, { likeCount: 2 }));
+
+      expect(getByTestId('memory-reactions-memory-1')).toBeTruthy();
+      expect(getByTestId('memory-reactions-divider-memory-1')).toBeTruthy();
+      expect(getByTestId('memory-react-memory-1')).toBeTruthy();
+      expect(getByTestId('memory-comments-memory-1')).toBeTruthy();
+    });
+
+    it('single piece: long-pressing my pill opens the tray; a pill tap opens the who-reacted sheet', () => {
+      mockEngagement({ myReaction: '😂', likedByMe: true, topReactions: ['😂'], likeCount: 1 });
+      const { getByTestId, queryByTestId } = renderCard(artworkMemory(1));
+
+      expect(queryByTestId('memory-react-memory-1')).toBeNull();
+      fireEvent(getByTestId('memory-reactions-memory-1'), 'longPress');
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+
+      fireEvent.press(getByTestId('memory-reactions-memory-1'));
+      expect(getByTestId('mock-reactions-sheet')).toBeTruthy();
+    });
+
+    it('batch deck: the reaction controls sit outside the deck, so tapping them never opens the detail', () => {
+      const { getByTestId, onPress } = renderCard(artworkMemory(3));
+
+      fireEvent.press(getByTestId('memory-react-memory-1'));
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+      expect(onPress).not.toHaveBeenCalled();
+    });
+
+    it('batch deck: long-pressing the pill opens the tray', () => {
+      mockEngagement({ myReaction: '❤️', likedByMe: true, topReactions: ['❤️'], likeCount: 1 });
+      const { getByTestId, onPress } = renderCard(artworkMemory(3));
+
+      fireEvent(getByTestId('memory-reactions-memory-1'), 'longPress');
+      expect(getByTestId('reaction-tray')).toBeTruthy();
+      expect(onPress).not.toHaveBeenCalled();
     });
   });
 });

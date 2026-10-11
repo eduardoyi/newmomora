@@ -8,6 +8,7 @@ import { MemoryCommentsDrawer } from '@/components/memory-comments-drawer';
 import { MemoryEngagementBar } from '@/components/memory-engagement-bar';
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { useFamily } from '@/hooks/use-family';
+import { useMemoryEngagement } from '@/hooks/useMemoryEngagement';
 import { useFamilyMemberProfiles } from '@/hooks/useFamilyMemberProfiles';
 import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
@@ -72,6 +73,25 @@ jest.mock('@/components/memory-media-carousel', () => ({
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
+
+// Only the artwork "emoji reactions" describe renders the real bar (via
+// requireActual); these keep its data/native dependencies out of the suite.
+jest.mock('@/hooks/useMemoryEngagement', () => ({ useMemoryEngagement: jest.fn() }));
+jest.mock('@/hooks/useShareMemoryCard', () => ({
+  useShareMemoryCard: () => ({ shareMemoryCard: jest.fn(), isSharing: false }),
+}));
+jest.mock('expo-haptics', () => ({
+  impactAsync: jest.fn(() => Promise.resolve()),
+  ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' },
+}));
+jest.mock('@/components/memory-reactions-sheet', () => {
+  const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+  return {
+    MemoryReactionsSheet: ({ visible }: { visible: boolean }) =>
+      visible ? <Text testID="mock-reactions-sheet">sheet</Text> : null,
+  };
+});
+jest.mock('@/components/reaction-emoji-picker', () => ({ ReactionEmojiPicker: () => null }));
 
 jest.mock('@/hooks/useFamilyMemberProfiles', () => ({
   useFamilyMemberProfiles: jest.fn(),
@@ -357,6 +377,76 @@ describe('MemoryDetailScreen artwork variant (docs/plans/artwork-scanning-v2.md)
       expect(screen.getByTestId('artwork-medium-chip')).toHaveTextContent('watercolor');
       expect(screen.queryByText('joy')).toBeNull();
       expect(screen.getByTestId('memory-detail-section-engagement')).toBeTruthy();
+    });
+
+    describe('emoji reactions', () => {
+      beforeEach(() => {
+        (MemoryEngagementBar as jest.Mock).mockImplementation(
+          jest.requireActual('@/components/memory-engagement-bar').MemoryEngagementBar,
+        );
+        // View.prototype.measureInWindow isn't implemented by the RN jest mock.
+        jest.requireActual('react-native').View.prototype.measureInWindow = (
+          callback: (x: number, y: number, w: number, h: number) => void,
+        ) => callback(24, 600, 120, 32);
+      });
+      afterEach(() => {
+        (MemoryEngagementBar as jest.Mock).mockImplementation(() => null);
+      });
+
+      function mockEngagement(overrides: Record<string, unknown> = {}) {
+        (useMemoryEngagement as jest.Mock).mockReturnValue({
+          likedByMe: false,
+          myReaction: null,
+          topReactions: [],
+          likeCount: 0,
+          commentCount: 0,
+          setReaction: jest.fn().mockResolvedValue(undefined),
+          isUpdatingLike: false,
+          ...overrides,
+        });
+      }
+
+      it('shows the add-reaction button on the gallery wall, and tapping it opens the tray', () => {
+        const setReaction = jest.fn().mockResolvedValue(undefined);
+        mockEngagement({ setReaction });
+        mockMemory({ media_variant: 'artwork' });
+
+        const screen = renderScreen();
+
+        expect(screen.getByTestId('memory-detail-gallery-wall')).toBeTruthy();
+        expect(screen.queryByTestId('reaction-tray')).toBeNull();
+        fireEvent.press(screen.getByTestId('memory-react-memory-1'));
+        expect(screen.getByTestId('reaction-tray')).toBeTruthy();
+
+        fireEvent.press(screen.getByTestId('reaction-tray-❤️'));
+        expect(setReaction).toHaveBeenCalledWith('❤️');
+        expect(screen.queryByTestId('reaction-tray')).toBeNull();
+      });
+
+      it('shows the merged pill, opens the tray on long-press and the sheet on tap', () => {
+        mockEngagement({ myReaction: '😂', likedByMe: true, topReactions: ['😂'], likeCount: 1 });
+        mockMemory({ media_variant: 'artwork' });
+
+        const screen = renderScreen();
+
+        expect(screen.queryByTestId('memory-react-memory-1')).toBeNull();
+        fireEvent(screen.getByTestId('memory-reactions-memory-1'), 'longPress');
+        expect(screen.getByTestId('reaction-tray')).toBeTruthy();
+
+        fireEvent.press(screen.getByTestId('memory-reactions-memory-1'));
+        expect(screen.getByTestId('mock-reactions-sheet')).toBeTruthy();
+      });
+
+      it('works on a batch gallery walk too', () => {
+        mockEngagement({ topReactions: ['🙏'], likeCount: 1 });
+        mockMemory({ media_variant: 'artwork' }, assets);
+
+        const screen = renderScreen();
+
+        expect(screen.getByTestId('memory-reactions-memory-1')).toBeTruthy();
+        fireEvent.press(screen.getByTestId('memory-react-memory-1'));
+        expect(screen.getByTestId('reaction-tray')).toBeTruthy();
+      });
     });
 
     it('falls back to the "Artwork" badge while the medium is not yet known', () => {
