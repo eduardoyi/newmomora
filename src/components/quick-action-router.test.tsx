@@ -7,8 +7,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import {
   getQuickActionsModule,
-  resetQuickActionLaunchForTests,
-  resetQuickActionsModuleForTests,
+  QUICK_ACTION_DEDUPE_MS,
+  resetQuickActionsForTests,
   setQuickActionsEnabled,
   SHORTCUTS,
   subscribeToQuickActions,
@@ -67,8 +67,7 @@ describe('QuickActionRouter', () => {
     jest.useFakeTimers();
     jest.clearAllMocks();
     qa.__resetQuickActionsMock();
-    resetQuickActionsModuleForTests();
-    resetQuickActionLaunchForTests();
+    resetQuickActionsForTests();
     (useRouter as jest.Mock).mockReturnValue({ push: mockPush, setParams: mockSetParams });
     setState();
   });
@@ -135,7 +134,7 @@ describe('QuickActionRouter', () => {
     await act(async () => {});
 
     act(() => qa.__triggerQuickAction(voice));
-    act(() => qa.__triggerQuickAction(voice));
+    act(() => qa.__triggerQuickAction(photo));
 
     const ids = mockPush.mock.calls.map((call) => (call[0] as { params: { actionId: string } }).params.actionId);
     expect(ids).toHaveLength(2);
@@ -227,6 +226,69 @@ describe('QuickActionRouter', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  it('consumes an event emitted while no router is mounted (activity recreation gap)', async () => {
+    const first = render(<QuickActionRouter />);
+    await act(async () => {});
+    first.unmount();
+
+    act(() => qa.__triggerQuickAction(voice));
+    expect(mockPush).not.toHaveBeenCalled();
+
+    render(<QuickActionRouter />);
+    await act(async () => {});
+    expect(mockPush).toHaveBeenCalledTimes(1);
+    expect((mockPush.mock.calls[0][0] as { params: { action: string } }).params.action).toBe('voice');
+  });
+
+  it('drops a buffered action older than the TTL when a router mounts', async () => {
+    const first = render(<QuickActionRouter />);
+    await act(async () => {});
+    first.unmount();
+    act(() => qa.__triggerQuickAction(voice));
+
+    act(() => {
+      jest.advanceTimersByTime(QUICK_ACTION_PENDING_TTL_MS + 1);
+    });
+    render(<QuickActionRouter />);
+    await act(async () => {});
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('turns the cold-start initial plus an immediate duplicate event into one navigation', async () => {
+    qa.__setInitial(voice);
+    render(<QuickActionRouter />);
+    await act(async () => {});
+    act(() => qa.__triggerQuickAction(voice));
+    await act(async () => {});
+
+    expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates for distinct taps more than the dedupe window apart', async () => {
+    render(<QuickActionRouter />);
+    await act(async () => {});
+
+    act(() => qa.__triggerQuickAction(voice));
+    act(() => {
+      jest.advanceTimersByTime(QUICK_ACTION_DEDUPE_MS + 1);
+    });
+    act(() => qa.__triggerQuickAction(voice));
+
+    expect(mockPush).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the native listener when a router unmounts', async () => {
+    const first = render(<QuickActionRouter />);
+    await act(async () => {});
+    first.unmount();
+
+    // Still attached: the event is buffered rather than lost.
+    act(() => qa.__triggerQuickAction(photo));
+    render(<QuickActionRouter />);
+    await act(async () => {});
+    expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores unknown shortcut ids', async () => {
     render(<QuickActionRouter />);
     await act(async () => {});
@@ -238,7 +300,7 @@ describe('QuickActionRouter', () => {
 describe('quick-actions service on a binary without the native module', () => {
   beforeEach(() => {
     jest.resetModules();
-    resetQuickActionsModuleForTests();
+    resetQuickActionsForTests();
   });
 
   afterEach(() => {
@@ -251,7 +313,7 @@ describe('quick-actions service on a binary without the native module', () => {
     });
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const service = require('@/services/quick-actions') as typeof import('@/services/quick-actions');
-    service.resetQuickActionsModuleForTests();
+    service.resetQuickActionsForTests();
 
     expect(service.getQuickActionsModule()).toBeNull();
     await expect(service.setQuickActionsEnabled(true)).resolves.toBeUndefined();

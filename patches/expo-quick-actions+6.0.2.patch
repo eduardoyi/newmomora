@@ -1,0 +1,14 @@
+diff --git a/node_modules/expo-quick-actions/android/src/main/java/expo/modules.quickactions/QuickActionsReactActivityLifecycleListener.kt b/node_modules/expo-quick-actions/android/src/main/java/expo/modules.quickactions/QuickActionsReactActivityLifecycleListener.kt
+index efb5019..e0e5874 100644
+--- a/node_modules/expo-quick-actions/android/src/main/java/expo/modules.quickactions/QuickActionsReactActivityLifecycleListener.kt
++++ b/node_modules/expo-quick-actions/android/src/main/java/expo/modules.quickactions/QuickActionsReactActivityLifecycleListener.kt
+@@ -22,6 +22,9 @@ class QuickActionsReactActivityLifecycleListener(activityContext: Context) : Rea
+             }
+             activity?.intent?.let {
+                 QuickActionsSingleton.launchAction = ExpoQuickActionsModule.convertShortcutIntent(it)
++                // The launcher can start a NEW activity for a shortcut while the JS
++                // runtime survives; emit the event too (no-op before the module exists).
++                ExpoQuickActionsModule.handleShortcutIntent(it)
+             }
+         }
+     }

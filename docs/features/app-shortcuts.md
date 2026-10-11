@@ -111,6 +111,8 @@ so this means replacing one or moving to a different surface):
 ## Constraints & gotchas
 
 - The composer is a native modal, so actions wait for its `transitionEnd` (or a 700 ms fallback) before presenting the camera, scanner or recorder; presenting during the animation fails silently on iOS. Once settled it stays settled, so a `setParams` action on an open composer runs at once.
+- **Android activity recreation.** With the app in the background, the launcher can start a NEW `MainActivity` for the shortcut instead of calling `onNewIntent`; the JS runtime survives and the React tree remounts. `expo-quick-actions` only reports a shortcut through the `initial` constant or an `onNewIntent` event, so this launch was lost (and the remount landed on the root redirect). Two parts fix it: `patches/expo-quick-actions+6.0.2.patch` (applied by `patch-package` on `postinstall`, so EAS builds get it) makes `QuickActionsReactActivityLifecycleListener.onCreate` also call `ExpoQuickActionsModule.handleShortcutIntent`, which emits `onQuickAction` when the module exists. This patch should go upstream; drop it once the library fixes it. In JS, `src/services/quick-actions.ts` attaches the native listener once per runtime (never removed), buffers the latest action with a timestamp (dropped after 10 s), and the router consumes the buffer on mount.
+- **Dedupe.** The same shortcut id arriving again within 2 s is ignored: a cold start can fire both `initial` and the onCreate event for one tap.
 - No memory content is logged; the shortcut carries only an action name.
 - The recorder is opened exactly as the mic button does; do not special-case the
   `VoiceSpeakItModal` or its `captureMode`.

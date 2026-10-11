@@ -28,11 +28,6 @@ export function getQuickActionsModule(): QuickActionsModule | null {
   return loadedModule;
 }
 
-/** Test-only: forget the cached module lookup. */
-export function resetQuickActionsModuleForTests(): void {
-  loadedModule = undefined;
-}
-
 interface ShortcutDefinition {
   id: string;
   action: NewMemoryAction;
@@ -79,36 +74,85 @@ export async function setQuickActionsEnabled(enabled: boolean): Promise<void> {
   }
 }
 
-let initialDelivered = false;
+/** A buffered shortcut older than this is considered stale and dropped. */
+export const QUICK_ACTION_PENDING_TTL_MS = 10_000;
 
-/** Test-only: allow the launch shortcut to be delivered again. */
-export function resetQuickActionLaunchForTests(): void {
-  initialDelivered = false;
+/** The same shortcut arriving again within this window is one tap (cold start fires both `initial` and the onCreate event). */
+export const QUICK_ACTION_DEDUPE_MS = 2_000;
+
+export interface PendingQuickAction {
+  action: NewMemoryAction;
+  at: number;
+}
+
+// Module state, not component state: on Android the launcher can start a new
+// activity for a shortcut while the JS runtime survives, so the event can land
+// while the React tree is being torn down and remounted. The native listener
+// is therefore created once per runtime and never removed, and the latest
+// action stays buffered until a router explicitly clears it.
+let nativeListenerStarted = false;
+let pendingAction: PendingQuickAction | null = null;
+let lastShortcut: { id: string; at: number } | null = null;
+const pendingListeners = new Set<(pending: PendingQuickAction) => void>();
+
+function ingestShortcut(id: unknown): void {
+  const action = actionForShortcutId(id);
+  if (!action) return;
+  const now = Date.now();
+  if (lastShortcut && lastShortcut.id === id && now - lastShortcut.at < QUICK_ACTION_DEDUPE_MS) return;
+  lastShortcut = { id: id as string, at: now };
+  pendingAction = { action, at: now };
+  pendingListeners.forEach((listener) => listener(pendingAction as PendingQuickAction));
+}
+
+function ensureNativeListener(): void {
+  if (nativeListenerStarted) return;
+  const module = getQuickActionsModule();
+  if (!module) return;
+  nativeListenerStarted = true;
+  // The launch shortcut, once per runtime.
+  ingestShortcut(module.initial?.id);
+  try {
+    module.addListener((payload) => ingestShortcut(payload?.id));
+  } catch {
+    // Shortcuts are a convenience; never disrupt the app over them.
+  }
+}
+
+/** The buffered shortcut if it is still fresh; stale ones are discarded. */
+export function getPendingQuickAction(): PendingQuickAction | null {
+  if (pendingAction && Date.now() - pendingAction.at >= QUICK_ACTION_PENDING_TTL_MS) {
+    pendingAction = null;
+  }
+  return pendingAction;
+}
+
+/** Called by the router once it has acted on, or deliberately dropped, the buffered shortcut. */
+export function clearPendingQuickAction(): void {
+  pendingAction = null;
 }
 
 /**
- * Subscribes to shortcut launches: the one that cold-started the app (once
- * per process, even if the subscriber remounts) and later ones while the app
- * is running or resumed from the background. Returns an unsubscribe function;
- * a no-op when the native module is missing.
+ * Observes shortcut launches (cold start, warm start, activity recreation).
+ * The listener is called right away with a fresh buffered shortcut, then for
+ * each new one. Unsubscribing only detaches this listener; the native
+ * subscription lives for the whole runtime. A no-op without the native module.
  */
-export function subscribeToQuickActions(listener: (action: NewMemoryAction) => void): () => void {
-  const module = getQuickActionsModule();
-  if (!module) return () => {};
+export function subscribeToQuickActions(listener: (pending: PendingQuickAction) => void): () => void {
+  ensureNativeListener();
+  pendingListeners.add(listener);
+  const buffered = getPendingQuickAction();
+  if (buffered) listener(buffered);
+  return () => {
+    pendingListeners.delete(listener);
+  };
+}
 
-  if (!initialDelivered) {
-    initialDelivered = true;
-    const initial = actionForShortcutId(module.initial?.id);
-    if (initial) listener(initial);
-  }
-
-  try {
-    const subscription = module.addListener((payload) => {
-      const action = actionForShortcutId(payload?.id);
-      if (action) listener(action);
-    });
-    return () => subscription.remove();
-  } catch {
-    return () => {};
-  }
+/** Test-only: forget the cached module and all launch state. */
+export function resetQuickActionsForTests(): void {
+  nativeListenerStarted = false;
+  pendingAction = null;
+  lastShortcut = null;
+  pendingListeners.clear();
+  loadedModule = undefined;
 }

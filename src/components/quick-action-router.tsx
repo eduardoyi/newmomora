@@ -4,11 +4,18 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { newMemoryRoute, type NewMemoryAction, type NewMemorySource } from '@/lib/routes';
-import { setQuickActionsEnabled, subscribeToQuickActions } from '@/services/quick-actions';
+import {
+  clearPendingQuickAction,
+  QUICK_ACTION_PENDING_TTL_MS,
+  setQuickActionsEnabled,
+  subscribeToQuickActions,
+  type PendingQuickAction,
+} from '@/services/quick-actions';
 import { canEditFamilyContent } from '@/utils/roles';
 
-/** A shortcut that never reaches the app screens (e.g. stuck in onboarding) is dropped after this. */
-export const QUICK_ACTION_PENDING_TTL_MS = 10_000;
+// A shortcut that never reaches the app screens (e.g. stuck in onboarding) is
+// dropped after QUICK_ACTION_PENDING_TTL_MS.
+export { QUICK_ACTION_PENDING_TTL_MS };
 
 const SOURCE_BY_ACTION: Record<NewMemoryAction, NewMemorySource> = {
   text: 'shortcut_text',
@@ -36,7 +43,7 @@ export function QuickActionRouter() {
   const segments = useSegments();
   const { session, isLoading: isAuthLoading } = useAuth();
   const { familyId, role, isLoading: isFamilyLoading } = useFamily();
-  const [pending, setPending] = useState<{ action: NewMemoryAction; at: number } | null>(null);
+  const [pending, setPending] = useState<PendingQuickAction | null>(null);
   const isOnAppRoute = (segments as string[]).includes('(app)');
 
   const isSignedIn = Boolean(session) && !session?.user?.is_anonymous;
@@ -44,7 +51,7 @@ export function QuickActionRouter() {
   const isSettled = !isAuthLoading && (!isSignedIn || !isFamilyLoading);
 
   useEffect(() => {
-    return subscribeToQuickActions((action) => setPending({ action, at: Date.now() }));
+    return subscribeToQuickActions(setPending);
   }, []);
 
   // Publish/clear the shortcut list. Not touched while loading so a restart
@@ -62,18 +69,23 @@ export function QuickActionRouter() {
     // Signed out / anonymous / no family / viewer: leave it to normal routing
     // and never replay after a later sign-in.
     if (!canCreate) {
+      clearPendingQuickAction();
       setPending(null);
       return;
     }
 
     if (!isOnAppRoute) {
       const remaining = QUICK_ACTION_PENDING_TTL_MS - (Date.now() - pending.at);
-      const timer = setTimeout(() => setPending(null), Math.max(0, remaining));
+      const timer = setTimeout(() => {
+        clearPendingQuickAction();
+        setPending(null);
+      }, Math.max(0, remaining));
       return () => clearTimeout(timer);
     }
 
     const source = SOURCE_BY_ACTION[pending.action];
     const params = { action: pending.action, actionId: createActionId() };
+    clearPendingQuickAction();
     setPending(null);
     if (pathname.endsWith('/new-memory')) {
       // Never stack a second composer or wipe the open draft: hand the
