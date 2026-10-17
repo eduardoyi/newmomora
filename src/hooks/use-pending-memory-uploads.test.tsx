@@ -10,6 +10,7 @@ import {
   usePendingMemoryUploads,
 } from '@/hooks/use-pending-memory-uploads';
 import { memoriesQueryKey, memoriesQueryKeyBase, calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { noteReviewSetback } from '@/lib/store-review';
 import { fetchLinkPreviews } from '@/services/ai';
 import {
   patchAudioDescriptionIfEmpty,
@@ -37,6 +38,7 @@ jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
 
+jest.mock('@/lib/store-review', () => ({ noteReviewSetback: jest.fn() }));
 jest.mock('@/services/ai', () => ({
   fetchLinkPreviews: jest.fn(),
 }));
@@ -354,6 +356,21 @@ describe('usePendingMemoryUploads', () => {
       expect(result.current.uploads).toHaveLength(0);
     });
     expect(mockedPostMediaMemory).toHaveBeenCalledTimes(2);
+  });
+
+  it('notes a review setback when an upload terminally fails', async () => {
+    mockedPostMediaMemory.mockRejectedValueOnce(new Error('network down'));
+
+    const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+    act(() => {
+      result.current.enqueue(photoInput);
+    });
+
+    await waitFor(() => {
+      expect(result.current.uploads[0]).toMatchObject({ status: 'failed' });
+    });
+    expect(noteReviewSetback).toHaveBeenCalledTimes(1);
   });
 
   it('tags a non-network failure (e.g. content-safety rejection) with isNetworkFailure: false', async () => {

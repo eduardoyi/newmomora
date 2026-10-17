@@ -1,6 +1,6 @@
 import { Redirect, Stack, useSegments } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, View } from 'react-native';
 
 import { OfflineBanner, OfflineBannerProvider } from '@/components/offline-banner';
 import { colors } from '@/constants/theme';
@@ -11,6 +11,7 @@ import { useAiUsageLimitNotices } from '@/hooks/useAiUsageLimitNotices';
 import { useGalleryImportDriver } from '@/hooks/useGalleryImportDriver';
 import { LookingBackSessionProvider } from '@/hooks/useLookingBackSession';
 import { noFamilyRoute } from '@/lib/routes';
+import { recordAppActiveDay } from '@/lib/store-review';
 
 export default function AppLayout() {
   const { session, isLoading: isAuthLoading } = useAuth();
@@ -35,6 +36,17 @@ export default function AppLayout() {
   // has an account, so this is what actually connects that grant to their
   // profile -- see syncPushTokenIfPermitted.
   usePushTokenSync(!isAuthLoading && Boolean(session) && !session?.user.is_anonymous);
+  // Device-local "active day" counter for the review-prompt eligibility check
+  // (docs/features/app-review-prompt.md): on mount and every return to foreground.
+  const isSignedIn = Boolean(session);
+  useEffect(() => {
+    if (!isSignedIn) return;
+    void recordAppActiveDay();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void recordAppActiveDay();
+    });
+    return () => subscription.remove();
+  }, [isSignedIn]);
   const segments = useSegments();
   // expo-router's typed useSegments() return type is a union of per-depth
   // literal tuples, which collapses .includes()'s element type to `never`

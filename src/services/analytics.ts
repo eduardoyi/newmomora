@@ -25,6 +25,8 @@ import type { PostAuthDestination } from '@/lib/onboarding-routing';
 import type { IllustrationRequestIntent } from '@/services/ai';
 import type { MemoryType } from '@/utils/memories';
 import type { LookingBackPackageType } from '@/services/looking-back';
+import type { ReviewLinkSource, ReviewTrigger } from '@/lib/store-review';
+import type { SupportLinkSource } from '@/lib/support-link';
 import type { OnboardingNotificationChoice, OnboardingPaywallMode, OnboardingStepId } from '@/utils/onboarding-progress';
 import type { FamilyRole } from '@/utils/roles';
 import type { PushRouteData } from '@/hooks/useNotifications';
@@ -276,6 +278,19 @@ export interface AnalyticsEventMap {
   audio_import_failed: {
     entry: 'share' | 'picker';
     code: 'unsupported_format' | 'too_long' | 'decode_failed' | 'io_failed' | 'unavailable';
+  };
+
+  // Store reviews + support (docs/features/app-review-prompt.md). Closed enums
+  // only. `review_prompt_requested` fires only when the native prompt was
+  // actually requested (the OS may still decline to show it).
+  review_prompt_requested: {
+    trigger: ReviewTrigger;
+  };
+  review_link_opened: {
+    source: ReviewLinkSource;
+  };
+  support_link_opened: {
+    source: SupportLinkSource;
   };
 
   // Year Films (docs/plans/year-film-p2.md Step 9). Content-free: no film

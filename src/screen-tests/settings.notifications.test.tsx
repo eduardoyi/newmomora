@@ -711,4 +711,19 @@ describe('Settings notifications toggles', () => {
 
     alertSpy.mockRestore();
   });
+
+  it('shows "Rate Momora" under Help and opens the store write-review page', async () => {
+    mockProfile();
+    const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+
+    const { getByTestId, getByText } = renderScreen();
+    expect(getByText('Rate Momora')).toBeTruthy();
+    fireEvent.press(getByTestId('settings-rate-app'));
+
+    await waitFor(() => {
+      expect(openURL).toHaveBeenCalledWith('https://apps.apple.com/app/id6745403572?action=write-review');
+    });
+
+    openURL.mockRestore();
+  });
 });

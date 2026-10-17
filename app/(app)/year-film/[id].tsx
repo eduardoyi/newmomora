@@ -10,7 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import { VideoView } from 'expo-video';
 import { ChevronLeft, ChevronRight, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BookToast } from '@/components/memory-books/book-toast';
@@ -26,6 +26,7 @@ import { useYearFilmPlayer } from '@/hooks/useYearFilmPlayer';
 import { useYearFilmShare } from '@/hooks/useYearFilmShare';
 import { invalidateYearFilms, useMarkYearFilmCompleted, useMarkYearFilmViewed } from '@/hooks/useYearFilms';
 import { timelineRoute, type YearFilmOpenSource } from '@/lib/routes';
+import { openStoreReviewPage, requestReviewAfterMoment } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 
@@ -95,11 +96,25 @@ export default function YearFilmScreen() {
   }, []);
   const dismissToast = useCallback(() => setToastMessage(null), []);
 
+  // Finished the film or shared it: ask for a review once the parent leaves
+  // the player (never over "The end"); eligibility is checked at fire time.
+  const shouldAskReviewRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (shouldAskReviewRef.current) requestReviewAfterMoment('year_film', 800);
+    },
+    [],
+  );
+  const onShared = useCallback(() => {
+    shouldAskReviewRef.current = true;
+  }, []);
+
   const player = useYearFilmPlayer({
     filmId,
     fallbackDurationMs: film?.duration_ms ?? null,
     onFirstPlay: () => markViewed.mutate(filmId),
     onComplete: (durationMs) => {
+      shouldAskReviewRef.current = true;
       markCompleted.mutate(filmId);
       if (kind) trackEvent('year_film_completed', { kind, duration_s: Math.round(durationMs / 1000) });
     },
@@ -110,7 +125,7 @@ export default function YearFilmScreen() {
     },
   });
 
-  const share = useYearFilmShare({ filmId, kind, title });
+  const share = useYearFilmShare({ filmId, kind, title, onShared });
 
   // `year_film_opened`: once, as soon as the film row (its kind) is known.
   const openedTrackedRef = useRef(false);
@@ -368,6 +383,7 @@ export default function YearFilmScreen() {
 
       {player.isComplete ? (
         <FilmCompletion
+          onRate={Platform.OS === 'web' ? undefined : () => void openStoreReviewPage('year_film')}
           onReplay={player.replay}
           renderExtraActions={canEditFilm ? () => <EditFilmButton onPress={() => setIsEditOpen(true)} /> : undefined}
           share={{ status: share.status, progress: share.progress, onShare: () => void share.share('completion'), onCancel: share.cancel }}

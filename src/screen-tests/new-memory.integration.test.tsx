@@ -26,6 +26,8 @@ import { useMemoryMutations } from '@/hooks/useMemories';
 import { usePendingMemoryUploads } from '@/hooks/use-pending-memory-uploads';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { navigateBack } from '@/lib/navigation';
+import { noteReviewSetback, recordMemorySavedForReview } from '@/lib/store-review';
+import { openSupportEmail } from '@/lib/support-link';
 import { trackEvent } from '@/services/analytics';
 import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 import { getNewMemoryDraftStorageKey, saveNewMemoryDraft } from '@/utils/new-memory-draft';
@@ -280,6 +282,11 @@ jest.mock('@/hooks/use-incoming-memory-share', () => ({
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
+jest.mock('@/lib/store-review', () => ({
+  noteReviewSetback: jest.fn(),
+  recordMemorySavedForReview: jest.fn(() => Promise.resolve()),
+}));
+jest.mock('@/lib/support-link', () => ({ openSupportEmail: jest.fn() }));
 
 // The native scanner boundary. Availability defaults to true so the toolbar
 // renders the scan button in every suite below; `scanArtwork` is driven per
@@ -1033,6 +1040,46 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
 
     expect(mockedTrackEvent).toHaveBeenCalledWith('memory_save_failed', { code: 'network_error' });
     expect(mockedTrackEvent).not.toHaveBeenCalledWith('memory_saved', expect.anything());
+    expect(noteReviewSetback).toHaveBeenCalledTimes(1);
+    expect(recordMemorySavedForReview).not.toHaveBeenCalled();
+
+    // A genuine failure offers a way to reach us -- not a review prompt.
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-contact-support'));
+    });
+    expect(openSupportEmail).toHaveBeenCalledWith('save_failed');
+  });
+
+  it('counts successful text and media saves toward the review milestones', async () => {
+    createMemory.mockResolvedValue({ id: 'memory-1' });
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    fireEvent.changeText(screen.getByTestId('new-memory-content'), 'Bedtime story time');
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(recordMemorySavedForReview).toHaveBeenCalledTimes(1);
+    expect(noteReviewSetback).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('new-memory-contact-support')).toBeNull();
+  });
+
+  it('counts a successful media enqueue toward the review milestones', async () => {
+    const screen = renderScreen();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(0);
+    });
+
+    await attachPhoto(screen, buildImageAsset());
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('new-memory-save'));
+    });
+
+    expect(enqueue).toHaveBeenCalled();
+    expect(recordMemorySavedForReview).toHaveBeenCalledTimes(1);
   });
 
   it('shows the friendly offline copy (not the raw error) when Save fails while offline', async () => {
@@ -1061,6 +1108,8 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
         screen.getByText("You're offline — your draft is safe; try again when you're back"),
       ).toBeTruthy();
       expect(screen.queryByText('Network request failed')).toBeNull();
+      // Offline is not a bug worth emailing about.
+      expect(screen.queryByTestId('new-memory-contact-support')).toBeNull();
     } finally {
       act(() => {
         onlineManager.setOnline(true);
@@ -1496,6 +1545,7 @@ describe('NewMemoryScreen -- audio memories (emergent type)', () => {
         }),
       }),
     );
+    expect(recordMemorySavedForReview).toHaveBeenCalledTimes(1);
     expect(trackEvent).toHaveBeenCalledWith('memory_saved', expect.objectContaining({
       memory_type: 'audio',
       used_voice: true,

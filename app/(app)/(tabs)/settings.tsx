@@ -32,6 +32,8 @@ import {
   sharingRedeemRoute,
   widgetSetupRoute,
 } from '@/lib/routes';
+import { openStoreReviewPage } from '@/lib/store-review';
+import { SUPPORT_EMAIL_URL } from '@/lib/support-link';
 import { getDeviceTimezone } from '@/services/auth';
 import { requestDataExport } from '@/services/export';
 import { leaveFamily } from '@/services/family';
@@ -49,7 +51,6 @@ const DEFAULT_REMINDER_TIME = '20:00:00';
 const FAQ_URL = 'https://usemomora.com/faq/';
 const PRIVACY_POLICY_URL = 'https://usemomora.com/privacy-policy/';
 const TERMS_OF_SERVICE_URL = 'https://usemomora.com/terms-of-service/';
-const SUPPORT_EMAIL_URL = 'mailto:hello@usemomora.com';
 const APP_VERSION = Constants.expoConfig?.version ?? '1.2.0';
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -688,6 +689,15 @@ export default function SettingsScreen() {
                 onPress={() => void openExternalUrl(SUPPORT_EMAIL_URL)}
                 testID="settings-contact-support"
               />
+              {Platform.OS !== 'web' ? (
+                <SettingsRow
+                  chevron
+                  label="Rate Momora"
+                  caption="A quick review helps other parents find us."
+                  onPress={() => void openStoreReviewPage('settings')}
+                  testID="settings-rate-app"
+                />
+              ) : null}
               <SettingsRow
                 chevron
                 label="Privacy policy"

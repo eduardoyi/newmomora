@@ -59,6 +59,7 @@ Create or update a doc in `docs/features/` when you ship a **major feature**:
 | Home-screen widget | [home-screen-widget.md](./home-screen-widget.md) | in-progress |
 | App shortcuts (long-press icon) | [app-shortcuts.md](./app-shortcuts.md) | in-progress |
 | Memory Book generation | [memory-book-generation.md](./memory-book-generation.md) | in-progress |
+| App store review prompts | [app-review-prompt.md](./app-review-prompt.md) | in-progress |
 
 ## Template
 

@@ -8,6 +8,7 @@ import { isMemoriesListQueryKey, patchMemoryInCaches } from '@/hooks/memory-cach
 import { useIsRealtimeLive } from '@/hooks/realtime-status';
 import { useIsOnline } from '@/lib/connectivity';
 import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
+import { noteReviewSetback } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import {
   fetchMemoryGenerationStatuses,
@@ -141,6 +142,7 @@ function applyStatusPatches(
       shouldReportIllustrationOutcome(status.id, status.illustration_status)
     ) {
       trackEvent('illustration_completed', { outcome: status.illustration_status });
+      if (status.illustration_status === 'failed') noteReviewSetback();
     }
   }
 }

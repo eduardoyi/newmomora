@@ -24,6 +24,7 @@ import {
   familyMemberProfilesQueryKey,
   familyMembershipLinksQueryKeyBase,
 } from '@/hooks/queryKeys';
+import { requestReviewAfterMoment } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import {
   fetchInviteRedeemer,
@@ -136,6 +137,7 @@ export default function ApprovalsScreen() {
         outcome: action === 'approve' ? 'approved' : 'rejected',
         family_id: invite.family_id,
       });
+      if (action === 'approve') requestReviewAfterMoment('invite_approved', 1200);
 
       // Non-blocking: the approval itself succeeded, only the link didn't.
       if (action === 'approve' && result?.linked === false) {

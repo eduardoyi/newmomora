@@ -3,6 +3,8 @@ import { AccessibilityInfo, AppState, View } from 'react-native';
 import { withTiming } from 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { requestReviewAfterMoment } from '@/lib/store-review';
+
 // This suite mounts the route itself.  The chapter/reducer has its own unit
 // coverage; these tests deliberately keep the route's collaborators as
 // controllable boundaries so navigation, safety reconciliation and lifecycle
@@ -90,6 +92,7 @@ jest.mock('@/components/looking-back/cover-artwork', () => {
   return { LookingBackCoverArtwork: ({ testID }: { testID?: string }) => React.createElement(NativeView, testID ? { testID } : undefined) };
 });
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('@/lib/store-review', () => ({ requestReviewAfterMoment: jest.fn() }));
 
 // Import after the route's boundaries are mocked.
 // eslint-disable-next-line import/first
@@ -585,6 +588,25 @@ describe('LookingBackViewerScreen route integration', () => {
     expect(screen.getByText('That was 4 memories from a little look back.')).toBeTruthy();
     expect(screen.getByText('Back to your timeline')).toBeTruthy();
     expect(screen.getByText('Play it again')).toBeTruthy();
+  });
+
+  it('asks for a review only after leaving a package that was watched to the end', async () => {
+    configurePlayback({ phase: 'complete' });
+    const screen = await renderViewer();
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+
+    await screen.unmountAsync();
+
+    expect(requestReviewAfterMoment).toHaveBeenCalledWith('looking_back', 800);
+  });
+
+  it('does not ask for a review when the package was not finished', async () => {
+    configurePlayback({ phase: 'playing' });
+    const screen = await renderViewer();
+
+    await screen.unmountAsync();
+
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
   });
 
   it('preserves a member name in the package-name completion copy', async () => {

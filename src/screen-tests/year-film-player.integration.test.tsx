@@ -9,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import YearFilmScreen from '../../app/(app)/year-film/[id]';
 import { pauseAllAudioPlayback, prepareAudioPlaybackMode } from '@/hooks/audio-playback-coordinator';
 import { invalidateYearFilms } from '@/hooks/useYearFilms';
+import { openStoreReviewPage, requestReviewAfterMoment } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import { getYearFilmPlayback } from '@/services/year-films';
 
@@ -84,6 +85,7 @@ jest.mock('expo-file-system/legacy', () => ({
 }));
 jest.mock('expo-sharing', () => ({ isAvailableAsync: jest.fn(), shareAsync: jest.fn() }));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
+jest.mock('@/lib/store-review', () => ({ openStoreReviewPage: jest.fn(), requestReviewAfterMoment: jest.fn() }));
 jest.mock('@/services/year-films', () => ({ getYearFilmPlayback: jest.fn() }));
 let mockMemberships: { familyId: string; role: string }[] = [];
 jest.mock('@/hooks/use-family', () => ({ useFamily: () => ({ memberships: mockMemberships }) }));
@@ -328,6 +330,35 @@ describe('Year Film player screen', () => {
 
     expect(await screen.findByTestId('year-film-complete')).toBeTruthy();
     expect(mockMarkCompleted).toHaveBeenCalledWith('film-1');
+  });
+
+  it('offers a quiet "Rate Momora" link on the end screen that opens the store page', async () => {
+    await renderPlayer();
+    await reachCompletion();
+
+    fireEvent.press(screen.getByTestId('year-film-rate'));
+
+    expect(openStoreReviewPage).toHaveBeenCalledWith('year_film');
+    // The link is a plain store link: it never triggers the native prompt itself.
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+  });
+
+  it('asks for a review only after the parent leaves a film they finished', async () => {
+    const view = await renderPlayer();
+    await reachCompletion();
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+
+    await view.unmountAsync();
+
+    expect(requestReviewAfterMoment).toHaveBeenCalledWith('year_film', 800);
+  });
+
+  it('does not ask for a review when the film was never finished', async () => {
+    const view = await renderPlayer();
+
+    await view.unmountAsync();
+
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
   });
 
   it('toggles mute on the player', async () => {

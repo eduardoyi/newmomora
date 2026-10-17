@@ -13,6 +13,7 @@ import {
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { calendarMemoriesQueryKeyBase, keepsakesOverviewQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
+import { noteReviewSetback } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import {
   patchMemoryInCaches,
@@ -363,6 +364,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         trackEvent('memory_save_failed', {
           code: isAudioUploadInput(input) ? 'other' : 'media_upload_failed',
         });
+        noteReviewSetback();
       }
     },
     [deleteInputShareCopies, patchUpload, queryClient, removeUpload],

@@ -2,7 +2,8 @@
 // Share shows its download progress and a Cancel in place (films are
 // 25-65 MB). Step 11 (docs/plans/year-film-p2.md, the owner/manager edit
 // sheet) adds its "Edit" button through `renderExtraActions` without
-// restructuring this component.
+// restructuring this component. An optional quiet "Rate Momora" text link
+// (`onRate`) sits below the actions -- a plain store link, never a prompt.
 import { RotateCcw, Share2 } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -25,13 +26,15 @@ interface FilmCompletionProps {
   };
   /** Extra action buttons rendered after Replay / Share (e.g. Edit for owners/managers). */
   renderExtraActions?: () => ReactNode;
+  /** Opens the store's write-review page; the link is hidden when omitted. */
+  onRate?: () => void;
 }
 
 export function shareProgressLabel(progress: number): string {
   return `Preparing video… ${Math.round(Math.min(1, Math.max(0, progress)) * 100)}%`;
 }
 
-export function FilmCompletion({ title, onReplay, share, renderExtraActions }: FilmCompletionProps) {
+export function FilmCompletion({ title, onReplay, share, renderExtraActions, onRate }: FilmCompletionProps) {
   const insets = useSafeAreaInsets();
   const isBusy = share.status !== 'idle';
   return (
@@ -91,6 +94,17 @@ export function FilmCompletion({ title, onReplay, share, renderExtraActions }: F
           {renderExtraActions?.()}
         </View>
       )}
+
+      {onRate && !isBusy ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onRate}
+          style={styles.rate}
+          testID="year-film-rate"
+        >
+          <Text style={styles.rateText}>Rate Momora</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -148,5 +162,12 @@ const styles = StyleSheet.create({
   shareStatus: { alignItems: 'center', gap: 14, marginTop: 30 },
   shareLabel: { color: CREAM, fontFamily: fonts.sansMedium, fontSize: 14 },
   cancel: { alignItems: 'center', justifyContent: 'center', minHeight: 44, paddingHorizontal: 18 },
+  rate: { alignItems: 'center', justifyContent: 'center', marginTop: 12, minHeight: 44, paddingHorizontal: 18 },
+  rateText: {
+    color: 'rgba(246,241,231,0.6)',
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
+    textDecorationLine: 'underline',
+  },
   cancelText: { color: 'rgba(246,241,231,0.8)', fontFamily: fonts.sansBold, fontSize: 13 },
 });

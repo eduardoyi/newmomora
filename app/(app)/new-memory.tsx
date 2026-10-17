@@ -39,6 +39,8 @@ import { useSuggestedMemoryDate } from '@/hooks/use-suggested-memory-date';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
 import { parseNewMemoryAction } from '@/lib/routes';
+import { noteReviewSetback, recordMemorySavedForReview } from '@/lib/store-review';
+import { openSupportEmail } from '@/lib/support-link';
 import { trackEvent, type AnalyticsEventMap } from '@/services/analytics';
 import { canEditFamilyContent } from '@/utils/roles';
 import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
@@ -205,6 +207,8 @@ export default function NewMemoryScreen() {
   const [illustrationEnabled, setIllustrationEnabled] = useState(true);
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  // A genuine save failure (not validation / offline) offers a support email link.
+  const [showSupportLink, setShowSupportLink] = useState(false);
 
   // Refs mirror the latest values of fields that async work (the draft
   // restore below, and the audio clip's trim / import completions) must read
@@ -834,6 +838,7 @@ export default function NewMemoryScreen() {
         source: clip.source,
         trimmed: clip.trimmed,
       });
+      void recordMemorySavedForReview();
 
       if (user?.id && familyId) {
         void clearNewMemoryDraft(user.id, familyId);
@@ -843,6 +848,8 @@ export default function NewMemoryScreen() {
       hasEnqueuedMediaRef.current = false;
       setIsPostingMedia(false);
       trackEvent('memory_save_failed', { code: 'network_error' });
+      noteReviewSetback();
+      setShowSupportLink(isOnline);
       setErrorMessage(
         !isOnline
           ? "You're offline — your draft is safe; try again when you're back"
@@ -853,6 +860,7 @@ export default function NewMemoryScreen() {
 
   const handleSave = async () => {
     setErrorMessage('');
+    setShowSupportLink(false);
 
     if (isAudio) {
       await handleSaveAudio();
@@ -922,6 +930,7 @@ export default function NewMemoryScreen() {
           is_artwork: hasArtwork,
           source: memorySavedSource,
         });
+        void recordMemorySavedForReview();
       } else {
         await createMemory({
           content: content.trim(),
@@ -938,6 +947,7 @@ export default function NewMemoryScreen() {
           is_artwork: false,
           source: memorySavedSource,
         });
+        void recordMemorySavedForReview();
       }
       // Both paths are considered "posted" here: the media path enqueues
       // synchronously above (upload itself continues in the background),
@@ -952,6 +962,8 @@ export default function NewMemoryScreen() {
       hasEnqueuedMediaRef.current = false;
       setIsPostingMedia(false);
       trackEvent('memory_save_failed', { code: 'network_error' });
+      noteReviewSetback();
+      setShowSupportLink(isOnline);
       // O6 (docs/plans/offline-awareness-and-share-cards.md): the text path
       // above awaits createMemory, a react-query mutation now pinned to
       // networkMode 'always' (see query-client.ts) -- offline, that fails
@@ -1050,6 +1062,16 @@ export default function NewMemoryScreen() {
       attachments={attachedMedia}
       belowErrorSlot={(
         <>
+          {errorMessage && showSupportLink ? (
+            <Pressable
+              accessibilityRole="link"
+              onPress={() => void openSupportEmail('save_failed')}
+              style={styles.supportLink}
+              testID="new-memory-contact-support"
+            >
+              <Text style={styles.supportLinkText}>Contact support</Text>
+            </Pressable>
+          ) : null}
           {scanNotice ? <ArtworkScanNotice message={scanNotice} testID="new-memory-scan-notice" /> : null}
           {isPreparingIncomingShare ? (
             <View style={styles.sharedMediaLoading} testID="new-memory-shared-media-loading">
@@ -1307,6 +1329,17 @@ const styles = StyleSheet.create({
     color: colors.ink2,
     fontFamily: fonts.sans,
     fontSize: 13,
+  },
+  supportLink: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  supportLinkText: {
+    color: colors.ink2,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    textDecorationLine: 'underline',
   },
   toolbarIconBtn: {
     width: 46,

@@ -12,6 +12,7 @@ import {
 import { clearRealtimeStatus, setRealtimeLive } from '@/hooks/realtime-status';
 import { lookingBackQueryKeyBase } from '@/hooks/queryKeys';
 import { shouldReportIllustrationOutcome } from '@/lib/illustration-outcome-dedupe';
+import { noteReviewSetback } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById, type Memory } from '@/services/memories';
 
@@ -154,6 +155,7 @@ export function useMemoriesRealtime(familyId: string | null | undefined): void {
             shouldReportIllustrationOutcome(row.id, row.illustration_status)
           ) {
             trackEvent('illustration_completed', { outcome: row.illustration_status });
+            if (row.illustration_status === 'failed') noteReviewSetback();
           }
         },
       )

@@ -14,6 +14,8 @@ import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { hasFloorTrace, SILENT_WAVEFORM } from '@/components/audio/trace-test-utils';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
+import { requestReviewAfterMoment } from '@/lib/store-review';
+import { openSupportEmail } from '@/lib/support-link';
 import { trackEvent } from '@/services/analytics';
 
 import MemoryDetailScreen from '../../app/(app)/memory/[id]';
@@ -73,6 +75,12 @@ jest.mock('@/components/memory-media-carousel', () => ({
 jest.mock('@/hooks/use-family', () => ({
   useFamily: jest.fn(),
 }));
+jest.mock('@/hooks/use-auth', () => {
+  const auth = { user: { id: 'user-1' } };
+  return { useAuth: () => auth };
+});
+jest.mock('@/lib/store-review', () => ({ requestReviewAfterMoment: jest.fn() }));
+jest.mock('@/lib/support-link', () => ({ openSupportEmail: jest.fn() }));
 
 // Only the artwork "emoji reactions" describe renders the real bar (via
 // requireActual); these keep its data/native dependencies out of the suite.
@@ -987,5 +995,107 @@ describe('MemoryDetailScreen -- illustration_retry_requested analytics', () => {
     expect(regenerateIllustration).not.toHaveBeenCalled();
 
     alertSpy.mockRestore();
+  });
+
+  it('offers a quiet "Report a problem" link in the failed state, separate from reviews', () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...baseMemory, memory_type: 'text_illustration', illustration_status: 'failed' },
+      isLoading: false,
+      isError: false,
+    });
+
+    const screen = renderScreen();
+    fireEvent.press(screen.getByTestId('memory-illustration-report-problem'));
+
+    expect(openSupportEmail).toHaveBeenCalledWith('illustration_failed');
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+  });
+
+  it('hides "Report a problem" when the illustration is fine', () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...baseMemory, memory_type: 'text_illustration', illustration_status: 'ready' },
+      isLoading: false,
+      isError: false,
+    });
+
+    expect(renderScreen().queryByTestId('memory-illustration-report-problem')).toBeNull();
+  });
+});
+
+describe('MemoryDetailScreen -- illustration reveal review moment', () => {
+  const NOW = new Date('2026-10-17T12:00:00.000Z');
+  const readyMemory = {
+    ...baseMemory,
+    memory_type: 'text_illustration',
+    illustration_status: 'ready',
+    illustration_key: 'illustrations/key.png',
+    created_at: '2026-10-17T10:00:00.000Z',
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+    jest.setSystemTime(NOW);
+    jest.clearAllMocks();
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
+    mockedUseFamilyMemberProfiles.mockReturnValue({ profiles: [{ user_id: 'user-1', name: 'Eduardo' }] });
+    mockedUseMemoryMutations.mockReturnValue({
+      deleteMemory: jest.fn(),
+      retryIllustration: jest.fn(),
+      regenerateIllustration: jest.fn(),
+      isDeleting: false,
+      isRetrying: false,
+      isRegenerating: false,
+    });
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.test/illustration.png' });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('asks on leave when the creator saw their own fresh illustration', () => {
+    mockedUseMemory.mockReturnValue({ data: readyMemory, isLoading: false, isError: false });
+
+    const screen = renderScreen();
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+    screen.unmount();
+
+    expect(requestReviewAfterMoment).toHaveBeenCalledWith('illustration_reveal', 800);
+  });
+
+  it('does not ask for a memory older than 48 hours', () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...readyMemory, created_at: '2026-10-14T10:00:00.000Z' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderScreen().unmount();
+
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+  });
+
+  it("does not ask for someone else's memory", () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...readyMemory, user_id: 'user-2' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderScreen().unmount();
+
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
+  });
+
+  it('does not ask while the illustration is not ready', () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...readyMemory, illustration_status: 'generating' },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderScreen().unmount();
+
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
   });
 });

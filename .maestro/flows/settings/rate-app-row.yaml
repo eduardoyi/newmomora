@@ -1,0 +1,18 @@
+appId: com.memora.app
+---
+# Settings -> Help shows the "Rate Momora" row (docs/features/app-review-prompt.md).
+# Visibility only on purpose: tapping it opens the App Store / Play Store and
+# leaves the app, so the tap is covered by src/screen-tests/settings.notifications
+# .test.tsx. Needs a logged-in account. NOT executed as part of this change --
+# authored lint-by-eye against app/(app)/(tabs)/settings.tsx.
+- runFlow: ../auth/login.yaml
+- tapOn:
+    id: tab-settings
+- scrollUntilVisible:
+    element:
+      id: settings-rate-app
+    direction: DOWN
+    timeout: 20000
+- assertVisible:
+    id: settings-rate-app
+- assertVisible: "Rate Momora"

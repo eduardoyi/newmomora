@@ -10,6 +10,7 @@ import { useFamily } from '@/hooks/use-family';
 import { useFamilyInvites } from '@/hooks/useFamilyInvites';
 import { useFamilyMembers } from '@/hooks/useFamilyMembers';
 import { useFamilyRelationships } from '@/hooks/useFamilyRelationships';
+import { requestReviewAfterMoment } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import { fetchInviteRedeemer, resolveFamilyInvite } from '@/services/invites';
 import type { FamilyInvite } from '@/services/invites';
@@ -56,6 +57,8 @@ jest.mock('@/services/invites', () => ({
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
+
+jest.mock('@/lib/store-review', () => ({ requestReviewAfterMoment: jest.fn() }));
 
 const mockedUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 const mockedUseFamily = useFamily as jest.MockedFunction<typeof useFamily>;
@@ -127,6 +130,7 @@ describe('ApprovalsScreen -- invite_resolved analytics', () => {
         family_id: 'family-1',
       });
     });
+    expect(requestReviewAfterMoment).toHaveBeenCalledWith('invite_approved', 1200);
   });
 
   it('reports invite_resolved({outcome: rejected, family_id}) when an invite is rejected', async () => {
@@ -143,6 +147,7 @@ describe('ApprovalsScreen -- invite_resolved analytics', () => {
         family_id: 'family-1',
       });
     });
+    expect(requestReviewAfterMoment).not.toHaveBeenCalled();
   });
 
   it('does not report invite_resolved when the resolve call fails', async () => {

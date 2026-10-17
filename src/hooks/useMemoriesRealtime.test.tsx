@@ -9,6 +9,7 @@ import { trackEvent } from '@/services/analytics';
 import { fetchMemoryById } from '@/services/memories';
 import type { Memory, MemoriesPage, MemoryWithTags } from '@/services/memories';
 import { warmShareCardFireAndForget } from '@/services/share-card';
+import { noteReviewSetback } from '@/lib/store-review';
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -24,6 +25,8 @@ jest.mock('@/services/memories', () => ({
 jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
+
+jest.mock('@/lib/store-review', () => ({ noteReviewSetback: jest.fn() }));
 
 jest.mock('@/services/share-card', () => ({
   warmShareCardFireAndForget: jest.fn(),
@@ -245,6 +248,7 @@ describe('useMemoriesRealtime', () => {
     });
 
     expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'ready' });
+    expect(noteReviewSetback).not.toHaveBeenCalled();
   });
 
   it('reports illustration_completed({outcome: failed}) when an UPDATE transitions to failed', () => {
@@ -262,6 +266,7 @@ describe('useMemoriesRealtime', () => {
     });
 
     expect(mockedTrackEvent).toHaveBeenCalledWith('illustration_completed', { outcome: 'failed' });
+    expect(noteReviewSetback).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 

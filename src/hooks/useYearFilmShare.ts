@@ -25,9 +25,11 @@ interface UseYearFilmShareOptions {
   kind: 'birthday' | 'family_month' | 'family_year' | null;
   /** The share sheet's title (Android `dialogTitle`); the film title. */
   title: string | null;
+  /** Called once the share sheet returns (not proof a share completed). */
+  onShared?: () => void;
 }
 
-export function useYearFilmShare({ filmId, kind, title }: UseYearFilmShareOptions) {
+export function useYearFilmShare({ filmId, kind, title, onShared }: UseYearFilmShareOptions) {
   const [status, setStatus] = useState<YearFilmShareStatus>('idle');
   const [progress, setProgress] = useState(0);
   const isBusyRef = useRef(false);
@@ -124,6 +126,7 @@ export function useYearFilmShare({ filmId, kind, title }: UseYearFilmShareOption
       });
       // The sheet returned; this is not proof that a share completed.
       if (kind) trackEvent('year_film_shared', { kind, source });
+      onShared?.();
     } catch {
       // A cancelled transfer surfaces as a rejection on some platforms; that is not an error.
       if (!cancelledRef.current) {
@@ -137,7 +140,7 @@ export function useYearFilmShare({ filmId, kind, title }: UseYearFilmShareOption
         setProgress(0);
       }
     }
-  }, [cleanup, filmId, kind, title]);
+  }, [cleanup, filmId, kind, onShared, title]);
 
   return { status, progress, share, cancel };
 }

@@ -40,6 +40,7 @@ import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
 import { ReportSheet } from '@/components/report-sheet';
 import { colors, fonts, getEmotionColors, getEmotionGradient, radius, spacing } from '@/constants/theme';
 import type { FamilyMember } from '@/services/family-members';
+import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import { useFamilyMemberProfiles, resolveAttributionName } from '@/hooks/useFamilyMemberProfiles';
 import { useAudioClipPlayback } from '@/hooks/useAudioClipPlayback';
@@ -48,6 +49,8 @@ import { useMemory, useMemoryMutations } from '@/hooks/useMemories';
 import { useMediaUrl, useMediaUrls } from '@/hooks/useMediaUrls';
 import { navigateBack } from '@/lib/navigation';
 import { editMemoryRoute } from '@/lib/routes';
+import { requestReviewAfterMoment } from '@/lib/store-review';
+import { openSupportEmail } from '@/lib/support-link';
 import { trackEvent } from '@/services/analytics';
 import { aspectRatioFromDimensions, clampMediaAspectRatio } from '@/utils/media-aspect';
 import { mediaImageSource } from '@/utils/media-image-source';
@@ -435,6 +438,18 @@ function MemoryDetailFramed({
           testID="memory-detail-retry-illustration"
         >
           <Text style={styles.retryBtnText}>{isRetrying ? 'Retrying…' : 'Retry illustration'}</Text>
+        </Pressable>
+      )}
+      {canEdit &&
+        memory.memory_type === 'text_illustration' &&
+        (memory.illustration_status === 'failed' || needsIllustrationRecovery(memory)) && (
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => void openSupportEmail('illustration_failed')}
+          style={styles.reportProblemLink}
+          testID="memory-illustration-report-problem"
+        >
+          <Text style={styles.reportProblemText}>Report a problem</Text>
         </Pressable>
       )}
       {isArtwork ? (
@@ -892,6 +907,8 @@ function MemoryDetailSound({
   );
 }
 
+const ILLUSTRATION_REVIEW_WINDOW_MS = 48 * 60 * 60 * 1000;
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 export default function MemoryDetailScreen() {
   const { id, comments, mediaIndex } = useLocalSearchParams<{
@@ -941,6 +958,29 @@ export default function MemoryDetailScreen() {
   const { url: illustrationUrl } = useMediaUrl(
     shouldLoadIllustration ? memory?.illustration_key : null,
     memory?.updated_at,
+  );
+
+  // Illustration reveal: the creator just watched their own fresh illustration
+  // appear -- ask for a review once they leave (eligibility is checked when
+  // the timer fires). Never for others' memories or old ones.
+  const { user } = useAuth();
+  const shouldAskReviewRef = useRef(false);
+  useEffect(() => {
+    shouldAskReviewRef.current = Boolean(
+      memory &&
+      shouldLoadIllustration &&
+      illustrationUrl &&
+      memory.illustration_status === 'ready' &&
+      user?.id &&
+      memory.user_id === user.id &&
+      Date.now() - Date.parse(memory.created_at) < ILLUSTRATION_REVIEW_WINDOW_MS,
+    );
+  });
+  useEffect(
+    () => () => {
+      if (shouldAskReviewRef.current) requestReviewAfterMoment('illustration_reveal', 800);
+    },
+    [],
   );
 
   const leaveMemoryDetail = () => {
@@ -1592,6 +1632,18 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansBold,
     fontSize: 13,
     color: colors.primary,
+  },
+  reportProblemLink: {
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+  },
+  reportProblemText: {
+    color: colors.ink2,
+    fontFamily: fonts.sans,
+    fontSize: 13,
+    textDecorationLine: 'underline',
   },
 
   // ── Editorial detail ──

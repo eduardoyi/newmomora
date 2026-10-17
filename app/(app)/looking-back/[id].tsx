@@ -25,6 +25,7 @@ import { useLookingBackVideoPreload } from '@/hooks/useLookingBackVideoPreload';
 import { useLookingBackPlayback } from '@/hooks/useLookingBackPlayback';
 import { useLookingBackSession, type LookingBackCheckpoint, type LookingBackSourceGeometry } from '@/hooks/useLookingBackSession';
 import { memoryDetailRoute, timelineRoute } from '@/lib/routes';
+import { requestReviewAfterMoment } from '@/lib/store-review';
 import { trackEvent } from '@/services/analytics';
 import type { LookingBackPackageType } from '@/services/looking-back';
 import { buildLookingBackChapters, flattenLookingBackFrames } from '@/utils/looking-back-frames';
@@ -294,6 +295,14 @@ export default function LookingBackViewerScreen() {
     void markPackageCompleted(item.id);
     trackEvent('looking_back_package_completed', { ...packageTypeProperties(item), frame_count: frames.length });
   }, [frames.length, item, markPackageCompleted, state.phase]);
+  // Watched to the end: ask for a review once the parent leaves the viewer
+  // (eligibility is checked when the timer fires).
+  useEffect(
+    () => () => {
+      if (wasCompletedRef.current) requestReviewAfterMoment('looking_back', 800);
+    },
+    [],
+  );
 
   const finishClose = useCallback(() => {
     if (isClosingRef.current) return;

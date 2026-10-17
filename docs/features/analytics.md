@@ -107,6 +107,16 @@ Every event name and its exact property shape lives in `AnalyticsEventMap` in [`
 
 No film title, member name, scope label or film id is sent.
 
+### Store reviews & support (content-free)
+
+See [app-review-prompt.md](./app-review-prompt.md).
+
+| Event | Properties | Fires from |
+|---|---|---|
+| `review_prompt_requested` | `trigger: year_film\|looking_back\|illustration_reveal\|memory_milestone\|invite_approved` | `src/lib/store-review.ts`, only after the native `requestReview()` call was made (the OS may still decline to show it; neither store reports whether it showed or the user rated) |
+| `review_link_opened` | `source: settings\|year_film` | "Rate Momora" tapped and the store page opened |
+| `support_link_opened` | `source: illustration_failed\|save_failed` | "Report a problem" / "Contact support" at a failure point opened the mail app |
+
 ### Gallery import (aggregate, content-free)
 
 | Event | Properties | Fires from |
