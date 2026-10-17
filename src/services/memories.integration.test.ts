@@ -1273,9 +1273,22 @@ describe('memories service integration', () => {
       throw new Error(`Unexpected table ${table}`);
     });
 
+    // Storage deletes are independent round trips; they must overlap instead
+    // of running one after another (which left the detail screen spinning).
+    let inFlight = 0;
+    let maxInFlight = 0;
+    (deleteStorageObject as jest.Mock).mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight -= 1;
+      return { error: null };
+    });
+
     const result = await deleteMemory('memory-3');
 
     expect(result.error).toBeNull();
+    expect(maxInFlight).toBeGreaterThan(1);
     expect(deleteStorageObject).toHaveBeenCalledWith('user-1/memories/memory-3/media.mp4');
     expect(deleteStorageObject).toHaveBeenCalledWith('user-1/memories/memory-3/media/asset-1.jpg');
     // Workstream C5: the derived preview must be cleaned up alongside its
@@ -1291,6 +1304,7 @@ describe('memories service integration', () => {
     expect(deleteStorageObject).toHaveBeenCalledWith(
       'user-1/memories/memory-3/share-card/v1-asset.png',
     );
+    (deleteStorageObject as jest.Mock).mockResolvedValue({ error: null });
   });
 
   it('rolls back both the original and preview keys when createMediaMemory fails after upload', async () => {

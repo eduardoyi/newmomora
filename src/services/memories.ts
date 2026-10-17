@@ -249,15 +249,28 @@ function normalizeOptionalContent(content?: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
+// Each key is its own delete-storage-object round trip. Running them one at a
+// time made deleting a multi-photo memory sit on a spinner for many seconds,
+// so a small pool of workers drains the list concurrently.
+const STORAGE_DELETE_CONCURRENCY = 6;
+
 async function deleteStorageKeys(keys: string[]) {
   const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  let next = 0;
 
-  for (const objectKey of uniqueKeys) {
-    const { error } = await deleteStorageObject(objectKey);
-    if (error) {
-      console.warn('Failed to delete storage object', objectKey, error.message);
+  const worker = async () => {
+    while (next < uniqueKeys.length) {
+      const objectKey = uniqueKeys[next++];
+      const { error } = await deleteStorageObject(objectKey);
+      if (error) {
+        console.warn('Failed to delete storage object', objectKey, error.message);
+      }
     }
-  }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(STORAGE_DELETE_CONCURRENCY, uniqueKeys.length) }, worker),
+  );
 }
 
 /** Flattens each media asset's object_key + preview_object_key + share_card_key
