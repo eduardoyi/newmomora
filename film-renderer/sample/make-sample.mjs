@@ -9,6 +9,12 @@
  *
  * Output: film-data/sample/ (film.json + assets/), committed.
  * usage: node film-renderer/sample/make-sample.mjs
+ *
+ * Opt-in variant: `--birthday-close` writes film-data/sample-birthday-close/
+ * instead — the same film in English, ending on the birthday film's close
+ * (docs/plans/birthday-film-morning.md): "Happy second birthday, Leo." over
+ * then/now photos with the corner wordmark (`wordmark: true`) and no end card.
+ * The default sample (the parity/benchmark fixture) is untouched by it.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -16,7 +22,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const OUT = path.join(HERE, '..', 'film-data', 'sample');
+const BIRTHDAY_CLOSE = process.argv.includes('--birthday-close');
+const OUT = path.join(HERE, '..', 'film-data', BIRTHDAY_CLOSE ? 'sample-birthday-close' : 'sample');
 const ASSETS = path.join(OUT, 'assets');
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(ASSETS, { recursive: true });
@@ -116,8 +123,10 @@ const film = {
     { type: 'firsts', kicker: 'Your milestones', items: [{ milestoneId: 'balance-bike', label: 'First balance bike ride', date: day(230), memoryId: 'sample-first-1', frame: photo('first bike ride', 230) }, { milestoneId: 'first-swim', label: 'First swim', date: day(300), memoryId: 'sample-first-2' }] },
     { type: 'burst', role: 'emotion', titles: ['Your funniest moments'], frames: [drawing('funny 1', 60), photo('funny 2', 120), photo('funny 3', 210), drawing('funny 4', 280)], secondsPerFrame: 0.51 },
     { type: 'burst', role: 'finale', titles: [], frames: burst(19, 5, 360, 'finale'), secondsPerFrame: 0.31 },
-    { type: 'close', line: 'Happy 4th birthday, Leo.', source: 'celebration', celebrationDate: '2026-06-12', frames: party },
-    { type: 'end_card', grid: backdrop.slice(0, 9) },
+    BIRTHDAY_CLOSE
+      ? { type: 'close', line: 'Happy second birthday, Leo.', source: 'then_now', celebrationDate: null, frames: party, wordmark: true }
+      : { type: 'close', line: 'Happy 4th birthday, Leo.', source: 'celebration', celebrationDate: '2026-06-12', frames: party },
+    ...(BIRTHDAY_CLOSE ? [] : [{ type: 'end_card', grid: backdrop.slice(0, 9) }]),
   ],
 };
 fs.writeFileSync(path.join(OUT, 'film.json'), `${JSON.stringify(film, null, 2)}\n`);

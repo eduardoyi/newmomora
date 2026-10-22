@@ -87,6 +87,8 @@ type — rebuilt as data-driven scene modules.
 
 ### 4.1 Birthday film — "Leo's Year Two"
 
+> **Superseded 2026-10-22:** the birthday film is now made on the birthday and delivered 07:00, scope through the day before (no party days, greeting end card) — see [birthday-film-morning.md](birthday-film-morning.md). The text below is the original decision.
+
 - **Scope:** the age-year that just ended **plus the birthday that closes
   it and 2 days after** (`birthdayFilmScope`, decided 2026-09-27), so this
   year's party is the film's ending. Eligibility is judged on the age-year

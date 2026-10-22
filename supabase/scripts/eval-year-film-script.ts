@@ -711,8 +711,8 @@ for (const film of options.films) {
   if (film.kind === 'birthday') {
     const child = children.find((c) => firstName(c.name).toLowerCase() === film.childName);
     if (!child?.dateOfBirth) throw new Error(`No child "${film.childName}" in --children`);
-    // The film window: the age-year through the day after the
-    // birthday, so this year's party closes the film (owner, 2026-09-27).
+    // The film window: the age-year through the day before the birthday (the
+    // film is made on the birthday morning, owner 2026-10-22).
     const scope = birthdayFilmScope(child.dateOfBirth, film.ageYear);
     const fullPool = birthdayPool(data.memories, child.id, scope, 'exclude');
     const variants = [null, ...options.subsample.filter((n) => n < fullPool.length)];

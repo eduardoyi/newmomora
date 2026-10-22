@@ -2,7 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   addDays,
   ageYearScopes,
-  BIRTHDAY_FILM_DAYS_AFTER,
+  BIRTHDAY_CELEBRATION_DAYS_AFTER,
   birthdayFilmScope,
   birthdayPool,
   evaluateBirthdayFilm,
@@ -275,14 +275,16 @@ Deno.test('chapters only include children born before the scope ends', () => {
 Deno.test('addDays and birthdayFilmScope roll over months, years and leap days', () => {
   assertEquals(addDays('2026-12-30', 3), '2027-01-02');
   assertEquals(addDays('2024-02-28', 1), '2024-02-29');
-  assertEquals(birthdayFilmScope('2024-02-29', 2), { start: '2025-02-28', endExclusive: '2026-03-02' });
+  // A Feb 29 child's birthday film now ends on the (clamped) birthday itself.
+  assertEquals(birthdayFilmScope('2024-02-29', 2), { start: '2025-02-28', endExclusive: '2026-02-28' });
 });
 
-Deno.test('film dates (owner 2026-09-29): birthday scope ends the day after, year-end ends Dec 27', () => {
+Deno.test('film dates (owner 2026-10-22): birthday scope ends on the birthday, year-end ends Dec 27', () => {
   // Coupled to year_film_due / placement_date in SQL: the birthday film is due
-  // birthday + 2 = its exclusive scope end.
-  assertEquals(BIRTHDAY_FILM_DAYS_AFTER, 1);
-  assertEquals(birthdayFilmScope('2022-10-17', 4), { start: '2025-10-17', endExclusive: '2026-10-19' });
+  // on the birthday = its exclusive scope end (through the day before). The
+  // celebration window is only for re-renders of old birthday + 2 rows.
+  assertEquals(BIRTHDAY_CELEBRATION_DAYS_AFTER, 1);
+  assertEquals(birthdayFilmScope('2022-10-17', 4), { start: '2025-10-17', endExclusive: '2026-10-17' });
   assertEquals(FAMILY_FILM_CUTOFF, '12-28');
   assertEquals(familyYearScope(2026), { start: '2026-01-01', endExclusive: '2026-12-28' });
 });

@@ -8,7 +8,7 @@ begin;
 -- current month / year (the owner's timezone is far from UTC on purpose), and
 -- the holiday fixtures live in a family of their own so they never overlap
 -- the month fixtures.
-select plan(217);
+select plan(219);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -953,43 +953,44 @@ insert into public.owner_entitlements (
 -- Rollout to every family; launch long ago.
 update public.year_film_settings set mode = 'all', launch_date = date '2020-01-01';
 
--- Members. Each child's age-N birthday falls at `today + k` (so the film, due
--- birthday + 2, is `today + k + 2`):
---   Ada  child, age 4, birthday today+8   -> film today+10   (the pool tests)
+-- Members. Each child's age-N birthday falls at `today + k`. The film is made
+-- ON the birthday (docs/plans/birthday-film-morning.md), so the film date and
+-- the scope end are the birthday itself, `today + k`:
+--   Ada  child, age 4, birthday today+10  -> film today+10   (the pool tests)
 --   Bo   cousin (tag target only; never an own child)
---   Cy   child, age 3, birthday today+28  -> film today+30   (last day in)
---   Di   child, age 2, birthday today+29  -> film today+31   (one day out)
---   Ed   child, age 5, birthday today-2   -> film today      (due today: in)
---   Fay  child, age 6, birthday today-3   -> film yesterday  (out)
+--   Cy   child, age 3, birthday today+30  -> film today+30   (last day in)
+--   Di   child, age 2, birthday today+31  -> film today+31   (one day out)
+--   Ed   child, age 5, birthday today     -> film today      (due today: in)
+--   Fay  child, age 6, birthday yesterday -> film yesterday  (out)
 --   Gus  child, age 13, birthday today+3  -> age 13 is outside 1..12
---   Ivy  cousin, age 4, birthday today+8  -> not an own child
---   Jo   unsorted (null role), age 7, birthday today+13 -> DOB rule: in
---   Kai  child, age 3, birthday today+10  -> film today+12   (film-row tests)
+--   Ivy  cousin, age 4, birthday today+10 -> not an own child
+--   Jo   unsorted (null role), age 7, birthday today+15 -> DOB rule: in
+--   Kai  child, age 3, birthday today+12  -> film today+12   (film-row tests)
 insert into public.family_members (id, family_id, name, date_of_birth, relationship)
 select v.id::uuid, 'ce100000-0000-4000-8000-000000000005', v.name,
        case when v.age is null then null else ((cur.today + v.k) - make_interval(years => v.age))::date end,
        v.rel
 from cur,
 (values
-  ('ce200000-0000-4000-8000-00000000000a', 'Ada', 4, 8, 'child'),
+  ('ce200000-0000-4000-8000-00000000000a', 'Ada', 4, 10, 'child'),
   ('ce200000-0000-4000-8000-00000000000b', 'Bo', null, null, 'cousin'),
-  ('ce200000-0000-4000-8000-00000000000c', 'Cy', 3, 28, 'child'),
-  ('ce200000-0000-4000-8000-00000000000d', 'Di', 2, 29, 'child'),
-  ('ce200000-0000-4000-8000-00000000000e', 'Ed', 5, -2, 'child'),
-  ('ce200000-0000-4000-8000-00000000000f', 'Fay', 6, -3, 'child'),
+  ('ce200000-0000-4000-8000-00000000000c', 'Cy', 3, 30, 'child'),
+  ('ce200000-0000-4000-8000-00000000000d', 'Di', 2, 31, 'child'),
+  ('ce200000-0000-4000-8000-00000000000e', 'Ed', 5, 0, 'child'),
+  ('ce200000-0000-4000-8000-00000000000f', 'Fay', 6, -1, 'child'),
   ('ce200000-0000-4000-8000-000000000010', 'Gus', 13, 3, 'child'),
-  ('ce200000-0000-4000-8000-000000000011', 'Ivy', 4, 8, 'cousin'),
-  ('ce200000-0000-4000-8000-000000000012', 'Jo', 7, 13, null),
-  ('ce200000-0000-4000-8000-000000000013', 'Kai', 3, 10, 'child')
+  ('ce200000-0000-4000-8000-000000000011', 'Ivy', 4, 10, 'cousin'),
+  ('ce200000-0000-4000-8000-000000000012', 'Jo', 7, 15, null),
+  ('ce200000-0000-4000-8000-000000000013', 'Kai', 3, 12, 'child')
 ) as v(id, name, age, k, rel);
 
 -- Ada's film window, and the month-index dates the quarters are read from.
 -- Quarter = floor(months since the MONTH of scope_start / 3), clamped to 3.
 create temp table ad on commit drop as
 select cur.today,
-       ((cur.today + 8) - interval '1 year')::date as sc,        -- scope_start (age-3 birthday)
-       cur.today + 10 as se,                                      -- scope_end_excl = film date
-       date_trunc('month', ((cur.today + 8) - interval '1 year'))::date as m0
+       ((cur.today + 10) - interval '1 year')::date as sc,       -- scope_start (age-3 birthday)
+       cur.today + 10 as se,                                      -- scope_end_excl = film date = the birthday
+       date_trunc('month', ((cur.today + 10) - interval '1 year'))::date as m0
 from cur;
 
 create or replace function pg_temp.entry(p_doc jsonb, p_member uuid)
@@ -1037,7 +1038,7 @@ select is(
   (select row(e ->> 'kind', (e ->> 'age_year')::int, (e ->> 'film_date')::date, (e ->> 'scope_end_excl')::date)::text
    from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
   (select row('birthday', 4, se, se)::text from ad),
-  'Ada: a birthday film, age 4, film date = scope_end_excl = birthday + 2 days');
+  'Ada: a birthday film, age 4, film date = scope_end_excl = the birthday itself');
 select is(
   (select (e ->> 'scope_start')::date from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 'window'),
   (select sc from ad), 'scope_start is the previous birthday (the age-year start)');
@@ -1055,7 +1056,7 @@ select is(
 -- Stage 1. Counted: t1 (text, scope_start), t2 (illustration, month 3),
 -- t3 (illustration, SAD, month 6). Not counted: t5 untagged, t6 tagged to a
 -- sibling only, t8 under an open report, t9a the day before the scope, t9b ON
--- scope_end_excl.
+-- scope_end_excl (the birthday itself: the film ends the morning of it).
 insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, emotion, memory_date)
 select v.id::uuid, 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000b', v.content,
        case when v.ill then 'text_illustration' else 'text_only' end,
@@ -1069,7 +1070,7 @@ from (values
   ('ce3b0000-0000-4000-8000-000000000006', 'Sibling only', true, 't6', null, (select sc + 1 from ad)),
   ('ce3b0000-0000-4000-8000-000000000008', 'Reported', true, 't8', null, (select sc + 2 from ad)),
   ('ce3b0000-0000-4000-8000-000000000009', 'Day before scope', true, 't9a', null, (select sc - 1 from ad)),
-  ('ce3b0000-0000-4000-8000-00000000000a', 'On scope end', true, 't9b', null, (select se from ad))
+  ('ce3b0000-0000-4000-8000-00000000000a', 'On the birthday', true, 't9b', null, (select se from ad))
 ) as v(id, content, ill, tag, emotion, d);
 insert into public.memory_family_members (memory_id, family_member_id) values
   ('ce3b0000-0000-4000-8000-000000000001', 'ce200000-0000-4000-8000-00000000000a'),
@@ -1110,12 +1111,13 @@ select is(
   '(5,4,3)',
   'stage 2: a weary visual and a memory tagged to the child plus a sibling count; quarters 0, 1 and 3 are covered (the sad one still covers nothing)');
 
--- Stage 3. t10: a visual on the day AFTER the birthday (scope_end_excl - 1),
--- by an author the viewer hid. Its month index is >= 12, which clamps to
--- quarter 3 instead of opening a fourth quarter.
+-- Stage 3. t10: a visual on the day BEFORE the birthday (scope_end_excl - 1,
+-- the last day in scope), by an author the viewer hid. Its month index is 12
+-- (clamped into quarter 3 instead of opening a fourth) unless the scope starts
+-- on the 1st of a month, when it is 11 (quarter 3 outright): quarter 3 either way.
 insert into public.memories (id, family_id, user_id, content, memory_type, illustration_status, illustration_key, memory_date)
 values ('ce3b0000-0000-4000-8000-000000000010', 'ce100000-0000-4000-8000-000000000005', 'ce000000-0000-4000-8000-00000000000e',
-        'The day after the party', 'text_illustration', 'ready', 'up-key/t10.png', (select se - 1 from ad));
+        'The day before the birthday', 'text_illustration', 'ready', 'up-key/t10.png', (select se - 1 from ad));
 insert into public.memory_family_members (memory_id, family_member_id)
 values ('ce3b0000-0000-4000-8000-000000000010', 'ce200000-0000-4000-8000-00000000000a');
 insert into public.blocked_family_accounts (family_id, blocker_user_id, blocked_user_id)
@@ -1125,7 +1127,7 @@ select is(
   (select row(e -> 'moments', e -> 'visuals', e -> 'quarters')::text
    from uf, pg_temp.entry(doc, 'ce200000-0000-4000-8000-00000000000a') e where label = 's3'),
   '(6,5,3)',
-  'stage 3: the two days after the birthday are in scope, and a month index past 11 clamps into quarter 3');
+  'stage 3: the day before the birthday is the last day in scope, and a month index past 11 clamps into quarter 3');
 
 -- ---- RPC level: viewers see films, not cards; personal blocks hide pictures -
 insert into public.holiday_cards (id, family_id, created_by, year, greeting, language, status, front_candidates, edits, created_at, deleted_at) values
@@ -1173,7 +1175,7 @@ select is((select pg_temp.entry(doc -> 'upcoming_films', 'ce200000-0000-4000-800
 -- ---- Film rows: which tiles the real film takes over ----------------------
 -- Kai's film key (the scheduler's): family, kind, member, scope_start_date.
 create temp table kai as
-select ((cur.today + 10) - interval '1 year')::date as sc, cur.today + 12 as se from cur;
+select ((cur.today + 12) - interval '1 year')::date as sc, cur.today + 12 as se from cur;
 -- A row that exists but has NOT surfaced (surface_at in the future) keeps the
 -- tile: the real film is hidden from everyone until surface_at, so the slot
 -- must not go empty (reveal gap, 20261012120000).
@@ -1189,11 +1191,16 @@ insert into uf select 'kai-p-ready', public.keepsake_upcoming_films('ce100000-00
 update public.year_films set status = 'queued', ready_at = null, surface_at = now() + interval '1 second'
 where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-edge-after', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
-update public.year_films set surface_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
+update public.year_films set surface_at = now(), status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-edge-at', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 
--- SURFACED rows (surface_at <= now()): the real film UI takes over.
-update public.year_films set surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000001';
+-- SURFACED rows (surface_at <= now()): the real film UI takes over -- once the
+-- film can be SHOWN. The app lists a film only after it has been ready
+-- (ready_at is not null, 20260930180000), so a surfaced row that is still
+-- queued / rendering / in retry (ready_at null) keeps the tile ("arrives
+-- today") instead of leaving an empty slot (20261022120000).
+update public.year_films set surface_at = now() - interval '1 hour', status = 'queued', ready_at = null
+where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
@@ -1205,6 +1212,9 @@ update public.year_films set status = 'rendering', surface_at = now() - interval
 insert into uf select 'kai-rendering', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000001';
 insert into uf select 'kai-ready', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
+-- A remake of a film that was ready once: ready_at stays set, the app keeps showing it.
+update public.year_films set status = 'rendering' where id = 'ce530000-0000-4000-8000-000000000001';
+insert into uf select 'kai-remake', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000005', null, (select today from cur));
 delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000001';
 insert into public.year_films (id, family_id, kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at, status, forced)
 select 'ce530000-0000-4000-8000-000000000002', 'ce100000-0000-4000-8000-000000000005', 'birthday',
@@ -1222,19 +1232,21 @@ select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') f
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-edge-after'), null,
   'surface_at one second away: the tile is still there');
 select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-edge-at'), null,
-  'surface_at = now(): the film has surfaced, the tile hands over');
-select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-queued'), null,
-  'a surfaced queued film row takes the tile away (the film is on its way)');
+  'surface_at = now() and ready: the film has surfaced, the tile hands over');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-queued'), null,
+  'readiness: a surfaced row that is not ready yet (queued, ready_at null) KEEPS the tile (the film cannot be shown yet)');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-skipped'), null,
   'a skipped film row keeps the tile (terminal, invisible to clients)');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-failed'), null,
   'a failed film row keeps the tile');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-p-skipped'), null,
   'a skipped film row that has not surfaced keeps the tile too');
-select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-rendering'), null,
-  'a surfaced rendering film row takes the tile away');
+select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-rendering'), null,
+  'readiness: a surfaced rendering row (ready_at null) keeps the tile');
 select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-ready'), null,
-  'a surfaced ready film row takes the tile away');
+  'readiness: a surfaced row with ready_at set takes the tile away (the film is showable)');
+select is((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-remake'), null,
+  'a surfaced remake (rendering again, ready_at still set) has handed over: the app still shows the film');
 select isnt((select pg_temp.entry(doc, 'ce200000-0000-4000-8000-000000000013') from uf where label = 'kai-forced'), null,
   'a forced (operator / canary) film row never takes a real film''s slot, surfaced or not');
 select is((select jsonb_array_length(pg_temp.births(doc)) from uf where label = 'kai-ready'), 4,
@@ -1417,6 +1429,8 @@ select 'ce530000-0000-4000-8000-000000000003', 'ce100000-0000-4000-8000-00000000
 insert into uf select 'y-p-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
 update public.year_films set surface_at = now() - interval '1 hour' where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-queued', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
+update public.year_films set status = 'ready', ready_at = now() where id = 'ce530000-0000-4000-8000-000000000003';
+insert into uf select 'y-ready', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
 update public.year_films set status = 'skipped' where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-skipped', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
 update public.year_films set status = 'ready', scope_start_date = make_date((select y from yr) - 1, 1, 1),
@@ -1424,7 +1438,8 @@ update public.year_films set status = 'ready', scope_start_date = make_date((sel
 where id = 'ce530000-0000-4000-8000-000000000003';
 insert into uf select 'y-lastyear', public.keepsake_upcoming_films('ce100000-0000-4000-8000-000000000006', null, (select make_date(y, 12, 1) from yr));
 select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-p-queued'), null, 'a queued year-end film row that has not surfaced keeps the tile');
-select is((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-queued'), null, 'a surfaced queued year-end film row takes the tile away');
+select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-queued'), null, 'readiness: a surfaced year-end film row that is not ready yet (ready_at null) keeps the tile');
+select is((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-ready'), null, 'readiness: a surfaced, ready year-end film row takes the tile away');
 select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-skipped'), null, 'a skipped year-end film row keeps the tile');
 select isnt((select pg_temp.kinds(doc, 'family_year') from uf where label = 'y-lastyear'), null, 'last year''s film row does not take this year''s tile');
 delete from public.year_films where id = 'ce530000-0000-4000-8000-000000000003';

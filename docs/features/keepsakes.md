@@ -1,7 +1,7 @@
 # Feature: Keepsakes
 
 **Status:** `in-progress` (tab redesign + native product pages built 2026-10-08; deploys with the `keepsakes_overview` migration and an OTA)
-**Last updated:** 2026-10-08
+**Last updated:** 2026-10-22
 **PRD reference:** [Memory Book plan](../plans/memory-book.md), [Year Film plan](../plans/year-film.md) §8
 **Plans:** [keepsakes-redesign.md](../plans/keepsakes-redesign.md) (the tab, the storefront, the product pages; approved design "Keepsakes Redesign v3") ·
 [timeline-calendar-keepsakes.md](../plans/timeline-calendar-keepsakes.md) Phase C (the original tab)
@@ -140,7 +140,7 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
 - **Previous-recap tile** (`overview.previous_recap`, everyone incl. viewers; shelf item
   `upcoming-previous-recap`, `isPrevious: true`): a film's `year_films` row is created
   ~00:30 owner-local on its due day but the film only appears at `surface_at` (19:00
-  on the 1st for monthly recaps, 09:00 for birthday / year-end films), and the film list
+  on the 1st for monthly recaps, 07:00 on the birthday for birthday films, 09:00 on Dec 30 for the year-end film), and the film list
   hides an unsurfaced film from everyone. So on the 1st the new month's recap tile
   restarts ("0 of 10") while last month's recap is not there yet. The server keeps last
   month's tile (`previous_recap`, same shape as `recap`) until that film surfaces; the
@@ -156,10 +156,16 @@ product"). Tap -> `router.push(keepsakeProductRoute(product))` and
   recap, birthday, year-end), the date equal to the shelf's `todayIso` is shown as
   "today" instead of "Oct 18", both on the tile ("arrives" + "today" in Caveat) and in
   the caption meta ("arrives today · 23 moments"; `formatArrival` in
-  `src/utils/keepsakes.ts`). The birthday / year-end tiles now stay all the way to the
-  reveal (09:00): the server drops them only once the film row has SURFACED
-  (`surface_at <= now()`), so the slot never goes empty between the row's creation and the
-  film appearing, then hands straight over to the real film. A locked tile still shows
+  `src/utils/keepsakes.ts`). The birthday / year-end tiles stay all the way to the
+  reveal (07:00 on the birthday, 09:00 on Dec 30): the server drops them only once the
+  film row has SURFACED (`surface_at <= now()`) **and is ready** (`ready_at is not null`,
+  since members only see a film once it has been ready; added 2026-10-22), so the slot
+  never goes empty between the row's creation and the film appearing, even when a render
+  runs past `surface_at`, then hands straight over to the real film. The readiness rule applies to both the
+  birthday and the year-end tile; the previous-recap tile is unchanged (it still goes
+  when the film surfaces). A birthday tile's
+  `film_date` is the birthday itself (it was birthday + 2 days until 2026-10-22; see
+  [birthday-film-morning.md](../plans/birthday-film-morning.md)). A locked tile still shows
   its progress, never a date.
 - **Upcoming birthday and year-end tiles** (`upcoming-film-tile.tsx`, from
   `overview.upcoming_films`, everyone incl. viewers): same look as the recap tile
@@ -530,3 +536,4 @@ The overview RPC is read-only. Otherwise the tab reads `memory_books`
 | 2026-10-08 | Real holiday card front on the shelf, the storefront tile and the card page (`card_front`, landscape and portrait, full-bleed and bordered); the generic preview now says the language's default greeting and just the year; the year-end film leads its year; `keepsakes_create_book_tapped` fires from the Memory Book page and the stack screen; dead code removed (`buildKeepsakeYears`, `keepsakesFilterCount`, `holidayCardFamilyLine`, `yearFilmsEnabledQueryKey`) |
 | 2026-10-09 | Past-year holiday cards on their own shelves (`overview.cards`; ready only, order badge, no "Ready to order"); upcoming birthday and year-end film tiles (`overview.upcoming_films`) built on a shared `UpcomingTile` with the recap tile |
 | 2026-10-12 | Reveal gap closed (migration `20261012120000`): birthday / year-end tiles stay until their film surfaces, new `overview.previous_recap` keeps last month's recap tile on the 1st, upcoming tiles say "arrives today" on the day |
+| 2026-10-22 | Birthday film now arrives on the birthday (07:00 owner-local, was birthday + 2 at 09:00): `upcoming_films` birthday `film_date` = the birthday, and `keepsake_upcoming_films` keeps a tile until its film is ready (migration `20261022120000`, [plan](../plans/birthday-film-morning.md)) |

@@ -7,7 +7,7 @@ begin;
 -- delete+reinsert media save), cycle-end rules, edits RPC, client access,
 -- notifications, recovery, the deletion fence and ledger operations; P2 dates,
 -- backfill and the edit sheet's get_year_film_edit_options (section 12).
-select plan(172);
+select plan(181);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (postgres role; assertions switch to authenticated where needed)
@@ -73,16 +73,17 @@ set mode = 'canary',
 -- 1. Scheduling
 -- ---------------------------------------------------------------------------
 
--- Enzo turns 4 on Oct 23 → due Oct 25 (birthday + 2) 00:30 New York (04:30 UTC).
-select is(public.year_film_due('2026-10-25 04:20:00+00'), 0, 'birthday: nothing before 00:30 owner-local');
-select is(public.year_film_due('2026-10-25 04:40:00+00'), 1, 'birthday: due at 00:30 owner-local (only the own child)');
+-- Enzo turns 4 on Oct 23 → due ON the birthday, 00:30 New York (04:30 UTC)
+-- (docs/plans/birthday-film-morning.md; before: birthday + 2).
+select is(public.year_film_due('2026-10-23 04:20:00+00'), 0, 'birthday: nothing before 00:30 owner-local on the birthday');
+select is(public.year_film_due('2026-10-23 04:40:00+00'), 1, 'birthday: due at 00:30 owner-local on the birthday (only the own child)');
 
 select results_eq(
   $$select kind, family_member_id, age_year, scope_start_date, scope_end_exclusive, surface_at
     from public.year_films where family_id = 'f8100000-0000-4000-8000-000000000001' and kind = 'birthday'$$,
-  $$values ('birthday'::text, 'f8200000-0000-4000-8000-000000000001'::uuid, 4, date '2025-10-23', date '2026-10-25',
-            timestamptz '2026-10-25 13:00:00+00')$$,
-  'birthday: due birthday + 2 (scope ends the day after the birthday), surfaces 09:00 local'
+  $$values ('birthday'::text, 'f8200000-0000-4000-8000-000000000001'::uuid, 4, date '2025-10-23', date '2026-10-23',
+            timestamptz '2026-10-23 11:00:00+00')$$,
+  'birthday: due on the birthday (scope ends the day before it), surfaces 07:00 local'
 );
 select ok(not exists (select 1 from public.year_films where family_member_id = 'f8200000-0000-4000-8000-000000000002'),
   'a niece marked cousin never gets a birthday film');
@@ -90,14 +91,16 @@ select ok(not exists (select 1 from public.year_films where family_member_id = '
   'an explicit child turning 14 gets no film (under-13 ceiling)');
 select ok(not exists (select 1 from public.year_films where family_id = 'f8100000-0000-4000-8000-000000000002'),
   'a billing-blocked family gets nothing');
-select is(public.year_film_due('2026-10-26 04:40:00+00'), 0, 'idempotent: a second run inside the window inserts nothing');
+select is(public.year_film_due('2026-10-25 04:40:00+00'), 0, 'idempotent: a second run inside the catch-up window inserts nothing');
 
--- Baby (unsorted, 2025-03-10): first birthday due 2026-03-12; a run a week later is outside the catch-up window.
-select is(public.year_film_due('2026-03-20 12:00:00+00'), 0, 'catch-up window is 3 days');
-select is(public.year_film_due('2026-03-14 12:00:00+00'), 1, 'inside the catch-up window: an unsorted under-13 kid counts');
+-- Baby (unsorted, 2025-03-10): first birthday due 2026-03-10 (00:30 EDT = 04:30Z).
+-- The catch-up window covers Mar 10-12 local; it closes at Mar 13 00:00 EDT (04:00Z).
+select is(public.year_film_due('2026-03-20 12:00:00+00'), 0, 'catch-up window is 3 days (a week later: nothing)');
+select is(public.year_film_due('2026-03-13 04:00:00+00'), 0, 'catch-up window closes at 00:00 on the fourth day (due day + 3)');
+select is(public.year_film_due('2026-03-13 03:59:00+00'), 1, 'inside the catch-up window (last minute of day 3): an unsorted under-13 kid counts');
 
 update public.year_film_settings set launch_date = date '2027-01-01';
-select is(public.year_film_due('2026-10-25 05:00:00+00') + public.year_film_due('2026-10-01 05:00:00+00'), 0,
+select is(public.year_film_due('2026-10-23 05:00:00+00') + public.year_film_due('2026-10-01 05:00:00+00'), 0,
   'nothing is scheduled before launch_date (no backfill)');
 update public.year_film_settings set launch_date = date '2026-01-01';
 
@@ -461,14 +464,43 @@ select is(
 -- ---------------------------------------------------------------------------
 
 select is((select placement_date from public.year_films where id = (select id from enzo)), date '2026-10-23',
-  'placement_date: a birthday film sits on the birthday (scope_end_exclusive - 2)');
+  'placement_date: a new-rule birthday film (scope ends on the birthday) sits on the birthday (scope_end_exclusive)');
 select ok(not exists (
     select 1 from public.year_films y
     join public.family_members m on m.id = y.family_member_id
     where y.kind = 'birthday'
       and y.placement_date is distinct from (m.date_of_birth + make_interval(years => y.age_year))::date
   ),
-  'placement_date: every birthday film sits on the actual birthday (coupled to BIRTHDAY_FILM_DAYS_AFTER = 1)');
+  'placement_date: every birthday film year_film_due makes sits on the actual birthday');
+
+-- The expression keeps the placement of films made under the earlier rules
+-- (docs/plans/birthday-film-morning.md): a scope spanning >= 367 days is the
+-- P2 shape (age-year + 2: sits on scope_end_exclusive - 2 = the birthday) or
+-- the short-lived P1 shape (+ 3: scope_end_exclusive - 2 = birthday + 1);
+-- a new-rule scope spans 365-366 days and sits on scope_end_exclusive.
+-- Forced rows (outside year_films_key) so nothing else sees them; removed below.
+insert into public.year_films (id, family_id, kind, forced, family_member_id, age_year, scope_start_date, scope_end_exclusive,
+                               surface_at, status)
+values
+  ('f8400000-0000-4000-8000-000000000011', 'f8100000-0000-4000-8000-000000000001', 'birthday', true,
+   'f8200000-0000-4000-8000-000000000001', 1, '2021-10-23', '2022-10-25', now(), 'queued'),
+  ('f8400000-0000-4000-8000-000000000012', 'f8100000-0000-4000-8000-000000000001', 'birthday', true,
+   'f8200000-0000-4000-8000-000000000001', 2, '2022-10-23', '2023-10-26', now(), 'queued'),
+  ('f8400000-0000-4000-8000-000000000013', 'f8100000-0000-4000-8000-000000000001', 'birthday', true,
+   'f8200000-0000-4000-8000-000000000001', 3, '2023-10-23', '2024-10-25', now(), 'queued'),
+  ('f8400000-0000-4000-8000-000000000014', 'f8100000-0000-4000-8000-000000000001', 'birthday', true,
+   'f8200000-0000-4000-8000-000000000001', 5, '2027-10-23', '2028-10-23', now(), 'queued');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000011'), date '2022-10-23',
+  'placement_date: an old P2 row (scope_end = birthday + 2, 367 days) still sits on the birthday');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000013'), date '2024-10-23',
+  'placement_date: an old P2 row spanning a leap day (368 days) still sits on the birthday');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000012'), date '2023-10-24',
+  'placement_date: a P1-shaped row (scope_end = birthday + 3, 368 days) keeps birthday + 1');
+select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000014'), date '2028-10-23',
+  'placement_date: a new-rule row spanning a leap day (366 days) sits on the birthday');
+delete from public.year_films where id in (
+  'f8400000-0000-4000-8000-000000000011', 'f8400000-0000-4000-8000-000000000012',
+  'f8400000-0000-4000-8000-000000000013', 'f8400000-0000-4000-8000-000000000014');
 select is((select placement_date from public.year_films where id = (select id from fy)), date '2026-12-31',
   'placement_date: the year-end film sits on Dec 31');
 
@@ -482,7 +514,16 @@ values
 select is((select placement_date from public.year_films where id = 'f8400000-0000-4000-8000-000000000003'), date '2025-06-30',
   'placement_date: a monthly recap sits on the last day of its month');
 select ok(has_column_privilege('authenticated', 'public.year_films', 'placement_date', 'SELECT'),
-  'placement_date is granted to clients');
+  'placement_date is granted to clients (the column grant survives the drop and re-add)');
+select ok(exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and tablename = 'year_films' and indexname = 'idx_year_films_family_placement'
+      and indexdef like '%(family_id, placement_date DESC)%'
+  ),
+  'idx_year_films_family_placement exists on (family_id, placement_date desc)');
+select is((select attgenerated::text from pg_attribute
+           where attrelid = 'public.year_films'::regclass and attname = 'placement_date' and not attisdropped), 's',
+  'placement_date is still a STORED generated column');
 
 set local role authenticated;
 select set_config('request.jwt.claim.sub', 'f8000000-0000-4000-8000-000000000003', true);
@@ -739,7 +780,9 @@ select u, u, 'production', 'app_store', 'momora_annual_v1', 'momora_plus', 'annu
 from unnest(array['f9000000-0000-4000-8000-000000000001', 'f9000000-0000-4000-8000-000000000002']::uuid[]) as u;
 update public.user_profiles set timezone = 'UTC' where id = 'f9000000-0000-4000-8000-000000000002';
 
--- Parity family: a Feb 29 child, a Dec 30 child (film due Jan 1, next year),
+-- Parity family: a Feb 29 child (due Feb 28 in non-leap years: Postgres clamps
+-- Feb 29 + n years, like TS addYears), a Dec 30 child (film due Dec 30; its
+-- catch-up window crosses into Jan 1 of the next year),
 -- a plain Oct child, an unsorted kid (DOB rule), a cousin (never), and a
 -- parent. 12 memories in every month of 2025-12..2028-03 except two thin ones.
 insert into public.family_members (id, family_id, name, date_of_birth, relationship) values
@@ -780,7 +823,7 @@ begin
     foreach v_day in array array[
       date '2026-01-31', date '2026-02-01', date '2026-02-28', date '2026-03-01', date '2026-03-02',
       date '2026-03-03', date '2026-03-08', date '2026-03-09', date '2026-05-01', date '2026-09-30',
-      date '2026-10-01', date '2026-10-25', date '2026-10-26', date '2026-11-01', date '2026-11-02',
+      date '2026-10-01', date '2026-10-23', date '2026-10-25', date '2026-10-26', date '2026-11-01', date '2026-11-02',
       date '2026-12-01', date '2026-12-27', date '2026-12-28', date '2026-12-29', date '2026-12-30',
       date '2026-12-31', date '2027-01-01', date '2027-01-02', date '2027-01-03', date '2027-01-04',
       date '2027-02-28', date '2027-03-01', date '2028-02-29', date '2028-03-01', date '2028-03-02',
@@ -820,16 +863,20 @@ begin
 end
 $parity$;
 
-select is((select count(*)::int from parity_probe), 124, 'parity sweep ran every probe date in every timezone');
+select is((select count(*)::int from parity_probe), 128, 'parity sweep ran every probe date in every timezone');
 select is((select count(*)::int from parity_probe where extra <> 0 or missing <> 0), 0,
   'parity: year_film_due inserts exactly the candidate rows due in its catch-up window (DST, UTC-11, UTC+14, year end, month ends, Feb 29)');
 select ok((select sum(birthdays) > 0 and sum(months) > 0 and sum(years) > 0 from parity_probe),
   'parity sweep is not vacuous: birthday, monthly and year-end films were all compared');
-select ok((select bool_and(total >= 1) from parity_probe
-           where tz = 'America/New_York' and probe_date in (date '2026-03-02', date '2028-03-02')),
-  'parity sweep covers a Feb 29 birthday (due Mar 2)');
-select ok((select bool_and(total >= 1) from parity_probe where probe_date = date '2027-01-01'),
-  'parity sweep covers a Dec 30 birthday due Jan 1 of the next year');
+select ok((select bool_and(birthdays >= 1) from parity_probe
+           where tz = 'America/New_York' and probe_date in (date '2026-02-28', date '2027-02-28', date '2028-02-29')),
+  'parity sweep covers a Feb 29 birthday: due Feb 28 in 2026 and 2027 (clamped), Feb 29 in 2028');
+select ok((select bool_and(birthdays >= 1) from parity_probe where probe_date = date '2027-01-01'),
+  'parity sweep covers a Dec 30 birthday whose catch-up window crosses into Jan 1 (due Dec 30, still caught up on Jan 1)');
+select is((select count(*)::int from parity_probe where probe_date = date '2027-01-02' and birthdays > 0), 0,
+  'parity: that Dec 30 birthday has left the catch-up window by Jan 2');
+select ok((select bool_and(birthdays >= 1) from parity_probe where probe_date = date '2026-10-23'),
+  'parity sweep covers an Oct birthday film on its due day (the birthday itself)');
 select is((select count(*)::int from parity_probe where probe_date = date '2026-05-01' and months > 0), 0,
   'parity: the thin April (3 memories) never produces a May 1 recap');
 select ok((select bool_and(years = 1) from parity_probe where probe_date = date '2026-12-29'),
@@ -870,8 +917,8 @@ select results_eq(
     from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', true)$$,
   $$values
     ('family_month'::text, null::uuid, null::integer, date '2026-01-01', date '2026-02-01', true),
-    ('family_month'::text, null::uuid, null::integer, date '2026-02-01', date '2026-03-01', true),
-    ('birthday'::text, 'f9200000-0000-4000-8000-000000000101'::uuid, 2, date '2025-02-28', date '2026-03-02', true)$$,
+    ('birthday'::text, 'f9200000-0000-4000-8000-000000000101'::uuid, 2, date '2025-02-28', date '2026-02-28', true),
+    ('family_month'::text, null::uuid, null::integer, date '2026-02-01', date '2026-03-01', true)$$,
   'backfill dry run lists the recaps with >= 10 memories and the Feb 29 birthday, and skips the thin March'
 );
 select is((select count(*)::int from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002'), 0,
@@ -893,15 +940,15 @@ select results_eq(
   $$select kind, scope_start_date, inserted from public.queue_year_film_backfill('f9100000-0000-4000-8000-000000000002', date '2026-04-30', false)$$,
   $$values
     ('family_month'::text, date '2026-01-01', false),
-    ('family_month'::text, date '2026-02-01', true),
-    ('birthday'::text, date '2025-02-28', true)$$,
+    ('birthday'::text, date '2025-02-28', true),
+    ('family_month'::text, date '2026-02-01', true)$$,
   'the full run inserts the rest and reports the existing film as not inserted'
 );
 select results_eq(
   $$select kind, scope_start_date, surface_at, status, forced, notified_at is not null
     from public.year_films where family_id = 'f9100000-0000-4000-8000-000000000002' order by scope_start_date, kind$$,
   $$values
-    ('birthday'::text, date '2025-02-28', timestamptz '2026-03-02 09:00:00+00', 'queued'::text, false, true),
+    ('birthday'::text, date '2025-02-28', timestamptz '2026-02-28 07:00:00+00', 'queued'::text, false, true),
     ('family_month'::text, date '2026-01-01', timestamptz '2026-02-01 19:00:00+00', 'queued'::text, false, true),
     ('family_month'::text, date '2026-02-01', timestamptz '2026-03-01 19:00:00+00', 'queued'::text, false, true)$$,
   'backfilled rows are queued, non-forced, historically timed and pre-notified'

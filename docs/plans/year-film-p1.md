@@ -10,7 +10,7 @@ render Dec 12, surface Dec 15).
 
 A production pipeline that, with no human in the loop, turns a family's
 journal into the three film kinds exactly as the F1–F3 dogfood pipeline does
-locally — **birthday** (3 days after, scope through birthday+2), **monthly**
+locally — **birthday** (3 days after, scope through birthday+2; superseded by [birthday-film-morning.md](birthday-film-morning.md): now made on the birthday, delivered 07:00), **monthly**
 (the 1st, previous month) and **year-end family** (Dec 12, scope Jan 1–Dec 11)
 — stores the MP4 + poster privately, never serves content the family removed,
 edited out or reported, and is safe to canary on Eduardo's family only.

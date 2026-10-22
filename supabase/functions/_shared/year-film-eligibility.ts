@@ -135,13 +135,18 @@ export function ageYearScopes(dateOfBirth: string, today: string): AgeYearScope[
   return out;
 }
 
-/** Days after the birthday a birthday film still covers, so the party is in
- * it (owner, 2026-09-27: the film comes out a couple of days AFTER the
- * birthday and closes on this year's celebration). Owner 2026-09-29: the
- * film is made 00:30 and delivered 09:00 two days after the birthday, i.e. on
- * the day its scope ends (birthday + DAYS_AFTER + 1). Coupled to
- * year_film_due and year_films.placement_date in SQL. */
-export const BIRTHDAY_FILM_DAYS_AFTER = 1;
+/** Days after a birthday that still count as its celebration (the party can
+ * be the weekend after). This is ONLY the celebration window used by
+ * birthdayCelebration — it no longer widens the film's scope: owner 2026-10-22
+ * moved the birthday film to 00:30 + 07:00 ON the birthday, covering the
+ * age-year through the day before (birthdayFilmScope), so this year's birthday
+ * is never in scope. The window stays so a re-render of an OLD row (scope =
+ * birthday + 2, made under the 2026-09-27/29 rule) still finds its party.
+ * This constant has no SQL twin: the SQL twin of the scope is birthdayFilmScope's
+ * end = the birthday (year_film_due / year_film_candidate_rows /
+ * keepsake_upcoming_films / placement_date in
+ * 20261022120000_birthday_film_morning.sql; docs/plans/birthday-film-morning.md). */
+export const BIRTHDAY_CELEBRATION_DAYS_AFTER = 1;
 
 function daysInMonth(year: number, month: number): number {
   return [31, (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
@@ -179,14 +184,19 @@ export function previousDay(date: string): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-/** The birthday film for `ageYear` ("Year Four"): the age-year plus the
- * birthday that closes it and BIRTHDAY_FILM_DAYS_AFTER days, so this year's
- * party is the film's ending. Eligibility is still judged on the age-year
- * (ageYearScopes); this is the film's content window. */
+/** The birthday film for `ageYear` ("Year Four"): the age-year, from the
+ * previous birthday through the day BEFORE the birthday that closes it
+ * (exclusive end = that birthday). The film is made 00:30 and delivered 07:00
+ * on the birthday itself (owner, 2026-10-22), so it can no longer close on
+ * this year's party. Rows made before that (scope = birthday + 2) keep their
+ * stored scope. Eligibility is still judged on the age-year (ageYearScopes);
+ * this is the film's content window. SQL twin: the birthday due date /
+ * scope_end_exclusive in year_film_due, year_film_candidate_rows,
+ * keepsake_upcoming_films and placement_date (20261022120000_birthday_film_morning.sql). */
 export function birthdayFilmScope(dateOfBirth: string, ageYear: number): FilmScope {
   return {
     start: addYears(dateOfBirth, ageYear - 1),
-    endExclusive: addDays(addYears(dateOfBirth, ageYear), BIRTHDAY_FILM_DAYS_AFTER + 1),
+    endExclusive: addYears(dateOfBirth, ageYear),
   };
 }
 

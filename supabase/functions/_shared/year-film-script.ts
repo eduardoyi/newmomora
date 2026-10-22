@@ -23,7 +23,7 @@ import { getTopicById } from './memory-topics.ts';
 import { type PortraitVersionCandidate, resolvePortraitVersionAtDate } from './portrait-versions.ts';
 import {
   addDays,
-  BIRTHDAY_FILM_DAYS_AFTER,
+  BIRTHDAY_CELEBRATION_DAYS_AFTER,
   birthdayPool,
   chapterChildren,
   countPool,
@@ -217,6 +217,9 @@ export type FilmScene =
     /** The birthday the celebration frames are from. */
     celebrationDate: string | null;
     frames: FrameRef[];
+    /** Last scene of the film — the renderer adds the small Momora wordmark
+     * and a hold (the birthday film ends here, with no end card). */
+    wordmark?: boolean;
   }
   | {
     type: 'end_card';
@@ -1127,8 +1130,10 @@ function withinDays(date: string, anchor: string, before: number, after: number)
 /** The child's real birthday memories in scope (owner, round 2): tagged to
  * the child, dated on the birthday or carrying the deterministic birthday
  * milestone (a DOB join, not model inference), from a day before to
- * BIRTHDAY_FILM_DAYS_AFTER after. The latest birthday in scope wins — with
- * birthdayFilmScope that is this year's party. */
+ * BIRTHDAY_CELEBRATION_DAYS_AFTER after. The latest birthday in scope wins.
+ * Since 2026-10-22 birthdayFilmScope ends ON the birthday (exclusive), so this
+ * year's birthday is never in scope and a new film never closes on a party;
+ * only a re-render of an OLD row (scope = birthday + 2) can still find one. */
 /** A child's certain firsts in the pool (isCertainFirst), each with its
  * memory as a card when it has a shareable picture — confirmed ones first,
  * then oldest. The caller caps and orders what it shows. */
@@ -1204,7 +1209,7 @@ export function birthdayCelebration(
     const memories = pool.filter(
       (m) =>
         m.taggedMemberIds.includes(child.id) && visualKind(m) !== null && !sensitive.has(m.id) &&
-        withinDays(m.date, date, 1, BIRTHDAY_FILM_DAYS_AFTER) && (m.date === date || birthdayRows.has(m.id)),
+        withinDays(m.date, date, 1, BIRTHDAY_CELEBRATION_DAYS_AFTER) && (m.date === date || birthdayRows.has(m.id)),
     );
     if (memories.length > 0) groups.push({ date, memories });
   }
@@ -1251,6 +1256,13 @@ export function birthdayVisionCandidates(input: BirthdayInput): FrameRef[] {
   const voice = soundCandidates(pool, input.child.id, ctx, own).videos.slice(0, VOICE_CANDIDATES);
   return dedupeFrames([...earliest, ...latest, ...voice].map((c) => c.frame));
 }
+
+/** The renderer holds the birthday close for 2 beats after its photos and
+ * adds the small Momora wordmark (close.wordmark) — estimateSeconds doesn't
+ * know, so the birthday builder budgets it: 2 × the beat, rounded up. Only
+ * the birthday builder does; estimateSeconds is shared, and the other films'
+ * trimming must not change. */
+const CLOSE_HOLD_SECONDS = Math.ceil(2 * BEAT_SECONDS);
 
 export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   const { child, scope, language } = input;
@@ -1396,9 +1408,10 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
   scenes.push({ type: 'burst', role: 'finale', titles: [], frames: finale, secondsPerFrame: FINALE_SECONDS_PER_FRAME });
 
   // FOCUS — close: the birthday party; else then → now (verified); else portraits.
+  // The film ends on the close (owner, 2026-10-22): wordmark + hold, no end card.
   const closeLine = strings.birthdayClose(name, input.ageYear);
   if (celebration && celebrationFrames.length > 0) {
-    scenes.push({ type: 'close', line: closeLine, source: 'celebration', celebrationDate: celebration.date, frames: celebrationFrames });
+    scenes.push({ type: 'close', line: closeLine, source: 'celebration', celebrationDate: celebration.date, frames: celebrationFrames, wordmark: true });
   } else if (thenFrame && nowFrame) {
     scenes.push({
       type: 'close',
@@ -1406,6 +1419,7 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
       source: 'then_now',
       celebrationDate: null,
       frames: [{ ...thenFrame.frame, why: `then · ${thenFrame.frame.why}` }, { ...nowFrame.frame, why: `now · ${nowFrame.frame.why}` }],
+      wordmark: true,
     });
     dropped.push({ scene: 'close', reason: 'no birthday memories in scope — then/now instead' });
   } else if (endPortrait) {
@@ -1415,12 +1429,18 @@ export function buildBirthdayScript(input: BirthdayInput): FilmScript {
       source: 'portraits',
       celebrationDate: null,
       frames: startPortrait ? [startPortrait, endPortrait] : [endPortrait],
+      wordmark: true,
     });
     dropped.push({ scene: 'close', reason: 'no birthday memories or verified then/now frames — portraits instead' });
   } else dropped.push({ scene: 'close', reason: 'no birthday memories, verified frames or portraits' });
 
-  fitLength(scenes, MAX_FILM_SECONDS - 3); // the end card follows
-  scenes.push({ type: 'end_card', grid: finale.slice(0, GRID_CARDS) });
+  if (scenes.some((sc) => sc.type === 'close')) {
+    fitLength(scenes, MAX_FILM_SECONDS - CLOSE_HOLD_SECONDS); // the close's wordmark hold follows its photos
+  } else {
+    // No close: the film would end on the finale burst, unbranded — keep the plain end card.
+    fitLength(scenes, MAX_FILM_SECONDS - 3); // the end card follows
+    scenes.push({ type: 'end_card', grid: finale.slice(0, GRID_CARDS) });
+  }
 
   return finish({ kind: 'birthday', language, title, scope, pool, scenes, dropped, vision: !!input.checks, subjects: [child], references: own,
     span: { from: scope.start, to: addYears(child.dateOfBirth!, input.ageYear) } });

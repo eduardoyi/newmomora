@@ -29,7 +29,7 @@ same release.
 
 | Area | Decision |
 |---|---|
-| Birthday film | Made 00:30 and delivered 09:00 **2 days after** the birthday; covers through the day after the birthday |
+| Birthday film | Made 00:30 and delivered 09:00 **2 days after** the birthday; covers through the day after the birthday (superseded 2026-10-22: [birthday-film-morning.md](birthday-film-morning.md)) |
 | Monthly recap | Unchanged: made 00:30 on the 1st, delivered 19:00 |
 | Year-end film | Made **Dec 28** (scope Jan 1 – Dec 27), delivered **Dec 30 09:00** |
 | Discovery | Push + a **notifications-drawer entry** (new activity kind) + a "New" marker on the card until watched |

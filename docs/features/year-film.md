@@ -1,7 +1,7 @@
 # Feature: Year Film
 
-**Status:** `in-progress` — P1 backend deployed (canary); P2 backend amendments migrated 2026-09-30 (`20260930120000_year_films_p2.sql`); P2 app built (Timeline, player, Keepsakes, drawer, edit sheet); the edit-options migration (`20260930150000_year_film_edit_options.sql`) is local only until the owner deploys
-**Last updated:** 2026-09-30
+**Status:** `in-progress` — P1 backend deployed (canary); P2 backend amendments migrated 2026-09-30 (`20260930120000_year_films_p2.sql`); P2 app built (Timeline, player, Keepsakes, drawer, edit sheet); the edit-options migration (`20260930150000_year_film_edit_options.sql`) is local only until the owner deploys; birthday-morning timing and the new birthday ending (2026-10-22, `20261022120000_birthday_film_morning.sql`, renderer image + Worker) implemented locally, not deployed — see [birthday-film-morning.md](../plans/birthday-film-morning.md)
+**Last updated:** 2026-10-22
 **Plans:** [year-film.md](../plans/year-film.md) (product, dogfood F0–F5) ·
 [year-film-p1.md](../plans/year-film-p1.md) (production backend, hardened) ·
 [year-film-p2.md](../plans/year-film-p2.md) (app surfaces, date changes, history backfill)
@@ -9,22 +9,25 @@
 ## Overview
 
 Personalized vertical films (1080×1920, ~60s) made from a family's journal:
-a **birthday film** per own child (made 2 days after the birthday, covering
-through the day after it), a **monthly recap** (the 1st, previous month) and a
+a **birthday film** per own child (made overnight and delivered the morning of
+the birthday, covering the previous birthday through the day before it), a **monthly recap** (the 1st, previous month) and a
 **year-end family film** (made Dec 28, surfaces Dec 30). Never called "Wrapped". Films are
 curated by the same pure builders the dogfood stages proved, rendered with
 HyperFrames on one-off Fly machines, and stored privately in R2.
 
 ## User-facing behavior (P1: backend only)
 
-- **Dates (P2, owner-local):** a birthday film is made at 00:30 on
-  *birthday + 2* and delivered at 09:00 that day (its scope ends the day after
-  the birthday); the monthly recap is made 00:30 on the 1st and delivered 19:00;
+- **Dates (P2, owner-local):** a birthday film is made at 00:30 **on the
+  birthday** and delivered at **07:00** that day (its scope is the previous
+  birthday up to, not including, this one — i.e. through the day before; a party
+  held after the birthday is not in the film, and there is no later re-render;
+  until 2026-10-22 it was made and delivered at 09:00 on *birthday + 2*, scope
+  through the day after); the monthly recap is made 00:30 on the 1st and delivered 19:00;
   the year-end film is made 00:30 on **Dec 28** (scope Jan 1 – Dec 27) and
   delivered **Dec 30 09:00**. One push at delivery, gated on
   `notify_new_memories`, plus a `film_ready` entry in the notifications drawer
   (written in the same statement — see [family-activity.md](family-activity.md)).
-- **Where a film sits (`placement_date`):** birthday → the birthday itself;
+- **Where a film sits (`placement_date`):** birthday → the birthday itself (films made under the old +2 rule keep `scope_end_exclusive - 2`; new ones use `scope_end_exclusive`, see TECH_SPEC);
   monthly recap → the month's last day; year-end → Dec 31. A stored generated
   column, readable by clients; the app orders/interleaves Timeline cards on it.
 - **Operator/canary (`forced`) films are never visible to members** (RLS).
@@ -54,6 +57,48 @@ HyperFrames on one-off Fly machines, and stored privately in R2.
   delivery time is still ahead (`notified_at` is set regardless); the launch
   runbook backfills through launch day − 1, so those times are already past.
 
+### Birthday film ending (2026-10-22)
+
+A birthday film **ends on its close scene** (then/now or portraits photos,
+confetti) titled with the original line, "Happy {ordinal} birthday, {Name}."
+(es "¡Feliz cumpleaños, {Name}!", `birthdayClose`), for every close source. The
+owner compared mockups and dropped a separate greeting card and sign-off.
+
+- **Script.** The close scene carries `wordmark: true` (optional field on the
+  close `FilmScene`) and the builder emits **no** `end_card`. Exception: a film
+  with no close at all (no portraits or frames) keeps the plain "made with
+  Momora" end card so every film ends branded. The builder budgets the end
+  hold with `CLOSE_HOLD_SECONDS` (= ceil of 2 beats = 2 s) in `fitLength`.
+- **Renderer** (`film-renderer/assemble.mjs`). A close with `wordmark` fades in
+  a small "Momora." wordmark in the bottom-right corner (Newsreader 46 px,
+  `ink2`, 60 px in; same look as the holiday card's corner wordmark) after the
+  confetti, and holds 2 beats so the music fades on the wish. `holidayEndCard`
+  is holiday-only, unchanged. The close title steps down in size (floor 72 px)
+  only when it would exceed 3 lines at 128 px or a single word is wider than a
+  line (about 15 characters), so every title that fits today renders
+  unchanged. The default sample is unchanged; `make-sample.mjs
+  --birthday-close` writes `film-data/sample-birthday-close` (English; the
+  close is the last scene, with the wordmark).
+- **Celebration close.** A close on a party memory is only reachable when
+  re-rendering an old +2 row whose scope still holds the party; it uses the
+  same title and ending.
+- **Extending.** Copy lives in the `strings` blocks (en and es) next to
+  `birthdayClose`. A renderer change ships as a new image and needs the
+  year-film Worker redeployed with `FILM_RENDERER_IMAGE`; with an old renderer
+  the `wordmark` flag is ignored (no wordmark, no hold). A deterministic render
+  failure ends the film `failed` and it is never re-inserted, so run a forced
+  canary (`--forced birthday … --end <birthday>`) with long names before
+  shipping a layout change.
+- **Known trade-offs.** The last old-rule film and the first new-rule film
+  overlap by the two days after last year's birthday; floors (60 moments / 40
+  visuals / 3 quarters) are judged without the party days; the memory pool is
+  cut at generation start (~00:35 owner-local), so a relative in an earlier
+  timezone can lose part of the day before; an owner with a null/UTC timezone
+  gets the film at the wrong local hour. On TikTok/Reels the bottom-right
+  corner sits under the app's buttons/caption, so the wordmark is often hidden
+  on socially shared birthday films (owner accepted it; moving it is a one-line
+  position change in `assemble.mjs`).
+
 ### Timeline (P2 app)
 
 Every ready film is a **permanent in-feed card** in the Timeline's List view
@@ -64,7 +109,8 @@ the player (`yearFilmRoute(id, 'timeline')`).
 
 - **Placement.** `interleaveFilms` (`src/utils/year-films.ts`) puts a film dated
   *d* before the first loaded memory with `memory_date <= d`, so a birthday film
-  is the latest item of the birthday, a monthly recap caps its month and the
+  is the latest item of the birthday (it sorts above every memory dated that
+  day, including a party logged later that day), a monthly recap caps its month and the
   year-end film caps its year (above December's recap). A film is shown only
   where the loaded window proves its position: above every loaded memory only
   when there are no newer pages (or, in an anchored month/day jump, when
@@ -308,7 +354,7 @@ See TECH_SPEC §2.1h. Key rules:
 | Pure logic (shared by Worker, render job, eval scripts) | `supabase/functions/_shared/year-film-{eligibility,script,quotes,vision,voice,trim,i18n,assets,context,checks,beds}.ts` |
 | Worker | `cloudflare/year-film-worker/src/{index,workflow,stages,bridge,fly,r2creds,storage,openai,uuid}.ts` |
 | Render job + image | `render/year-film-renderer/{Dockerfile,build.sh,src/job.mjs}`, `film-renderer/assemble.mjs` |
-| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql`, `20260930150000_year_film_edit_options.sql`, `20260930180000_year_films_remaking_visibility.sql` |
+| Database | `supabase/migrations/20260929120000_year_films.sql`, `…120100_schedule_year_films_cron.sql`, `20260930120000_year_films_p2.sql`, `20260930150000_year_film_edit_options.sql`, `20260930180000_year_films_remaking_visibility.sql`, `20261022120000_birthday_film_morning.sql` (birthday due/candidate/upcoming functions + `placement_date` re-add; rollback `supabase/rollbacks/20261022120000_birthday_film_morning_down.sql` restores the functions only) |
 | Operator | `npm run year-film:queue` (`supabase/scripts/queue-year-film.ts`) — list, `--forced`, `--requeue`, `--requeue-all`, `--backfill`, `--delete-forced`, `--delete-backfilled`, `--purge-prefix` |
 | Dogfood | `npm run eval:year-film-{audit,script,assets}`, `film-renderer/render.mjs` |
 
@@ -425,3 +471,4 @@ permanent.
 | 2026-09-30 | P2 app: owner/manager edit sheet from the completion overlay (hide moments, line of the year, music with bundled 5 s previews); `get_year_film_edit_options` RPC; `save_year_film_edits` now accepts earlier removals in the full set; `hideNames` stays unbuilt |
 | 2026-09-30 | Render job: image-manifest startup guard (`IMAGE_INCOMPLETE`) + Worker dispatch jitter against Fly partial-rootfs machine starts |
 | 2026-09-30 | Remaking visibility: members keep seeing a film that was ever ready while it is blocked/remade (RLS `ready_at is not null`); `filmDisplayState` (`ready`/`remaking`/`updating`/`hidden`), Timeline + Keepsakes placeholders and "Updating…" stickers, 20 s focused polling, "being remade" player copy |
+| 2026-10-22 | Birthday film made 00:30 and delivered 07:00 on the birthday (scope previous birthday → the day before; was +2 days, 09:00); `placement_date` keeps the old rows and puts new rows on the birthday; `keepsake_upcoming_films` tile stays until `ready_at`; birthday film ends on the "Happy Nth birthday" close with a corner "Momora." wordmark and a 2-beat hold (close `wordmark` flag, `CLOSE_HOLD_SECONDS`; no greeting card), close-title step-down in the renderer (migration `20261022120000_birthday_film_morning.sql`). Not deployed |

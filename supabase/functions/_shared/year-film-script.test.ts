@@ -174,7 +174,8 @@ Deno.test('birthday: focus beats alternate with bursts that never repeat a memor
   assertEquals(scenes(script, 'burst').map((b) => b.role).filter((r) => r !== 'emotion'), ['first_half', 'second_half', 'finale']);
   const types = script.scenes.map((s) => s.type);
   assertEquals(types[0], 'cold_open');
-  assertEquals(types.at(-1), 'end_card');
+  assertEquals(types.at(-1), 'close'); // the film ends on the close — no end card
+  assert(!types.includes('end_card'));
   const ids = scenes(script, 'burst').flatMap((b) => b.frames.map((f) => f.memoryId));
   assertEquals(new Set(ids).size, ids.length);
   const [first, second] = scenes(script, 'burst');
@@ -307,8 +308,11 @@ Deno.test('isCertainFirst: confirmed, or explicit "first" in the text within the
   assert(!isCertainFirst(row, 'Mi primo vino a jugar')); // "primo" is not "primer"
 });
 
-Deno.test('birthday: the close shows the party of the birthday the film celebrates', () => {
-  const scope = birthdayFilmScope('2022-10-17', 4); // 2025-10-17 → 2026-10-19
+// A row made under the 2026-09-27/29 rule: the age-year plus the birthday and the day after.
+const OLD_ROW_SCOPE = { start: '2025-10-17', endExclusive: '2026-10-19' };
+
+Deno.test('birthday: an old row re-render still closes on the party of the birthday it celebrates', () => {
+  const scope = OLD_ROW_SCOPE;
   const party = memory({ id: 'party', date: '2026-10-17', taggedMemberIds: [TOMAS, GRAN] });
   const nextDay = memory({ id: 'cake', date: '2026-10-18', taggedMemberIds: [TOMAS] });
   const unrelated = memory({ id: 'later', date: '2026-10-19', taggedMemberIds: [TOMAS] });
@@ -319,13 +323,15 @@ Deno.test('birthday: the close shows the party of the birthday the film celebrat
   });
   const close = scene(script, 'close')!;
   assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-17']);
+  assertEquals(close.line, 'Happy fourth birthday, Tomás.');
+  assertEquals(close.wordmark, true);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake', 'party']);
   assertEquals(birthdayCelebration([unrelated], [], tomas, scope), null);
 });
 
 Deno.test("birthday: last year's party never closes this year's film", () => {
   // Only the birthday the window starts on is logged (this year's party hasn't happened yet).
-  const scope = birthdayFilmScope('2022-10-17', 4);
+  const scope = OLD_ROW_SCOPE;
   const lastYear = memory({ id: 'third', date: '2025-10-17', taggedMemberIds: [TOMAS] });
   const close = scene(birthday([...yearOfMemories(), lastYear], { scope }), 'close')!;
   // Falls back to then → now (the year's first photo may be that party, as "then"), never a party claim.
@@ -525,8 +531,8 @@ Deno.test('birthday: a sibling\'s voice is never the child\'s sound', () => {
   assert(scene(script, 'sound')?.frame.memoryId !== 'story', 'used the sibling\'s voice');
 });
 
-Deno.test('birthday film window runs through the birthday, so this year\'s party closes it', () => {
-  const scope = birthdayFilmScope('2022-10-17', 4);
+Deno.test('birthday film window of an old row runs through the birthday + 1, so that party closes it', () => {
+  const scope = OLD_ROW_SCOPE;
   assertEquals(scope, { start: '2025-10-17', endExclusive: '2026-10-19' });
   const lastYear = memory({ id: 'party-3', date: '2025-10-17', taggedMemberIds: [TOMAS] });
   const thisYear = memory({ id: 'party-4', date: '2026-10-17', taggedMemberIds: [TOMAS] });
@@ -538,6 +544,73 @@ Deno.test('birthday film window runs through the birthday, so this year\'s party
   const close = scene(script, 'close')!;
   assertEquals([close.source, close.celebrationDate], ['celebration', '2026-10-17']);
   assertEquals(close.frames.map((f) => f.memoryId).sort(), ['cake-4', 'party-4']);
+});
+
+Deno.test('birthday film window (2026-10-22) ends on the birthday: the party never closes it', () => {
+  const scope = birthdayFilmScope('2022-10-17', 4);
+  assertEquals(scope, { start: '2025-10-17', endExclusive: '2026-10-17' });
+  const lastYear = memory({ id: 'party-3', date: '2025-10-17', taggedMemberIds: [TOMAS] });
+  const dayBefore = memory({ id: 'eve', date: '2026-10-16', taggedMemberIds: [TOMAS] });
+  const party = memory({ id: 'party-4', date: '2026-10-17', taggedMemberIds: [TOMAS] });
+  const script = birthday([...yearOfMemories(), lastYear, dayBefore, party], {
+    scope,
+    milestones: [{ memoryId: 'party-4', familyMemberId: TOMAS, milestoneId: 'birthday', status: 'candidate' }],
+  });
+  const close = scene(script, 'close')!;
+  assert(close.source !== 'celebration', close.source);
+  assertEquals(close.celebrationDate, null);
+  assertEquals(birthdayCelebration([party], [], tomas, scope), null); // this year's birthday is out of scope
+  const ids = script.scenes.flatMap((s) => (s.type === 'burst' ? s.frames.map((f) => f.memoryId) : []));
+  assert(!ids.includes('party-4'), 'the birthday itself is out of scope');
+});
+
+Deno.test('birthday: the film ends on the close (all three sources), with the original birthday line and the wordmark flag', () => {
+  const thenNow = birthday(yearOfMemories());
+  assertEquals(scene(thenNow, 'close')!.source, 'then_now');
+  assertEquals(scene(thenNow, 'close')!.line, 'Happy fourth birthday, Tomás.');
+  assertEquals(thenNow.scenes.at(-1), scene(thenNow, 'close'));
+  assertEquals(scene(thenNow, 'close')!.wordmark, true);
+  assertEquals(scene(thenNow, 'end_card'), undefined);
+
+  // No usable photos at all → portraits close.
+  const bare = birthday([]);
+  assertEquals(scene(bare, 'close')?.source, 'portraits');
+  assertEquals(scene(bare, 'close')?.line, 'Happy fourth birthday, Tomás.');
+  assertEquals(bare.scenes.at(-1), scene(bare, 'close'));
+  assertEquals(scene(bare, 'close')?.wordmark, true);
+
+  const es = birthday(yearOfMemories(), { language: 'es' });
+  assertEquals(scene(es, 'close')!.line, '¡Feliz cumpleaños, Tomás!');
+  assertEquals(es.scenes.at(-1)?.type, 'close');
+});
+
+Deno.test('birthday: the close line falls back to "{n}th" past the ordinal table', () => {
+  const script = birthday(yearOfMemories(), { ageYear: 15 });
+  assertEquals(scene(script, 'close')!.line, 'Happy 15th birthday, Tomás.');
+});
+
+Deno.test('birthday: with no close at all, the plain end card keeps the film branded', () => {
+  // No portraits and no usable then/now frames → no close scene.
+  const noPortraits = { ...tomas, portraits: [] };
+  const script = birthday([], { child: noPortraits, members: [gran, noPortraits, lucia] });
+  assertEquals(scene(script, 'close'), undefined);
+  assert(script.dropped.some((d) => d.scene === 'close'));
+  const last = script.scenes.at(-1)!;
+  assertEquals(last.type, 'end_card');
+  assertEquals((last as { greeting?: string }).greeting, undefined);
+  assertEquals((last as { from?: string }).from, undefined);
+});
+
+Deno.test('birthday: the film budgets the close\'s wordmark hold, so the whole film stays under the cap', () => {
+  const rich = MONTHS.flatMap((month) =>
+    Array.from({ length: 20 }, (_, i) =>
+      i % 3 === 0 ? video({ date: `${month}-${String(i + 1).padStart(2, '0')}` }) : memory({ date: `${month}-${String(i + 1).padStart(2, '0')}` })
+    )
+  );
+  const script = birthday([...yearOfMemories(), ...rich]);
+  // estimateSeconds knows nothing of the 2-beat hold (~1 s → 2 s budget): the scenes are trimmed to 58 s.
+  assert(script.estimatedSeconds <= 58, `${script.estimatedSeconds}s`);
+  assert(script.estimatedSeconds > 50, `${script.estimatedSeconds}s (the budget should still be used)`);
 });
 
 Deno.test('counters carry a backdrop mosaic; the film carries its timeline span', () => {

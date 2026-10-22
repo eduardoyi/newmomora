@@ -1031,7 +1031,9 @@ Plan: [docs/plans/year-film-p1.md](plans/year-film-p1.md) (hardened) · parent
 (client SELECT policy: visible once ever ready) and
 `20261005120000_family_holiday_film_share.sql` (kind `family_holiday`, the two
 holiday music beds, and `film_share_tokens` for the public film page; see
-"Table `film_share_tokens`" next to `media_share_tokens` below).
+"Table `film_share_tokens`" next to `media_share_tokens` below) and
+`20261022120000_birthday_film_morning.sql` (birthday films made on the
+birthday, delivered 07:00; see "Birthday film on the morning" below).
 
 **`year_films`** — one row per scheduled film key forever (unique
 `(family_id, kind, coalesce(family_member_id, zero), scope_start_date)` where
@@ -1048,7 +1050,7 @@ holiday music beds, and `film_share_tokens` for the public film page; see
 | `content_epoch`, `curated_epoch` | invalidation clock; publish requires them equal |
 | `attempt_id`, `attempt_count`, `next_attempt_at`, `heartbeat_at`, `render_slot_at`, `machine_ids`, `requeue_after`, `cleanup_needed`, `last_failure_code` | attempt state (service role only) |
 | `video_key`, `poster_key`, `scenes_key`, `duration_ms`, `surface_at`, `notified_at`, `ready_at` | output under `{ownerId}/year-films/{filmId}/{attemptId}/` (`film.mp4`, `poster.jpg`, `poster_thumb.jpg` — the list thumbnail, key derived from `poster_key` —, `scenes.json`) |
-| `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `scope_end_exclusive - 2` (the birthday), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` and `family_holiday` (the `else` branch) → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday offset is coupled to `BIRTHDAY_FILM_DAYS_AFTER = 1` (pgTAP asserts every birthday film sits on the real birthday). |
+| `placement_date` (P2) | stored generated `date` — where the film sits in the Timeline: `birthday` → `case when scope_end_exclusive - scope_start_date >= 367 then scope_end_exclusive - 2 else scope_end_exclusive end` (the birthday: rows made under the old +2 rule span 367+ days and keep `- 2`, rows made since `20261022120000` span 365–366 and sit on `scope_end_exclusive`), `family_month` → `scope_end_exclusive - 1` (the month's last day), `family_year` and `family_holiday` (the `else` branch) → Dec 31 of `scope_start_date`'s year. Its own `grant select (placement_date)` to `authenticated`; index `(family_id, placement_date desc)`. The birthday expression is coupled to the scope length (`birthdayFilmScope`), not to a TS constant; pgTAP asserts old-shape, P1-shaped and new-shape rows all sit on the real birthday. Re-added (drop column / add generated column / re-grant / re-index) by `20261022120000_birthday_film_morning.sql`, which keeps the portable form instead of `SET EXPRESSION`. |
 
 Client access: column-level `select` on safe columns only (never scripts,
 checks, quotes, keys or attempt fields); RLS ("Year films: select") = family
@@ -1098,11 +1100,33 @@ in-flight films. `ai_usage_events.operation` adds `year_film_quote`,
 
 **P2 amendments (`20260930120000_year_films_p2.sql`).**
 - *Dates* (`year_film_due`, structure and windows unchanged): birthday films
-  due **birthday + 2** (`scope_end_exclusive`, so the scope ends the day after
-  the birthday; TS `BIRTHDAY_FILM_DAYS_AFTER = 1`, own-child check at
-  `due_date - 2`); year-end film due **Dec 28** (scope Jan 1 – Dec 27) and
+  were due **birthday + 2** (`scope_end_exclusive`, scope through the day after
+  the birthday, own-child check at `due_date - 2`) until
+  `20261022120000_birthday_film_morning.sql` (below) moved them to the birthday
+  itself; year-end film due **Dec 28** (scope Jan 1 – Dec 27) and
   surfaces **Dec 30 09:00** owner-local (TS `FAMILY_FILM_CUTOFF = '12-28'`);
   monthly unchanged (due the 1st 00:30, surfaces 19:00).
+- *Birthday film on the morning* (`20261022120000_birthday_film_morning.sql`,
+  plan [birthday-film-morning.md](plans/birthday-film-morning.md)): birthday
+  films are created at 00:30 owner-local **on the birthday** (same 3-day
+  catch-up), `due_date = scope_end_exclusive` = the birthday (scope = previous
+  birthday up to, not including, this one), `surface_at` = **07:00** owner-local
+  that day, own-child check at the birthday. `year_film_due`,
+  `year_film_candidate_rows` (same rule, parity-swept) and
+  `keepsake_upcoming_films` are recreated in one migration; `placement_date` is
+  re-added (above); `scope_start_date` is unchanged, so the unique key can
+  never duplicate a film the old rule made, and existing films keep their scope
+  and placement. TS: `birthdayFilmScope` ends at the birthday and
+  `BIRTHDAY_FILM_DAYS_AFTER` became `BIRTHDAY_CELEBRATION_DAYS_AFTER = 1`, which
+  now only sizes the celebration window for re-renders of old rows (a new
+  scope never contains a celebration). The birthday script ends on its close scene
+  (`birthdayClose` title, close `wordmark: true`, 2 s `CLOSE_HOLD_SECONDS`
+  budgeted in `fitLength`) with no `end_card`, except a film with no close,
+  which keeps the plain end card (see "Birthday film ending" in
+  [year-film.md](features/year-film.md)). Rollback
+  `supabase/rollbacks/20261022120000_birthday_film_morning_down.sql` restores
+  only the three function bodies, not `placement_date`. Deploy order: renderer
+  image, Worker with `FILM_RENDERER_IMAGE`, forced canary, then `supabase db push`.
 - *Client RPC* `year_films_enabled(p_family_id) returns boolean` (definer,
   anonymous + membership guards, `authenticated` only) — true only when the
   rollout includes the family, `launch_date` is set and `<=` the next 1st
@@ -1327,7 +1351,9 @@ editable/orderable until its film is done; meanwhile the app and shop show "Prep
 `20261011120000_keepsakes_overview_cards_upcoming.sql` (adds `cards` and
 `upcoming_films`, moves the card-front logic into `keepsake_card_front`) +
 `20261012120000_keepsakes_overview_reveal_gap.sql` (tiles stay until the film surfaces;
-adds `previous_recap` and the `keepsake_previous_recap` helper), pgTAP
+adds `previous_recap` and the `keepsake_previous_recap` helper) +
+`20261022120000_birthday_film_morning.sql` (birthday `film_date` = the birthday; tiles
+stay until the film is ready; rollback restores the function bodies only), pgTAP
 `supabase/tests/keepsakes_overview_test.sql`, rollbacks
 `supabase/rollbacks/20261009120000_keepsakes_overview_down.sql` (drops the RPC and pool
 helper), `20261010120000_keepsakes_overview_card_front_down.sql` (restores the
@@ -1446,8 +1472,8 @@ whole Keepsakes tab.
     - **Birthday** (`kind: 'birthday'`): for each member with a date of birth and each
       `age_year` 1..12 (`year_film_due`'s own-child rule `year_film_is_own_child` at the
       birthday): `birthday = dob + age_year years`, **`film_date` = `scope_end_excl` =
-      birthday + 2 days** (the day the film appears; `surface_at` is 09:00 owner-local that
-      day, TS twin `BIRTHDAY_FILM_DAYS_AFTER`), `scope_start = dob + (age_year-1) years`.
+      the birthday** (the day the film appears; `surface_at` is 07:00 owner-local that
+      day; before `20261022120000` it was birthday + 2 days at 09:00), `scope_start = dob + (age_year-1) years`.
       Listed when `film_date` is within `[today, today + 30]` owner-local.
     - **Year-end** (`kind: 'family_year'`, `member_id`/`age_year` null): December 1..30 of
       the owner-local year; `scope_start` Jan 1, `scope_end_excl` Dec 28 (the pool is Jan 1
@@ -1456,11 +1482,15 @@ whole Keepsakes tab.
       worker's `isFilmChild`) and Dec 28 >= `launch_date`.
     - **Exclusion**: a tile is dropped only when a non-`forced` `year_films` row with the
       scheduler's key (family, kind, member, `scope_start_date`) exists in a status
-      **other than `skipped` / `failed`** AND it has **surfaced** (`surface_at <= now()`,
-      the instant the app starts listing the film; queued … ready: the real film UI takes
-      over, the unique key means no second row will ever be inserted). A row that exists
-      but has not surfaced (created ~00:30 on the due day, surfaces 09:00) **keeps the
-      tile**, so the slot never goes empty ("arrives today", then the real film). A
+      **other than `skipped` / `failed`** AND it has **surfaced** (`surface_at <= now()`)
+      AND it is **ready** (`ready_at is not null`, the instant the app can actually list the
+      film, since clients only see a film once ever ready; the unique key means no second row
+      will ever be inserted). A row that exists but has not surfaced (created ~00:30 on the
+      due day, surfaces 07:00 for birthdays / 09:00 for the year-end film) or is still
+      queued / rendering / retrying after `surface_at` **keeps the tile**, so the slot never
+      goes empty ("arrives today", then the real film). The readiness condition applies
+      to both the birthday and the year-end tile; `previous_recap` is unchanged (it still
+      goes when its film surfaces). A
       `skipped`/`failed` row is terminal and invisible to clients, so the tile stays until
       its film date passes. The due day is inside both windows (30-day birthday, Dec
       1..30 year-end).
@@ -3988,9 +4018,9 @@ posture as the other OpenAI features). Logs carry counts and error names only.
 
 Hourly (pg_cron minute 5, `x-cron-secret`, `verify_jwt = false`). Inserts due
 films (`year_film_due`: owner-local ≥ 00:30 on the due date, 3-day catch-up,
-`launch_date`, rollout, billing; **due dates: birthday +2 days, the 1st for
-monthly recaps, Dec 28 for the year-end film — delivered 09:00 / 19:00 /
-Dec 30 09:00 owner-local**), promotes debounced requeues / spaced retries
+`launch_date`, rollout, billing; **due dates: the birthday itself (since
+`20261022120000`; was birthday +2 days), the 1st for monthly recaps, Dec 28 for
+the year-end film — delivered 07:00 / 19:00 / Dec 30 09:00 owner-local**), promotes debounced requeues / spaced retries
 / skipped re-checks, claims up to 20 queued films and POSTs each to the
 Worker `/dispatch` (`{ filmId, attemptId }`, HMAC `x-dispatch-*` with
 `CLOUDFLARE_YEAR_FILM_WORKFLOW_SECRET`; failure → `end_cycle aborted`, no

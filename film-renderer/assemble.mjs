@@ -75,7 +75,10 @@ const MAX_SECONDS = 60; // plan §5: approved burst pace first, films up to the 
 // of lavender and cream, a wine night instead of plum, berry instead of rose),
 // a quiet snowfall behind the text of the light scenes, a warm light over the
 // bursts and the greeting end card. Every other film is untouched: nothing below
-// changes its output when HOLIDAY is false.
+// changes its output when HOLIDAY is false — except the birthday film's close
+// (close.wordmark, docs/plans/birthday-film-morning.md: a corner wordmark and a
+// two-beat hold) and a close title too long for three lines at 128 px, which
+// steps down.
 const HOLIDAY = film.theme === 'holiday';
 const C = HOLIDAY
   ? {
@@ -830,8 +833,38 @@ q('.st').forEach(function(el,i){ tl.fromTo(el,{scale:0,rotation:0},{scale:1,rota
   return { beats: n, events: frames.map((f, i) => ({ t: BEAT + i * BEAT * 0.5, date: f.date ?? null })) };
 }
 
+/** Greedy word-wrap line count for a deterministic text-fit estimate: `cap` is
+ * how many characters fit on a line; a word longer than `cap` cannot wrap. */
+function wrapLines(text, cap) {
+  let lines = 1;
+  let used = 0;
+  let fits = true;
+  for (const w of String(text).split(/\s+/).filter(Boolean)) {
+    if (w.length > cap) fits = false;
+    if (used === 0) used = w.length;
+    else if (used + 1 + w.length <= cap) used += 1 + w.length;
+    else { lines++; used = w.length; }
+  }
+  return { lines, fits };
+}
+
+/** The close title stays 128 px (≈15 characters per line across the 864 px
+ * safe width, Newsreader ≈ 0.45 em per character) unless it would run past
+ * three lines (or a single word wider than a line) and into the photos from
+ * y ≈ 700; then it steps down 4 px at a time. Every title that fits at 128 px
+ * returns 128, so those closes render exactly as before. */
+function closeTitleSize(text) {
+  for (let size = 128; size > 72; size -= 4) {
+    const { lines, fits } = wrapLines(text, Math.floor(864 / (0.45 * size)));
+    if (lines <= 3 && fits) return size;
+  }
+  return 72;
+}
+
 function close(s, id) {
-  const n = nb(8);
+  // The birthday film's close is its last scene (s.wordmark): two more beats
+  // hold the wish after the confetti lands, under a quiet corner wordmark.
+  const n = nb(8) + (s.wordmark ? 2 : 0);
   // Holiday: when the close is everyone's portraits (no photo of the whole core
   // family exists), show all of them, up to four, never just the children.
   const group = HOLIDAY && s.frames.length > 2;
@@ -849,11 +882,15 @@ function close(s, id) {
     css: `
 .${id} .conf{position:absolute;${HOLIDAY ? 'width:16px;height:16px;border-radius:50%' : 'width:22px;height:40px;border-radius:6px'};opacity:0;z-index:1}
 .${id} .party{z-index:2}
-.${id} .sub{position:absolute;left:96px;top:1300px;font:500 34px "Plus Jakarta Sans";color:${C.ink2}}`,
-    html: `<h1 class="title" style="top:310px;font-size:128px">${words(s.line)}</h1>
+.${id} .sub{position:absolute;left:96px;top:1300px;font:500 34px "Plus Jakarta Sans";color:${C.ink2}}${s.wordmark ? `
+/* Birthday film: the film's last scene. The app's Wordmark, small and quiet in the
+   bottom-right corner (the same as the holiday card's), fading in once the confetti has landed. */
+.${id} .wm{position:absolute;right:60px;bottom:60px;font:500 46px/1 "Newsreader";letter-spacing:-.025em;color:${C.ink2};white-space:nowrap;opacity:0}
+.${id} .wm i{font-style:normal;color:${C.rose}}` : ''}`,
+    html: `<h1 class="title" style="top:310px;font-size:${closeTitleSize(s.line)}px">${words(s.line)}</h1>
 ${conf.map((c) => `<i class="conf" style="left:${c.x.toFixed(0)}px;top:${c.y.toFixed(0)}px;background:${c.c}"></i>`).join('')}
 ${frames.map((f, i) => `<div class="card party" style="${fitCard(f, group ? { cx: spotsGroup[i][0], cy: spotsGroup[i][1], maxW: 400, maxH: 380, pad: 14 } : HOLIDAY ? { cx: i ? 740 : 330, cy: 1090, maxW: 470, maxH: 660, pad: 16 } : { cx: i ? 730 : 340, cy: 970, maxW: 420, maxH: 540, pad: 16 }).style}"><img src="${still(f)}"></div>`).join('')}
-${s.celebrationDate ? `<p class="sub">${esc(fdate(s.celebrationDate))}</p>` : ''}`,
+${s.celebrationDate ? `<p class="sub">${esc(fdate(s.celebrationDate))}</p>` : ''}${s.wordmark ? '<p class="wm">Momora<i>.</i></p>' : ''}`,
     js: `
 var B=${BEAT}, land=${land.toFixed(3)}, conf=${JSON.stringify(conf.map((c) => [Math.round(c.dx), Math.round(c.dy), Math.round(c.rot), Math.round(H + 80 - c.y)]))};
 tl.fromTo(q('.title .word'),{y:70,opacity:0},{y:0,opacity:1,duration:.5,ease:'power3.out',stagger:.08},0);
@@ -862,7 +899,8 @@ q('.conf').forEach(function(el,i){ var c=conf[i];
   tl.fromTo(el,{x:0,y:0,rotation:0,opacity:0},{x:c[0],y:c[1],rotation:c[2],opacity:1,duration:.55,ease:'power3.out',immediateRender:false},land);
   tl.set(el,{zIndex:3},land+.55);
   tl.to(el,{y:c[3],rotation:c[2]+360,duration:1.1,ease:'power1.in'},land+.55); });
-${s.celebrationDate ? `tl.fromTo(q('.sub'),{opacity:0},{opacity:1,duration:.4},B*3);` : ''}`,
+${s.celebrationDate ? `tl.fromTo(q('.sub'),{opacity:0},{opacity:1,duration:.4},B*3);` : ''}${s.wordmark ? `
+tl.fromTo(q('.wm'),{opacity:0},{opacity:.85,duration:.8,ease:'power1.out'},land+1.9);` : ''}`,
   });
   return { beats: n, events: [{ t: 0, date: film.span.to, label: '' }], seal: true };
 }
