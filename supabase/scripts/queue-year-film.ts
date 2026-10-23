@@ -27,7 +27,7 @@
  *   npm run year-film:queue -- --all-families --backfill --through 2026-09-29 --apply
  *
  *   # remove films and their R2 prefixes ({ownerId}/year-films/{filmId}/)
- *   npm run year-film:queue -- --family <id> --delete-forced --apply
+ *   npm run year-film:queue -- --family <id> --delete-forced --apply       # canaries; never holiday card films
  *   npm run year-film:queue -- --family <id> --delete-backfilled --apply   # backfill-only rows (see below)
  *   npm run year-film:queue -- --family <id> --purge-prefix <filmId> --apply  # R2 leftovers with no row
  *
@@ -129,6 +129,9 @@ async function deleteFilms(familyId: string, mode: 'forced' | 'backfilled') {
   }
   const selection = (q: any) => {
     let query = q.eq('family_id', familyId).eq('forced', mode === 'forced');
+    // Holiday card films are forced rows too, but they back a printed QR
+    // (holiday_cards.film_id / film_share_tokens): never a canary to clean up.
+    if (mode === 'forced') query = query.neq('kind', 'family_holiday');
     if (mode === 'backfilled' && launchDate) query = query.lt('scope_end_exclusive', launchDate);
     return query;
   };
@@ -137,6 +140,15 @@ async function deleteFilms(familyId: string, mode: 'forced' | 'backfilled') {
   const films = (data ?? []) as { id: string; status: string }[];
   const label = mode === 'forced' ? 'forced' : 'backfilled';
   console.log(`${apply ? 'Deleting' : '[dry run] would delete'} ${films.length} ${label} film(s) and their R2 prefixes {ownerId}/year-films/{filmId}/.`);
+  if (mode === 'forced') {
+    const { count: kept, error: keptError } = await supabase
+      .from('year_films')
+      .select('id', { count: 'exact', head: true })
+      .eq('family_id', familyId)
+      .eq('kind', 'family_holiday');
+    if (keptError) throw keptError;
+    if (kept) console.log(`${kept} holiday card film(s) kept (they back printed QR codes).`);
+  }
   if (mode === 'backfilled') {
     const { count, error: countError } = await supabase
       .from('year_films')
