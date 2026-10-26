@@ -458,7 +458,7 @@ export async function handleGenerateIllustration(
   let { data: memory, error: memoryError } = await supabase
     .from('memories')
     .select(
-      'id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type',
+      'id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type, onboarding_attributed',
     )
     .eq('id', memoryId)
     .maybeSingle();
@@ -616,7 +616,7 @@ export async function handleGenerateIllustration(
         if (!updated) break; // A real edit won; the normal claim CAS will re-read next time.
         const { data: refreshed } = await supabase
           .from('memories')
-          .select('id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type')
+          .select('id, family_id, content, memory_date, emotion, illustration_key, illustration_generation_id, illustration_generation_attempt_id, illustration_status, illustration_generation_started_at, updated_at, memory_type, onboarding_attributed')
           .eq('id', memoryId)
           .maybeSingle();
         if (refreshed) memory = refreshed;
@@ -752,6 +752,9 @@ export async function handleGenerateIllustration(
   // `finally` (a different block scope from `try`, so it can't be a local
   // there) to decide the reset target and whether to schedule a retrigger.
   let deferredForPortraits = false;
+  // Onboarding first memory whose tagged kids have no portrait at all yet;
+  // parks at 'pending' like a deferral but with nothing to self-retrigger on.
+  let awaitingOnboardingPortrait = false;
   // Also read in `finally`'s self-retrigger recheck, so it's declared here
   // rather than as a `const` inside `try`.
   let memberIds: string[] = [];
@@ -940,6 +943,15 @@ export async function handleGenerateIllustration(
       if (hasFreshInFlightPortraitVersion(portraitVersionRows)) {
         deferredForPortraits = true;
         return errorResponse('Character portraits are still generating', 409, 'PORTRAITS_NOT_READY');
+      }
+      // The onboarding first memory is saved before its kids have photos:
+      // the photo is picked on S16, after purchase. A recovery dispatch that
+      // lands before then (a parent who left S16 and relaunched) must leave
+      // it pending for S16 / the portrait-completion retrigger to resume,
+      // not fail it (2026-10-24 trial cancellation).
+      if (memory.onboarding_attributed && memberIds.length > 0 && portraitVersionRows.length === 0) {
+        awaitingOnboardingPortrait = true;
+        return errorResponse('Waiting for a character portrait', 409, 'PORTRAITS_NOT_READY');
       }
       return errorResponse('No ready character portraits for tagged members', 400, 'NO_PORTRAITS');
     }
@@ -1279,9 +1291,16 @@ export async function handleGenerateIllustration(
       // 'pending' -- reusing the status the client's shared poll already
       // treats as in-flight -- and only that case needs a self-retrigger,
       // since a retained-key memory isn't waiting on anything to resume.
-      const parkedPendingForPortraits = deferredForPortraits && !hasRetainedIllustration;
+      const parkedPendingForPortraits = (deferredForPortraits || awaitingOnboardingPortrait) &&
+        !hasRetainedIllustration;
 
-      await supabase
+      // Service client: the attempt/clock columns are not client-writable
+      // (only illustration_status is granted to authenticated), so a
+      // user-client reset was rejected and left the memory 'generating'
+      // until client stale-recovery -- forever for a parent who left. The
+      // caller was already authorized as a manager above, and the attempt
+      // CAS still scopes this to our own claim.
+      const { error: resetError } = await dependencies.createServiceClient()
         .from('memories')
         .update({
           illustration_status: hasRetainedIllustration
@@ -1295,8 +1314,11 @@ export async function handleGenerateIllustration(
         .eq('id', memoryId)
         .eq('illustration_generation_attempt_id', generationAttemptId)
         .eq('illustration_status', 'generating');
+      if (resetError) {
+        console.error('generate-illustration attempt reset failed', resetError.message);
+      }
 
-      if (parkedPendingForPortraits) {
+      if (deferredForPortraits && !hasRetainedIllustration) {
         dependencies.waitUntil(selfRetriggerAfterDeferral());
       }
     }

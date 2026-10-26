@@ -297,9 +297,16 @@ export default function PortraitScreen() {
   const [errorMessage, setErrorMessage] = useState('');
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
 
+  // The resume marker covers only the first, post-purchase entry (no
+  // memberId) while a photo is still to be picked; sibling re-entries from
+  // S17 and the painting state never send a relaunch back here.
   useEffect(() => {
-    patch({ step: 'portrait' });
-  }, [patch]);
+    patch({
+      step: 'portrait',
+      portraitResumeFamilyId:
+        screenState === 'pick' && !params.memberId && role === 'owner' && familyId ? familyId : undefined,
+    });
+  }, [patch, screenState, params.memberId, role, familyId]);
 
   // WP7-A pin -- see resolveTargetMember's doc comment for the full story.
   // Only ever needed for the ambiguous "no explicit memberId" resolution

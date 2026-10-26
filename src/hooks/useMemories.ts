@@ -61,6 +61,7 @@ import {
 import { deleteStorageObject } from '@/services/media';
 import {
   hasImageMediaAsset,
+  MEDIA_UPLOAD_STALL_TIMEOUT_MS,
   notifyFamilyActivityFireAndForget,
   uploadAudioClipObject,
   uploadMemoryMediaAssets,
@@ -91,11 +92,6 @@ import {
 } from '@/utils/timeline-anchor';
 
 export type { MediaAssetUploadPhase, MemoryMediaMutationAsset } from '@/services/memory-posting';
-
-// Edit-memory blocks its screen on media uploads (unlike new-memory's
-// background queue), so a hung upload must surface as an error rather than
-// an endless spinner: fail when no bytes move for this long.
-const MEDIA_UPLOAD_STALL_TIMEOUT_MS = 60_000;
 
 // Family members are ordered by how often they're tagged in memories, so any
 // mutation that can change tags must refresh that ordering too.
@@ -313,6 +309,8 @@ export function useMemoryMutations() {
               assets: input.mediaAssets,
               uploadedKeys,
               onAssetProgress: input.onMediaProgress,
+              // Edit-memory blocks its screen on uploads: a hung upload must
+              // surface as an error, not an endless spinner.
               uploadStallTimeoutMs: MEDIA_UPLOAD_STALL_TIMEOUT_MS,
             })
           : undefined;

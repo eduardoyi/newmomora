@@ -157,6 +157,7 @@ export function OnboardingFlowProvider({ children }: { children: ReactNode }) {
         captureCommitted: draft.captureCommitted,
         pendingMediaMemoryId: draft.pendingMediaMemoryId,
         paywallMode: draft.paywallMode,
+        portraitResumeFamilyId: draft.portraitResumeFamilyId,
       });
     }, ONBOARDING_DRAFT_PERSIST_DEBOUNCE_MS);
 

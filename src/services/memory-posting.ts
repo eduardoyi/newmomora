@@ -17,6 +17,8 @@ import { getVideoFrame } from '@/utils/video-aspect-ratio';
 import { compressVideoForUpload } from '@/utils/video-compression';
 
 const MEDIA_UPLOAD_CONCURRENCY = 3;
+/** Per-file upload stall bound, shared by the deferred-post and edit paths. */
+export const MEDIA_UPLOAD_STALL_TIMEOUT_MS = 60_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -489,6 +491,9 @@ export async function postMediaMemory(params: {
       assets: input.mediaAssets,
       uploadedKeys,
       onAssetUploaded,
+      // Same per-file stall bound the edit path uses; without it iOS's plain
+      // uploadAsync could hang a deferred post indefinitely.
+      uploadStallTimeoutMs: MEDIA_UPLOAD_STALL_TIMEOUT_MS,
     });
 
     const { data, error } = await createMediaMemory({

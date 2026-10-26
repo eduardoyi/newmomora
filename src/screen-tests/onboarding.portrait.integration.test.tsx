@@ -243,6 +243,37 @@ describe('PortraitScreen (S16)', () => {
     expect(await waitFor(() => getByText("We're painting."))).toBeTruthy();
   });
 
+  it('marks a cold-launch resume point for an owner until a photo is submitted', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [LILA_MEMBER],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+    const patch = jest.fn();
+    mockedUseOnboardingFlow.mockReturnValue({
+      draft: { ...createEmptyOnboardingDraft('portrait'), kidNames: ['Lila'] },
+      isHydrated: true,
+      patch,
+      clear: jest.fn(),
+    });
+    (useFamily as jest.Mock).mockReturnValue({ familyId: 'family-1', role: 'owner' });
+    mockedPickFromLibrary.mockResolvedValue({
+      selection: {
+        uri: 'file:///lila.jpg',
+        contentType: 'image/jpeg',
+        captureDate: '2026-06-01',
+        referenceDate: '2026-06-01',
+        dateSource: 'exif',
+      },
+    });
+
+    const { getByText, getByTestId } = renderScreen();
+    expect(patch).toHaveBeenLastCalledWith({ step: 'portrait', portraitResumeFamilyId: 'family-1' });
+
+    fireEvent.press(getByTestId('onb-portrait-choose-photo-button'));
+    expect(await waitFor(() => getByText("We're painting."))).toBeTruthy();
+    expect(patch).toHaveBeenLastCalledWith({ step: 'portrait', portraitResumeFamilyId: undefined });
+  });
+
   it('falls back to the first-entered name when nothing is tagged yet, and hides the multi-kid note for a single kid', () => {
     mockedUseFamilyMembers.mockReturnValue({
       members: [{ ...LILA_MEMBER, name: 'Teo', id: 'member-teo', date_of_birth: null }],

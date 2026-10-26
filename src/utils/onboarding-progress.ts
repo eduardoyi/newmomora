@@ -124,6 +124,14 @@ export interface OnboardingDraft {
   pendingMediaMemoryId?: string;
   /** Set while S15 is visible so a cold launch can resume the paywall. */
   paywallMode?: OnboardingPaywallMode;
+  /**
+   * Set while S16 waits for the first kid photo (post-purchase, so the family
+   * exists and the owner already has access). A cold launch returns there
+   * instead of the journal; cleared once a photo is submitted. Without it a
+   * parent who left S16 landed in a journal whose first memory could never be
+   * drawn (2026-10-24 trial cancellation).
+   */
+  portraitResumeFamilyId?: string;
 }
 
 export function createEmptyOnboardingDraft(step: OnboardingStepId = 'welcome'): OnboardingDraft {
@@ -151,6 +159,7 @@ function isOnboardingDraftShape(value: unknown): value is OnboardingDraft {
     Array.isArray(candidate.kidNames) &&
     typeof candidate.familyName === 'string' &&
     (candidate.pendingMediaMemoryId === undefined || typeof candidate.pendingMediaMemoryId === 'string') &&
+    (candidate.portraitResumeFamilyId === undefined || typeof candidate.portraitResumeFamilyId === 'string') &&
     (candidate.paywallMode === undefined ||
       candidate.paywallMode === 'new-owner' ||
       candidate.paywallMode === 'resubscribe')

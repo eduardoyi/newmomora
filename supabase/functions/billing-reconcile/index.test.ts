@@ -63,3 +63,23 @@ Deno.test('does not reconcile expired RevenueCat entitlements as active access',
   assertEquals(isCurrentEntitlement({ expires_date: '2026-07-31T23:59:59Z' }, Date.parse('2026-08-01T00:00:00Z')), false);
   assertEquals(isCurrentEntitlement({ expires_date: '2026-07-31T23:59:59Z', grace_period_expires_date: '2026-08-02T00:00:00Z' }, Date.parse('2026-08-01T00:00:00Z')), true);
 });
+
+Deno.test('reads unsubscribe and billing-issue dates from the subscription for will_renew', () => {
+  const snapshot = (subscription: Record<string, string>) =>
+    buildBillingSnapshots({
+      entitlements: {
+        momora_plus: {
+          product_identifier: 'momora_annual_v1',
+          purchase_date: '2099-08-01T00:00:00Z',
+          expires_date: '2099-08-08T00:00:00Z',
+        },
+      },
+      subscriptions: {
+        momora_annual_v1: { store: 'app_store', period_type: 'trial', ...subscription },
+      },
+    }).get('production')?.[0]?.will_renew;
+
+  assertEquals(snapshot({}), true);
+  assertEquals(snapshot({ unsubscribe_detected_at: '2099-08-02T00:00:00Z' }), false);
+  assertEquals(snapshot({ billing_issues_detected_at: '2099-08-02T00:00:00Z' }), false);
+});

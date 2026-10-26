@@ -40,6 +40,11 @@ import { deleteArtworkScanFile, sweepStaleArtworkScans } from '@/utils/artwork-s
 import { markArtworkForReveal } from '@/utils/artwork-reveal';
 import { extractUrls } from '@/utils/links';
 import { isNetworkFailure } from '@/utils/network-errors';
+import {
+  addPendingPostMarker,
+  removePendingPostMarker,
+  takePendingPostMarkers,
+} from '@/utils/pending-post-markers';
 import { deleteShareCopies } from '@/utils/shared-file-cleanup';
 
 /** Scanned-artwork pages (docs/features/artwork.md) exist only as files in
@@ -88,12 +93,23 @@ interface PendingMemoryUploadsContextValue {
 
 const PendingMemoryUploadsContext = createContext<PendingMemoryUploadsContextValue | null>(null);
 
+// No-progress watchdog for one post attempt: if no asset finishes uploading
+// (and, after the last asset, the row insert doesn't land) within this
+// window, the attempt fails like any other error -- card shows Retry and
+// `memory_save_failed` is reported. Without it a hung step (DB call with no
+// fetch timeout, native compression) left the card at 'posting' until the OS
+// killed the app, losing the post silently (2026-10-22). Generous: one
+// asset's compression + upload is bounded far below this in practice.
+export const MEDIA_POST_STALL_TIMEOUT_MS = 10 * 60_000;
+export const MEDIA_POST_STALLED_MESSAGE = 'Saving this memory took too long. Please try again.';
+
 // Instagram-style deferred posting: the composer hands the memory to this
 // queue and closes immediately; timeline/calendar render the queue as
 // progress cards. Uploads live here (mounted for the whole app session in
 // AppProviders) so they survive the composer unmounting. The queue is
 // in-memory only -- a force-quit mid-upload loses the pending post (v1
-// tradeoff; persistence is backlog).
+// tradeoff; persistence is backlog), but an id-only marker per in-flight post
+// (src/utils/pending-post-markers.ts) reports it as 'interrupted' next start.
 export function PendingMemoryUploadsProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { familyId } = useFamily();
@@ -106,6 +122,19 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
   const inputsRef = useRef(
     new Map<string, { input: PendingMemoryUploadInput; userId: string; familyId: string }>(),
   );
+
+  // Live stall-watchdog timers, cleared on unmount so a provider teardown
+  // (sign-out remount, tests) never leaves a 10-minute timer behind.
+  const stallTimersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const stallTimers = stallTimersRef.current;
+    return () => {
+      for (const timer of stallTimers) {
+        clearTimeout(timer);
+      }
+      stallTimers.clear();
+    };
+  }, []);
 
   const patchUpload = useCallback(
     (memoryId: string, patch: Partial<PendingMemoryUpload>) => {
@@ -120,6 +149,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
 
   const removeUpload = useCallback((memoryId: string) => {
     inputsRef.current.delete(memoryId);
+    void removePendingPostMarker(memoryId);
     setUploads((current) => current.filter((upload) => upload.memoryId !== memoryId));
   }, []);
 
@@ -184,12 +214,40 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
       }
     }
     void sweepStaleArtworkScans({ keepUris });
+    // A marker surviving to app start is a post the OS killed mid-flight.
+    void takePendingPostMarkers().then((markers) => {
+      for (let index = 0; index < markers.length; index += 1) {
+        trackEvent('memory_save_failed', { code: 'interrupted' });
+      }
+    });
   }, []);
 
   const runUpload = useCallback(
     async (input: PendingMemoryUploadInput, userId: string, activeFamilyId: string) => {
+      const stallTimers = stallTimersRef.current;
+      let stallTimeoutId: ReturnType<typeof setTimeout> | undefined;
+      const disarmStallWatchdog = () => {
+        if (stallTimeoutId !== undefined) {
+          clearTimeout(stallTimeoutId);
+          stallTimers.delete(stallTimeoutId);
+          stallTimeoutId = undefined;
+        }
+      };
+      let armStallWatchdog = () => {};
+      const stallWatchdog = new Promise<never>((_resolve, reject) => {
+        armStallWatchdog = () => {
+          disarmStallWatchdog();
+          stallTimeoutId = setTimeout(() => {
+            stallTimers.delete(stallTimeoutId!);
+            reject(new Error(MEDIA_POST_STALLED_MESSAGE));
+          }, MEDIA_POST_STALL_TIMEOUT_MS);
+          stallTimers.add(stallTimeoutId);
+        };
+      });
+      armStallWatchdog();
       try {
         const onAssetUploaded = () => {
+          armStallWatchdog();
           setUploads((current) =>
             current.map((upload) =>
               upload.memoryId === input.memoryId
@@ -203,9 +261,13 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         // Audio memories never flow through the image/video upload branch
         // (docs/plans/audio-memories-v1.md P2.4) -- postAudioMemory is a
         // minimal, dedicated pipeline (no compression/strip/preview).
-        const memory = isAudio
-          ? await postAudioMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded })
-          : await postMediaMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded });
+        const memory = await Promise.race([
+          isAudio
+            ? postAudioMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded })
+            : postMediaMemory({ userId, familyId: activeFamilyId, input, onAssetUploaded }),
+          stallWatchdog,
+        ]);
+        disarmStallWatchdog();
 
         // An artwork post gets the Timeline swing-in once (consumed by the
         // ArtworkCard that mounts for it) -- mark BEFORE the prepend renders it.
@@ -348,6 +410,10 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         // A new media/audio memory changes the Keepsakes overview (stale only; refetched on focus).
         queryClient.invalidateQueries({ queryKey: [keepsakesOverviewQueryKeyBase], refetchType: 'none' });
       } catch (error) {
+        disarmStallWatchdog();
+        // Reported below; a failed card left behind by an app kill isn't a
+        // second, silent loss. retry() re-marks it.
+        void removePendingPostMarker(input.memoryId);
         patchUpload(input.memoryId, {
           status: 'failed',
           errorMessage: error instanceof Error ? error.message : 'Could not save memory',
@@ -399,6 +465,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         },
       ]);
 
+      void addPendingPostMarker(input.memoryId);
       void runUpload(input, user.id, familyId);
       return true;
     },
@@ -420,6 +487,7 @@ export function PendingMemoryUploadsProvider({ children }: { children: ReactNode
         errorMessage: null,
         isNetworkFailure: false,
       });
+      void addPendingPostMarker(memoryId);
       void runUpload(record.input, record.userId, record.familyId);
     },
     [patchUpload, runUpload],

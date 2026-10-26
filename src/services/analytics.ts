@@ -132,7 +132,7 @@ export interface AnalyticsEventMap {
     page_count: number;
   };
   memory_save_failed: {
-    code: 'validation_error' | 'media_upload_failed' | 'network_error' | 'other';
+    code: 'validation_error' | 'media_upload_failed' | 'network_error' | 'interrupted' | 'other';
   };
   illustration_completed: {
     outcome: 'ready' | 'failed';

@@ -2658,7 +2658,7 @@ that supply it remain valid.
 
 The legacy synchronous success response remains accepted during rollout.
 
-**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `NO_USABLE_REFERENCES`, `GENERATION_IN_PROGRESS`, `GENERATION_SUPERSEDED`, `GENERATION_FAILED`, `MODERATION_BLOCKED`, `409 PORTRAITS_NOT_READY` (deferral — not a failure).
+**Errors:** `MEMORY_NOT_FOUND`, `NO_PORTRAITS`, `NO_USABLE_REFERENCES`, `GENERATION_IN_PROGRESS`, `GENERATION_SUPERSEDED`, `GENERATION_FAILED`, `MODERATION_BLOCKED`, `409 PORTRAITS_NOT_READY` (deferral — not a failure; also returned, instead of `NO_PORTRAITS`, for an `onboarding_attributed` memory whose resolved members have no portrait version at all, parking it at `pending` for S16). Every pre-handoff exit resets the claimed attempt with the service client (the attempt/clock columns are not granted to `authenticated`).
 
 **Client handling:** the client never writes `illustration_status` for retry/recovery/regenerate. It sends intent to the dispatcher and accepts both legacy synchronous and queued responses. `PORTRAITS_NOT_READY` remains success-shaped for automatic paths and a distinct non-error notice for explicit regenerate.
 

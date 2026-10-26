@@ -82,6 +82,39 @@ describe('resolvePostAuthDestination', () => {
     ).toEqual({ kind: 'journal' });
   });
 
+  it('returns a first-time owner who left S16 before the first photo to the portrait step', () => {
+    const input = {
+      memberships: [{ familyId: 'fam-1', role: 'owner' as const }],
+      hasPendingInviteCode: false,
+      draft: { ...createEmptyOnboardingDraft('portrait'), portraitResumeFamilyId: 'fam-1' },
+      billing: {
+        familyId: 'fam-1',
+        isOwner: true,
+        hasWriteAccess: true,
+        hasEverHadAccess: true,
+        trialEligible: false,
+      },
+      intent: 'login' as const,
+    };
+    expect(resolvePostAuthDestination(input)).toEqual({ kind: 'resume-onboarding', step: 'portrait' });
+    // A stale S16 draft from before the marker existed, or after a photo was
+    // submitted, keeps the journal.
+    expect(
+      resolvePostAuthDestination({ ...input, draft: createEmptyOnboardingDraft('portrait') }),
+    ).toEqual({ kind: 'journal' });
+    // Another family's marker (different account on this device) is ignored.
+    expect(
+      resolvePostAuthDestination({
+        ...input,
+        draft: { ...createEmptyOnboardingDraft('portrait'), portraitResumeFamilyId: 'fam-2' },
+      }),
+    ).toEqual({ kind: 'journal' });
+    // Joiners never resume the owner arc.
+    expect(
+      resolvePostAuthDestination({ ...input, billing: { ...input.billing, isOwner: false } }),
+    ).toEqual({ kind: 'journal' });
+  });
+
   it('does not paywall a joiner when the owner has no access', () => {
     expect(
       resolvePostAuthDestination({

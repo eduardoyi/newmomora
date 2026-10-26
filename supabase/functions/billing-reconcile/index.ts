@@ -97,7 +97,11 @@ export function buildBillingSnapshots(
       purchased_at: value.purchase_date ?? subscription?.purchase_date ?? null,
       expires_at: value.expires_date ?? subscription?.expires_date ?? null,
       grace_until: value.grace_period_expires_date ?? subscription?.grace_period_expires_date ?? null,
-      will_renew: !value.unsubscribe_detected_at && !value.billing_issues_detected_at,
+      // RevenueCat reports unsubscribe/billing-issue dates on the
+      // subscription, not the entitlement; reading only the entitlement reset
+      // a cancelled trial back to will_renew=true on every sweep.
+      will_renew: !(value.unsubscribe_detected_at ?? subscription?.unsubscribe_detected_at) &&
+        !(value.billing_issues_detected_at ?? subscription?.billing_issues_detected_at),
       original_transaction_id: null,
       transaction_id: subscription?.store_transaction_id ?? null,
       management_url: subscriber.management_url ?? null,

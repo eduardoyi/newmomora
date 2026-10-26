@@ -111,6 +111,18 @@ export function resolvePostAuthDestination(input: ResolvePostAuthDestinationInpu
         return { kind: 'resume-paywall', mode: resolveOwnerPaywallMode(billing) };
       }
 
+      // A first-time owner who left S16 before picking the first photo goes
+      // back there, not to a journal whose first memory can't be drawn yet.
+      if (
+        billing.isOwner &&
+        !hasPendingInviteCode &&
+        intent !== 'join' &&
+        draft?.step === 'portrait' &&
+        draft.portraitResumeFamilyId === billing.familyId
+      ) {
+        return { kind: 'resume-onboarding', step: 'portrait' };
+      }
+
       return { kind: 'journal' };
     }
 

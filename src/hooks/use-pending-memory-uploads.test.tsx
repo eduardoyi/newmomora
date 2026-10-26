@@ -5,10 +5,15 @@ import type { ReactNode } from 'react';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import * as memoryCache from '@/hooks/memory-cache';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  MEDIA_POST_STALL_TIMEOUT_MS,
+  MEDIA_POST_STALLED_MESSAGE,
   PendingMemoryUploadsProvider,
   usePendingMemoryUploads,
 } from '@/hooks/use-pending-memory-uploads';
+import { trackEvent } from '@/services/analytics';
+import { PENDING_POST_MARKERS_STORAGE_KEY } from '@/utils/pending-post-markers';
 import { memoriesQueryKey, memoriesQueryKeyBase, calendarMemoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { noteReviewSetback } from '@/lib/store-review';
 import { fetchLinkPreviews } from '@/services/ai';
@@ -39,6 +44,7 @@ jest.mock('@/hooks/use-family', () => ({
 }));
 
 jest.mock('@/lib/store-review', () => ({ noteReviewSetback: jest.fn() }));
+jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 jest.mock('@/services/ai', () => ({
   fetchLinkPreviews: jest.fn(),
 }));
@@ -147,8 +153,9 @@ function createWrapper() {
 }
 
 describe('usePendingMemoryUploads', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
+    await AsyncStorage.clear();
     onlineManager.setOnline(true);
 
     mockedUseAuth.mockReturnValue({
@@ -356,6 +363,70 @@ describe('usePendingMemoryUploads', () => {
       expect(result.current.uploads).toHaveLength(0);
     });
     expect(mockedPostMediaMemory).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails a post whose steps stop making progress instead of leaving it posting forever', async () => {
+    jest.useFakeTimers();
+    try {
+      mockedPostMediaMemory.mockReturnValueOnce(new Promise(() => {}) as never);
+      const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+      act(() => {
+        result.current.enqueue(photoInput);
+      });
+      expect(result.current.uploads[0]).toMatchObject({ status: 'posting' });
+
+      await act(async () => {
+        jest.advanceTimersByTime(MEDIA_POST_STALL_TIMEOUT_MS);
+      });
+
+      expect(result.current.uploads[0]).toMatchObject({
+        status: 'failed',
+        errorMessage: MEDIA_POST_STALLED_MESSAGE,
+        isNetworkFailure: false,
+      });
+      expect(trackEvent).toHaveBeenCalledWith('memory_save_failed', { code: 'media_upload_failed' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps an on-disk marker only while a post is in flight', async () => {
+    let resolvePost: (memory: { id: string }) => void = () => {};
+    mockedPostMediaMemory.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePost = resolve;
+      }) as ReturnType<typeof postMediaMemory>,
+    );
+    const { result } = renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+    act(() => {
+      result.current.enqueue(photoInput);
+    });
+    await waitFor(async () => {
+      expect(await AsyncStorage.getItem(PENDING_POST_MARKERS_STORAGE_KEY)).toContain('memory-1');
+    });
+
+    await act(async () => {
+      resolvePost({ id: 'memory-1' });
+    });
+    await waitFor(async () => {
+      expect(await AsyncStorage.getItem(PENDING_POST_MARKERS_STORAGE_KEY)).toBeNull();
+    });
+  });
+
+  it('reports a post the app died with as interrupted at the next start', async () => {
+    await AsyncStorage.setItem(
+      PENDING_POST_MARKERS_STORAGE_KEY,
+      JSON.stringify([{ memoryId: 'memory-lost', enqueuedAt: '2026-10-22T18:46:04.000Z' }]),
+    );
+
+    renderHook(() => usePendingMemoryUploads(), { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(trackEvent).toHaveBeenCalledWith('memory_save_failed', { code: 'interrupted' });
+    });
+    expect(await AsyncStorage.getItem(PENDING_POST_MARKERS_STORAGE_KEY)).toBeNull();
   });
 
   it('notes a review setback when an upload terminally fails', async () => {

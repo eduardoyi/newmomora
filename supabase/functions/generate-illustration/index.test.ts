@@ -28,7 +28,7 @@ interface MockNetworkResult {
   openAiChatSystemPrompts: string[];
   openAiImagePrompts: string[];
   portraitLoads: number;
-  memoryPatches: Array<{ payload: Record<string, unknown>; url: string }>;
+  memoryPatches: Array<{ payload: Record<string, unknown>; url: string; authorization: string | null }>;
 }
 
 const TEST_ENV = {
@@ -91,7 +91,11 @@ async function withMockedIllustrationNetwork(
       if (request.method === 'PATCH') {
         const payload = await request.json();
         if (table === 'memories') {
-          result.memoryPatches.push({ payload, url: url.toString() });
+          result.memoryPatches.push({
+            payload,
+            url: url.toString(),
+            authorization: request.headers.get('Authorization'),
+          });
         }
         if (payload.illustration_generation_attempt_id && select.includes('id')) {
           return jsonResponse({ id: MEMORY_ID });
@@ -1318,6 +1322,63 @@ Deno.test(
       },
       [],
       {},
+      { portraitVersions: () => [] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration resets a failed attempt with the service client (attempt columns are not client-writable)',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon with no names mentioned.',
+      async (network) => {
+        const response = await handleGenerateIllustration(authenticatedRequest());
+        assertEquals((await response.json()).code, 'NO_PORTRAITS');
+        const reset = network.memoryPatches.find(
+          ({ payload, url }) =>
+            payload.illustration_status === 'failed' && url.includes('illustration_status=eq.generating'),
+        );
+        assertEquals(reset?.authorization, `Bearer ${TEST_ENV.SUPABASE_SERVICE_ROLE_KEY}`);
+      },
+      [],
+      {},
+      { portraitVersions: () => [] },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration parks an onboarding memory at pending while its kids have no portrait yet',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'Theo laughed at the dog.',
+      async (network) => {
+        const retrigger = trackedRetriggerDependencies();
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+          waitUntil: retrigger.waitUntil,
+        });
+        const body = await response.json();
+
+        assertEquals(response.status, 409);
+        assertEquals(body.code, 'PORTRAITS_NOT_READY');
+        assertEquals(
+          network.memoryPatches.some(
+            ({ payload, url }) =>
+              payload.illustration_status === 'pending' &&
+              payload.illustration_generation_attempt_id === null &&
+              typeof payload.illustration_generation_started_at === 'string' &&
+              url.includes('illustration_status=eq.generating'),
+          ),
+          true,
+        );
+        // Nothing is in flight to wait for; S16 / the portrait bridge resumes it.
+        assertEquals(retrigger.backgroundTask(), undefined);
+        assertEquals(retrigger.calls.length, 0);
+      },
+      [MEMBER_ID],
+      { onboarding_attributed: true },
       { portraitVersions: () => [] },
     );
   },
