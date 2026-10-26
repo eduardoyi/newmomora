@@ -6,6 +6,7 @@
 //
 //   npm run eval:billing-trials -- [--days 5]
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { runHogQL } from './posthog-query.ts';
 
 function argValue(name: string, fallback: number): number {
   const index = Deno.args.indexOf(`--${name}`);
@@ -25,56 +26,17 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSess
 const revenueCatKey = Deno.env.get('REVENUECAT_SECRET_API_KEY');
 const revenueCatProject = Deno.env.get('REVENUECAT_PROJECT_ID');
 
-// The personal (query:read) PostHog key is found by its phx_ prefix so this
-// script doesn't depend on the variable name; it is never printed.
-const posthogKey = Object.values(Deno.env.toObject()).find((value) => value.startsWith('phx_'));
-const posthogHost = (Deno.env.get('EXPO_PUBLIC_POSTHOG_HOST') ?? 'https://us.i.posthog.com')
-  .replace('.i.posthog.com', '.posthog.com');
-
-async function posthogProjectId(): Promise<number | string | null> {
-  if (!posthogKey) return null;
-  const configured = Object.entries(Deno.env.toObject())
-    .find(([name]) => /POSTHOG.*PROJECT/.test(name))?.[1];
-  if (configured) return configured;
-  const response = await fetch(`${posthogHost}/api/projects/`, {
-    headers: { Authorization: `Bearer ${posthogKey}` },
-  });
-  if (!response.ok) {
-    // A query:read-only key can't list projects; @current resolves to the
-    // key's project.
-    console.log('posthog projects lookup failed:', response.status, '- trying @current');
-    return '@current';
-  }
-  const payload = await response.json() as { results?: { id: number; name: string }[] };
-  const projects = payload.results ?? [];
-  return (projects.find((project) => /momora/i.test(project.name)) ?? projects[0])?.id ?? null;
-}
-
-const posthogProject = await posthogProjectId();
-
 async function posthogTimeline(userId: string) {
-  if (!posthogKey || !posthogProject) {
-    console.log('posthog: no phx_ key / project; skipped');
-    return;
-  }
   const query = `
     select timestamp, event, properties
     from events
     where person_id = (select person_id from person_distinct_ids where distinct_id = '${userId}' limit 1)
     order by timestamp asc
     limit 500`;
-  const response = await fetch(`${posthogHost}/api/projects/${posthogProject}/query/`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${posthogKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
-  });
-  if (!response.ok) {
-    console.log('posthog query failed:', response.status, (await response.text()).slice(0, 300));
-    return;
-  }
-  const payload = await response.json() as { results?: [string, string, string | Record<string, unknown>][] };
-  console.log(`posthog events: ${payload.results?.length ?? 0}`);
-  for (const [timestamp, event, rawProperties] of payload.results ?? []) {
+  const results = await runHogQL(query) as [string, string, string | Record<string, unknown>][] | null;
+  if (!results) return;
+  console.log(`posthog events: ${results.length}`);
+  for (const [timestamp, event, rawProperties] of results) {
     const properties = typeof rawProperties === 'string' ? JSON.parse(rawProperties) : rawProperties;
     // Momora's event properties are content-free by design; drop PostHog's
     // own $-prefixed device noise except a few useful fields.
