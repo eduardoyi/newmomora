@@ -89,6 +89,14 @@ async function configureRevenueCatInternal(userId: string, apiKey: string): Prom
       await Purchases.setLogLevel(LOG_LEVEL.WARN);
     }
     Purchases.configure({ apiKey, appUserID: userId });
+    // Apple Ads attribution (docs/features/subscriptions.md): RevenueCat sends
+    // the AdServices token to Apple and tags the customer with the campaign.
+    // Standard attribution only -- no ATT prompt. Never blocks or fails billing.
+    if (Platform.OS === 'ios') {
+      Promise.resolve()
+        .then(() => Purchases.enableAdServicesAttributionTokenCollection())
+        .catch(() => undefined);
+    }
   }
 
   configuredForUserId = userId;

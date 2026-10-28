@@ -4,6 +4,7 @@ const Purchases = {
   addCustomerInfoUpdateListener: jest.fn(),
   checkTrialOrIntroductoryPriceEligibility: jest.fn(),
   configure: jest.fn(),
+  enableAdServicesAttributionTokenCollection: jest.fn(() => Promise.resolve()),
   getAppUserID: jest.fn(),
   getCustomerInfo: jest.fn(),
   getOfferings: jest.fn(),

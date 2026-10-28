@@ -26,6 +26,7 @@ jest.mock('react-native-purchases', () => ({
   default: {
     isConfigured: jest.fn(),
     configure: jest.fn(),
+    enableAdServicesAttributionTokenCollection: jest.fn(),
     logIn: jest.fn(),
     logOut: jest.fn(),
     setLogLevel: jest.fn(),
@@ -106,6 +107,39 @@ describe('billing service', () => {
       apiKey: 'ios_public_key',
       appUserID: 'env-key-test-user',
     });
+  });
+
+  it('enables Apple Ads attribution token collection right after configuring on iOS', async () => {
+    mockPurchases.enableAdServicesAttributionTokenCollection.mockResolvedValue(undefined);
+
+    await configureRevenueCat('ios-attribution-user');
+    await Promise.resolve();
+
+    expect(mockPurchases.enableAdServicesAttributionTokenCollection).toHaveBeenCalledTimes(1);
+    expect(mockPurchases.enableAdServicesAttributionTokenCollection.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mockPurchases.configure.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('never lets Apple Ads attribution failures break configuring', async () => {
+    mockPurchases.enableAdServicesAttributionTokenCollection.mockImplementation(() => {
+      throw new Error('AdServices unavailable');
+    });
+
+    await expect(configureRevenueCat('ios-attribution-throws')).resolves.toEqual({ configured: true });
+    mockPurchases.enableAdServicesAttributionTokenCollection.mockRejectedValue(new Error('network'));
+    await expect(configureRevenueCat('ios-attribution-rejects')).resolves.toEqual({ configured: true });
+  });
+
+  it('does not collect Apple Ads attribution on Android', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY = 'android_public_key';
+
+    await configureRevenueCat('android-attribution-user');
+    await Promise.resolve();
+
+    expect(mockPurchases.configure).toHaveBeenCalled();
+    expect(mockPurchases.enableAdServicesAttributionTokenCollection).not.toHaveBeenCalled();
   });
 
   it('serializes RevenueCat logout before configuring the next account', async () => {

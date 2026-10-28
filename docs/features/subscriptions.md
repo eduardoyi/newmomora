@@ -1,7 +1,7 @@
 # Feature: Paid subscriptions
 
 **Status:** `implementation complete; store release pending`
-**Last updated:** 2026-08-03
+**Last updated:** 2026-10-28
 **PRD reference:** [PRD §6.9](../PRD.md#69-paid-access-and-data-export)
 
 ## Overview
@@ -189,6 +189,18 @@ family status/admission check.
 - Archive readability/export after lapse and the no-trial-reoffer rule.
 - Event idempotency and timestamp ordering in the webhook ledger.
 
+## Apple Ads attribution
+
+- `configureRevenueCatInternal` (`src/services/billing.ts`) calls `Purchases.enableAdServicesAttributionTokenCollection()` on iOS right after the first `Purchases.configure`. RevenueCat sends the AdServices token to Apple and records Apple Ads (or Organic), campaign, ad group and keyword on the customer, so trials and purchases can be split by campaign in RevenueCat Charts. The call is fire-and-forget: a failure never blocks or fails billing.
+- **Standard attribution only, with no ATT prompt.** Detailed attribution (click or impression date) would need `requestTrackingAuthorization` before collection, an App Privacy tracking declaration, and an extra onboarding prompt. It's deliberately not done.
+- **The owner's dashboard setup:** RevenueCat → Integrations → Apple AdServices → add the integration, then the Advanced section → Sign in with Apple, Read Only, as an Apple Ads Account Admin or Campaign Group Manager. Without Advanced, campaign, ad group and keyword names show as `Unspecified`.
+- **Caveats:**
+  - Only users who reach sign-in get a RevenueCat customer, because configure runs with the Supabase user id. Installs that never sign up show only in Apple Ads' own install counts.
+  - Data takes up to 24h, or 7 days for a new campaign or integration.
+  - TestFlight and debug builds return placeholder data.
+  - From September 2026 Apple returns `attribution: false` for ad groups that use age or gender targeting, so don't use those targets.
+  - RevenueCat's PostHog integration isn't documented to forward the campaign fields, so PostHog funnels can't be split by campaign.
+
 ## Constraints & gotchas
 
 - RevenueCat public SDK keys belong in EAS environment variables; RevenueCat
@@ -363,6 +375,7 @@ npm run test:edge
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | iOS Apple Ads attribution: AdServices token collection after RevenueCat configure (standard attribution, no ATT). Ships with the 1.5.1 store build. |
 | 2026-08-04 | Unblocked Android sandbox purchases: paused the stale "Security Enhancements" closed track that pinned tester accounts to pre-billing v1.1.1, disabled Play automatic protection (incompatible with license testing; requires a fresh AAB ≥ build 40), and documented the Android on-device billing test requirements. Discovered live v1.1.1 cannot onboard new users under `all_families` enforcement (pre-RPC client inserts hit billing RLS) — production needs 1.2.0 or an enforcement decision. |
 | 2026-08-03 | Fixed Android paid-now paywall for trial-eligible owners: replaced the new-customer-acquisition Google Play offer with developer-determined `annual-7d-trial-v2` (Google was filtering the offer by Google-account history the server cannot see) and added the dev-only `[billing:android-trial]` eligibility diagnostic log. |
 | 2026-08-03 | Made annual trial copy consistent across stores by reading the eligible Google Play subscription option list, purchasing the exact displayed trial/base-plan option, and adding Android eligibility regression coverage. |
