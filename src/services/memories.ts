@@ -1226,6 +1226,13 @@ export async function createMemory(input: CreateMemoryInput): Promise<{
 }
 
 const POSTGRES_UNIQUE_VIOLATION = '23505';
+// The onboarding photo hand-off posts into the memory row commit_onboarding
+// already created, usually before the owner has paid. Row-level security is
+// checked before uniqueness, so that insert fails with 42501 instead of
+// 23505 and must take the same existing-row path (whose tag and media writes
+// honor onboarding_media_pending). With no existing row, the resolver gives
+// up and the original error still surfaces.
+const POSTGRES_RLS_VIOLATION = '42501';
 
 /** Deletes an orphaned/failed memory row created earlier in this call and
  * warns (rather than silently swallowing) if the delete itself fails -- a
@@ -1433,7 +1440,7 @@ export async function createMediaMemory(input: CreateMediaMemoryInput): Promise<
     .single();
 
   if (error || !memory) {
-    if (error?.code === POSTGRES_UNIQUE_VIOLATION) {
+    if (error?.code === POSTGRES_UNIQUE_VIOLATION || error?.code === POSTGRES_RLS_VIOLATION) {
       const conflictResult = await resolveMediaMemoryInsertConflict(input);
       if (conflictResult) {
         return conflictResult;

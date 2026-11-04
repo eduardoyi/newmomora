@@ -1501,6 +1501,128 @@ describe('memories service integration', () => {
     expect(deleteStorageObject).not.toHaveBeenCalled();
   });
 
+  it('attaches the onboarding photo to the row commit_onboarding created when RLS (42501) rejects the insert for a not-yet-paid owner', async () => {
+    // commit_onboarding inserts the media memory before the paywall; the
+    // post-commit upload then inserts the same id. For an unpaid owner RLS
+    // rejects that insert (42501) before uniqueness is checked, so this must
+    // still continue against the existing row.
+    const insertBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'new row violates row-level security policy for table "memories"', code: '42501' },
+    });
+
+    const orphanRow = {
+      id: 'memory-orphan',
+      user_id: 'user-1',
+      family_id: 'family-1',
+      content: null,
+      memory_date: '2026-05-24',
+      memory_type: 'media',
+      emotion: null,
+      illustration_key: null,
+      illustration_status: 'none',
+      illustration_prompt: null,
+      media_key: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+      media_content_type: 'image/jpeg',
+      created_at: '2026-05-24T00:00:00Z',
+      updated_at: '2026-05-24T00:00:00Z',
+    };
+    const conflictFetchBuilder = createQueryBuilder({ data: orphanRow, error: null });
+    const tagsBuilder = createQueryBuilder({ data: [], error: null });
+
+    const emptyMediaBuilder = createQueryBuilder({ data: [], error: null });
+    const populatedMediaBuilder = createQueryBuilder({
+      data: [{
+        id: 'asset-1',
+        memory_id: 'memory-orphan',
+        object_key: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        content_type: 'image/jpeg',
+        duration_ms: null,
+        position: 0,
+        created_at: '2026-05-24T00:00:00Z',
+        updated_at: '2026-05-24T00:00:00Z',
+      }],
+      error: null,
+    });
+
+    let memoriesCall = 0;
+    let mediaCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? insertBuilder : conflictFetchBuilder;
+      }
+      if (table === 'memory_family_members') return tagsBuilder;
+      if (table === 'memory_media') {
+        mediaCall += 1;
+        // First lookup (inside the conflict resolver) must see zero rows to
+        // classify this as an orphan; the final enrichment lookup (after
+        // continuing the flow) sees the now-populated row.
+        return mediaCall === 1 ? emptyMediaBuilder : populatedMediaBuilder;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-orphan',
+      mediaAssets: [{
+        objectKey: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        contentType: 'image/jpeg',
+      }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    });
+
+    expect(result.error).toBeNull();
+    expect(result.data?.id).toBe('memory-orphan');
+    expect(result.data?.mediaAssets).toHaveLength(1);
+    expect(supabase.rpc).toHaveBeenCalledWith('replace_memory_media_assets', {
+      target_memory_id: 'memory-orphan',
+      assets: [{
+        objectKey: 'user-1/memories/memory-orphan/media/asset-1.jpg',
+        contentType: 'image/jpeg',
+        durationMs: null,
+        aspectRatio: null,
+        previewObjectKey: null,
+        waveform: null,
+      }],
+    });
+    // A repaired orphan must not re-delete the storage objects it already owns.
+    expect(deleteStorageObject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the RLS error when a 42501 insert has no existing row to continue', async () => {
+    const insertBuilder = createQueryBuilder({
+      data: null,
+      error: { message: 'new row violates row-level security policy for table "memories"', code: '42501' },
+    });
+    const missingRowBuilder = createQueryBuilder({ data: null, error: null });
+    let memoriesCall = 0;
+    (supabase.from as jest.Mock).mockImplementation((table: string) => {
+      if (table === 'memories') {
+        memoriesCall += 1;
+        return memoriesCall === 1 ? insertBuilder : missingRowBuilder;
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const result = await createMediaMemory({
+      userId: 'user-1',
+      familyId: 'family-1',
+      memoryId: 'memory-new',
+      mediaAssets: [{ objectKey: 'user-1/memories/memory-new/media/asset-1.jpg', contentType: 'image/jpeg' }],
+      memoryDate: '2026-05-24',
+      taggedMemberIds: [],
+    });
+
+    expect(result.data).toBeNull();
+    expect(result.error?.code).toBe('42501');
+    expect(supabase.rpc).not.toHaveBeenCalledWith('replace_memory_media_assets', expect.anything());
+    expect(deleteStorageObject).toHaveBeenCalledWith('user-1/memories/memory-new/media/asset-1.jpg');
+  });
+
   it('returns the existing memory idempotently when a 23505 retry finds it already fully posted', async () => {
     // A prior attempt fully succeeded (memory row + media rows + tags) but
     // the success response never reached the client (e.g. dropped
