@@ -118,11 +118,58 @@ it('seeds the detail query with the validated memory so the detail screen does n
   expect(queryClient.getQueryData(memoryDetailQueryKey('family-a', 'memory-a'))).toBe(validated);
 });
 
-it('does not seed the detail cache when validation fails', async () => {
-  mockFetch.mockResolvedValue({ data: [], error: null });
-  renderRoute();
-  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
-  expect(queryClient.getQueryData(memoryDetailQueryKey('family-a', 'memory-a'))).toBeUndefined();
+describe('validation retries', () => {
+  beforeEach(() => { jest.useFakeTimers(); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  it('does not seed the detail cache when validation keeps finding nothing', async () => {
+    mockFetch.mockResolvedValue({ data: [], error: null, failure: null });
+    renderRoute();
+    // Fake timers: waitFor advances them, so allow the full retry window.
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'), { timeout: 5000 });
+    // First read plus both retries before giving up.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(queryClient.getQueryData(memoryDetailQueryKey('family-a', 'memory-a'))).toBeUndefined();
+  });
+
+  it('opens the memory when a transient error on wake clears on retry', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ data: null, error: { message: 'JWT expired', code: 'PGRST301' }, failure: 'unavailable' })
+      .mockResolvedValue({ data: [{ id: 'memory-a', family_id: 'family-a' }], error: null, failure: null });
+    renderRoute();
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+    expect(mockReplace).not.toHaveBeenCalledWith('/(app)/(tabs)/timeline');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the memory when an empty read before the session refresh clears on retry', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ data: [], error: null, failure: null })
+      .mockResolvedValue({ data: [{ id: 'memory-a', family_id: 'family-a' }], error: null, failure: null });
+    renderRoute();
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back immediately on an explicit membership denial', async () => {
+    mockFetch.mockResolvedValue({ data: null, error: { message: 'denied', code: '42501' }, failure: 'authorization' });
+    renderRoute();
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops retrying after the account changes', async () => {
+    mockFetch.mockResolvedValue({ data: [], error: null, failure: null });
+    const screen = renderRoute();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      mockUser = { id: 'account-b', is_anonymous: false };
+      renderRoute(screen);
+    });
+    await act(async () => { jest.advanceTimersByTime(5000); });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockReplace).not.toHaveBeenCalledWith('/(app)/memory/memory-a');
+  });
 });
 
 it('opens immediately from a cached detail entry without the validation fetch', async () => {

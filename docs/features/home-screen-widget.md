@@ -219,6 +219,16 @@ When the target belongs to another family, the validation read runs in
 parallel with `setActiveFamily(familyId)`; the seed happens only after both
 settle because `setActiveFamily` invalidates the memories queries.
 
+A tap wakes the app, so the first validation read often races the session
+refresh: it can fail with an expired JWT, or, when the refresh itself failed,
+go out with the anon key and come back as zero rows. The shim therefore
+re-reads twice (after 800 ms and 2 s) before falling back to the timeline.
+Only an explicit membership denial (`failure: 'authorization'`) skips the
+retries. Without this, a valid memory tap sometimes landed on the timeline.
+Keep the fallback for a memory that stays missing: the detail screen's error
+and not-found states have no back control, so on a cold-start tap they would
+be a dead end.
+
 ### Background refresh
 
 `expo-background-task` (WorkManager on Android, `BGTaskScheduler` on iOS) runs

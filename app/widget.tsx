@@ -18,6 +18,25 @@ import {
 
 type EntryState = 'checking' | 'invalid' | 'forbidden';
 
+type WidgetValidationResult = Awaited<ReturnType<typeof fetchWidgetRetainedMemoriesByIds>>;
+
+// A widget tap wakes the app, and the first read can land before the session
+// refresh settles: an expired-JWT error, or (when the refresh itself failed)
+// an anon-key read that RLS answers with zero rows. Re-check a couple of times
+// before treating the memory as gone; only an explicit membership denial is
+// final immediately.
+const WIDGET_VALIDATION_RETRY_DELAYS_MS = [800, 2000] as const;
+
+function shouldRetryValidation(result: WidgetValidationResult, memoryId: string): boolean {
+  if (result.failure === 'authorization') return false;
+  if (result.error) return true;
+  return !result.data?.some((memory) => memory.id === memoryId);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function firstParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -138,10 +157,17 @@ export default function WidgetEntryRoute() {
         // The validation read takes the family explicitly, so it does not
         // depend on the profile write that switches the active family; run
         // both together instead of serially.
-        const [result] = await Promise.all([
+        let [result] = await Promise.all([
           fetchWidgetRetainedMemoriesByIds(familyId, [memoryId]),
           needsFamilySwitch ? setActiveFamilyRef.current(familyId) : Promise.resolve(),
         ]);
+        for (const delayMs of WIDGET_VALIDATION_RETRY_DELAYS_MS) {
+          if (cancelled || firstUserIdRef.current !== userId) return;
+          if (!shouldRetryValidation(result, memoryId)) break;
+          await wait(delayMs);
+          if (cancelled || firstUserIdRef.current !== userId) return;
+          result = await fetchWidgetRetainedMemoriesByIds(familyId, [memoryId]);
+        }
         if (cancelled || firstUserIdRef.current !== userId) return;
         const target = result.data?.find((memory) => memory.id === memoryId);
         if (result.error || !target) {
