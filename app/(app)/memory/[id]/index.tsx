@@ -697,23 +697,49 @@ type SoundPlaybackState = 'idle' | 'playing' | 'loading' | 'unavailable';
 // clip -- so the total is visible immediately, before any tap (same reason
 // memory-card.tsx's SoundCard passes an explicit `durationSeconds`).
 function SoundStage({
-  clip,
+  clipKey,
+  clipVersion,
   durationSeconds,
   emotion,
   seed,
-  state,
   waveform,
+  onListeningChange,
 }: {
-  clip: ReturnType<typeof useAudioClipPlayback>;
+  clipKey: string | null;
+  /** Cache-bust version for the clip URL (the memory's updated_at). */
+  clipVersion: string | null | undefined;
   durationSeconds: number;
   emotion: string | null;
   seed: number;
-  state: SoundPlaybackState;
   waveform: number[] | null;
+  /** Called when playback starts/stops so the parent can fade its body. */
+  onListeningChange: (listening: boolean) => void;
 }) {
+  // The player lives here, not in MemoryDetailSound: playback updates the
+  // position ~4x/s, and that re-render must stay confined to the stage rather
+  // than redrawing the engagement/note/members/footer body. This component
+  // stays mounted for the parent's lifetime (it only returns different JSX),
+  // so the audio player is never released under a mounted view.
+  const { url: clipUrl, isLoading: isClipUrlLoading, isError: isClipUrlError } = useMediaUrl(
+    clipKey,
+    clipVersion,
+  );
+  const clip = useAudioClipPlayback(clipUrl);
+  const state: SoundPlaybackState =
+    !clipKey || isClipUrlError || clip.error
+      ? 'unavailable'
+      : isClipUrlLoading || (Boolean(clipUrl) && clip.loading)
+        ? 'loading'
+        : clip.playing
+          ? 'playing'
+          : 'idle';
   // While dragging, the time shows where the scrub would land.
   const [scrubFraction, setScrubFraction] = useState<number | null>(null);
   const listening = state === 'playing';
+
+  useEffect(() => {
+    onListeningChange(listening);
+  }, [listening, onListeningChange]);
 
   if (state === 'unavailable') {
     return (
@@ -820,23 +846,11 @@ function MemoryDetailSound({
 }) {
   const clipAsset = memory.mediaAssets[0] ?? null;
   const clipKey = clipAsset?.object_key ?? memory.media_key ?? null;
-  const { url: clipUrl, isLoading: isClipUrlLoading, isError: isClipUrlError } = useMediaUrl(
-    clipKey,
-    memory.updated_at,
-  );
-  const clip = useAudioClipPlayback(clipUrl);
   const durationSeconds = (clipAsset?.duration_ms ?? 0) / 1000;
   const seed = seedFromKey(memory.id);
-
-  const state: SoundPlaybackState =
-    !clipKey || isClipUrlError || clip.error
-      ? 'unavailable'
-      : isClipUrlLoading || (Boolean(clipUrl) && clip.loading)
-        ? 'loading'
-        : clip.playing
-          ? 'playing'
-          : 'idle';
-  const listening = state === 'playing';
+  // Playback state lives in SoundStage (it ticks ~4x/s); this component only
+  // learns when listening flips so the body fade doesn't re-render on ticks.
+  const [listening, setListening] = useState(false);
 
   // The words step back while listening (design handoff, P3.2): the
   // engagement/note/members/footer block fades to ~32% opacity over ~380ms
@@ -874,12 +888,13 @@ function MemoryDetailSound({
         <View style={styles.framedCard}>
           <View style={styles.framedMediaWrap}>
             <SoundStage
-              clip={clip}
+              clipKey={clipKey}
+              clipVersion={memory.updated_at}
               durationSeconds={durationSeconds}
               emotion={memory.emotion}
               seed={seed}
-              state={state}
               waveform={clipAsset?.waveform ?? null}
+              onListeningChange={setListening}
             />
           </View>
           <Animated.View style={[styles.framedCardBody, { opacity: quietOpacity }]}>
@@ -960,7 +975,7 @@ export default function MemoryDetailScreen() {
     comments?: string;
     mediaIndex?: string;
   }>();
-  const { data: memory, isLoading, isError } = useMemory(id);
+  const { data: memory, isLoading, isError, refetch: refetchMemory } = useMemory(id);
   const isTransitionComplete = useScreenTransitionEnded();
   // Which carousel page the caller was looking at (see memoryDetailRoute).
   // Anything unparseable falls back to the first asset; the carousel clamps
@@ -1128,7 +1143,22 @@ export default function MemoryDetailScreen() {
     );
   }
 
-  if (isError || !memory) {
+  if (!memory) {
+    // A failed fetch with nothing cached is a load error (retryable); a
+    // successful fetch that returned no row means the memory is really gone.
+    // When a background refetch fails but data is cached, `memory` is still
+    // set and we fall through to render it.
+    if (isError) {
+      return (
+        <View style={styles.centeredFull} testID="memory-detail-load-error">
+          <Text style={styles.errorText}>Couldn’t load this memory</Text>
+          <Pressable onPress={() => void refetchMemory()}>
+            <Text style={styles.retryBtnText}>Try again</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.centeredFull}>
         <Text style={styles.errorText}>Memory not found</Text>

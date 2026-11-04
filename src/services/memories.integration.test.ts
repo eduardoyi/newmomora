@@ -2468,6 +2468,67 @@ describe('memories service integration', () => {
     expect(data?.mediaAssets[0]?.object_key).toBe('user-1/memories/memory-1/media.jpg');
   });
 
+  describe('fetchMemoryById parallel loading', () => {
+    const row = { id: 'memory-1', user_id: 'user-1', content: 'Hello', memory_type: 'text_only' };
+
+    function mockTables(
+      memoriesResult: QueryResult,
+      sideResult: QueryResult = { data: [], error: null },
+    ) {
+      (supabase.from as jest.Mock).mockImplementation((table: string) =>
+        table === 'memories' ? createQueryBuilder(memoriesResult) : createQueryBuilder(sideResult),
+      );
+    }
+
+    it('starts the tag, media and engagement reads without waiting for the row', async () => {
+      let resolveRow: (value: QueryResult) => void = () => undefined;
+      const memoriesBuilder = createQueryBuilder({ data: row, error: null });
+      memoriesBuilder.maybeSingle = jest.fn(
+        () => new Promise<QueryResult>((resolve) => { resolveRow = resolve; }),
+      );
+      (supabase.from as jest.Mock).mockImplementation((table: string) =>
+        table === 'memories' ? memoriesBuilder : createQueryBuilder({ data: [], error: null }),
+      );
+
+      const pending = fetchMemoryById('memory-1');
+
+      expect(supabase.from).toHaveBeenCalledWith('memory_family_members');
+      expect(supabase.from).toHaveBeenCalledWith('memory_media');
+      expect(supabase.rpc).toHaveBeenCalledWith('get_memory_engagement', { memory_ids: ['memory-1'] });
+
+      resolveRow({ data: row, error: null });
+      expect((await pending).data?.id).toBe('memory-1');
+    });
+
+    it('returns the mapped row error even if a side read also fails', async () => {
+      (supabase.from as jest.Mock).mockImplementation((table: string) =>
+        table === 'memories'
+          ? createQueryBuilder({ data: null, error: { message: 'row boom', code: 'XX000' } })
+          : createQueryBuilder({ data: null, error: { message: 'side boom', code: 'XX000' } }),
+      );
+
+      const { data, error } = await fetchMemoryById('memory-1');
+
+      expect(data).toBeNull();
+      expect(error?.message).toBeTruthy();
+    });
+
+    it('returns null data and no error for a missing row, ignoring side read failures', async () => {
+      mockTables({ data: null, error: null }, { data: null, error: { message: 'side boom', code: 'XX000' } });
+
+      await expect(fetchMemoryById('memory-1')).resolves.toEqual({ data: null, error: null });
+    });
+
+    it('still rejects when a side read fails for an existing row', async () => {
+      mockTables(
+        { data: row, error: null },
+        { data: null, error: { message: 'side boom', code: 'XX000' } },
+      );
+
+      await expect(fetchMemoryById('memory-1')).rejects.toBeTruthy();
+    });
+  });
+
   it('fetchMemoriesByIds bounds the Looking Back batch, family-scopes it, preserves requested order, and omits missing rows', async () => {
     const first = {
       id: 'memory-1', family_id: 'family-1', memory_date: '2024-01-01', created_at: '2024-01-01T00:00:00Z',

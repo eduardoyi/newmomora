@@ -1124,7 +1124,14 @@ export function useMemory(memoryId: string | undefined) {
     return resolveMemoryTagPortraits([query.data], portraitVersionsQuery.data ?? [])[0];
   }, [query.data, portraitVersionsQuery.data]);
 
-  return { ...query, data: resolvedMemory };
+  // Return only the fields callers read, memoized. Spreading `query` would read
+  // every tracked getter (isFetching, status, ...) and re-render the detail
+  // screen on each fetch-status flip, including the 3s/5s polls.
+  const { isLoading, isError, isPlaceholderData } = query;
+  return useMemo(
+    () => ({ data: resolvedMemory, isLoading, isError, isPlaceholderData, refetch: refetchMemory }),
+    [resolvedMemory, isLoading, isError, isPlaceholderData, refetchMemory],
+  );
 }
 
 // Member-profile timeline (Workstream A6): same infinite/keyset shape as

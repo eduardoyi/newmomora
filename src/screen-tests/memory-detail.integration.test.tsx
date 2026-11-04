@@ -1,4 +1,5 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { useState } from 'react';
 import { Alert, Animated, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -950,6 +951,44 @@ describe('MemoryDetailScreen audio variant', () => {
     timingSpy.mockRestore();
   });
 
+  it('confines playback position ticks to the stage and fades the body when play starts', () => {
+    const timingSpy = jest.spyOn(Animated, 'timing');
+    const mockedEngagementBar = MemoryEngagementBar as jest.Mock;
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
+    let setPlayback: (next: { playing: boolean; position: number }) => void = () => undefined;
+    mockedUseAudioClipPlayback.mockImplementation(() => {
+      const [playback, set] = useState({ playing: false, position: 0 });
+      setPlayback = set;
+      return { ...idlePlayback, ...playback, progress: playback.position / 42 };
+    });
+    mockedUseMemory.mockReturnValue({ data: audioMemory(), isLoading: false, isError: false });
+
+    const screen = renderScreen();
+    expect(timingSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toValue: 0.32 }),
+    );
+
+    // Starting playback is a listening transition: the parent re-renders and
+    // the body fade is triggered.
+    act(() => setPlayback({ playing: true, position: 0 }));
+    expect(timingSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toValue: 0.32, duration: 380 }),
+    );
+    expect(screen.getByTestId('memory-detail-section-content')).toBeTruthy();
+
+    // Position ticks re-render only SoundStage, never the body.
+    mockedEngagementBar.mockClear();
+    act(() => setPlayback({ playing: true, position: 1.25 }));
+    act(() => setPlayback({ playing: true, position: 1.5 }));
+    expect(mockedEngagementBar).not.toHaveBeenCalled();
+    expect(screen.getByText('0:01')).toBeTruthy();
+    expect(screen.getByTestId('memory-detail-section-content')).toBeTruthy();
+
+    timingSpy.mockRestore();
+  });
+
   it('toggles playback via the seal', () => {
     const toggle = jest.fn();
     mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/clip.m4a', isLoading: false, isError: false });
@@ -960,6 +999,69 @@ describe('MemoryDetailScreen audio variant', () => {
     fireEvent.press(screen.getByTestId('memory-detail-sound-seal'));
 
     expect(toggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('MemoryDetailScreen load failures', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'manager' });
+    mockedUseFamilyMemberProfiles.mockReturnValue({
+      profiles: [{ user_id: 'user-1', name: 'Eduardo' }],
+    });
+    mockedUseMemoryMutations.mockReturnValue({
+      deleteMemory: jest.fn(),
+      retryIllustration: jest.fn(),
+      regenerateIllustration: jest.fn(),
+      isDeleting: false,
+      isRetrying: false,
+      isRegenerating: false,
+    });
+    mockedUseMediaUrl.mockReturnValue({ url: undefined });
+  });
+
+  it('keeps showing a cached memory when a background refetch fails', () => {
+    mockedUseMemory.mockReturnValue({
+      data: { ...baseMemory, memory_type: 'text_only' },
+      isLoading: false,
+      isError: true,
+      refetch: jest.fn(),
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('memory-detail-section-content')).toBeTruthy();
+    expect(screen.queryByText('Memory not found')).toBeNull();
+    expect(screen.queryByTestId('memory-detail-load-error')).toBeNull();
+  });
+
+  it('shows a retryable load error when the first load fails, and Try again refetches', () => {
+    const refetch = jest.fn();
+    mockedUseMemory.mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch });
+
+    const screen = renderScreen();
+
+    expect(screen.getByTestId('memory-detail-load-error')).toBeTruthy();
+    expect(screen.getByText('Couldn’t load this memory')).toBeTruthy();
+    expect(screen.queryByText('Memory not found')).toBeNull();
+
+    fireEvent.press(screen.getByText('Try again'));
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows "Memory not found" when the row is really gone', () => {
+    mockedUseMemory.mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false,
+      refetch: jest.fn(),
+    });
+
+    const screen = renderScreen();
+
+    expect(screen.getByText('Memory not found')).toBeTruthy();
+    expect(screen.queryByTestId('memory-detail-load-error')).toBeNull();
   });
 });
 

@@ -847,6 +847,17 @@ export async function fetchMemoryById(memoryId: string): Promise<{
   data: MemoryWithTags | null;
   error: ServiceError | null;
 }> {
+  // The row and its tags/media/engagement only need `memoryId`, so start all
+  // four at once. The side fetches throw on failure; the row result decides
+  // first so an error/missing row still returns exactly as before, and the
+  // side promises' rejections are never left unhandled in that case.
+  const sidePromise = Promise.all([
+    fetchTagsForMemories([memoryId]),
+    fetchMediaForMemories([memoryId]),
+    fetchEngagementForMemories([memoryId]),
+  ]);
+  sidePromise.catch(() => undefined);
+
   const { data, error } = await supabase.from('memories').select('*').eq('id', memoryId).maybeSingle();
 
   if (error) {
@@ -857,11 +868,7 @@ export async function fetchMemoryById(memoryId: string): Promise<{
     return { data: null, error: null };
   }
 
-  const [tagMap, mediaMap, engagementMap] = await Promise.all([
-    fetchTagsForMemories([memoryId]),
-    fetchMediaForMemories([memoryId]),
-    fetchEngagementForMemories([memoryId]),
-  ]);
+  const [tagMap, mediaMap, engagementMap] = await sidePromise;
   return {
     data: attachEngagement(
       attachMediaAssets(attachTags([data], tagMap), mediaMap),
