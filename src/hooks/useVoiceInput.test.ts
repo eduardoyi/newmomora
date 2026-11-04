@@ -1,5 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { act, renderHook } from '@testing-library/react-native';
+import { Alert, Linking } from 'react-native';
 
 import { pauseAllAudioPlayback } from '@/hooks/audio-playback-coordinator';
 import { processVoiceMemory } from '@/services/ai';
@@ -48,6 +49,7 @@ jest.mock('@/services/ai', () => ({
 }));
 
 jest.mock('@/utils/native-permissions', () => ({
+  ...jest.requireActual('@/utils/native-permissions'),
   getOrRequestNativePermission: jest.fn(async (getPermission: () => Promise<unknown>) => ({
     permission: await getPermission(),
     didRequest: false,
@@ -90,7 +92,8 @@ describe('useVoiceInput', () => {
     expect(mockRecorder.record).toHaveBeenCalledTimes(1);
   });
 
-  it('sets an error and never starts recording when permission is denied', async () => {
+  it('soft denial: sets the tap-again text and never starts recording', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     mockGetRecordingPermissionsAsync.mockResolvedValue({ granted: false, canAskAgain: true });
     const { result } = renderHook(() => useVoiceInput(FAMILY_MEMBERS, 'family-1'));
 
@@ -98,8 +101,36 @@ describe('useVoiceInput', () => {
       await result.current.startRecording();
     });
 
-    expect(result.current.errorMessage).toContain('Microphone access');
+    expect(result.current.errorMessage).toBe(
+      'Momora needs your microphone to type out what you say. Tap again to allow it.',
+    );
+    expect(alertSpy).not.toHaveBeenCalled();
     expect(mockRecorder.record).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+  });
+
+  it('blocked: shows the Settings prompt with no inline error and never starts recording', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+    mockGetRecordingPermissionsAsync.mockResolvedValue({ granted: false, canAskAgain: false });
+    const { result } = renderHook(() => useVoiceInput(FAMILY_MEMBERS, 'family-1'));
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    expect(result.current.errorMessage).toBe('');
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Turn on microphone access',
+      'Momora needs your microphone to type out what you say. You can turn it on in Settings.',
+      expect.any(Array),
+    );
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((button) => button.text === 'Open Settings')?.onPress?.();
+    expect(settingsSpy).toHaveBeenCalledTimes(1);
+    expect(mockRecorder.record).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+    settingsSpy.mockRestore();
   });
 
   it('stop kicks transcription immediately and resolves into transcriptionResult', async () => {

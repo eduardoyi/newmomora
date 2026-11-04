@@ -2,6 +2,8 @@ import * as ImagePicker from 'expo-image-picker';
 
 import {
   getOrRequestNativePermission,
+  getSoftPermissionDeniedText,
+  showPermissionSettingsPrompt,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
 import {
@@ -34,8 +36,8 @@ export const PROFILE_PHOTO_PICKER_OPTIONS = {
 } satisfies ImagePicker.ImagePickerOptions;
 
 const CAMERA_UNAVAILABLE_ERROR = 'Camera is not available on this device.';
-const CAMERA_PERMISSION_ERROR = 'Camera access is required to take a profile photo.';
-const LIBRARY_PERMISSION_ERROR = 'Photo library access is required to choose a profile photo.';
+const CAMERA_PERMISSION_PURPOSE = 'to take a profile photo';
+const LIBRARY_PERMISSION_PURPOSE = 'to choose a profile photo';
 const CAMERA_PICK_ERROR = 'Could not open the camera. Please try again.';
 const LIBRARY_PICK_ERROR = 'Could not open the photo library. Please try again.';
 
@@ -112,11 +114,13 @@ export async function pickFamilyProfilePhotoFromLibrary(): Promise<FamilyProfile
       () => ImagePicker.requestMediaLibraryPermissionsAsync(),
     );
     if (!permission.granted) {
-      return {
-        error: permission.canAskAgain === false
-          ? `${LIBRARY_PERMISSION_ERROR} Enable it in Settings.`
-          : LIBRARY_PERMISSION_ERROR,
-      };
+      // Blocked: the Settings prompt is the whole response, so no `error`
+      // (callers treat an empty result like a cancel).
+      if (permission.canAskAgain === false) {
+        showPermissionSettingsPrompt('photos', LIBRARY_PERMISSION_PURPOSE);
+        return {};
+      }
+      return { error: getSoftPermissionDeniedText('photos', LIBRARY_PERMISSION_PURPOSE) };
     }
 
     if (didRequest) {
@@ -137,11 +141,11 @@ export async function pickFamilyProfilePhotoFromCamera(): Promise<FamilyProfileP
       () => ImagePicker.requestCameraPermissionsAsync(),
     );
     if (!permission.granted) {
-      return {
-        error: permission.canAskAgain === false
-          ? `${CAMERA_PERMISSION_ERROR} Enable it in Settings.`
-          : CAMERA_PERMISSION_ERROR,
-      };
+      if (permission.canAskAgain === false) {
+        showPermissionSettingsPrompt('camera', CAMERA_PERMISSION_PURPOSE);
+        return {};
+      }
+      return { error: getSoftPermissionDeniedText('camera', CAMERA_PERMISSION_PURPOSE) };
     }
 
     if (didRequest) {

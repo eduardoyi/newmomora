@@ -294,7 +294,7 @@ describe('PortraitScreen (S16)', () => {
       isLoading: false,
     } as unknown as ReturnType<typeof useFamilyMembers>);
     mockDraft({ kidNames: ['Lila'], capture: null });
-    mockedPickFromLibrary.mockResolvedValue({ error: 'Photo library access is required to choose a profile photo.' });
+    mockedPickFromLibrary.mockResolvedValue({ error: 'Momora needs access to your photos to choose a profile photo. Tap again to allow it.' });
 
     const { getByTestId, findByTestId } = renderScreen();
 

@@ -25,6 +25,8 @@ import { deleteArtworkScanFile } from '@/utils/artwork-scan-custody';
 import { MAX_MEMORY_MEDIA_ASSETS } from '@/utils/memories';
 import {
   getOrRequestNativePermission,
+  getSoftPermissionDeniedText,
+  showPermissionSettingsPrompt,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
 
@@ -233,11 +235,12 @@ export const ArtworkScanButton = forwardRef<ArtworkScanButtonHandle, ArtworkScan
           () => ImagePicker.requestCameraPermissionsAsync(),
         );
         if (!permission.granted) {
-          onErrorRef.current(
-            permission.canAskAgain === false
-              ? 'Camera permission is required to scan artwork. Enable it in Settings.'
-              : 'Camera permission is required to scan artwork.',
-          );
+          if (permission.canAskAgain === false) {
+            onErrorRef.current('');
+            showPermissionSettingsPrompt('camera', "to scan your kids' artwork");
+          } else {
+            onErrorRef.current(getSoftPermissionDeniedText('camera', "to scan your kids' artwork"));
+          }
           return;
         }
         if (didRequest) {

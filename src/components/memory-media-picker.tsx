@@ -23,7 +23,9 @@ import {
 } from '@/utils/media-validation';
 import {
   getOrRequestNativePermission,
+  getSoftPermissionDeniedText,
   runAfterNativeChooserDismisses,
+  showPermissionSettingsPrompt,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
@@ -201,11 +203,12 @@ export const MemoryMediaPicker = forwardRef<MemoryMediaPickerHandle, MemoryMedia
         () => ImagePicker.requestMediaLibraryPermissionsAsync(),
       );
       if (!permission.granted) {
-        onError(
-          permission.canAskAgain === false
-            ? 'Photo library permission is required to attach media. Enable it in Settings.'
-            : 'Photo library permission is required to attach media.',
-        );
+        if (permission.canAskAgain === false) {
+          onError('');
+          showPermissionSettingsPrompt('photos', 'to add them to this memory');
+        } else {
+          onError(getSoftPermissionDeniedText('photos', 'to add them to this memory'));
+        }
         return;
       }
 
@@ -300,11 +303,12 @@ export const MemoryMediaPicker = forwardRef<MemoryMediaPickerHandle, MemoryMedia
         () => ImagePicker.requestCameraPermissionsAsync(),
       );
       if (!permission.granted) {
-        onError(
-          permission.canAskAgain === false
-            ? 'Camera permission is required to take a photo. Enable it in Settings.'
-            : 'Camera permission is required to take a photo.',
-        );
+        if (permission.canAskAgain === false) {
+          onError('');
+          showPermissionSettingsPrompt('camera', 'to take photos for this memory');
+        } else {
+          onError(getSoftPermissionDeniedText('camera', 'to take photos for this memory'));
+        }
         return;
       }
 

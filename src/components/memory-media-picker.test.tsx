@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { ActionSheetIOS, Alert, Platform } from 'react-native';
+import { ActionSheetIOS, Alert, Linking, Platform } from 'react-native';
 
 import { MemoryMediaPicker } from './memory-media-picker';
 import { extractVideoCaptureDateIso } from '@/utils/video-capture-date';
@@ -68,6 +68,113 @@ describe('MemoryMediaPicker', () => {
       );
     });
     expect(mockedImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  describe('permission denied', () => {
+    async function chooseOption(screen: ReturnType<typeof render>, text: string) {
+      fireEvent.press(screen.getByTestId('new-memory-attach-media'));
+      const buttons = (Alert.alert as jest.Mock).mock.calls[0]?.[2] as
+        | { text: string; onPress?: () => void }[]
+        | undefined;
+      buttons?.find((button) => button.text === text)?.onPress?.();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(300);
+      });
+    }
+
+    function permissionPromptCall() {
+      return (Alert.alert as jest.Mock).mock.calls.find(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('Turn on '),
+      );
+    }
+
+    it('photo library, blocked: shows the Settings prompt and no inline error', async () => {
+      const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+      mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: false,
+      } as ImagePicker.MediaLibraryPermissionResponse);
+      const onError = jest.fn();
+      const screen = render(<MemoryMediaPicker onError={onError} onSelect={jest.fn()} />);
+
+      await chooseOption(screen, 'Photo library');
+
+      const call = permissionPromptCall();
+      expect(call?.[0]).toBe('Turn on photo access');
+      expect(call?.[1]).toBe(
+        'Momora needs access to your photos to add them to this memory. You can turn it on in Settings.',
+      );
+      expect(onError).toHaveBeenLastCalledWith('');
+      expect(mockedImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+      expect(mockedImagePicker.launchImageLibraryAsync).not.toHaveBeenCalled();
+      (call?.[2] as { text: string; onPress?: () => void }[])
+        .find((button) => button.text === 'Open Settings')?.onPress?.();
+      expect(settingsSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('photo library, soft denial: shows the tap-again text and no prompt', async () => {
+      mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: true,
+      } as ImagePicker.MediaLibraryPermissionResponse);
+      mockedImagePicker.requestMediaLibraryPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: true,
+      } as ImagePicker.MediaLibraryPermissionResponse);
+      const onError = jest.fn();
+      const screen = render(<MemoryMediaPicker onError={onError} onSelect={jest.fn()} />);
+
+      await chooseOption(screen, 'Photo library');
+
+      expect(onError).toHaveBeenLastCalledWith(
+        'Momora needs access to your photos to add them to this memory. Tap again to allow it.',
+      );
+      expect(permissionPromptCall()).toBeUndefined();
+    });
+
+    it('take photo, blocked: shows the Settings prompt and no inline error', async () => {
+      const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+      mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: false,
+      } as ImagePicker.CameraPermissionResponse);
+      const onError = jest.fn();
+      const screen = render(<MemoryMediaPicker onError={onError} onSelect={jest.fn()} />);
+
+      await chooseOption(screen, 'Take photo');
+
+      const call = permissionPromptCall();
+      expect(call?.[0]).toBe('Turn on camera access');
+      expect(call?.[1]).toBe(
+        'Momora needs your camera to take photos for this memory. You can turn it on in Settings.',
+      );
+      expect(onError).toHaveBeenLastCalledWith('');
+      expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
+      expect(mockedImagePicker.launchCameraAsync).not.toHaveBeenCalled();
+      (call?.[2] as { text: string; onPress?: () => void }[])
+        .find((button) => button.text === 'Open Settings')?.onPress?.();
+      expect(settingsSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('take photo, soft denial: shows the tap-again text and no prompt', async () => {
+      mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: true,
+      } as ImagePicker.CameraPermissionResponse);
+      mockedImagePicker.requestCameraPermissionsAsync.mockResolvedValue({
+        granted: false,
+        canAskAgain: true,
+      } as ImagePicker.CameraPermissionResponse);
+      const onError = jest.fn();
+      const screen = render(<MemoryMediaPicker onError={onError} onSelect={jest.fn()} />);
+
+      await chooseOption(screen, 'Take photo');
+
+      expect(onError).toHaveBeenLastCalledWith(
+        'Momora needs your camera to take photos for this memory. Tap again to allow it.',
+      );
+      expect(permissionPromptCall()).toBeUndefined();
+    });
   });
 
   it('prevents concurrent native picker launches', async () => {

@@ -13,6 +13,8 @@ import type { VoiceFamilyMemberPayload } from '@/services/ai';
 import { transcribeClip, type VoiceProcessingResult } from '@/services/voice-transcription';
 import {
   getOrRequestNativePermission,
+  getSoftPermissionDeniedText,
+  showPermissionSettingsPrompt,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
 
@@ -156,11 +158,11 @@ export function useVoiceInput(familyMembers: VoiceFamilyMemberPayload[], familyI
         () => AudioModule.requestRecordingPermissionsAsync(),
       );
       if (!permission.granted) {
-        setErrorMessage(
-          permission.canAskAgain === false
-            ? 'Microphone access is required for voice memories. Enable it in Settings.'
-            : 'Microphone access is required for voice memories.',
-        );
+        if (permission.canAskAgain === false) {
+          showPermissionSettingsPrompt('microphone', 'to type out what you say');
+        } else {
+          setErrorMessage(getSoftPermissionDeniedText('microphone', 'to type out what you say'));
+        }
         return;
       }
 

@@ -15,6 +15,8 @@ import { useFamily } from '@/hooks/use-family';
 import { readLocalFileAsBase64 } from '@/utils/local-files';
 import {
   getOrRequestNativePermission,
+  getSoftPermissionDeniedText,
+  showPermissionSettingsPrompt,
   waitForNativePresentationToSettle,
 } from '@/utils/native-permissions';
 
@@ -73,11 +75,11 @@ export function VoiceMemoryButton({
         () => AudioModule.requestRecordingPermissionsAsync(),
       );
       if (!permission.granted) {
-        onError(
-          permission.canAskAgain === false
-            ? 'Microphone access is required for voice memories. Enable it in Settings.'
-            : 'Microphone access is required for voice memories.',
-        );
+        if (permission.canAskAgain === false) {
+          showPermissionSettingsPrompt('microphone', 'to record voice memories');
+        } else {
+          onError(getSoftPermissionDeniedText('microphone', 'to record voice memories'));
+        }
         return;
       }
 

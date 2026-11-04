@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { Alert, Linking } from 'react-native';
 
 import {
   assetToSelection,
@@ -58,7 +59,7 @@ describe('family profile photo picker', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     await expect(pickFamilyProfilePhotoFromLibrary()).resolves.toEqual({
-      error: 'Photo library access is required to choose a profile photo.',
+      error: 'Momora needs access to your photos to choose a profile photo. Tap again to allow it.',
     });
     expect(mockedImagePicker.launchImageLibraryAsync).not.toHaveBeenCalled();
   });
@@ -73,7 +74,7 @@ describe('family profile photo picker', () => {
     } as ImagePicker.CameraPermissionResponse);
 
     await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({
-      error: 'Camera access is required to take a profile photo.',
+      error: 'Momora needs your camera to take a profile photo. Tap again to allow it.',
     });
     expect(mockedImagePicker.launchCameraAsync).not.toHaveBeenCalled();
   });
@@ -140,17 +141,50 @@ describe('family profile photo picker', () => {
     });
   });
 
-  it('directs a permanently denied camera permission to Settings without requesting again', async () => {
+  it('shows the Settings prompt for a permanently denied camera permission, without an error or a second request', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
     mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
       granted: false,
       canAskAgain: false,
     } as ImagePicker.CameraPermissionResponse);
 
-    await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({
-      error: 'Camera access is required to take a profile photo. Enable it in Settings.',
-    });
+    await expect(pickFamilyProfilePhotoFromCamera()).resolves.toEqual({});
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Turn on camera access',
+      'Momora needs your camera to take a profile photo. You can turn it on in Settings.',
+      expect.any(Array),
+    );
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((button) => button.text === 'Open Settings')?.onPress?.();
+    expect(settingsSpy).toHaveBeenCalledTimes(1);
     expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
     expect(mockedImagePicker.launchCameraAsync).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+    settingsSpy.mockRestore();
+  });
+
+  it('shows the Settings prompt for a permanently denied library permission, without an error or a second request', async () => {
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
+    mockedImagePicker.getMediaLibraryPermissionsAsync.mockResolvedValue({
+      granted: false,
+      canAskAgain: false,
+    } as ImagePicker.MediaLibraryPermissionResponse);
+
+    await expect(pickFamilyProfilePhotoFromLibrary()).resolves.toEqual({});
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Turn on photo access',
+      'Momora needs access to your photos to choose a profile photo. You can turn it on in Settings.',
+      expect.any(Array),
+    );
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((button) => button.text === 'Open Settings')?.onPress?.();
+    expect(settingsSpy).toHaveBeenCalledTimes(1);
+    expect(mockedImagePicker.requestMediaLibraryPermissionsAsync).not.toHaveBeenCalled();
+    expect(mockedImagePicker.launchImageLibraryAsync).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+    settingsSpy.mockRestore();
   });
 
   it('parses pending success, cancel, and error results', () => {

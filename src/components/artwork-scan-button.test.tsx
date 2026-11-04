@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { AppState, Modal, Platform } from 'react-native';
+import { Alert, AppState, Linking, Modal, Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { trackEvent } from '@/services/analytics';
@@ -159,8 +159,10 @@ describe('ArtworkScanButton', () => {
     expect(mockedTrackEvent).toHaveBeenCalledWith('artwork_scan_result', { status: 'success', page_count: 2 });
   });
 
-  it('ios: asks for camera permission first and stops with Settings copy when it can no longer ask', async () => {
+  it('ios: asks for camera permission first and shows the Settings prompt when it can no longer ask', async () => {
     setPlatform('ios');
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    const settingsSpy = jest.spyOn(Linking, 'openSettings').mockResolvedValue(undefined);
     mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
       granted: false,
       canAskAgain: false,
@@ -171,12 +173,19 @@ describe('ArtworkScanButton', () => {
 
     expect(mockedImagePicker.requestCameraPermissionsAsync).not.toHaveBeenCalled();
     expect(mockedScan).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenLastCalledWith(
-      'Camera permission is required to scan artwork. Enable it in Settings.',
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Turn on camera access',
+      "Momora needs your camera to scan your kids' artwork. You can turn it on in Settings.",
+      expect.any(Array),
     );
+    // No red inline text alongside the prompt.
+    expect(onError).toHaveBeenLastCalledWith('');
+    const buttons = alertSpy.mock.calls[0][2] as { text: string; onPress?: () => void }[];
+    buttons.find((button) => button.text === 'Open Settings')?.onPress?.();
+    expect(settingsSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('ios: a refused (but re-askable) request shows the short permission copy', async () => {
+  it('ios: a refused (but re-askable) request shows the tap-again copy', async () => {
     setPlatform('ios');
     mockedImagePicker.getCameraPermissionsAsync.mockResolvedValue({
       granted: false,
@@ -191,7 +200,9 @@ describe('ArtworkScanButton', () => {
     await press(screen);
 
     expect(mockedScan).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenLastCalledWith('Camera permission is required to scan artwork.');
+    expect(onError).toHaveBeenLastCalledWith(
+      "Momora needs your camera to scan your kids' artwork. Tap again to allow it.",
+    );
   });
 
   it('ios: states the page cap before the scanner opens, then clears it on success', async () => {
