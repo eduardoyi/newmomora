@@ -87,6 +87,12 @@ Verify commands exist before running. Do not invent scripts.
 - **No generated file edits** — regenerate `src/types/database.ts` from Supabase, don't hand-edit.
 - **English-only UI** — i18n-ready strings, no hardcoded copy scattered in logic.
 
+### Product & marketing copy
+
+- **Name the thing, never a vague "it".** Every headline and button has to make sense to someone who skipped the previous screen. Say what gets saved, what it turns into, and who sees it. Bad: "Save it in seconds", "Watch it turn into more", "Things you can hold", "Just for your family", "Keep it going". Good: "Save a memory in 20 seconds", "Every memory becomes an illustrated page", "Order a printed book of your year", "Only your family can see your journal".
+- **Buttons say the next action or the goal it serves** ("Save my first memory", "Show me how it works"), not filler ("Next", "Continue", "Sounds good") where a specific verb fits.
+- Word choice follows the VoC register in [docs/features/onboarding.md](docs/features/onboarding.md#copy-register-rules) (no "preserve", "keepsake", "legacy", "magical"; guilt-relief, never guilt).
+
 ### TypeScript
 
 - Strict mode. Prefer `interface` for object shapes; avoid `enum` (use const objects).
