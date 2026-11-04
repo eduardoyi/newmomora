@@ -11,7 +11,10 @@ import { BrandSplash } from '@/components/brand-splash';
 import { isMemoriesListQueryKey } from '@/hooks/memory-cache';
 import {
   ANCHORED_MEMORIES_KEY_SEGMENT,
+  billingStatusQueryKeyBase,
+  blockedFamilyAccountsQueryKeyBase,
   calendarMemoriesQueryKeyBase,
+  contentReportsQueryKeyBase,
   familyMembershipsQueryKeyBase,
   familyMembersQueryKeyBase,
   lookingBackQueryKeyBase,
@@ -45,6 +48,11 @@ export const PERSISTED_QUERY_CACHE_KEY = 'momora-query-cache';
 // the whole persisted cache instead of feeding stale-shaped data into a
 // hook that assumes the new one.
 // v3: memories gained myReaction/topReactions (emoji reactions).
+// Adding keys to the allow-list (family-billing-status, content-reports,
+// blocked-family-accounts) deliberately did NOT bump this: a buster guards
+// the shape of entries an older build already wrote, and those three never
+// existed in any older persisted blob, so there is nothing stale-shaped to
+// hydrate. Bumping would only throw away every user's warm cache on update.
 export const PERSISTED_QUERY_CACHE_BUSTER = 'v3';
 
 export const PERSISTED_QUERY_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -77,13 +85,46 @@ const PERSISTABLE_QUERY_KEY_BASES: readonly unknown[] = [
   // to hand expo-image in the first place, defeating O5's cacheKey work
   // entirely. See docs/features/offline.md "Why media-urls is persisted".
   'media-urls',
+  // Billing status is persisted so index.tsx's cold-start gate
+  // (`memberships.length > 0 && !billingStatus && isBillingLoading`) is
+  // satisfied from the restored cache instead of waiting on a NetInfo + RPC
+  // round trip. It restores stale (staleTime 60s) and revalidates on mount.
+  // Only a real success payload is dehydrated -- see
+  // isPersistableBillingStatusData. docs/features/subscriptions.md
+  // "Cold start and persisted status".
+  billingStatusQueryKeyBase,
+  // The memory detail screen shows a full-screen spinner while the content-
+  // safety reports/blocks queries load; unpersisted, a cold open (widget,
+  // notification) waited on two network calls even with the memory cached.
+  // Both are account+family scoped in their keys and purged with the rest of
+  // the cache on sign-out/family loss. 'content-safety-reveals' is NOT here:
+  // it is session-only by design (a hidden item the user chose to reveal must
+  // re-hide on the next launch).
+  contentReportsQueryKeyBase,
+  blockedFamilyAccountsQueryKeyBase,
   // EXCLUDED deliberately: 'generation-status' (poll-only, meaningless
-  // hydrated), 'memories-search' (transient results), 'family-member-profiles'
-  // and billing/session state (not in this list -- default-excluded).
+  // hydrated), 'memories-search' (transient results), 'family-member-profiles',
+  // 'revenuecat-offerings' (store-customer specific, re-fetched once RevenueCat
+  // configures) and 'content-safety-reveals' (not in this list --
+  // default-excluded).
 ];
 
 function isPersistableQueryKey(queryKey: readonly unknown[]): boolean {
   return PERSISTABLE_QUERY_KEY_BASES.includes(queryKey[0]);
+}
+
+// fetchFamilyBillingStatus resolves `{ data, error }` rather than throwing, so
+// a query can be status 'success' while carrying `data: null` + an error
+// object (RPC failed, no usable offline cache). Persisting that would make the
+// next launch's index.tsx render BillingStatusGate from a stale error before
+// any network call. `is_offline: true` is itself a fallback read of the
+// AsyncStorage billing cache (see services/billing.ts), not fresh server
+// truth, so it is also never restored as if it were.
+function isPersistableBillingStatusData(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const { data: status, error } = data as { data?: unknown; error?: unknown };
+  if (error || !status || typeof status !== 'object') return false;
+  return (status as { is_offline?: unknown }).is_offline !== true;
 }
 
 // Only a query that actually resolved is worth restoring -- mirrors
@@ -93,6 +134,7 @@ export function shouldDehydrateQuery(query: Query): boolean {
   return (
     query.state.status === 'success' &&
     isPersistableQueryKey(query.queryKey) &&
+    (query.queryKey[0] !== billingStatusQueryKeyBase || isPersistableBillingStatusData(query.state.data)) &&
     // A date-anchored Timeline list is a transient view, not the feed: restoring
     // it on cold start would reopen the app somewhere in the past.
     query.queryKey[2] !== ANCHORED_MEMORIES_KEY_SEGMENT

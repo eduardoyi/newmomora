@@ -158,7 +158,14 @@ export default function AppLayout() {
     <LookingBackSessionProvider>
     <OfflineBannerProvider>
     <View style={styles.stackWrap}>
-      <Stack screenOptions={{ headerShown: false }}>
+      {/* freezeOnBlur: screens buried under a pushed screen (react-native-screens
+          never freezes the one directly below the top on Fabric, nor iOS modals)
+          stop re-rendering on every query/context change until they are
+          revealed again. Nothing in this tree needs live renders while buried:
+          the feed video pause is flipped by a focus effect that renders before
+          the freeze lands (DelayedFreeze), the year-film player pauses
+          imperatively, and OfflineBanner sits outside the Stack. */}
+      <Stack screenOptions={{ headerShown: false, freezeOnBlur: true }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="no-family" />
         <Stack.Screen

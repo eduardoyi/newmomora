@@ -51,6 +51,20 @@ export function artworkPieces(
   }));
 }
 
+/**
+ * The Timeline's list-sized preview key for a piece, when the detail screen
+ * (which shows `object_key`, decision C6) can use it as a placeholder: only
+ * when it exists AND differs from the original. null otherwise (legacy rows,
+ * the no-upscale guard, a failed preview upload). The detail wall asks the
+ * media-urls cache for this key's URL -- already signed by the Timeline -- and
+ * pins expo-image's cacheKey to it exactly as the Timeline card does
+ * (`mediaImageSource(url, displayKey)`), so the placeholder is a disk hit.
+ */
+export function artworkPlaceholderKey(asset: MemoryMediaAsset): string | null {
+  const previewKey = resolveMediaDisplayKey(asset, true);
+  return previewKey !== asset.object_key ? previewKey : null;
+}
+
 export interface ArtworkLabelContent {
   /** Caption as a handwritten title, curly-quoted; null when there is none. */
   title: string | null;

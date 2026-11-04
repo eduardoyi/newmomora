@@ -255,3 +255,13 @@ export function yearFilmEditOptionsQueryKey(filmId: string | null | undefined) {
 export function yearFilmEditFramesQueryKey(familyId: string | null | undefined, memoryIdsSignature: string) {
   return [yearFilmsQueryKeyBase, 'edit-frames', familyId, memoryIdsSignature] as const;
 }
+
+// Bases pulled into this dependency-free module so lib-level code
+// (src/lib/query-persistence.tsx) can allow-list them without importing
+// use-billing / useContentSafety and their transitive chains -- use-auth
+// imports query-persistence, so importing a hook that imports use-auth back
+// would be a cycle. use-billing builds its exported key from the billing base
+// (drift test in query-persistence.test.ts); useContentSafety imports its two.
+export const billingStatusQueryKeyBase = 'family-billing-status' as const;
+export const contentReportsQueryKeyBase = 'content-reports' as const;
+export const blockedFamilyAccountsQueryKeyBase = 'blocked-family-accounts' as const;

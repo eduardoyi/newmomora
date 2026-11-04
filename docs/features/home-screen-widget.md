@@ -1,7 +1,7 @@
 # Feature: Home-screen widget
 
 **Status:** `implemented; release validation pending`
-**Last updated:** 2026-09-29
+**Last updated:** 2026-11-04
 **PRD reference:** Journey C — Revisit
 
 ## Overview
@@ -51,7 +51,8 @@ for measured checks and remaining release gates. The backend migration is live; 
   card. With one eligible memory the button keeps it. A process restart resets
   shuffle history. The database still supplies a daily sample of at most 40
   candidates; this is not an exhaustive shuffle of an unlimited archive.
-- Tap the card to open its memory through normal account/family access checks.
+- Tap the card to open its memory through normal account/family access checks
+  (see “Tap routing” below).
 - Cached cards rotate at 08:00, 13:00, and 18:00 in the validated family
   timezone for at most 168 elapsed hours after online validation. The app may
   publish up to 24 dated timeline entries, while retaining at most seven
@@ -151,6 +152,35 @@ stayed there until a manual “Show another memory”. Guarding rules now:
   family truly has no eligible memory.
 - The automatic foreground sync retries retryable failures after 10s, 30s and
   90s while the app stays active (`isRetryableWidgetSyncFailure`).
+
+### Sync timing (launch, foreground, mutations)
+
+A full sync is about six serial requests plus image signing and downloads, so
+it must not compete with first render or a widget tap that opens a memory:
+
+- **Deferred:** the launch/foreground sync starts `WIDGET_LAUNCH_SYNC_DELAY_MS`
+  (2.5 s) after the effect runs. The timer is cancelled on unmount, on
+  background (`isAppActive` flips) and on scope change. A scope change
+  (family or account switch) is not deferred; the new scope must replace the
+  old card promptly.
+- **Throttled:** an app activation skips the sync when
+  `isWidgetForegroundSyncDue` says nothing is due: the scoped manifest was
+  published < 15 min ago (`verifiedAt` only advances on a successful publish,
+  so failures never suppress a retry), still has entries (the neutral card
+  always re-syncs), is inside its lease, and the family-local day has not
+  changed. A pending content mutation (below) bypasses the throttle.
+- **Mutation trigger:** only a mutation whose first `mutationKey` segment is in
+  `WIDGET_CONTENT_MUTATION_KEY_BASES` (memories/calendar-memories, content
+  safety) enqueues a sync, through a 3 s trailing debounce
+  (`WIDGET_MUTATION_SYNC_DEBOUNCE_MS`) that coalesces bursts. Keyed mutations
+  outside the list (reactions, read markers, profile) are ignored. No mutation
+  in the app declares a `mutationKey` yet, so unkeyed mutations are treated as
+  possibly content-changing (debounced) via `WIDGET_SYNC_ON_UNKEYED_MUTATIONS`;
+  when you add or change a mutation that edits memories, media, illustrations,
+  reports or blocks, give it a `mutationKey` starting with one of those bases,
+  and flip the constant to `false` once all of them are keyed. A debounced sync
+  that never completes leaves a dirty flag so the next foreground sync is not
+  throttled.
 - Android picks the scheduled image, then any other image in the same verified
   generation, before falling back to the neutral card.
 
@@ -163,6 +193,31 @@ validation. Session-only “Show anyway” does not authorize persistent exposur
 
 Initial delivery and widget design changes use new store builds. Existing
 incoming-share extension storage must stay separate from widget storage.
+
+### Tap routing
+
+`app/widget.tsx` is a redirect shim (its stack screen uses `animation: 'none'`
+so a warm tap does not animate a push and then a replace). It requires an
+authenticated, non-anonymous user, a valid `familyId` the user is currently a
+member of, and one of two proofs for the memory:
+
+1. **Cached fast path:** the detail query `memoryDetailQueryKey(familyId,
+   memoryId)` already holds that memory. The key embeds the family, and the
+   persisted query cache is cleared on sign-out and on family/membership loss,
+   so a hit means this account read the memory earlier; current membership was
+   just verified. The route replaces immediately with no network round trip.
+   The detail screen refetches on mount and shows its own “Memory not found”
+   state if the memory was deleted or is no longer visible (fail closed).
+2. **Validated path:** `fetchWidgetRetainedMemoriesByIds(familyId, [memoryId])`
+   (RLS-scoped). On success the returned row is written to the detail query
+   key before the replace, so the detail screen does not refetch the same
+   memory. `fetchMemoriesByIds` and the detail screen's `fetchMemoryById` both
+   select `*` and attach tags, media assets and engagement, so the shapes are
+   identical; if either changes, keep them identical or drop the seeding.
+
+When the target belongs to another family, the validation read runs in
+parallel with `setActiveFamily(familyId)`; the seed happens only after both
+settle because `setActiveFamily` invalidates the memories queries.
 
 ### Background refresh
 
@@ -225,11 +280,11 @@ Automated coverage includes:
 - `src/utils/widget-selection.test.ts`: age bands, one-memory rotation, calendar/lease behavior.
 - `src/services/widget-memories.test.ts` and `.integration.test.ts`: candidate and retained-memory authorization/read contracts.
 - `src/services/widget-cache.test.ts` and `widget-image-staging.test.ts`: publication ordering, 24-entry manifests, seven-image storage limits, staging limits and cancellation.
-- `src/hooks/useMemoryWidgetSync.integration.test.tsx` and `.lifecycle.integration.test.tsx`: safety, revalidation, account and async lifecycle fences.
+- `src/hooks/useMemoryWidgetSync.integration.test.tsx` and `.lifecycle.integration.test.tsx`: safety, revalidation, account and async lifecycle fences, launch deferral, foreground throttle and mutation filtering/debounce.
 - `src/widgets/manifest.test.ts`: 24-entry acceptance, 25-entry rejection, and seven-ID/seven-image limits.
 - `src/services/widget-background-refresh.test.ts`: background scope choice, foreground/no-widget/signed-out skips, account and deletion clears, registration and restricted status.
 - `src/widgets/native-adapter.adversarial.test.ts`: capability negotiation, old-binary fallback, all-entry iOS timelines, scope-safe clear and timeline failures.
-- `src/screen-tests/widget-entry.adversarial.integration.test.tsx`: guarded routing and family switch behavior.
+- `src/screen-tests/widget-entry.adversarial.integration.test.tsx`: guarded routing, family switch behavior, detail-cache seeding, cached fast path and parallel family switch.
 - `src/components/widget-setup-screen.test.tsx` and `app-providers.test.tsx`: settings and app-wide integration.
 - `plugins/withMomoraWidget.test.ts`: native generation configuration.
 - `modules/momora-widget/android/src/test/java/expo/modules/momorawidget/WidgetManifestParserTest.kt`: native manifest/lease validation.

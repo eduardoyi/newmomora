@@ -168,6 +168,11 @@ export function useGalleryImportEntryStatus(options: { enabled?: boolean } = {})
     void reloadCheckpoint();
   }, [reloadCheckpoint]);
 
+  // The driver only notifies on a real change and keeps the same state
+  // reference otherwise (gallery-import-driver.ts setState), so React's
+  // same-reference bail-out here means this hook (mounted on the Timeline and
+  // Settings, which stay mounted under the tab bar) re-renders only on genuine
+  // phase/run/pause/error transitions, not on every runner progress event.
   useEffect(() => subscribeGalleryImportDriver(setDriverState), []);
 
   // The checkpoint is loaded once per user/family above, but this hook lives

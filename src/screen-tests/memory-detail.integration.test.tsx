@@ -39,9 +39,20 @@ const mockSearchParams: { id: string; comments?: string; mediaIndex?: string } =
   id: 'memory-1',
 };
 
+// The native-stack `transitionEnd` listeners the screen registers; a test fires
+// them to finish the push animation.
+const mockTransitionEndListeners = new Set<() => void>();
+const mockNavigation = {
+  addListener: jest.fn((_event: string, listener: () => void) => {
+    mockTransitionEndListeners.add(listener);
+    return () => mockTransitionEndListeners.delete(listener);
+  }),
+};
+
 jest.mock('expo-router', () => ({
   router: { push: jest.fn() },
   useLocalSearchParams: () => mockSearchParams,
+  useNavigation: () => mockNavigation,
 }));
 
 jest.mock('expo-symbols', () => ({
@@ -288,6 +299,54 @@ describe('MemoryDetailScreen hierarchy', () => {
     expect(mockedCarousel.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ initialIndex: expectedInitialIndex }),
     );
+  });
+});
+
+describe('MemoryDetailScreen video playback during the push transition', () => {
+  const videoMemory = {
+    ...baseMemory,
+    mediaAssets: [
+      { id: 'asset-1', object_key: 'clip.mp4', content_type: 'video/mp4', position: 0 },
+    ],
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    mockTransitionEndListeners.clear();
+    mockSearchParams.mediaIndex = undefined;
+    mockedUseMemory.mockReturnValue({ data: videoMemory, isLoading: false, isError: false });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  const lastCarouselProps = () => {
+    const calls = (MemoryMediaCarousel as jest.Mock).mock.calls;
+    return calls[calls.length - 1][0];
+  };
+
+  it('defers playback until the native-stack transitionEnd event', () => {
+    renderScreen();
+    expect(lastCarouselProps().isPlaybackDeferred).toBe(true);
+
+    act(() => {
+      mockTransitionEndListeners.forEach((listener) => listener());
+    });
+
+    expect(lastCarouselProps().isPlaybackDeferred).toBe(false);
+  });
+
+  it('falls back to a timer when no transition event ever fires', () => {
+    renderScreen();
+    expect(lastCarouselProps().isPlaybackDeferred).toBe(true);
+
+    act(() => {
+      jest.advanceTimersByTime(600);
+    });
+
+    expect(lastCarouselProps().isPlaybackDeferred).toBe(false);
   });
 });
 

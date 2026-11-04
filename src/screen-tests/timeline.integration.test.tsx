@@ -72,8 +72,9 @@ jest.mock('@/hooks/useMemoryMonthCounts', () => ({
 }));
 jest.mock('@/components/calendar-month-picker-sheet', () => ({ CalendarMonthPickerSheet: () => null }));
 // The Calendar view's range query -- covered by timeline-month-jump.integration.test.tsx.
+const mockCalendarMemories: unknown[] = [];
 jest.mock('@/hooks/useCalendarMemories', () => ({
-  useCalendarMemoriesInRange: () => ({ data: [], refetch: jest.fn() }),
+  useCalendarMemoriesInRange: () => ({ data: mockCalendarMemories, refetch: jest.fn() }),
 }));
 // The header glyph/drawer are gone (owner decision: the activity bell is the
 // one re-entry point) -- this flag defaults on here so the empty-state and
@@ -101,11 +102,17 @@ jest.mock('@/hooks/useLookingBackPackages', () => ({
 jest.mock('@/hooks/useLookingBackSession', () => ({
   useLookingBackSession: () => ({ savePackageSnapshot: jest.fn() }),
 }));
+// A fresh result object per call (the pre-memoization worst case) but stable
+// callbacks, like the real hook's useCallbacks: the timeline must key
+// renderItem on the individual callbacks, never on the whole result.
+const mockIsTargetReported = () => false;
+const mockIsUserBlocked = () => false;
+const mockRevealTarget = jest.fn();
 jest.mock('@/hooks/useContentSafety', () => ({
   useContentSafety: () => ({
     isLoading: false, isError: false,
-    isTargetReported: () => false, isUserBlocked: () => false,
-    revealTarget: jest.fn(), revealBlockedUser: jest.fn(), refetch: jest.fn(),
+    isTargetReported: mockIsTargetReported, isUserBlocked: mockIsUserBlocked,
+    revealTarget: mockRevealTarget, revealBlockedUser: jest.fn(), refetch: jest.fn(),
   }),
 }));
 // The bell's unread dot -- mocked (rather than exercised for real) because
@@ -295,6 +302,42 @@ describe('TimelineScreen', () => {
 
       mockSetTimelineFocused(true);
       expect(lastVideoActive()).toBe(true);
+    });
+  });
+
+  // MemoryCard is React.memo'd, but it can only bail out if the props the
+  // timeline passes are referentially stable. An inline onShowIllustration
+  // closure (and renderItem depending on the whole contentSafety result) made
+  // every visible card re-render on any TimelineScreen render.
+  describe('memoized card props', () => {
+    const mockedMemoryCard = MemoryCard as unknown as jest.Mock;
+
+    it('hands MemoryCard referentially identical props across screen re-renders', () => {
+      mockSetTimelineFocused(true);
+      const { rerender } = render(<TimelineScreen />);
+      const before = mockedMemoryCard.mock.calls.at(-1)?.[0];
+      expect(before).toBeDefined();
+
+      // A blur/focus flip re-renders TimelineScreen (isTimelineFocused state)
+      // while no video is active, so no card prop may actually change; the
+      // real React.memo only bails out if every prop is Object.is-equal.
+      mockSetTimelineFocused(false);
+      rerender(<TimelineScreen />);
+      mockSetTimelineFocused(true);
+      rerender(<TimelineScreen />);
+
+      const after = mockedMemoryCard.mock.calls.at(-1)?.[0];
+      for (const key of Object.keys(before)) {
+        expect([key, Object.is(after[key], before[key])]).toEqual([key, true]);
+      }
+    });
+
+    it('passes a stable id-based onShowIllustration that reveals the illustration version', () => {
+      render(<TimelineScreen />);
+      const props = mockedMemoryCard.mock.calls.at(-1)?.[0];
+      expect(typeof props.onShowIllustration).toBe('function');
+      props.onShowIllustration('memory-1', 'generation-a');
+      expect(mockRevealTarget).toHaveBeenCalledWith('memory_illustration', 'memory-1', 'generation-a');
     });
   });
 

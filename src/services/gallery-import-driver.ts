@@ -91,6 +91,14 @@ let tickTimer: ReturnType<typeof setInterval> | null = null;
 let listenersStarted = false;
 
 function setState(patch: Partial<GalleryImportDriverState>): void {
+  // Shallow-compare first (docs/plans/performance-optimizations.md): the live
+  // progress subscription below calls this on EVERY runner progress event,
+  // almost always with the same phase/runId/isActive, and a no-op patch used
+  // to mint a new state object and wake every listener (each one a React
+  // setState on a mounted Timeline/Settings). Keep the existing reference and
+  // stay silent when nothing actually changed.
+  const keys = Object.keys(patch) as (keyof GalleryImportDriverState)[];
+  if (keys.every((key) => Object.is(state[key], patch[key]))) return;
   state = { ...state, ...patch };
   for (const listener of listeners) listener(state);
 }

@@ -1,6 +1,9 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, waitFor } from '@testing-library/react-native';
+import type { ReactElement } from 'react';
 
 import WidgetEntryRoute from '../../app/widget';
+import { memoryDetailQueryKey } from '@/hooks/queryKeys';
 
 const mockReplace = jest.fn();
 const mockFetch = jest.fn();
@@ -30,25 +33,43 @@ jest.mock('@/services/widget-memories', () => ({
   fetchWidgetRetainedMemoriesByIds: (...args: unknown[]) => mockFetch(...args),
 }));
 
+let queryClient: QueryClient;
+
+// Every render goes through the same client so cache assertions see what the
+// route wrote.
+function renderRoute(screen?: ReturnType<typeof render>) {
+  const tree: ReactElement = (
+    <QueryClientProvider client={queryClient}>
+      <WidgetEntryRoute />
+    </QueryClientProvider>
+  );
+  if (screen) {
+    screen.rerender(tree);
+    return screen;
+  }
+  return render(tree);
+}
+
 beforeEach(() => {
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   jest.clearAllMocks();
   mockUser = { id: 'account-a', is_anonymous: false };
   mockFamilyId = 'family-a';
   mockMemberships = [{ familyId: 'family-a' }, { familyId: 'family-b' }];
   mockParams = { memoryId: 'memory-a', familyId: 'family-a' };
-  mockFetch.mockResolvedValue({ data: [{ id: 'memory-a' }], error: null });
+  mockFetch.mockResolvedValue({ data: [{ id: 'memory-a', family_id: 'family-a' }], error: null });
   mockSetActiveFamily.mockResolvedValue(undefined);
 });
 
 it('opens a validated same-family memory', async () => {
-  render(<WidgetEntryRoute />);
+  renderRoute();
   await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
   expect(mockFetch).toHaveBeenCalledWith('family-a', ['memory-a']);
 });
 
 it('rejects a family the account does not belong to before fetching content', async () => {
   mockParams.familyId = 'family-forbidden';
-  render(<WidgetEntryRoute />);
+  renderRoute();
   await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
   expect(mockFetch).not.toHaveBeenCalled();
   expect(mockSetActiveFamily).not.toHaveBeenCalled();
@@ -56,7 +77,7 @@ it('rejects a family the account does not belong to before fetching content', as
 
 it('does not replay a target while signed out', async () => {
   mockUser = null;
-  render(<WidgetEntryRoute />);
+  renderRoute();
   await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(auth)/login'));
   expect(mockFetch).not.toHaveBeenCalled();
 });
@@ -65,11 +86,11 @@ it('completes a cross-family tap when switching families rerenders the route', a
   mockParams.familyId = 'family-b';
   let finishSwitch!: () => void;
   mockSetActiveFamily.mockImplementation(() => new Promise<void>((resolve) => { finishSwitch = resolve; }));
-  const screen = render(<WidgetEntryRoute />);
+  const screen = renderRoute();
   await waitFor(() => expect(mockSetActiveFamily).toHaveBeenCalledWith('family-b'));
   await act(async () => {
     mockFamilyId = 'family-b';
-    screen.rerender(<WidgetEntryRoute />);
+    renderRoute(screen);
   });
   await act(async () => { finishSwitch(); });
   await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
@@ -78,12 +99,92 @@ it('completes a cross-family tap when switching families rerenders the route', a
 it('does not navigate to a late memory response after account replacement', async () => {
   let finishFetch!: (value: unknown) => void;
   mockFetch.mockImplementation(() => new Promise((resolve) => { finishFetch = resolve; }));
-  const screen = render(<WidgetEntryRoute />);
+  const screen = renderRoute();
   await waitFor(() => expect(mockFetch).toHaveBeenCalled());
   await act(async () => {
     mockUser = { id: 'account-b', is_anonymous: false };
-    screen.rerender(<WidgetEntryRoute />);
+    renderRoute(screen);
   });
-  await act(async () => { finishFetch({ data: [{ id: 'memory-a' }], error: null }); });
+  await act(async () => { finishFetch({ data: [{ id: 'memory-a', family_id: 'family-a' }], error: null }); });
   expect(mockReplace).not.toHaveBeenCalledWith('/(app)/memory/memory-a');
+});
+
+it('seeds the detail query with the validated memory so the detail screen does not refetch it', async () => {
+  const validated = { id: 'memory-a', family_id: 'family-a', content: 'validated row' };
+  mockFetch.mockResolvedValue({ data: [validated], error: null });
+  renderRoute();
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+  // Same key useMemory reads: [memories, familyId, 'detail', memoryId].
+  expect(queryClient.getQueryData(memoryDetailQueryKey('family-a', 'memory-a'))).toBe(validated);
+});
+
+it('does not seed the detail cache when validation fails', async () => {
+  mockFetch.mockResolvedValue({ data: [], error: null });
+  renderRoute();
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
+  expect(queryClient.getQueryData(memoryDetailQueryKey('family-a', 'memory-a'))).toBeUndefined();
+});
+
+it('opens immediately from a cached detail entry without the validation fetch', async () => {
+  queryClient.setQueryData(
+    memoryDetailQueryKey('family-a', 'memory-a'),
+    { id: 'memory-a', family_id: 'family-a' },
+  );
+  renderRoute();
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+  expect(mockFetch).not.toHaveBeenCalled();
+});
+
+it('still requires current membership before using a cached detail entry', async () => {
+  queryClient.setQueryData(
+    memoryDetailQueryKey('family-forbidden', 'memory-a'),
+    { id: 'memory-a', family_id: 'family-forbidden' },
+  );
+  mockParams.familyId = 'family-forbidden';
+  renderRoute();
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/(tabs)/timeline'));
+  expect(mockReplace).not.toHaveBeenCalledWith('/(app)/memory/memory-a');
+});
+
+it('ignores a cached entry whose family_id disagrees with the target', async () => {
+  // A cached row whose family_id disagrees with the widget target is not proof.
+  queryClient.setQueryData(
+    memoryDetailQueryKey('family-a', 'memory-a'),
+    { id: 'memory-a', family_id: 'family-other' },
+  );
+  renderRoute();
+  await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('family-a', ['memory-a']));
+});
+
+it('starts the validation fetch in parallel with the family switch and seeds after both settle', async () => {
+  mockParams.familyId = 'family-b';
+  const validated = { id: 'memory-a', family_id: 'family-b' };
+  mockFetch.mockResolvedValue({ data: [validated], error: null });
+  let finishSwitch!: () => void;
+  mockSetActiveFamily.mockImplementation(() => new Promise<void>((resolve) => { finishSwitch = resolve; }));
+  renderRoute();
+  // The fetch is issued while the family switch is still pending.
+  await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('family-b', ['memory-a']));
+  expect(mockSetActiveFamily).toHaveBeenCalledWith('family-b');
+  expect(mockReplace).not.toHaveBeenCalled();
+  expect(queryClient.getQueryData(memoryDetailQueryKey('family-b', 'memory-a'))).toBeUndefined();
+  await act(async () => { finishSwitch(); });
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+  expect(queryClient.getQueryData(memoryDetailQueryKey('family-b', 'memory-a'))).toBe(validated);
+});
+
+it('switches family before opening from the cached fast path', async () => {
+  mockParams.familyId = 'family-b';
+  queryClient.setQueryData(
+    memoryDetailQueryKey('family-b', 'memory-a'),
+    { id: 'memory-a', family_id: 'family-b' },
+  );
+  let finishSwitch!: () => void;
+  mockSetActiveFamily.mockImplementation(() => new Promise<void>((resolve) => { finishSwitch = resolve; }));
+  renderRoute();
+  await waitFor(() => expect(mockSetActiveFamily).toHaveBeenCalledWith('family-b'));
+  expect(mockReplace).not.toHaveBeenCalled();
+  await act(async () => { finishSwitch(); });
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/(app)/memory/memory-a'));
+  expect(mockFetch).not.toHaveBeenCalled();
 });

@@ -1,4 +1,5 @@
 import { fireEvent, render, type RenderResult } from '@testing-library/react-native';
+import { ActivityIndicator } from 'react-native';
 import { createVideoPlayer } from 'expo-video';
 
 import { MemoryMediaCarousel } from '@/components/memory-media-carousel';
@@ -625,6 +626,7 @@ describe('MemoryMediaCarousel', () => {
       expect(mockedUseMediaUrls).toHaveBeenCalledWith(
         ['user/memory/media/photo-1-preview.jpg'],
         undefined,
+        { seedFromCache: true },
       );
       expect(getByTestId('memory-media-image-asset-1').props.source).toEqual([{
         uri: 'https://example.com/photo-1-preview.jpg',
@@ -637,19 +639,25 @@ describe('MemoryMediaCarousel', () => {
 
       measureCarousel(getByTestId);
 
-      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/photo-1.jpg'], undefined);
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/photo-1.jpg'], undefined, {
+        seedFromCache: true,
+      });
       expect(getByTestId('memory-media-image-asset-1').props.source).toEqual([{
         uri: 'https://example.com/photo-1.jpg',
         cacheKey: 'user/memory/media/photo-1.jpg:',
       }]);
     });
 
-    it('ignores the preview key when preferPreview is false (default -- detail/full-screen)', () => {
+    it('displays the original (preview only as a placeholder) when preferPreview is false (default -- detail/full-screen)', () => {
       const { getByTestId } = render(<MemoryMediaCarousel assets={[assetWithPreview]} />);
 
       measureCarousel(getByTestId);
 
-      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/photo-1.jpg'], undefined);
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(
+        ['user/memory/media/photo-1.jpg', 'user/memory/media/photo-1-preview.jpg'],
+        undefined,
+        { seedFromCache: true },
+      );
     });
   });
 
@@ -681,6 +689,7 @@ describe('MemoryMediaCarousel', () => {
       expect(mockedUseMediaUrls).toHaveBeenCalledWith(
         ['user/memory/media/video-1.mp4', 'user/memory/media/video-1-preview.jpg'],
         undefined,
+        { seedFromCache: true },
       );
       // aspect_ratio is already persisted, so no legacy ratio measurement is
       // needed -- the runtime extractor must not be asked to fetch/decode
@@ -731,7 +740,9 @@ describe('MemoryMediaCarousel', () => {
       );
       measureCarousel(getByTestId);
 
-      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/video-1.mp4'], undefined);
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(['user/memory/media/video-1.mp4'], undefined, {
+        seedFromCache: true,
+      });
       expect(mockedUseVideoThumbnailResult).toHaveBeenCalledWith(
         'https://example.com/video-1.mp4',
         expect.any(String),
@@ -754,5 +765,229 @@ describe('MemoryMediaCarousel', () => {
 
     fireEvent(image, 'error', { nativeEvent: { error: 'expired' } });
     expect(mockRefetchMediaUrls).toHaveBeenCalledTimes(1);
+  });
+  describe('page window (performance plan Workstream C)', () => {
+    const manyAssets = Array.from({ length: 6 }, (_, i) => ({
+      ...assets[0],
+      id: `asset-${i + 1}`,
+      object_key: `user/memory/media/photo-${i + 1}.jpg`,
+    }));
+    const manyUrls = Object.fromEntries(
+      manyAssets.map((a) => [a.object_key, `https://example.com/${a.id}.jpg`]),
+    );
+
+    beforeEach(() => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: manyUrls,
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+    });
+
+    function mountedPages(queryByTestId: RenderResult['queryByTestId']) {
+      return manyAssets
+        .map((a) => a.id)
+        .filter((id) => queryByTestId(`memory-media-image-${id}`) !== null);
+    }
+
+    function swipeTo(getByTestId: RenderResult['getByTestId'], page: number) {
+      fireEvent(getByTestId('memory-media-carousel-scroll'), 'momentumScrollEnd', {
+        nativeEvent: { contentOffset: { x: page * 320, y: 0 } },
+      });
+    }
+
+    it('only mounts the first, active and neighbouring pages', () => {
+      const { getByTestId, queryByTestId } = render(<MemoryMediaCarousel assets={manyAssets} />);
+      measureCarousel(getByTestId);
+
+      expect(mountedPages(queryByTestId)).toEqual(['asset-1', 'asset-2']);
+
+      swipeTo(getByTestId, 3);
+
+      // 0 (always), 2-4 (window around page 3); 1 was never visited.
+      expect(mountedPages(queryByTestId)).toEqual(['asset-1', 'asset-3', 'asset-4', 'asset-5']);
+    });
+
+    it('keeps pages the user has been on mounted so swiping back does not flicker', () => {
+      const { getByTestId, queryByTestId } = render(<MemoryMediaCarousel assets={manyAssets} />);
+      measureCarousel(getByTestId);
+
+      swipeTo(getByTestId, 3);
+      swipeTo(getByTestId, 5);
+
+      // Visited: 0, 3, 5. Window around 5: 4, 5. Page 2 (index 1) never visited.
+      expect(mountedPages(queryByTestId)).toEqual(['asset-1', 'asset-4', 'asset-5', 'asset-6']);
+    });
+
+    it('opens an initial page with its neighbours (and the first page) mounted', () => {
+      const { getByTestId, queryByTestId } = render(
+        <MemoryMediaCarousel assets={manyAssets} initialIndex={4} />,
+      );
+      measureCarousel(getByTestId);
+
+      expect(mountedPages(queryByTestId)).toEqual(['asset-1', 'asset-4', 'asset-5', 'asset-6']);
+    });
+
+    it('prioritises the page on screen over its neighbours', () => {
+      const { getByTestId } = render(<MemoryMediaCarousel assets={manyAssets} />);
+      measureCarousel(getByTestId);
+
+      expect(getByTestId('memory-media-image-asset-1').props.priority).toBe('high');
+      expect(getByTestId('memory-media-image-asset-2').props.priority).toBe('low');
+    });
+
+    it('keeps one batched media-urls request for every page, mounted or not', () => {
+      render(<MemoryMediaCarousel assets={manyAssets} cacheVersion="v1" />);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(
+        expect.arrayContaining(manyAssets.map((a) => a.object_key)),
+        'v1',
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('preview placeholder on the detail screen (performance plan C6)', () => {
+    const photo = {
+      ...assets[0],
+      preview_object_key: 'user/memory/media/photo-1-preview.jpg',
+    };
+    const PREVIEW_URL = 'https://example.com/photo-1-preview.jpg';
+    const ORIGINAL_URL = 'https://example.com/photo-1.jpg';
+
+    it('paints the cached preview instead of a spinner while the original URL is unsigned', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: { 'user/memory/media/photo-1-preview.jpg': PREVIEW_URL },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+      const { getByTestId, UNSAFE_queryByType } = render(
+        <MemoryMediaCarousel assets={[photo]} cacheVersion="2026-07-01T00:00:00Z" />,
+      );
+      measureCarousel(getByTestId);
+
+      expect(UNSAFE_queryByType(ActivityIndicator)).toBeNull();
+      // Same cacheKey the timeline card pins this preview under:
+      // `${previewKey}:${memory.updated_at}` -- an expo-image disk-cache hit.
+      expect(getByTestId('memory-media-image-asset-1').props.source).toEqual([{
+        uri: PREVIEW_URL,
+        cacheKey: 'user/memory/media/photo-1-preview.jpg:2026-07-01T00:00:00Z',
+      }]);
+    });
+
+    it('upgrades to the original with the preview as placeholder, still cached on the original key', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: {
+          'user/memory/media/photo-1.jpg': ORIGINAL_URL,
+          'user/memory/media/photo-1-preview.jpg': PREVIEW_URL,
+        },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[photo]} cacheVersion="v1" />,
+      );
+      measureCarousel(getByTestId);
+
+      const image = getByTestId('memory-media-image-asset-1');
+      expect(image.props.source).toEqual([
+        { uri: ORIGINAL_URL, cacheKey: 'user/memory/media/photo-1.jpg:v1' },
+      ]);
+      expect(image.props.placeholder).toEqual([
+        { uri: PREVIEW_URL, cacheKey: 'user/memory/media/photo-1-preview.jpg:v1' },
+      ]);
+      expect(image.props.transition).toEqual({ duration: 150 });
+    });
+
+    it('still shows the spinner when there is neither an original nor a preview URL yet', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: {},
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+      const { getByTestId, UNSAFE_queryByType } = render(<MemoryMediaCarousel assets={[photo]} />);
+      measureCarousel(getByTestId);
+
+      expect(UNSAFE_queryByType(ActivityIndicator)).not.toBeNull();
+    });
+
+    it('requests the preview alongside the original and seeds from the cache', () => {
+      render(<MemoryMediaCarousel assets={[photo]} cacheVersion="v1" />);
+
+      expect(mockedUseMediaUrls).toHaveBeenCalledWith(
+        [photo.object_key, 'user/memory/media/photo-1-preview.jpg'],
+        'v1',
+        { seedFromCache: true },
+      );
+    });
+
+    it('list surfaces (preferPreview) display the preview directly, with no placeholder', () => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: { 'user/memory/media/photo-1-preview.jpg': PREVIEW_URL },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+      const { getByTestId } = render(
+        <MemoryMediaCarousel assets={[photo]} cacheVersion="v1" preferPreview />,
+      );
+      measureCarousel(getByTestId);
+
+      const image = getByTestId('memory-media-image-asset-1');
+      expect(image.props.source).toEqual([
+        { uri: PREVIEW_URL, cacheKey: 'user/memory/media/photo-1-preview.jpg:v1' },
+      ]);
+      expect(image.props.placeholder).toEqual([]);
+      expect(mockedUseMediaUrls.mock.calls[0][0]).toEqual(['user/memory/media/photo-1-preview.jpg']);
+    });
+
+    it('never treats a video poster as a placeholder source', () => {
+      const video = {
+        ...assets[0],
+        id: 'asset-video',
+        object_key: 'user/memory/media/video-1.mp4',
+        content_type: 'video/mp4',
+        preview_object_key: 'user/memory/media/video-1-poster.jpg',
+      };
+      render(<MemoryMediaCarousel assets={[video]} />);
+
+      // The poster is requested once (as the poster), not twice.
+      expect(mockedUseMediaUrls.mock.calls[0][0]).toEqual([
+        'user/memory/media/video-1.mp4',
+        'user/memory/media/video-1-poster.jpg',
+      ]);
+    });
+  });
+
+  describe('isPlaybackDeferred (push-transition gating)', () => {
+    const videoAsset = {
+      ...assets[0],
+      id: 'asset-video',
+      object_key: 'user/memory/media/video-1.mp4',
+      content_type: 'video/mp4',
+    };
+
+    beforeEach(() => {
+      mockedUseMediaUrls.mockReturnValue({
+        data: { 'user/memory/media/video-1.mp4': 'https://example.com/video-1.mp4' },
+        refetch: mockRefetchMediaUrls,
+      } as ReturnType<typeof useMediaUrls>);
+      mockedUseVideoThumbnailResult.mockReturnValue({
+        uri: 'file:///video-frame.jpg',
+        width: 1280,
+        height: 720,
+      });
+    });
+
+    it('holds the player and play() back, keeping the poster (no play overlay), until released', () => {
+      const { getByTestId, queryByTestId, rerender } = render(
+        <MemoryMediaCarousel assets={[videoAsset]} isPlaybackDeferred />,
+      );
+      measureCarousel(getByTestId);
+
+      expect(queryByTestId('memory-media-video')).toBeNull();
+      expect(createVideoPlayer).not.toHaveBeenCalled();
+      expect(mockVideoPlayer.play).not.toHaveBeenCalled();
+      expect(getByTestId('memory-media-video-thumbnail-asset-video')).toBeTruthy();
+
+      rerender(<MemoryMediaCarousel assets={[videoAsset]} isPlaybackDeferred={false} />);
+
+      expect(getByTestId('memory-media-video')).toBeTruthy();
+      expect(mockVideoPlayer.play).toHaveBeenCalled();
+    });
   });
 });

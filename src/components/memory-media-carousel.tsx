@@ -63,6 +63,30 @@ interface MemoryMediaCarouselProps {
    * source always stays its own object_key. See resolveVideoPosterKey.
    */
   preferPreview?: boolean;
+  /**
+   * Keeps the active VIDEO page showing its poster instead of mounting the
+   * player (and calling play()) yet. The detail screen sets it until the
+   * native-stack push transition ends, so a video doesn't start decoding and
+   * playing audio mid-animation. Unlike `isActive={false}` it leaves the
+   * paused-state play overlay off: the poster just sits there, then the video
+   * takes over. Photos are unaffected.
+   */
+  isPlaybackDeferred?: boolean;
+}
+
+// Decode-in-place upgrade from the preview placeholder to the original.
+const PREVIEW_UPGRADE_TRANSITION_MS = 150;
+
+/**
+ * Which pages get an <Image> (and therefore start a download): the first
+ * page, the active page and its immediate neighbours, and any page the user
+ * has already been on (so swiping back never re-mounts/flickers). Everything
+ * else keeps its sized container -- scroll geometry and paging are unchanged
+ * -- but renders nothing, so a 10-photo memory doesn't pull 10 full-size
+ * originals in parallel against the one the user is looking at.
+ */
+function isPageInWindow(index: number, activeIndex: number, visited: ReadonlySet<number>) {
+  return index === 0 || Math.abs(index - activeIndex) <= 1 || visited.has(index);
 }
 
 function clampIndex(index: number, assetCount: number) {
@@ -227,24 +251,34 @@ function VideoAsset({
 function MediaPage({
   asset,
   isActive,
+  isCurrentPage,
+  isPlaybackDeferred,
   cacheKey,
   mutedVideos,
   videoTapToToggle,
   onNaturalRatio,
   onUrlError,
   url,
+  placeholder,
   posterUrl,
   shouldLoadVideoThumbnail,
   shouldMeasureNaturalRatio,
 }: {
   asset: MemoryMediaAsset;
   isActive: boolean;
+  /** This page is the one on screen (regardless of the carousel's `isActive`);
+   * drives download priority. */
+  isCurrentPage: boolean;
+  isPlaybackDeferred: boolean;
   cacheKey: string;
   mutedVideos: boolean;
   videoTapToToggle: boolean;
   onNaturalRatio: (objectKey: string, ratio: number) => void;
   onUrlError: () => void;
   url?: string;
+  /** Photos on the detail screen: the list-sized preview, already on disk
+   * from the timeline, painted while the original downloads. */
+  placeholder?: { uri: string; cacheKey: string };
   posterUrl?: string;
   shouldLoadVideoThumbnail: boolean;
   shouldMeasureNaturalRatio: boolean;
@@ -288,7 +322,9 @@ function MediaPage({
     }
   }, [isActive]);
 
-  if (!url) {
+  // A photo with a preview to show never needs the spinner, even before its
+  // original's URL is signed.
+  if (!url && !(placeholder && !isVideo)) {
     return (
       <View style={[styles.page, styles.placeholder]}>
         <ActivityIndicator color={colors.primary} />
@@ -296,10 +332,10 @@ function MediaPage({
     );
   }
 
-  if (isVideo) {
+  if (isVideo && url) {
     return (
       <View style={styles.page}>
-        {isActive ? (
+        {isActive && !isPlaybackDeferred ? (
           <VideoAsset
             hasPreferredNaturalRatio={!shouldMeasureNaturalRatio || videoThumbnail !== null}
             isActive={isActive}
@@ -333,6 +369,13 @@ function MediaPage({
     );
   }
 
+  // Until the original's URL is signed, the preview IS the source (same
+  // cacheKey the timeline card stored it under, so it's a disk-cache hit).
+  // Once the original arrives it takes over, with the preview as its
+  // placeholder so the swap is a short cross-fade rather than a blank.
+  const source = url ? { uri: url, cacheKey } : placeholder;
+  const upgradePlaceholder = url ? placeholder : undefined;
+
   return (
     <Image
       contentFit="contain"
@@ -346,9 +389,13 @@ function MediaPage({
           reportNaturalRatio(ratio);
         }
       }}
-      source={{ uri: url, cacheKey }}
+      placeholder={upgradePlaceholder}
+      placeholderContentFit="contain"
+      priority={isCurrentPage ? 'high' : 'low'}
+      source={source}
       style={styles.page}
       testID={`memory-media-image-${asset.id}`}
+      transition={upgradePlaceholder ? PREVIEW_UPGRADE_TRANSITION_MS : undefined}
     />
   );
 }
@@ -363,11 +410,16 @@ export function MemoryMediaCarousel({
   style,
   videoTapToToggle = false,
   preferPreview = false,
+  isPlaybackDeferred = false,
   initialIndex = 0,
   onActiveIndexChange,
 }: MemoryMediaCarouselProps) {
   const startIndex = clampIndex(initialIndex, assets.length);
   const [activeIndex, setActiveIndex] = useState(startIndex);
+  // Pages the user has been on -- they stay mounted (see isPageInWindow).
+  const [visitedPages, setVisitedPages] = useState<ReadonlySet<number>>(
+    () => new Set([startIndex]),
+  );
   const [width, setWidth] = useState(0);
   const [naturalRatios, setNaturalRatios] = useState<Record<string, number>>({});
   const scrollRef = useRef<ScrollView>(null);
@@ -391,9 +443,26 @@ export function MemoryMediaCarousel({
   const posterKeys = assets
     .map((asset) => (isVideoContentType(asset.content_type) ? resolveVideoPosterKey(asset) : null))
     .filter((key): key is string => Boolean(key));
+  // Detail screen (preferPreview=false): a photo whose original is shown
+  // also gets its list-sized preview resolved, to paint as a placeholder
+  // while the multi-MB original downloads (decision C6 still holds -- the
+  // detail ENDS on the original). Same single batched signing call; the
+  // preview URLs are usually already in the query cache from the timeline,
+  // so `seedFromCache` hands them back on the first render, before this
+  // query's own request (which also has to sign the originals) lands.
+  const placeholderKeys = assets.map((asset, index) => {
+    if (isVideoContentType(asset.content_type)) return null;
+    const previewKey = resolveMediaDisplayKey(asset, true);
+    return previewKey !== displayKeys[index] ? previewKey : null;
+  });
   const { data: urls = {}, refetch: refetchMediaUrls } = useMediaUrls(
-    [...displayKeys, ...posterKeys],
+    [
+      ...displayKeys,
+      ...posterKeys,
+      ...placeholderKeys.filter((key): key is string => Boolean(key)),
+    ],
     cacheVersion,
+    { seedFromCache: true },
   );
   const showPaging = assets.length > 1;
 
@@ -446,6 +515,7 @@ export function MemoryMediaCarousel({
 
     const nextIndex = Math.round(event.nativeEvent.contentOffset.x / width);
     setActiveIndex(nextIndex);
+    setVisitedPages((prev) => (prev.has(nextIndex) ? prev : new Set(prev).add(nextIndex)));
     onActiveIndexChange?.(nextIndex);
   };
 
@@ -523,12 +593,26 @@ export function MemoryMediaCarousel({
             ? resolveVideoPosterKey(asset)
             : null;
 
+          const placeholderKey = placeholderKeys[index];
+          const placeholderUrl = placeholderKey ? urls[placeholderKey] : undefined;
+
           return (
             <View key={asset.id} style={[styles.pageWrap, { width: width || 1 }]}>
-              {width > 0 ? (
+              {width > 0 && isPageInWindow(index, activeIndex, visitedPages) ? (
                 <MediaPage
                   asset={asset}
+                  // MUST match the cacheKey the timeline card stores this
+                  // preview under (`${previewKey}:${memory.updated_at}`, i.e.
+                  // this same template with preferPreview) for the
+                  // placeholder to be a disk-cache hit.
+                  placeholder={
+                    placeholderKey && placeholderUrl
+                      ? { uri: placeholderUrl, cacheKey: `${placeholderKey}:${cacheVersion ?? ''}` }
+                      : undefined
+                  }
                   cacheKey={`${displayKeys[index]}:${cacheVersion ?? ''}`}
+                  isCurrentPage={index === activeIndex}
+                  isPlaybackDeferred={isPlaybackDeferred}
                   isActive={isActive && index === activeIndex}
                   mutedVideos={mutedVideos}
                   onNaturalRatio={handleNaturalRatio}

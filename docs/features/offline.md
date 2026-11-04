@@ -246,6 +246,30 @@ never touches the network at all, and a miss just fails exactly like having
 no URL would. Excluding it would silently cancel out the whole point of
 pinning `cacheKey` to the object key.
 
+### Cold-start query gates that are also on the allow-list (2026-11-04)
+
+Three more bases are persisted purely so a cold start does not block on a
+network round trip before any UI shows; each is a restored-then-revalidated
+(stale) read, never a source of truth:
+
+- `family-billing-status` — satisfies `app/index.tsx`'s billing gate. Only a
+  genuine success payload is dehydrated: `shouldDehydrateQuery` rejects a
+  resolved `{ data: null, error }` result and an `is_offline: true` fallback.
+  See [subscriptions.md](subscriptions.md) "Cold start and persisted status".
+- `content-reports` and `blocked-family-accounts` (`useContentSafety`) — the
+  memory detail screen shows a full-screen spinner while these load, so a cold
+  open from a widget or notification waited on two network calls even with the
+  memory itself cached. Both are keyed by user + family and purged with the rest
+  of the cache. `content-safety-reveals` is deliberately NOT persisted: it is
+  session-only (a revealed hidden item must re-hide on the next launch).
+
+`revenuecat-offerings` stays unpersisted (store-customer specific). The shared
+bases live in `src/hooks/queryKeys.ts` because `query-persistence` cannot import
+the owning hooks (`use-auth` imports `query-persistence`); a drift test in
+`query-persistence.test.ts` pins the billing base to `use-billing`;
+`useContentSafety` imports its two bases from `queryKeys.ts`. Adding these keys did not
+bump `PERSISTED_QUERY_CACHE_BUSTER`: no previously persisted shape changed.
+
 ### cacheKey rationale (Workstream O5 — implemented by a different change)
 
 R2 signed URLs rotate hourly; `expo-image` caches by URI by default, so

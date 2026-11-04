@@ -91,6 +91,35 @@ Env vars (client):
 - `isUserNotFoundOtpError` currently keys off Supabase's `otp_disabled` error code (message "Signups not allowed for otp"), which is what GoTrue returns today when `shouldCreateUser: false` is rejected because the account doesn't exist. `user_not_found` is also treated as a match defensively, and there's a message-text fallback. **This is an assumption, not a documented contract** — verify against a real Supabase project before relying on it, and re-check if Supabase changes this behavior.
 - OTP codes expire after the window configured in the Supabase dashboard (see below) — expired/invalid codes surface as a `verifyOtp` error on `verify-otp.tsx`.
 
+### Provisional session (cold start, 2026-11-04)
+
+supabase-js's `getSession()` / `onAuthStateChange` only resolve after an
+expired access token (1h JWT, so most launches) has been refreshed over the
+network, which used to hold every gate (`app/index.tsx`, `(app)/_layout`,
+widget route) before the persisted query cache could render anything.
+`AuthProvider` therefore reads the raw session auth-js persisted
+(`AsyncStorage[sb-<project-ref>-auth-token]`; `supabase.auth.storageKey` at
+runtime, URL-derived fallback), and if it has an access token, refresh token and
+user id, exposes it as a provisional `Session` with `isLoading: false`. Rules:
+
+- auth-js always wins: any `getSession()` / `onAuthStateChange` session replaces
+  the provisional one, and a late storage read never overrides an auth result.
+- Nothing may read `session.access_token` from this context (the provisional
+  token can be expired). Services call `supabase.auth.getSession()`, which awaits
+  the refresh; the Supabase client's own requests do the same.
+- A null result ends the provisional session only if auth-js also emptied the
+  stored session (revoked refresh token) or emitted `SIGNED_OUT`; then the
+  existing purge effect clears the cache and the app redirects to login. A null
+  caused by a transient failure (offline: auth-js retries ~25s twice, ~50s total,
+  then reports null with a retryable error but keeps storage) leaves the
+  provisional session in place so the cached journal stays visible; the
+  auto-refresh ticker emits `TOKEN_REFRESHED` once back online. Previously that
+  case showed the splash for ~50s then bounced to login.
+- Anonymous provisional sessions behave like any anonymous session (no
+  analytics identify/reset). Malformed or incomplete stored JSON is ignored.
+- `BillingProvider` keys on the user id (not the user object) so swapping the
+  provisional session for the refreshed one does not reconfigure RevenueCat.
+
 ### Supabase dashboard (required)
 
 In [Auth → URL Configuration](https://supabase.com/dashboard/project/uglhonlaqkqvxcqudwlk/auth/url-configuration):
@@ -136,6 +165,7 @@ maestro test .maestro/flows/auth/app-review-access.yaml
 
 | Date | Change |
 |------|--------|
+| 2026-11-04 | `AuthProvider` hydrates a provisional session from AsyncStorage so cold start no longer waits on the access-token refresh (see "Provisional session"). |
 | 2026-08-01 | Fixed the keyboard covering login's "Sign in" button: the footer moved outside the scroll view onto the same `KeyboardStickyView` + native-inset + measured-footer-height mechanism `OnbShell` uses, extracted into `src/components/keyboard-sticky-shell.tsx` so onboarding and auth share one implementation. `AuthScreen` was rebuilt into the editorial shell (wordmark + Newsreader headline + subtitle) to match `login.tsx`'s look; `verify-otp.tsx`, `password.tsx` and `signup.tsx` now share it. `login.tsx` itself renders through `AuthScreen` instead of duplicating the composition. `AuthField`/`AuthInput`/`AuthButton`/`AuthErrorMessage` and their eight `app/(app)/` consumers are unchanged. |
 | 2026-08-01 | OTP email subject changed from `[Momora] Your sign-in link` to `{{ .Token }} is your Momora code`; canonical subject/body recorded above. |
 | 2026-07-25 | Auth screens adopt the keyboard-controller scroll container so Android stops covering the submit buttons. |

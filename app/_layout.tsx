@@ -76,7 +76,8 @@ export default function RootLayout() {
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(onboarding)" />
           <Stack.Screen name="(app)" />
-          <Stack.Screen name="widget" />
+          {/* Transient redirect shim: a push animation here would be followed by a second animation for the replace to the memory. */}
+          <Stack.Screen name="widget" options={{ animation: 'none' }} />
         </Stack>
         <IncomingShareRouter />
         <QuickActionRouter />

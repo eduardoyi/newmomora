@@ -253,4 +253,16 @@ describe('GalleryWalk', () => {
     const { queryByTestId } = renderWalk({ urls: {} });
     expect(queryByTestId('memory-media-image-asset-0')).toBeNull();
   });
+
+  it('paints each piece\'s Timeline preview while its original URL is unsigned (decision C6)', () => {
+    const withPreview = ASSETS.map((a) => ({ ...a, preview_object_key: `${a.object_key}-preview` }));
+    const { getByTestId } = renderWalk({
+      assets: withPreview,
+      urls: { 'scan-0.jpg-preview': 'https://r2.test/scan-0-preview' },
+    });
+
+    expect(getByTestId('memory-media-image-asset-0').props.source).toEqual([
+      { uri: 'https://r2.test/scan-0-preview', cacheKey: 'scan-0.jpg-preview' },
+    ]);
+  });
 });

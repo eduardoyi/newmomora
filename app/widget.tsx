@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
@@ -5,6 +6,8 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { colors, fonts, spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { memoryDetailQueryKey } from '@/hooks/queryKeys';
+import type { MemoryWithTags } from '@/services/memories';
 import { fetchWidgetRetainedMemoriesByIds } from '@/services/widget-memories';
 import {
   isValidWidgetRouteId,
@@ -45,6 +48,7 @@ export default function WidgetEntryRoute() {
   const userId = user?.id;
   const isAnonymous = user?.is_anonymous;
   const { familyId: activeFamilyId, memberships, isLoading: isFamilyLoading, setActiveFamily } = useFamily();
+  const queryClient = useQueryClient();
   const [state, setState] = useState<EntryState>('checking');
   const completedTargetRef = useRef<string | null>(null);
   const inFlightTargetRef = useRef<string | null>(null);
@@ -107,12 +111,37 @@ export default function WidgetEntryRoute() {
     let cancelled = false;
     void (async () => {
       try {
-        if (activeFamilyIdRef.current !== familyId) {
-          await setActiveFamilyRef.current(familyId);
-        }
-        if (cancelled || firstUserIdRef.current !== userId) return;
+        const needsFamilySwitch = activeFamilyIdRef.current !== familyId;
+        const detailKey = memoryDetailQueryKey(familyId, memoryId);
 
-        const result = await fetchWidgetRetainedMemoriesByIds(familyId, [memoryId]);
+        // Fast path: the detail query for this exact (family, memory) is
+        // already cached (in-session or restored from the persisted cache).
+        // That entry can only exist because this account was authorized to
+        // read the memory in this family earlier: the persisted cache is
+        // purged on sign-out and on family/membership loss (use-auth,
+        // use-family clearPersistedQueryCache) and the key embeds the family.
+        // Current membership was just verified above, so skip the two-round-
+        // trip validation read and open immediately. The detail screen
+        // refetches on mount and shows its own "Memory not found" state when
+        // the memory was deleted or became invisible, so this stays
+        // fail-closed. docs/features/home-screen-widget.md "Tap routing".
+        const cached = queryClient.getQueryData<MemoryWithTags | null>(detailKey);
+        if (cached && cached.id === memoryId && cached.family_id === familyId) {
+          if (needsFamilySwitch) await setActiveFamilyRef.current(familyId);
+          if (cancelled || firstUserIdRef.current !== userId) return;
+          completedTargetRef.current = targetKey;
+          inFlightTargetRef.current = null;
+          router.replace(memoryDetailRoute(memoryId, mediaIndex));
+          return;
+        }
+
+        // The validation read takes the family explicitly, so it does not
+        // depend on the profile write that switches the active family; run
+        // both together instead of serially.
+        const [result] = await Promise.all([
+          fetchWidgetRetainedMemoriesByIds(familyId, [memoryId]),
+          needsFamilySwitch ? setActiveFamilyRef.current(familyId) : Promise.resolve(),
+        ]);
         if (cancelled || firstUserIdRef.current !== userId) return;
         const target = result.data?.find((memory) => memory.id === memoryId);
         if (result.error || !target) {
@@ -121,6 +150,14 @@ export default function WidgetEntryRoute() {
           router.replace(activeFamilyIdRef.current ? timelineRoute : noFamilyRoute);
           return;
         }
+        // Seed the detail query so the screen paints from the row we just
+        // validated instead of repeating the same select + tags/media/
+        // engagement reads. fetchMemoriesByIds and useMemory's fetchMemoryById
+        // both select '*' and attach tags, media assets and engagement
+        // (myReaction/topReactions), so the shapes are identical. This runs
+        // AFTER setActiveFamily resolved: its invalidateQueries calls on the
+        // memories base would otherwise mark this entry stale.
+        queryClient.setQueryData<MemoryWithTags | null>(detailKey, target);
         completedTargetRef.current = targetKey;
         inFlightTargetRef.current = null;
         router.replace(memoryDetailRoute(target.id, mediaIndex));
@@ -143,6 +180,7 @@ export default function WidgetEntryRoute() {
     mediaIndex,
     rawMediaIndex,
     hasSession,
+    queryClient,
     targetKey,
     userId,
     isAnonymous,

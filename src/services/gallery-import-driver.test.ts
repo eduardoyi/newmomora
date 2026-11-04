@@ -133,6 +133,35 @@ describe('gallery import driver', () => {
     expect(getLatestGalleryImportLiveProgress('run-1')).toEqual({ stage: 'sending', completed: 3, total: 10 });
   });
 
+  it('does not notify listeners or replace the state object when a patch changes nothing', async () => {
+    mockedLoadCheckpoint.mockResolvedValue(null);
+    const before = getGalleryImportDriverState();
+    const listener = jest.fn();
+    const unsubscribe = subscribeGalleryImportDriver(listener);
+    expect(listener).toHaveBeenCalledTimes(1); // the immediate replay only
+    kickGalleryImportDriver('test'); // no checkpoint -> setState(IDLE_STATE) over an already-idle state
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getGalleryImportDriverState()).toBe(before);
+    unsubscribe();
+  });
+
+  it('notifies once per real change when the runner emits repeated identical progress events', async () => {
+    mockedLoadCheckpoint.mockResolvedValue(checkpointFixture());
+    mockedResume.mockImplementation(async (input: any) => {
+      for (let i = 1; i <= 5; i += 1) input.onProgress?.({ stage: 'sending', completed: i, total: 10 });
+      input.onProgress?.({ stage: 'dispatching', completed: 10, total: 10 });
+    });
+    const phases: string[] = [];
+    const unsubscribe = subscribeGalleryImportDriver((state) => phases.push(JSON.stringify(state)));
+    kickGalleryImportDriver('test');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // sending x5 collapses to one transition; no consecutive duplicates at all.
+    expect(phases.filter((entry, index) => index > 0 && entry === phases[index - 1])).toEqual([]);
+    expect(phases.filter((entry) => JSON.parse(entry).phase === 'sending')).toHaveLength(1);
+    unsubscribe();
+  });
+
   it('reports done once every chunk is settled and there is no more history', async () => {
     mockedLoadCheckpoint.mockResolvedValue(checkpointFixture());
     mockedLoadFrontier.mockResolvedValue({ oldestCoveredMs: 0, coveredThroughNewestMs: 1, completedLibrary: true, corpusMode: 'full_library_fallback', autoContinue: true });

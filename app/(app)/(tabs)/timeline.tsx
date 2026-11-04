@@ -108,6 +108,10 @@ type MonthRow = { kind: 'month'; month: GridMonth; monthIndex: number };
 type FilmRow = { kind: 'film'; film: YearFilm };
 type TimelineRow = ControlsRow | MemoryRow | MonthRow | FilmRow;
 const CONTROL_ROW: ControlsRow = { kind: 'controls' };
+// Stable fallback for the Calendar range query: it is disabled (data undefined)
+// in List view, and a `= []` destructuring default would mint a new array every
+// render, re-running summarizeGridDays and rebuilding renderItem each time.
+const NO_GRID_MEMORIES: MemoryWithTags[] = [];
 // An anchored list starts loading newer pages this many screens before the
 // top, so a quick scroll up doesn't hit the (not-yet-loaded) top first.
 const NEWER_PAGE_THRESHOLD_SCREENS = 5;
@@ -442,7 +446,18 @@ export default function TimelineScreen() {
     isFetchingPreviousPage,
   } = useMemories({ shouldReconcileOnForeground, anchorDate });
   const contentSafety = useContentSafety();
-  const { isUserBlocked } = contentSafety;
+  // Destructure the individually stable callbacks: renderItem below must not
+  // depend on the whole hook result (see useContentSafety's memoized return),
+  // or any report/block data change would rebuild it and re-render every card.
+  const { isUserBlocked, isTargetReported, revealTarget } = contentSafety;
+  // Id-based and stable (like handleCardPress) so MemoryCard's React.memo can
+  // actually bail out -- an inline `() => revealTarget(...)` per row was a new
+  // prop on every renderItem call.
+  const handleShowIllustration = useCallback(
+    (memoryId: string, illustrationGenerationId: string | null) =>
+      revealTarget('memory_illustration', memoryId, illustrationGenerationId),
+    [revealTarget],
+  );
   const lookingBack = useLookingBackPackages({ enabled: !isOnboardingLoading });
   const { clearCheckpoint, savePackageSnapshot } = useLookingBackSession();
   const visibleMemories = useMemo(
@@ -532,7 +547,7 @@ export default function TimelineScreen() {
     () => (view === 'calendar' ? getGridFetchRange(gridMonths, gridVisibleRange.first, gridVisibleRange.last) : null),
     [gridMonths, gridVisibleRange.first, gridVisibleRange.last, view],
   );
-  const { data: gridMemories = [], refetch: refetchGridMemories } = useCalendarMemoriesInRange(gridFetchRange);
+  const { data: gridMemories = NO_GRID_MEMORIES, refetch: refetchGridMemories } = useCalendarMemoriesInRange(gridFetchRange);
   const gridSummaries = useMemo(() => summarizeGridDays(gridMemories, isUserBlocked), [gridMemories, isUserBlocked]);
   // Days with a Year Film get a dot in the grid (and are tappable when empty).
   const filmDates = useMemo(() => new Set(films.map((film) => film.placement_date)), [films]);
@@ -933,7 +948,7 @@ export default function TimelineScreen() {
       if (item.kind === 'month') {
         return (
           <CalendarGridMonth
-            isTargetReported={contentSafety.isTargetReported}
+            isTargetReported={isTargetReported}
             filmDates={filmDates}
             month={item.month}
             onDayPress={handleGridDayPress}
@@ -955,8 +970,8 @@ export default function TimelineScreen() {
         );
       }
       const memory = item.memory;
-      const isMemoryReported = contentSafety.isTargetReported('memory', memory.id);
-      const isIllustrationReported = contentSafety.isTargetReported(
+      const isMemoryReported = isTargetReported('memory', memory.id);
+      const isIllustrationReported = isTargetReported(
         'memory_illustration',
         memory.id,
         memory.illustration_generation_id,
@@ -966,7 +981,7 @@ export default function TimelineScreen() {
           <View style={styles.cardItem}>
             <ContentHiddenNotice
               label="Reported memory hidden"
-              onShow={() => contentSafety.revealTarget('memory', memory.id)}
+              onShow={() => revealTarget('memory', memory.id)}
               testID={`timeline-memory-${memory.id}-hidden`}
             />
           </View>
@@ -980,18 +995,15 @@ export default function TimelineScreen() {
             onOpenComments={handleOpenComments}
             isVideoActive={memory.id === activeVideoId}
             isIllustrationHidden={isIllustrationReported}
-            onShowIllustration={() => contentSafety.revealTarget(
-              'memory_illustration',
-              memory.id,
-              memory.illustration_generation_id,
-            )}
+            onShowIllustration={handleShowIllustration}
           />
         </View>
       );
     },
     [
-      activeVideoId, contentSafety, controlRowHeight, filmDates, gridSummaries, handleCardPress, handleFilmPress,
-      handleGridDayPress, handleOpenComments, isFilmViewsLoading, members, showTopContent, tileSize, view, viewedIds,
+      activeVideoId, controlRowHeight, filmDates, gridSummaries, handleCardPress, handleFilmPress,
+      handleGridDayPress, handleOpenComments, handleShowIllustration, isFilmViewsLoading, isTargetReported, members,
+      revealTarget, showTopContent, tileSize, view, viewedIds,
     ],
   );
 

@@ -1,4 +1,5 @@
-import type { Session, User } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
 import {
   createContext,
   useCallback,
@@ -40,6 +41,49 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Cold-start hydration (docs/features/auth.md "Provisional session"). The
+// AsyncStorage key supabase-js persists the session under is
+// `sb-<project-ref>-auth-token` (SupabaseClient derives it from the URL's first
+// hostname label). GoTrueClient keeps it as `storageKey`, which TypeScript
+// marks protected but exists at runtime; prefer that, and only fall back to
+// re-deriving it the way supabase-js does.
+function getSupabaseAuthStorageKey(): string | null {
+  const runtimeKey = (supabase.auth as unknown as { storageKey?: unknown }).storageKey;
+  if (typeof runtimeKey === 'string' && runtimeKey.length > 0) {
+    return runtimeKey;
+  }
+  const projectRef = /^https?:\/\/([^./:?#]+)/i.exec(process.env.EXPO_PUBLIC_SUPABASE_URL ?? '')?.[1];
+  return projectRef ? `sb-${projectRef}-auth-token` : null;
+}
+
+// Reads the raw session auth-js persisted, without any network. Returns null
+// for anything that is not a usable session (missing, unparsable, or lacking
+// the user/refresh token the app and auth-js need) -- hydration is purely an
+// optimization, so every failure just means "wait for getSession() as before".
+export async function readStoredSession(): Promise<Session | null> {
+  try {
+    const key = getSupabaseAuthStorageKey();
+    if (!key) return null;
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<Session> | null;
+    const user = parsed?.user as Partial<User> | undefined;
+    if (
+      !parsed ||
+      typeof parsed.access_token !== 'string' ||
+      typeof parsed.refresh_token !== 'string' ||
+      !user ||
+      typeof user !== 'object' ||
+      typeof user.id !== 'string'
+    ) {
+      return null;
+    }
+    return parsed as Session;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -48,17 +92,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
+    // The session currently in state that came from storage rather than from
+    // auth-js. Its access token may be expired -- nothing reads the token off
+    // this context (services call supabase.auth.getSession(), which awaits the
+    // refresh); consumers only need the user id and "is someone signed in".
+    let provisional: Session | null = null;
+    // True once auth-js has authoritatively answered (a session, or a null with
+    // nothing provisional to protect). A late storage read must never override.
+    let hasAuthResult = false;
+
+    // getSession() / onAuthStateChange only resolve after auth-js has refreshed
+    // an expired access token (JWT expiry is 1h, so most cold starts), and
+    // offline that is ~50s of retry backoff followed by a null session. Hydrating
+    // from storage lets the persisted query cache render immediately; the
+    // auth-js result below always wins.
+    void readStoredSession().then((stored) => {
+      if (!isMounted || hasAuthResult || !stored) {
+        return;
+      }
+      provisional = stored;
+      setSession(stored);
+      setIsLoading(false);
+    });
+
+    const applyAuthResult = (next: Session | null, event?: AuthChangeEvent) => {
+      if (next) {
+        hasAuthResult = true;
+        provisional = null;
+        setSession(next);
+        setIsLoading(false);
+        return;
+      }
+
+      const held = provisional;
+      if (!held || event === 'SIGNED_OUT') {
+        hasAuthResult = true;
+        provisional = null;
+        setSession(null);
+        setIsLoading(false);
+        return;
+      }
+
+      // auth-js reports a null session both for a revoked refresh token (it
+      // removes the stored session first) AND for a transient failure such as
+      // being offline (retryable fetch error; the stored session is kept and
+      // its auto-refresh ticker keeps retrying, later emitting
+      // TOKEN_REFRESHED). Dropping the provisional session on the second kind
+      // would purge the persisted cache -- the offline journal this exists to
+      // show -- so only a null that also emptied storage ends the session.
+      void readStoredSession().then((stored) => {
+        if (!isMounted || provisional !== held || stored) {
+          return;
+        }
+        hasAuthResult = true;
+        provisional = null;
+        setSession(null);
+        setIsLoading(false);
+      });
+    };
 
     supabase.auth.getSession().then(({ data }) => {
       if (isMounted) {
-        setSession(data.session);
-        setIsLoading(false);
+        applyAuthResult(data.session);
       }
     });
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setIsLoading(false);
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      applyAuthResult(nextSession, event);
     });
 
     return () => {

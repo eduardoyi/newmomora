@@ -17,6 +17,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import { colors, getEmotionColors } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { calendarMemoriesQueryKeyBase, memoriesQueryKeyBase } from '@/hooks/queryKeys';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { useIsOnline } from '@/lib/connectivity';
 import {
@@ -722,6 +723,79 @@ export function isRetryableWidgetSyncFailure(result: MemoryWidgetSyncResult): bo
   return !NON_RETRYABLE_SYNC_REASONS.has(result.reason ?? 'superseded');
 }
 
+/**
+ * Launch/foreground sync is deferred so its ~6 serial requests plus image
+ * signing and downloads never race first render or a widget deep-link tap
+ * (app/widget.tsx validates and opens the memory in the same window). A scope
+ * change (family switch, account change) is NOT deferred: that content must
+ * replace the old scope's card promptly.
+ */
+export const WIDGET_LAUNCH_SYNC_DELAY_MS = 2_500;
+
+/**
+ * An app activation re-syncs only when the last successful publication for
+ * this scope is older than this, or something that changes widget content is
+ * due (see `isWidgetForegroundSyncDue`). Background refresh and the lease
+ * (168 h) are far longer, so this only bounds foreground churn.
+ */
+export const WIDGET_FOREGROUND_SYNC_MIN_INTERVAL_MS = 15 * 60 * 1_000;
+
+/** Trailing debounce that coalesces a burst of content mutations into one sync. */
+export const WIDGET_MUTATION_SYNC_DEBOUNCE_MS = 3_000;
+
+/**
+ * Whether an app activation must run a full online sync for this scope.
+ * `manifest.verifiedAt` only advances on a successful publish, so a failed
+ * sync never suppresses the next attempt, and a clock moved backwards counts
+ * as due. Due when: nothing published yet; the neutral/empty card is showing
+ * (another member may have added a first image); the throttle interval has
+ * elapsed; the lease expired; or the family-local day changed since
+ * verification (new daily candidate sample, docs/features/home-screen-widget.md
+ * "Daytime rotation"). Scope changes and content mutations bypass this check
+ * at the call site.
+ */
+export function isWidgetForegroundSyncDue(
+  manifest: WidgetManifest | null,
+  nowMs: number,
+): boolean {
+  if (!manifest || manifest.entries.length === 0) return true;
+  const verifiedMs = Date.parse(manifest.verifiedAt);
+  const expiresMs = Date.parse(manifest.expiresAt);
+  if (Number.isNaN(verifiedMs) || Number.isNaN(expiresMs)) return true;
+  const age = nowMs - verifiedMs;
+  if (age < 0 || age >= WIDGET_FOREGROUND_SYNC_MIN_INTERVAL_MS) return true;
+  if (nowMs >= expiresMs) return true;
+  const verifiedDay = widgetLocalDateAt(manifest.verifiedAt, manifest.timezone);
+  const currentDay = widgetLocalDateAt(new Date(nowMs), manifest.timezone);
+  return verifiedDay === null || currentDay === null || verifiedDay !== currentDay;
+}
+
+/**
+ * First `mutationKey` segments whose mutations can change widget content:
+ * memory create/edit/delete, media, illustration state (all under the
+ * memories/calendar bases) and content reports/blocks.
+ */
+export const WIDGET_CONTENT_MUTATION_KEY_BASES: readonly unknown[] = [
+  memoriesQueryKeyBase,
+  calendarMemoriesQueryKeyBase,
+  'content-safety',
+];
+
+/**
+ * No mutation in the app declares a `mutationKey` yet, so an unkeyed mutation
+ * cannot be classified. Until the content mutations (useMemories,
+ * useContentSafety) are keyed, treat unkeyed ones as possibly content-changing
+ * and rely on the trailing debounce; flip this to false once they are keyed.
+ * A keyed mutation outside the allow-list (reactions, read markers, profile
+ * updates...) never triggers a sync.
+ */
+const WIDGET_SYNC_ON_UNKEYED_MUTATIONS = true;
+
+export function isWidgetContentMutationKey(mutationKey: readonly unknown[] | undefined): boolean {
+  if (!mutationKey || mutationKey.length === 0) return WIDGET_SYNC_ON_UNKEYED_MUTATIONS;
+  return WIDGET_CONTENT_MUTATION_KEY_BASES.includes(mutationKey[0]);
+}
+
 function appStateIsActive(state: AppStateStatus | null): boolean {
   // React Native can report null briefly while the bridge is starting. Treat
   // that startup window as active so automatic preparation is not skipped
@@ -766,6 +840,14 @@ function useMemoryWidgetSyncInternal(): UseMemoryWidgetSyncResult {
   const canSyncRef = useRef(false);
   const bootClearedAdaptersRef = useRef(new WeakSet<object>());
   const deletionClearKeyRef = useRef<string | null>(null);
+  // A content-changing mutation happened that no successful sync has covered
+  // yet (its debounced sync was cancelled by backgrounding, or failed). The
+  // foreground throttle must not suppress the catch-up sync while it is set.
+  const contentDirtyRef = useRef(false);
+  // Scope the foreground effect last started a sync for; a change from a
+  // previous non-null scope is an account/family switch (not deferred).
+  const lastForegroundScopeKeyRef = useRef<string | null>(null);
+  const mutationSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const accountId = user && !user.is_anonymous ? user.id : null;
   const scope = useMemo(
@@ -920,11 +1002,17 @@ function useMemoryWidgetSyncInternal(): UseMemoryWidgetSyncResult {
     if (!coordinator || !scope || !isNativeAvailable || !isOnline || !isAppActive) return;
     if (profile?.deleted_at || isAuthLoading || isFamilyLoading || isProfileLoading) return;
     if (memberships.length > 0 && !memberships.some((membership) => membership.familyId === scope.familyId)) return;
+    const targetScopeKey = scopeKey(scope);
+    const isScopeSwitch = lastForegroundScopeKeyRef.current !== null
+      && lastForegroundScopeKeyRef.current !== targetScopeKey;
+    lastForegroundScopeKeyRef.current = targetScopeKey;
     let cancelled = false;
+    let launchTimer: ReturnType<typeof setTimeout> | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const run = (attempt: number) => {
       const request = enqueueSync(scope, coordinator, lifecycleTokenRef.current);
       void request.then((result) => {
+        if (result.published || result.cleared) contentDirtyRef.current = false;
         if (result.published) void coordinator.read(scope).then(setManifest);
         // A transient failure would otherwise leave a stale or empty widget
         // until the next foreground. Retry a few times while the app is open.
@@ -934,25 +1022,67 @@ function useMemoryWidgetSyncInternal(): UseMemoryWidgetSyncResult {
         retryTimer = setTimeout(() => run(attempt + 1), delay);
       });
     };
-    run(0);
+    const start = async () => {
+      // Throttle plain app activations: the card on screen was verified
+      // moments ago and nothing is due, so skip the full online sync that
+      // would otherwise compete with whatever the user opened the app for. A
+      // scope switch or an uncovered content mutation always syncs.
+      if (!isScopeSwitch && !contentDirtyRef.current) {
+        const cached = await coordinator.read(scope).catch(() => null);
+        if (cancelled) return;
+        if (!isWidgetForegroundSyncDue(cached, Date.now())) return;
+      }
+      run(0);
+    };
+    if (isScopeSwitch) {
+      void start();
+    } else {
+      // Cleared by the effect cleanup on unmount, background and scope change,
+      // so a deferred sync never fires for a stale state.
+      launchTimer = setTimeout(() => void start(), WIDGET_LAUNCH_SYNC_DELAY_MS);
+    }
     return () => {
       cancelled = true;
+      if (launchTimer) clearTimeout(launchTimer);
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [coordinator, enqueueSync, scope, isNativeAvailable, isOnline, isAppActive, profile?.deleted_at, isAuthLoading, isFamilyLoading, isProfileLoading, memberships]);
 
-  // Reconnect and successful mutations are deliberately app-wide. This
-  // subscription does not inspect memory content and never blocks a mutation.
+  // Reconnect and successful content mutations are deliberately app-wide, but
+  // only mutations that can change widget content (see
+  // `isWidgetContentMutationKey`) enqueue a sync, and a burst of them is
+  // coalesced by a trailing debounce so a reaction/edit flurry does not run a
+  // full sync per mutation. This subscription does not inspect memory content
+  // and never blocks a mutation.
   useEffect(() => {
     if (!coordinator || !scope || !isNativeAvailable || !isOnline || !isAppActive) return;
     if (profile?.deleted_at || isAuthLoading || isFamilyLoading || isProfileLoading) return;
     if (memberships.length > 0 && !memberships.some((membership) => membership.familyId === scope.familyId)) return;
     const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
       if (event.type !== 'updated' || event.mutation.state.status !== 'success') return;
-      void enqueueSync(scope, coordinator, lifecycleTokenRef.current);
+      if (!isWidgetContentMutationKey(event.mutation.options.mutationKey)) return;
+      // Stays set until a sync publishes/clears, so a failed or superseded
+      // debounced sync still gets a catch-up on the next foreground despite
+      // the throttle.
+      contentDirtyRef.current = true;
+      // The timer lives in a ref, not this effect's closure: the effect
+      // re-runs whenever one of its many dependencies changes identity, and
+      // that must not drop a pending sync. enqueueSync's scope/lifecycle
+      // fence already discards a sync whose scope changed in the meantime.
+      if (mutationSyncTimerRef.current) clearTimeout(mutationSyncTimerRef.current);
+      mutationSyncTimerRef.current = setTimeout(() => {
+        mutationSyncTimerRef.current = null;
+        void enqueueSync(scope, coordinator, lifecycleTokenRef.current).then((result) => {
+          if (result.published || result.cleared) contentDirtyRef.current = false;
+        });
+      }, WIDGET_MUTATION_SYNC_DEBOUNCE_MS);
     });
     return unsubscribe;
   }, [coordinator, enqueueSync, queryClient, scope, isNativeAvailable, isOnline, isAppActive, profile?.deleted_at, isAuthLoading, isFamilyLoading, isProfileLoading, memberships]);
+
+  useEffect(() => () => {
+    if (mutationSyncTimerRef.current) clearTimeout(mutationSyncTimerRef.current);
+  }, []);
 
   const syncNow = useCallback(async (options: { showAnother?: boolean } = {}) => {
     if (

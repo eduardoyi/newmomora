@@ -10,6 +10,7 @@ import {
 import { ARTWORK_NAIL_HEIGHT, getArtworkFrameSize } from '@/components/artwork-frame';
 import { frameBodyBounds, frameVisualBounds } from '@/components/artwork/artwork-bounds';
 import { artworkRatio } from '@/components/artwork/artwork-layout';
+import { artworkPlaceholderKey } from '@/components/artwork/artwork-pieces';
 import type { ArtworkUrlErrorHandler } from '@/components/artwork/artwork-piece-image';
 import {
   ArtworkPiece,
@@ -203,6 +204,7 @@ export function GalleryWalk({
                     ? 'memory-detail-artwork-frame'
                     : `memory-detail-gallery-walk-slide-${index}`
                 }
+                placeholderUrl={urls[artworkPlaceholderKey(item) ?? '']}
                 url={urls[item.object_key]}
               />
             </View>

@@ -1,4 +1,4 @@
-import { artworkLabelContent, artworkPieces } from '@/components/artwork/artwork-pieces';
+import { artworkLabelContent, artworkPieces, artworkPlaceholderKey } from '@/components/artwork/artwork-pieces';
 import { pickFrameStyle } from '@/components/artwork/frame-style';
 import type { MemoryMediaAsset, MemoryWithTags } from '@/services/memories';
 
@@ -86,5 +86,18 @@ describe('artworkLabelContent', () => {
     const { title } = artworkLabelContent(memory({ content: 'x'.repeat(200) }));
     expect(title!.length).toBeLessThan(90);
     expect(title).toContain('…');
+  });
+});
+
+describe('artworkPlaceholderKey', () => {
+  it('is the Timeline preview key (the displayKey the Timeline pins its cacheKey to)', () => {
+    const a = asset('a');
+    expect(artworkPlaceholderKey(a)).toBe('u/a-preview.jpg');
+    expect(artworkPieces('memory-1', [a], null)[0].displayKey).toBe(artworkPlaceholderKey(a));
+  });
+
+  it('is null when there is no distinct preview (legacy row, no-upscale guard, failed upload)', () => {
+    expect(artworkPlaceholderKey(asset('a', { preview_object_key: null }))).toBeNull();
+    expect(artworkPlaceholderKey(asset('a', { preview_object_key: 'u/a.jpg' }))).toBeNull();
   });
 });

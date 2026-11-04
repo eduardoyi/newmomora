@@ -3,7 +3,10 @@ import { QueryClient, type Query } from '@tanstack/react-query';
 import { persistQueryClientRestore, persistQueryClientSave } from '@tanstack/react-query-persist-client';
 
 import {
+  billingStatusQueryKeyBase,
+  blockedFamilyAccountsQueryKeyBase,
   calendarMemoriesQueryKeyBase,
+  contentReportsQueryKeyBase,
   familyMembershipsQueryKeyBase,
   familyMembersQueryKeyBase,
   lookingBackQueryKey,
@@ -47,6 +50,8 @@ describe('shouldDehydrateQuery (allow-list)', () => {
     ['user profile', userProfileQueryKeyBase],
     ['Looking Back packages', lookingBackQueryKeyBase],
     ['media-urls', 'media-urls'],
+    ['content-safety reports', contentReportsQueryKeyBase],
+    ['content-safety blocks', blockedFamilyAccountsQueryKeyBase],
   ])('persists a successful %s query', (_label, base) => {
     expect(shouldDehydrateQuery(buildQuery([base, 'family-1']))).toBe(true);
   });
@@ -55,6 +60,10 @@ describe('shouldDehydrateQuery (allow-list)', () => {
     ['generation-status', 'generation-status'],
     ['memories-search', 'memories-search'],
     ['family-member-profiles', 'family-member-profiles'],
+    // Session-only by design (a revealed hidden item must re-hide next launch).
+    ['content-safety reveals', 'content-safety-reveals'],
+    // Store-customer specific; refetched once RevenueCat configures.
+    ['RevenueCat offerings', 'revenuecat-offerings'],
     ['an unrecognized key', 'some-other-query'],
   ])('excludes %s (not on the allow-list)', (_label, base) => {
     expect(shouldDehydrateQuery(buildQuery([base, 'family-1']))).toBe(false);
@@ -70,6 +79,72 @@ describe('shouldDehydrateQuery (allow-list)', () => {
   it('excludes an allow-listed key that has not resolved yet', () => {
     expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1'], 'pending'))).toBe(false);
     expect(shouldDehydrateQuery(buildQuery([memoriesQueryKeyBase, 'family-1'], 'error'))).toBe(false);
+  });
+});
+
+// Billing status is persisted so the cold-start gate in app/index.tsx is
+// satisfied from the restored cache -- but only a genuine success payload. The
+// queryFn resolves `{ data, error }`, so a 'success' query can hold an error.
+describe('shouldDehydrateQuery billing status guard', () => {
+  const freshStatus = { family_id: 'family-1', has_write_access: true, cached_at: 1, is_offline: false };
+  const billingKey = [billingStatusQueryKeyBase, 'family-1'];
+
+  function billingQuery(data: unknown) {
+    return { queryKey: billingKey, state: { status: 'success', data } } as unknown as Query;
+  }
+
+  it('persists a real success payload', () => {
+    expect(shouldDehydrateQuery(billingQuery({ data: freshStatus, error: null }))).toBe(true);
+  });
+
+  it('does not persist a resolved query that carries only an error (data: null)', () => {
+    expect(
+      shouldDehydrateQuery(billingQuery({ data: null, error: { message: 'Could not check subscription access' } })),
+    ).toBe(false);
+  });
+
+  it('does not persist an error payload even if it somehow has data', () => {
+    expect(shouldDehydrateQuery(billingQuery({ data: freshStatus, error: { message: 'boom' } }))).toBe(false);
+  });
+
+  it('does not persist the is_offline fallback read', () => {
+    expect(shouldDehydrateQuery(billingQuery({ data: { ...freshStatus, is_offline: true }, error: null }))).toBe(false);
+  });
+
+  it.each([[undefined], [null], ['oops'], [{}], [{ data: 'nope', error: null }]])(
+    'does not persist a malformed payload (%p)',
+    (data) => {
+      expect(shouldDehydrateQuery(billingQuery(data))).toBe(false);
+    },
+  );
+
+  it('does not persist a billing query that has not succeeded', () => {
+    expect(
+      shouldDehydrateQuery({
+        queryKey: billingKey,
+        state: { status: 'error', data: { data: freshStatus, error: null } },
+      } as unknown as Query),
+    ).toBe(false);
+  });
+
+  it('applies the guard only to billing: other allow-listed keys with arbitrary data still persist', () => {
+    expect(
+      shouldDehydrateQuery({
+        queryKey: [familyMembersQueryKeyBase, 'family-1'],
+        state: { status: 'success', data: null },
+      } as unknown as Query),
+    ).toBe(true);
+  });
+
+  it('keeps the billing key base in lock-step with use-billing', () => {
+    // query-persistence cannot import use-billing (use-auth -> query-persistence
+    // cycle), so the dependency-free base in queryKeys.ts must match it. The
+    // content-safety bases are imported by useContentSafety from queryKeys.ts,
+    // so they cannot drift.
+    /* eslint-disable @typescript-eslint/no-require-imports -- lazy require keeps the heavy hook graph out of the other tests */
+    const { billingStatusQueryKey } = require('@/hooks/use-billing') as typeof import('@/hooks/use-billing');
+    /* eslint-enable @typescript-eslint/no-require-imports */
+    expect(billingStatusQueryKey[0]).toBe(billingStatusQueryKeyBase);
   });
 });
 
@@ -352,5 +427,62 @@ describe('purge / restore integration', () => {
     expect(restoreClient.getQueryData([familyMembersQueryKeyBase, 'family-1'])).toEqual([
       { id: 'member-1' },
     ]);
+  });
+
+  it('restores a persisted billing status as stale data, so it revalidates on mount', async () => {
+    const key = [billingStatusQueryKeyBase, 'family-1'];
+    const status = { family_id: 'family-1', has_write_access: true, cached_at: 1, is_offline: false };
+    queryClient.setQueryData(key, { data: status, error: null });
+    // Saved a few minutes ago; use-billing's staleTime is 60s.
+    const savedAt = Date.now() - 5 * 60 * 1000;
+    queryClient.getQueryCache().find({ queryKey: key })!.state.dataUpdatedAt = savedAt;
+
+    await persistQueryClientSave({
+      queryClient,
+      persister: asyncStoragePersister,
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      dehydrateOptions,
+    });
+
+    const restoreClient = new QueryClient();
+    await persistQueryClientRestore({
+      queryClient: restoreClient,
+      persister: asyncStoragePersister,
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      maxAge: PERSISTED_QUERY_CACHE_MAX_AGE_MS,
+    });
+
+    expect(restoreClient.getQueryData(key)).toEqual({ data: status, error: null });
+    const restored = restoreClient.getQueryCache().find({ queryKey: key })!;
+    expect(restored.state.dataUpdatedAt).toBe(savedAt);
+    expect(restored.isStaleByTime(60 * 1000)).toBe(true);
+  });
+
+  it('does not persist a resolved billing error or an offline fallback', async () => {
+    queryClient.setQueryData([billingStatusQueryKeyBase, 'family-1'], {
+      data: null,
+      error: { message: 'Could not check subscription access' },
+    });
+    queryClient.setQueryData([billingStatusQueryKeyBase, 'family-2'], {
+      data: { family_id: 'family-2', is_offline: true },
+      error: null,
+    });
+
+    await persistQueryClientSave({
+      queryClient,
+      persister: asyncStoragePersister,
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      dehydrateOptions,
+    });
+
+    const restoreClient = new QueryClient();
+    await persistQueryClientRestore({
+      queryClient: restoreClient,
+      persister: asyncStoragePersister,
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      maxAge: PERSISTED_QUERY_CACHE_MAX_AGE_MS,
+    });
+
+    expect(restoreClient.getQueryCache().getAll()).toHaveLength(0);
   });
 });

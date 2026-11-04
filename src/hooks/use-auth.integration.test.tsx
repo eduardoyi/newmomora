@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
@@ -438,5 +439,216 @@ describe('useAuth analytics identity', () => {
 
     expect(mockedIdentifyUser).toHaveBeenCalledTimes(1);
     expect(mockedResetAnalytics).not.toHaveBeenCalled();
+  });
+});
+
+// Cold-start hydration (docs/features/auth.md "Provisional session"): the
+// stored session renders the app before auth-js has refreshed an expired
+// access token, and auth-js's answer always wins afterwards.
+describe('useAuth provisional session hydration', () => {
+  // jest.setup.ts pins EXPO_PUBLIC_SUPABASE_URL to https://example.supabase.co
+  const STORAGE_KEY = 'sb-example-auth-token';
+  let authChangeCallback: (event: string, session: Session | null) => void = () => undefined;
+
+  function fakeSession(userId: string, isAnonymous = false, accessToken = 'token'): Session {
+    return {
+      access_token: accessToken,
+      refresh_token: 'refresh',
+      expires_in: 3600,
+      expires_at: 1,
+      token_type: 'bearer',
+      user: {
+        id: userId,
+        is_anonymous: isAnonymous,
+        app_metadata: {},
+        user_metadata: {},
+        aud: 'authenticated',
+        created_at: new Date().toISOString(),
+      },
+    } as unknown as Session;
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await AsyncStorage.clear();
+
+    mockedSupabase.auth.onAuthStateChange.mockImplementation((callback) => {
+      authChangeCallback = callback as unknown as (event: string, session: Session | null) => void;
+      return { data: { subscription: { unsubscribe: jest.fn() } } } as never;
+    });
+  });
+
+  it('renders the stored session before getSession resolves (and identifies a real user)', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1')));
+    const pending = deferred<{ data: { session: Session | null }; error: null }>();
+    mockedSupabase.auth.getSession.mockReturnValue(pending.promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.user?.id).toBe('real-user-1');
+    expect(mockedSupabase.auth.getSession).toHaveBeenCalled();
+    expect(mockedIdentifyUser).toHaveBeenCalledWith('real-user-1');
+  });
+
+  it('does not identify a provisional anonymous session', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('anon-1', true)));
+    mockedSupabase.auth.getSession.mockReturnValue(deferred<never>().promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.user?.id).toBe('anon-1');
+    expect(mockedIdentifyUser).not.toHaveBeenCalled();
+    expect(mockedResetAnalytics).not.toHaveBeenCalled();
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+  });
+
+  it('prefers the runtime storageKey exposed by the auth client', async () => {
+    (mockedSupabase.auth as unknown as { storageKey: string }).storageKey = 'custom-key';
+    try {
+      await AsyncStorage.setItem('custom-key', JSON.stringify(fakeSession('custom-user')));
+      mockedSupabase.auth.getSession.mockReturnValue(deferred<never>().promise as never);
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+
+      await waitFor(() => expect(result.current.user?.id).toBe('custom-user'));
+    } finally {
+      delete (mockedSupabase.auth as unknown as { storageKey?: string }).storageKey;
+    }
+  });
+
+  it('lets the getSession result override the provisional session', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1', false, 'stale')));
+    const pending = deferred<{ data: { session: Session | null }; error: null }>();
+    mockedSupabase.auth.getSession.mockReturnValue(pending.promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.session?.access_token).toBe('stale'));
+
+    await act(async () => {
+      pending.resolve({ data: { session: fakeSession('real-user-1', false, 'fresh') }, error: null });
+    });
+
+    expect(result.current.session?.access_token).toBe('fresh');
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+  });
+
+  it('does not let a late storage read clobber an already-resolved getSession result', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1')));
+    const storageRead = deferred<string | null>();
+    // Only the provisional read (the first getItem on mount) is held back. The
+    // storage mock's getItem is already a jest.fn, so use mockImplementationOnce
+    // rather than spyOn/mockRestore (which would wipe its implementation).
+    (AsyncStorage.getItem as jest.Mock).mockImplementationOnce(() => storageRead.promise);
+    mockedSupabase.auth.getSession.mockResolvedValue({ data: { session: null }, error: null });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.session).toBeNull();
+
+    await act(async () => {
+      storageRead.resolve(JSON.stringify(fakeSession('real-user-1')));
+    });
+
+    expect(result.current.session).toBeNull();
+    expect(mockedIdentifyUser).not.toHaveBeenCalled();
+  });
+
+  it('ignores malformed or unusable stored sessions and keeps waiting for getSession', async () => {
+    const pending = deferred<{ data: { session: Session | null }; error: null }>();
+    mockedSupabase.auth.getSession.mockReturnValue(pending.promise as never);
+
+    for (const raw of [
+      '{not json',
+      'null',
+      JSON.stringify({ access_token: 'a', refresh_token: 'r' }),
+      JSON.stringify({ access_token: 'a', user: { id: 'u' } }),
+    ]) {
+      await AsyncStorage.setItem(STORAGE_KEY, raw);
+      const { result, unmount } = renderHook(() => useAuth(), { wrapper });
+      // Give the storage read time to settle; nothing may hydrate.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.session).toBeNull();
+      unmount();
+    }
+
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await act(async () => {
+      pending.resolve({ data: { session: null }, error: null });
+    });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.session).toBeNull();
+  });
+
+  it('ends the provisional session and purges the cache when the refresh was revoked (storage emptied)', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1')));
+    const pending = deferred<{ data: { session: Session | null }; error: null }>();
+    mockedSupabase.auth.getSession.mockReturnValue(pending.promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.user?.id).toBe('real-user-1'));
+
+    // auth-js removes the stored session before reporting a revoked token.
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    await act(async () => {
+      pending.resolve({ data: { session: null }, error: null });
+    });
+
+    await waitFor(() => expect(result.current.session).toBeNull());
+    expect(result.current.isLoading).toBe(false);
+    expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the provisional session when the refresh failed transiently (offline; storage kept)', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1')));
+    const pending = deferred<{ data: { session: Session | null }; error: unknown }>();
+    mockedSupabase.auth.getSession.mockReturnValue(pending.promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.user?.id).toBe('real-user-1'));
+
+    // Offline: auth-js retries ~50s, then reports null + a retryable error but
+    // leaves the stored session in place. The offline journal must survive.
+    await act(async () => {
+      pending.resolve({ data: { session: null }, error: { name: 'AuthRetryableFetchError' } });
+      authChangeCallback('INITIAL_SESSION', null);
+    });
+
+    expect(result.current.user?.id).toBe('real-user-1');
+    expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
+
+    // The auto-refresh ticker later succeeds once back online.
+    act(() => {
+      authChangeCallback('TOKEN_REFRESHED', fakeSession('real-user-1', false, 'fresh'));
+    });
+    expect(result.current.session?.access_token).toBe('fresh');
+  });
+
+  it('an explicit SIGNED_OUT always ends a provisional session', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(fakeSession('real-user-1')));
+    mockedSupabase.auth.getSession.mockReturnValue(deferred<never>().promise as never);
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.user?.id).toBe('real-user-1'));
+
+    act(() => {
+      authChangeCallback('SIGNED_OUT', null);
+    });
+
+    expect(result.current.session).toBeNull();
+    expect(mockedClearPersistedQueryCache).toHaveBeenCalledTimes(1);
   });
 });

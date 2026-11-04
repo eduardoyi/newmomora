@@ -5,6 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { ARTWORK_NAIL_HEIGHT, ArtworkFrame, getArtworkFrameSize } from '@/components/artwork-frame';
 import { frameBodyBounds, frameVisualBounds } from '@/components/artwork/artwork-bounds';
 import { artworkRatio } from '@/components/artwork/artwork-layout';
+import { artworkPlaceholderKey } from '@/components/artwork/artwork-pieces';
 import type { ArtworkUrlErrorHandler } from '@/components/artwork/artwork-piece-image';
 import { DETAIL_TILT_MAX, pickDetailTilt, pickFrameStyle } from '@/components/artwork/frame-style';
 import { colors } from '@/constants/theme';
@@ -87,12 +88,17 @@ export function getDetailSingleLayout(screenWidth: number, aspectRatio: number):
   return { artWidth, topPad: Math.ceil(reach) + DETAIL_TOP_MARGIN };
 }
 
+const PREVIEW_UPGRADE_TRANSITION_MS = 150;
+
 interface ArtworkPieceProps {
   asset: MemoryMediaAsset;
   /** Fallback seed when the asset has no id of its own. */
   memoryId: string;
   /** Signed URL for the asset (undefined while loading). */
   url: string | undefined;
+  /** Signed URL of the Timeline's list-sized preview (see
+   * `artworkPlaceholderKey`), painted while the original loads. */
+  placeholderUrl?: string;
   artWidth: number;
   onPress?: () => void;
   onUrlError?: ArtworkUrlErrorHandler;
@@ -108,6 +114,7 @@ function ArtworkPieceBase({
   asset,
   memoryId,
   url,
+  placeholderUrl,
   artWidth,
   onPress,
   onUrlError,
@@ -121,6 +128,11 @@ function ArtworkPieceBase({
   // everywhere); the lean is the detail wall's own, bolder and alternating.
   const { kind, color } = pickFrameStyle(frameKey);
   const tilt = pickDetailTilt(frameKey, leanDirection);
+  // Detail shows the original (decision C6); the preview the Timeline already
+  // cached stands in until it arrives, so there's no spinner or blank frame.
+  const placeholderKey = artworkPlaceholderKey(asset);
+  const placeholder =
+    placeholderUrl && placeholderKey ? mediaImageSource(placeholderUrl, placeholderKey) : undefined;
 
   return (
     <Pressable
@@ -138,14 +150,17 @@ function ArtworkPieceBase({
         testID={testID}
         tilt={tilt}
       >
-        {url ? (
+        {url || placeholder ? (
           <Image
             contentFit="contain"
             onError={onUrlError ? () => onUrlError(asset.object_key) : undefined}
             onLoad={onUrlLoad ? () => onUrlLoad(asset.object_key) : undefined}
-            source={mediaImageSource(url, asset.object_key)}
+            placeholder={url ? placeholder : undefined}
+            placeholderContentFit="contain"
+            source={url ? mediaImageSource(url, asset.object_key) : placeholder}
             style={StyleSheet.absoluteFill}
             testID={`memory-media-image-${asset.id}`}
+            transition={url && placeholder ? PREVIEW_UPGRADE_TRANSITION_MS : undefined}
           />
         ) : (
           <View style={styles.loading}>

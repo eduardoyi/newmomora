@@ -6,6 +6,11 @@ import { AppState } from 'react-native';
 
 import {
   MemoryWidgetSyncProvider,
+  WIDGET_FOREGROUND_SYNC_MIN_INTERVAL_MS,
+  WIDGET_LAUNCH_SYNC_DELAY_MS,
+  WIDGET_MUTATION_SYNC_DEBOUNCE_MS,
+  isWidgetContentMutationKey,
+  isWidgetForegroundSyncDue,
   registerMemoryWidgetNativeAdapter,
   useMemoryWidgetSync,
 } from './useMemoryWidgetSync';
@@ -132,6 +137,24 @@ function createWrapper(client: QueryClient) {
   };
 }
 
+function mockAppStateListener() {
+  let handler: ((status: 'active' | 'background') => void) | undefined;
+  jest.spyOn(AppState, 'addEventListener').mockImplementation((_event, listener) => {
+    handler = listener as (status: 'active' | 'background') => void;
+    return { remove: jest.fn() };
+  });
+  return (status: 'active' | 'background') => handler?.(status);
+}
+
+// The launch/foreground sync is deferred (WIDGET_LAUNCH_SYNC_DELAY_MS), so
+// these tests run on fake timers and step past the delay explicitly.
+async function advance(ms: number) {
+  await act(async () => {
+    jest.advanceTimersByTime(ms);
+  });
+}
+const pastLaunchDelay = () => advance(WIDGET_LAUNCH_SYNC_DELAY_MS + 50);
+
 describe('MemoryWidgetSyncProvider lifecycle fences', () => {
   let authValue: any;
   let familyValue: any;
@@ -140,6 +163,7 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
   let adapter: WidgetNativeAdapter;
 
   beforeEach(async () => {
+    jest.useFakeTimers();
     jest.clearAllMocks();
     await AsyncStorage.clear();
     Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' });
@@ -173,6 +197,8 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
 
   afterEach(() => {
     act(() => registerMemoryWidgetNativeAdapter(null));
+    jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   it('automatically prepares an eligible photo without opening widget settings', async () => {
@@ -180,6 +206,7 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
     const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
 
     await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await pastLaunchDelay();
     await waitFor(() => expect(fetchCandidates).toHaveBeenCalledWith('family-a'));
     await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalled());
     expect(rendered.result.current.isSupported).toBe(true);
@@ -204,8 +231,10 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
   it('ignores a legacy disabled preference and still prepares the active family', async () => {
     await widgetCache.writeWidgetPreference({ accountId: 'account-a', familyId: 'family-a' }, false);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+    const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
 
+    await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await pastLaunchDelay();
     await waitFor(() => expect(fetchCandidates).toHaveBeenCalledWith('family-a'));
     await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalled());
   });
@@ -216,6 +245,8 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
 
+    await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await pastLaunchDelay();
     await waitFor(() => expect(fetchCandidates).toHaveBeenCalled());
     authValue = { ...authValue, session: null, user: null };
     familyValue = { ...familyValue, familyId: null, memberships: [] };
@@ -240,6 +271,7 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
     await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await pastLaunchDelay();
     await waitFor(() => expect(stageImage).toHaveBeenCalled());
 
     fetchCandidates.mockResolvedValue(candidateResult('memory-b', 'family-b'));
@@ -310,6 +342,214 @@ describe('MemoryWidgetSyncProvider lifecycle fences', () => {
     await act(async () => { await Promise.resolve(); });
     expect(adapter.clearManifest).not.toHaveBeenCalled();
     expect(fetchCandidates).not.toHaveBeenCalled();
+  });
+
+  it('defers the launch sync so it cannot race first render or a widget tap', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+    await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+
+    await advance(WIDGET_LAUNCH_SYNC_DELAY_MS - 100);
+    expect(fetchCandidates).not.toHaveBeenCalled();
+    await advance(200);
+    await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(1));
+  });
+
+  it('cancels the deferred launch sync when the app goes to the background', async () => {
+    const emitAppState = mockAppStateListener();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+    await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await advance(WIDGET_LAUNCH_SYNC_DELAY_MS - 500);
+
+    await act(async () => { emitAppState('background'); });
+    await pastLaunchDelay();
+    expect(fetchCandidates).not.toHaveBeenCalled();
+  });
+
+  it('does not defer a family switch', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+    await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+    await pastLaunchDelay();
+    await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalledTimes(1));
+    fetchCandidates.mockClear();
+    fetchCandidates.mockResolvedValue(candidateResult('memory-b', 'family-b'));
+
+    familyValue = { ...familyValue, familyId: 'family-b', memberships: [{ familyId: 'family-b' }] };
+    await act(async () => {
+      rendered.rerender();
+      await Promise.resolve();
+    });
+    // No timer advance: the new scope syncs immediately.
+    await waitFor(() => expect(fetchCandidates).toHaveBeenCalledWith('family-b'));
+  });
+
+  describe('foreground throttle', () => {
+    async function mountAndPublishOnce() {
+      const emitAppState = mockAppStateListener();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+      await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+      await pastLaunchDelay();
+      await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalledTimes(1));
+      expect(fetchCandidates).toHaveBeenCalledTimes(1);
+      return { emitAppState, queryClient, rendered };
+    }
+
+    async function backgroundThenForeground(
+      emitAppState: (status: 'active' | 'background') => void,
+      awayMs: number,
+    ) {
+      await act(async () => { emitAppState('background'); });
+      await advance(awayMs);
+      await act(async () => { emitAppState('active'); });
+      await pastLaunchDelay();
+      await act(async () => { await Promise.resolve(); });
+    }
+
+    it('skips a foreground re-sync when the last publish is recent and nothing is due', async () => {
+      const { emitAppState } = await mountAndPublishOnce();
+      await backgroundThenForeground(emitAppState, 60_000);
+      expect(fetchCandidates).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-syncs on foreground once the throttle interval has elapsed', async () => {
+      const { emitAppState } = await mountAndPublishOnce();
+      await backgroundThenForeground(emitAppState, WIDGET_FOREGROUND_SYNC_MIN_INTERVAL_MS + 1_000);
+      await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe('mutation trigger', () => {
+    async function settledAfterFirstSync() {
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+      await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+      await pastLaunchDelay();
+      await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalledTimes(1));
+      fetchCandidates.mockClear();
+      return queryClient;
+    }
+
+    async function runMutation(queryClient: QueryClient, mutationKey?: readonly unknown[]) {
+      const mutation = queryClient.getMutationCache().build(queryClient, {
+        mutationKey,
+        mutationFn: async () => 'ok',
+      });
+      await act(async () => {
+        const pending = mutation.execute(undefined);
+        await advance(5);
+        await pending;
+        await advance(5);
+      });
+    }
+
+    it('ignores a keyed mutation that cannot change widget content', async () => {
+      const queryClient = await settledAfterFirstSync();
+      await runMutation(queryClient, ['memory-reactions', 'toggle']);
+      await advance(WIDGET_MUTATION_SYNC_DEBOUNCE_MS + 500);
+      expect(fetchCandidates).not.toHaveBeenCalled();
+    });
+
+    it('coalesces a burst of content mutations into one trailing sync', async () => {
+      const queryClient = await settledAfterFirstSync();
+      await runMutation(queryClient, ['memories', 'update']);
+      await advance(1_000);
+      await runMutation(queryClient, ['memories', 'update']);
+      await runMutation(queryClient, ['content-safety', 'report']);
+      // Debounce restarts on each mutation: nothing yet.
+      await advance(WIDGET_MUTATION_SYNC_DEBOUNCE_MS - 500);
+      expect(fetchCandidates).not.toHaveBeenCalled();
+      await advance(1_000);
+      await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(1));
+    });
+
+    it('treats an unkeyed mutation as possibly content-changing, debounced', async () => {
+      const queryClient = await settledAfterFirstSync();
+      await runMutation(queryClient);
+      expect(fetchCandidates).not.toHaveBeenCalled();
+      await advance(WIDGET_MUTATION_SYNC_DEBOUNCE_MS + 100);
+      await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not drop a pending mutation sync when the app backgrounds, and bypasses the throttle on return', async () => {
+      const emitAppState = mockAppStateListener();
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const rendered = renderHook(() => useMemoryWidgetSync(), { wrapper: createWrapper(queryClient) });
+      await waitFor(() => expect(rendered.result.current.isSupported).toBe(true));
+      await pastLaunchDelay();
+      await waitFor(() => expect(adapter.publishManifest).toHaveBeenCalledTimes(1));
+      fetchCandidates.mockClear();
+
+      // The sync stays offline-failing so the dirty flag survives to foreground.
+      fetchCandidates.mockResolvedValue({ data: null, error: { message: 'offline' }, failure: 'unavailable' });
+      await runMutation(queryClient, ['memories', 'delete']);
+      await advance(WIDGET_MUTATION_SYNC_DEBOUNCE_MS + 100);
+      await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(1));
+
+      fetchCandidates.mockResolvedValue(candidateResult());
+      await act(async () => { emitAppState('background'); });
+      await act(async () => { emitAppState('active'); });
+      await pastLaunchDelay();
+      // The manifest is recent (throttle would skip) but the mutation never synced.
+      await waitFor(() => expect(fetchCandidates).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  describe('throttle and mutation helpers', () => {
+    const baseManifest = {
+      schemaVersion: 1,
+      accountId: 'account-a',
+      familyId: 'family-a',
+      generationId: 'g',
+      verifiedAt: '2026-09-15T10:00:00.000Z',
+      expiresAt: '2026-09-22T10:00:00.000Z',
+      timezone: 'UTC',
+      entries: [{ memoryId: 'memory-a' }],
+    } as unknown as WidgetManifest;
+    const at = (iso: string) => Date.parse(iso);
+
+    it('is due without a manifest or with the neutral (empty) card', () => {
+      expect(isWidgetForegroundSyncDue(null, at('2026-09-15T10:01:00.000Z'))).toBe(true);
+      expect(isWidgetForegroundSyncDue({ ...baseManifest, entries: [] }, at('2026-09-15T10:01:00.000Z'))).toBe(true);
+    });
+
+    it('is not due inside the interval on the same family-local day', () => {
+      expect(isWidgetForegroundSyncDue(baseManifest, at('2026-09-15T10:10:00.000Z'))).toBe(false);
+    });
+
+    it('is due after the interval, after lease expiry, on a clock rewind, or on a new family-local day', () => {
+      expect(isWidgetForegroundSyncDue(baseManifest, at('2026-09-15T10:16:00.000Z'))).toBe(true);
+      expect(isWidgetForegroundSyncDue(baseManifest, at('2026-09-15T09:00:00.000Z'))).toBe(true);
+      expect(isWidgetForegroundSyncDue(
+        { ...baseManifest, verifiedAt: '2026-09-22T09:55:00.000Z' },
+        at('2026-09-22T10:01:00.000Z'),
+      )).toBe(true);
+      // 23:55 -> 00:05 local midnight crossing, well inside 15 minutes.
+      expect(isWidgetForegroundSyncDue(
+        { ...baseManifest, verifiedAt: '2026-09-15T23:55:00.000Z', expiresAt: '2026-09-22T23:55:00.000Z' },
+        at('2026-09-16T00:05:00.000Z'),
+      )).toBe(true);
+    });
+
+    it('uses the manifest family timezone for the day boundary', () => {
+      // 23:55Z is already the next day in Tokyo, so 00:05Z is the same local day there.
+      expect(isWidgetForegroundSyncDue(
+        { ...baseManifest, timezone: 'Asia/Tokyo', verifiedAt: '2026-09-15T23:55:00.000Z', expiresAt: '2026-09-22T23:55:00.000Z' },
+        at('2026-09-16T00:05:00.000Z'),
+      )).toBe(false);
+    });
+
+    it('classifies mutation keys', () => {
+      expect(isWidgetContentMutationKey(['memories', 'create'])).toBe(true);
+      expect(isWidgetContentMutationKey(['calendar-memories'])).toBe(true);
+      expect(isWidgetContentMutationKey(['content-safety', 'block'])).toBe(true);
+      expect(isWidgetContentMutationKey(['memory-reactions'])).toBe(false);
+      expect(isWidgetContentMutationKey(['user-profile'])).toBe(false);
+      expect(isWidgetContentMutationKey(undefined)).toBe(true);
+      expect(isWidgetContentMutationKey([])).toBe(true);
+    });
   });
 
   it('clears another account persisted on disk on a cold offline start', async () => {

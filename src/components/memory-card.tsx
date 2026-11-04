@@ -41,7 +41,10 @@ interface MemoryCardProps {
   onOpenComments: (memoryId: string) => void;
   isVideoActive?: boolean;
   isIllustrationHidden?: boolean;
-  onShowIllustration?: () => void;
+  // Id-based like `onPress` (a stable parent callback, not a per-row closure,
+  // so React.memo can bail out): the card hands back what the parent needs to
+  // identify the reported illustration version.
+  onShowIllustration?: (memoryId: string, illustrationGenerationId: string | null) => void;
 }
 
 // ── Illustration visual ───────────────────────────────────────────────────────
@@ -168,6 +171,9 @@ function SpreadCard({
     : null;
   const handlePress = () => onPress(memory.id);
   const handleOpenComments = () => onOpenComments(memory.id);
+  const handleShowIllustration = onShowIllustration
+    ? () => onShowIllustration(memory.id, memory.illustration_generation_id ?? null)
+    : undefined;
   // Tapping the carousel opens the detail screen on that same page; tapping
   // the caption/footer below it has no page context, so it opens on the first.
   const handleMediaPress = (mediaIndex: number) => onPress(memory.id, mediaIndex);
@@ -219,10 +225,10 @@ function SpreadCard({
 
   return (
     <View style={styles.card} testID={`memory-card-${memory.id}`}>
-      {isIllustrationHidden && onShowIllustration ? (
+      {isIllustrationHidden && handleShowIllustration ? (
         <ContentHiddenNotice
           label="Reported AI illustration hidden"
-          onShow={onShowIllustration}
+          onShow={handleShowIllustration}
           style={styles.hiddenIllustration}
           testID={`memory-card-${memory.id}-illustration-hidden`}
         />

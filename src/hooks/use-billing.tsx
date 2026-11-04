@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState } from 'react-native';
 
 import { useAuth } from '@/hooks/use-auth';
+import { billingStatusQueryKeyBase } from '@/hooks/queryKeys';
 import { useFamily } from '@/hooks/use-family';
 import {
   addCustomerInfoListener,
@@ -20,7 +21,7 @@ import {
 } from '@/services/billing';
 import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 
-export const billingStatusQueryKey = ['family-billing-status'] as const;
+export const billingStatusQueryKey = [billingStatusQueryKeyBase] as const;
 export const billingOfferingsQueryKey = ['revenuecat-offerings'] as const;
 
 interface BillingContextValue {
@@ -40,7 +41,7 @@ interface BillingContextValue {
 const BillingContext = createContext<BillingContextValue | null>(null);
 
 export function BillingProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, isLoading: isAuthLoading } = useAuth();
   const { familyId } = useFamily();
   const queryClient = useQueryClient();
   const [configuredUserId, setConfiguredUserId] = useState<string | null>(null);
@@ -95,15 +96,25 @@ export function BillingProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the identity must be invalidated before any enabled query can observe this session
     setConfiguredUserId(null);
 
-    if (!user) {
+    if (!billingUserId) {
       lastReconcileAtRef.current = 0;
       lastReconcileUserIdRef.current = null;
       // Trial eligibility and available packages can change when the device's
       // StoreKit/Play account changes, even if the Momora user signs back in
       // with the same email. Never let the next session reuse an offerings or
       // family-status result from the previous customer.
-      queryClient.removeQueries({ queryKey: billingOfferingsQueryKey });
-      queryClient.removeQueries({ queryKey: billingStatusQueryKey });
+      //
+      // Not while auth is still resolving, though: AuthProvider hydrates its
+      // provisional session from storage a tick AFTER mount, so `user` is null
+      // on the very first render of a cold start. Removing here would delete
+      // the persisted billing status the cache just restored -- the entire
+      // point of persisting it (docs/features/subscriptions.md "Cold start and
+      // persisted status"). Once auth settles with no user this effect re-runs
+      // (isAuthLoading is a dep) and the removal happens as before.
+      if (!isAuthLoading) {
+        queryClient.removeQueries({ queryKey: billingOfferingsQueryKey });
+        queryClient.removeQueries({ queryKey: billingStatusQueryKey });
+      }
       const logoutPromise = logOutRevenueCat();
       logoutInFlightRef.current = logoutPromise;
       void logoutPromise.finally(() => {
@@ -126,9 +137,9 @@ export function BillingProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const result = await configureRevenueCat(user.id);
+        const result = await configureRevenueCat(billingUserId);
         if (mounted && billingTransitionRef.current === transition) {
-          setConfiguredUserId(result.configured ? user.id : null);
+          setConfiguredUserId(result.configured ? billingUserId : null);
         }
       } catch {
         if (mounted && billingTransitionRef.current === transition) {
@@ -140,7 +151,11 @@ export function BillingProvider({ children }: { children: ReactNode }) {
     return () => {
       mounted = false;
     };
-  }, [queryClient, user]);
+  // Keyed on the user ID, not the `user` object: auth-js hands back a fresh
+  // user object on every token refresh, and AuthProvider swaps a provisional
+  // (storage-hydrated) session for the refreshed one on every cold start.
+  // Depending on the object would reset RevenueCat configuration each time.
+  }, [queryClient, billingUserId, isAuthLoading]);
 
   useEffect(() => {
     if (!isConfigured) return;

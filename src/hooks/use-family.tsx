@@ -11,7 +11,7 @@ import {
 } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
-import { useUserProfile } from '@/hooks/useUserProfile';
+import { userProfileQueryKey, useUserProfile } from '@/hooks/useUserProfile';
 import {
   calendarMemoriesQueryKeyBase,
   familyMembershipsQueryKeyBase,
@@ -23,6 +23,10 @@ import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { clearGalleryImportCheckpointsForScope } from '@/utils/gallery-import-checkpoint';
 import { fetchMyFamilyMemberships } from '@/services/family';
+import type { UserProfile } from '@/services/user-profile';
+
+// What the profile query caches (fetchUserProfile resolves `null` for no row).
+type UserProfileCache = UserProfile | null;
 
 export interface FamilyMembershipSummary {
   id: string;
@@ -240,7 +244,29 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
 
   const setActiveFamily = useCallback(
     async (familyId: string) => {
-      await updateProfile({ activeFamilyId: familyId });
+      // Optimistic flip (docs/plans/performance-optimizations.md): the active
+      // family used to change only after the profile write AND the follow-up
+      // profile refetch (two round trips). Patch the cached profile first so
+      // `resolvedMembership` -- and every family-scoped query key -- switches
+      // immediately; roll back and rethrow if the write fails so callers
+      // still see the failure. `correctingRef` is deliberately untouched: the
+      // stale-active-family effect only fires when `activeFamilyId` is NOT a
+      // current membership, and an optimistic value always is one.
+      await queryClient.cancelQueries({ queryKey: userProfileQueryKey });
+      const previousProfile = queryClient.getQueryData<UserProfileCache>(userProfileQueryKey);
+      queryClient.setQueryData<UserProfileCache>(userProfileQueryKey, (old) =>
+        old ? { ...old, active_family_id: familyId } : old,
+      );
+      try {
+        await updateProfile({ activeFamilyId: familyId });
+      } catch (error) {
+        // Only restore if nothing newer replaced our optimistic value (e.g. a
+        // concurrent switch, or a refetch that already landed the truth).
+        queryClient.setQueryData<UserProfileCache>(userProfileQueryKey, (current) =>
+          current?.active_family_id === familyId ? previousProfile : current,
+        );
+        throw error;
+      }
       queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
       queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
       queryClient.invalidateQueries({ queryKey: [familyMembersQueryKeyBase] });
@@ -249,10 +275,15 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
     [updateProfile, queryClient],
   );
 
+  // Depend on the (stable) `refetch` function, not the whole TanStack result
+  // object -- that object is a new reference every render, which made this
+  // callback, the context `value` below, and therefore every useFamily()
+  // consumer change on every FamilyProvider render.
+  const refetchMembershipsQuery = membershipsQuery.refetch;
   const refetchMemberships = useCallback(async () => {
-    const result = await membershipsQuery.refetch();
+    const result = await refetchMembershipsQuery();
     return result.data;
-  }, [membershipsQuery]);
+  }, [refetchMembershipsQuery]);
 
   const value = useMemo<FamilyContextValue>(
     () => ({

@@ -294,6 +294,91 @@ describe('FamilyProvider', () => {
     expect(mockedClearPersistedQueryCache).not.toHaveBeenCalled();
   });
 
+  it('flips the active family optimistically, before the profile write resolves', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({
+      data: [familyAMembership(), familyBMembership()],
+      error: null,
+    });
+    let resolveWrite: (value: { data: never; error: null }) => void = () => undefined;
+    mockedUpdateUserProfile.mockImplementation(
+      () => new Promise((resolve) => { resolveWrite = resolve as typeof resolveWrite; }),
+    );
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    let settled = false;
+    let pending: Promise<void> = Promise.resolve();
+    act(() => {
+      pending = result.current.setActiveFamily('family-b').then(() => { settled = true; });
+    });
+
+    // The write is still in flight, yet the active family already switched.
+    await waitFor(() => expect(result.current.familyId).toBe('family-b'));
+    expect(settled).toBe(false);
+
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,
+      error: null,
+    });
+    await act(async () => {
+      resolveWrite({ data: { id: 'user-1', active_family_id: 'family-b' } as never, error: null });
+      await pending;
+    });
+    expect(settled).toBe(true);
+    expect(result.current.familyId).toBe('family-b');
+  });
+
+  it('rolls the optimistic active-family switch back and rethrows when the profile write fails', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({
+      data: [familyAMembership(), familyBMembership()],
+      error: null,
+    });
+    mockedUpdateUserProfile.mockResolvedValue({ data: null, error: { message: 'write failed' } });
+
+    const { result } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+
+    let thrown: unknown;
+    await act(async () => {
+      try {
+        await result.current.setActiveFamily('family-b');
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(thrown).toBeDefined();
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+  });
+
+  it('keeps refetchMemberships and the context value referentially stable across provider re-renders', async () => {
+    mockedFetchUserProfile.mockResolvedValue({
+      data: { id: 'user-1', active_family_id: 'family-a', name: 'Test' } as never,
+      error: null,
+    });
+    mockedFetchMemberships.mockResolvedValue({ data: [familyAMembership()], error: null });
+
+    const { result, rerender } = renderHook(() => useFamily(), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.familyId).toBe('family-a'));
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    const first = result.current;
+    rerender({});
+    rerender({});
+    expect(result.current.refetchMemberships).toBe(first.refetchMemberships);
+    expect(result.current.setActiveFamily).toBe(first.setActiveFamily);
+    expect(result.current).toBe(first);
+  });
+
   it('purges private persisted data when a non-active family membership disappears', async () => {
     mockedFetchUserProfile.mockResolvedValue({
       data: { id: 'user-1', active_family_id: 'family-b', name: 'Test' } as never,

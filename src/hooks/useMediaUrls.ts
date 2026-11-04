@@ -52,6 +52,20 @@ export function mediaUrlsQueryOptions(
   };
 }
 
+export interface UseMediaUrlsOptions {
+  /**
+   * Seed `data` synchronously, on the first render, with any still-fresh
+   * signed URL for these keys that another media-urls query already holds
+   * (see readCachedMediaUrls) -- until this query's own request lands. Opt-in
+   * because it makes `data` partial while `isPlaceholderData` is true; only
+   * callers that render per-key (and can show what they have) should ask.
+   * The detail carousel uses it so the timeline's already-signed PREVIEW
+   * URLs paint immediately, while the original's URL is still being signed
+   * (docs/plans/performance-optimizations.md Workstream C6).
+   */
+  seedFromCache?: boolean;
+}
+
 /**
  * `cacheVersion` busts the presigned-URL react-query cache on edits (pass
  * `memory.updated_at`/`member.updated_at` after saves) so a stale signed URL
@@ -64,14 +78,27 @@ export function mediaUrlsQueryOptions(
  * way; overwriting bytes under a reused key would silently serve stale
  * cached images to any client that already has that key cached.
  */
-export function useMediaUrls(keys: string[], cacheVersion?: string | null) {
+export function useMediaUrls(
+  keys: string[],
+  cacheVersion?: string | null,
+  { seedFromCache = false }: UseMediaUrlsOptions = {},
+) {
+  const queryClient = useQueryClient();
   const normalizedKeys = keys.filter(Boolean);
   const options = mediaUrlsQueryOptions(keys, cacheVersion);
+  const keySignature = Array.from(new Set(normalizedKeys)).sort().join('|');
+  // Resolved once per distinct key set (not per render): reading the query
+  // cache walks every media-urls query.
+  const seed = useMemo(() => {
+    if (!seedFromCache || !keySignature) return undefined;
+    const cached = readCachedMediaUrls(queryClient, keySignature.split('|'));
+    return Object.keys(cached).length > 0 ? cached : undefined;
+  }, [keySignature, queryClient, seedFromCache]);
 
   return useQuery({
     ...options,
     enabled: normalizedKeys.length > 0,
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData) => previousData ?? seed,
   });
 }
 

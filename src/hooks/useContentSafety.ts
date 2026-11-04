@@ -3,7 +3,11 @@ import { useCallback, useMemo } from 'react';
 
 import { useFamily } from '@/hooks/use-family';
 import { useAuth } from '@/hooks/use-auth';
-import { keepsakesOverviewQueryKeyBase } from '@/hooks/queryKeys';
+import {
+  blockedFamilyAccountsQueryKeyBase,
+  contentReportsQueryKeyBase,
+  keepsakesOverviewQueryKeyBase,
+} from '@/hooks/queryKeys';
 import { clearMemoryWidgetForScope } from '@/hooks/useMemoryWidgetSync';
 import {
   createContentReport,
@@ -16,9 +20,6 @@ import {
   type ReportTargetType,
 } from '@/services/content-safety';
 
-export const contentReportsQueryKeyBase = 'content-reports' as const;
-export const blockedFamilyAccountsQueryKeyBase = 'blocked-family-accounts' as const;
-
 export function contentReportsQueryKey(userId: string | null | undefined, familyId: string | null | undefined) {
   return [contentReportsQueryKeyBase, userId, familyId] as const;
 }
@@ -30,6 +31,11 @@ export function blockedFamilyAccountsQueryKey(userId: string | null | undefined,
 export function contentSafetyRevealsQueryKey(userId: string | null | undefined, familyId: string | null | undefined) {
   return ['content-safety-reveals', userId, familyId] as const;
 }
+
+// Stable empties: `query.data ?? []` would mint a new array every render while
+// a query is disabled/loading and defeat the memoized return below.
+const EMPTY_REPORTS: ContentReport[] = [];
+const EMPTY_BLOCKS: BlockedFamilyAccount[] = [];
 
 interface ContentSafetyReveals {
   reportIds: string[];
@@ -186,41 +192,66 @@ export function useContentSafety() {
     return Boolean(report && !revealedReportIds.has(report.id));
   }, [familyId, reportsByTarget, revealedReportIds]);
 
-  return {
-    reports: reportsQuery.data ?? [],
-    blocks: blocksQuery.data ?? [],
-    isLoading: reportsQuery.isLoading || blocksQuery.isLoading,
-    isError: reportsQuery.isError || blocksQuery.isError,
-    refetch: async () => {
-      await Promise.all([reportsQuery.refetch(), blocksQuery.refetch()]);
-    },
-    report: reportMutation.mutateAsync,
-    isReporting: reportMutation.isPending,
-    setAccountBlocked: blockMutation.mutateAsync,
-    isUpdatingBlock: blockMutation.isPending,
+  const reportsRefetch = reportsQuery.refetch;
+  const blocksRefetch = blocksQuery.refetch;
+  const refetch = useCallback(async () => {
+    await Promise.all([reportsRefetch(), blocksRefetch()]);
+  }, [reportsRefetch, blocksRefetch]);
+
+  const revealBlockedUser = useCallback((blockedUserId: string) => {
+    const block = blocksByUser.get(blockedUserId);
+    if (!block) return;
+    queryClient.setQueryData<ContentSafetyReveals>(contentSafetyRevealsQueryKey(userId, familyId), (current) => ({
+      reportIds: current?.reportIds ?? [],
+      blockIds: [...new Set([...(current?.blockIds ?? []), block.id])],
+    }));
+  }, [blocksByUser, familyId, queryClient, userId]);
+
+  const revealTarget = useCallback((
+    targetType: ReportTargetType,
+    targetId: string,
+    targetVersionId?: string | null,
+  ) => {
+    const report = reportsByTarget.get(targetKey(familyId, targetType, targetId, targetVersionId));
+    if (!report) return;
+    queryClient.setQueryData<ContentSafetyReveals>(contentSafetyRevealsQueryKey(userId, familyId), (current) => ({
+      reportIds: [...new Set([...(current?.reportIds ?? []), report.id])],
+      blockIds: current?.blockIds ?? [],
+    }));
+  }, [familyId, queryClient, reportsByTarget, userId]);
+
+  const reports = reportsQuery.data ?? EMPTY_REPORTS;
+  const blocks = blocksQuery.data ?? EMPTY_BLOCKS;
+  const isLoading = reportsQuery.isLoading || blocksQuery.isLoading;
+  const isError = reportsQuery.isError || blocksQuery.isError;
+  const { mutateAsync: report, isPending: isReporting } = reportMutation;
+  const { mutateAsync: setAccountBlocked, isPending: isUpdatingBlock } = blockMutation;
+
+  // Memoized (docs/plans/performance-optimizations.md, timeline re-render
+  // audit): this hook is called by the timeline (whose memoized MemoryCard
+  // rows depend on `isTargetReported`/`revealTarget`) and per-pill in the
+  // memory detail screen. A fresh object literal each render made every
+  // consumer's useCallback/useMemo that listed the whole result as a dep
+  // rebuild on every render. Every member is a primitive, a stable query
+  // result, or a useCallback keyed on the data it reads.
+  return useMemo(() => ({
+    reports,
+    blocks,
+    isLoading,
+    isError,
+    refetch,
+    report,
+    isReporting,
+    setAccountBlocked,
+    isUpdatingBlock,
     getBlockForUser,
     isUserBlocked,
-    revealBlockedUser: (blockedUserId: string) => {
-      const block = blocksByUser.get(blockedUserId);
-      if (!block) return;
-      queryClient.setQueryData<ContentSafetyReveals>(contentSafetyRevealsQueryKey(userId, familyId), (current) => ({
-        reportIds: current?.reportIds ?? [],
-        blockIds: [...new Set([...(current?.blockIds ?? []), block.id])],
-      }));
-    },
+    revealBlockedUser,
     hasActiveReport,
     isTargetReported,
-    revealTarget: (
-      targetType: ReportTargetType,
-      targetId: string,
-      targetVersionId?: string | null,
-    ) => {
-      const report = reportsByTarget.get(targetKey(familyId, targetType, targetId, targetVersionId));
-      if (!report) return;
-      queryClient.setQueryData<ContentSafetyReveals>(contentSafetyRevealsQueryKey(userId, familyId), (current) => ({
-        reportIds: [...new Set([...(current?.reportIds ?? []), report.id])],
-        blockIds: current?.blockIds ?? [],
-      }));
-    },
-  };
+    revealTarget,
+  }), [
+    reports, blocks, isLoading, isError, refetch, report, isReporting, setAccountBlocked, isUpdatingBlock,
+    getBlockForUser, isUserBlocked, revealBlockedUser, hasActiveReport, isTargetReported, revealTarget,
+  ]);
 }

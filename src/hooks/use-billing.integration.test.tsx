@@ -2,7 +2,7 @@ import { act, render, waitFor } from '@testing-library/react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
-import { BillingProvider, useBilling } from '@/hooks/use-billing';
+import { BillingProvider, billingStatusQueryKey, useBilling } from '@/hooks/use-billing';
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
 import {
@@ -43,10 +43,11 @@ const mockedLogOutRevenueCat = logOutRevenueCat as jest.MockedFunction<typeof lo
 const mockedReconcileBillingAccess = reconcileBillingAccess as jest.MockedFunction<typeof reconcileBillingAccess>;
 const mockedAddCustomerInfoListener = addCustomerInfoListener as jest.MockedFunction<typeof addCustomerInfoListener>;
 
-function renderProvider() {
+function renderProvider(seedCache?: (client: QueryClient) => void) {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } },
   });
+  seedCache?.(queryClient);
   let latestBilling: ReturnType<typeof useBilling> | null = null;
 
   function Capture({ onCapture }: { onCapture: (billing: ReturnType<typeof useBilling>) => void }) {
@@ -196,6 +197,61 @@ describe('BillingProvider session transitions', () => {
 
     await waitFor(() => expect(mockedConfigureRevenueCat).toHaveBeenCalledWith('user-a'));
     await waitFor(() => expect(mockedFetchBillingOfferings).toHaveBeenCalledTimes(1));
+
+    screen.unmount();
+    screen.queryClient.clear();
+  });
+
+  // Cold start (docs/features/subscriptions.md "Cold start and persisted
+  // status"): the billing status is restored from the persisted cache, but
+  // AuthProvider's user is still null on the first render. That must not wipe
+  // the restored status; a settled signed-out state still must.
+  it('keeps a restored billing status while auth is still loading, and removes it once auth settles signed out', async () => {
+    const restoredKey = [...billingStatusQueryKey, 'family-1'];
+    const restored = { data: { family_id: 'family-1', has_write_access: true }, error: null };
+    let isAuthLoading = true;
+    currentUser = null;
+    mockedUseAuth.mockImplementation(() => ({ user: currentUser, isLoading: isAuthLoading }) as never);
+
+    // Seeded before mount, like the persisted cache restore that precedes it.
+    const screen = renderProvider((client) => client.setQueryData(restoredKey, restored));
+
+    await waitFor(() => expect(mockedLogOutRevenueCat).toHaveBeenCalled());
+    expect(screen.queryClient.getQueryData(restoredKey)).toEqual(restored);
+
+    isAuthLoading = false;
+    await act(async () => {
+      screen.rerender(
+        <QueryClientProvider client={screen.queryClient}>
+          <BillingProvider><BillingProbe /></BillingProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(screen.queryClient.getQueryData(restoredKey)).toBeUndefined();
+
+    screen.unmount();
+    screen.queryClient.clear();
+  });
+
+  it('does not reconfigure RevenueCat when the auth user object is replaced but the user id is unchanged', async () => {
+    const screen = renderProvider();
+    await waitFor(() => expect(mockedConfigureRevenueCat).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockedFetchBillingOfferings).toHaveBeenCalledTimes(1));
+
+    // Provisional -> refreshed session (and every hourly token refresh) hands
+    // back a new user object for the same account.
+    currentUser = { id: 'user-a' };
+    await act(async () => {
+      screen.rerender(
+        <QueryClientProvider client={screen.queryClient}>
+          <BillingProvider><BillingProbe /></BillingProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(mockedConfigureRevenueCat).toHaveBeenCalledTimes(1);
+    expect(mockedLogOutRevenueCat).not.toHaveBeenCalled();
 
     screen.unmount();
     screen.queryClient.clear();

@@ -177,4 +177,31 @@ describe('useContentSafety', () => {
     });
     expect(invalidate).toHaveBeenCalledWith(expected);
   });
+
+  it('returns a referentially stable result across re-renders while its data is unchanged', async () => {
+    mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as never);
+    mockedUseFamily.mockReturnValue({ familyId: 'family-1' } as never);
+    mockedFetchReports.mockResolvedValue({ data: [], error: null });
+    mockedFetchBlocks.mockResolvedValue({ data: [], error: null });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { gcTime: Infinity } },
+    });
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const hook = renderHook(() => useContentSafety(), { wrapper });
+    await waitFor(() => expect(hook.result.current.isLoading).toBe(false));
+
+    const first = hook.result.current;
+    hook.rerender({});
+    hook.rerender({});
+
+    // Whole object (what a per-row consumer lists as a dep) and every callback
+    // a memoized timeline row would receive.
+    expect(hook.result.current).toBe(first);
+    expect(hook.result.current.refetch).toBe(first.refetch);
+    expect(hook.result.current.isTargetReported).toBe(first.isTargetReported);
+    expect(hook.result.current.revealTarget).toBe(first.revealTarget);
+    expect(hook.result.current.revealBlockedUser).toBe(first.revealBlockedUser);
+  });
 });

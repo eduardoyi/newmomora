@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -19,6 +19,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import { artworkRatio } from '@/components/artwork/artwork-layout';
 import { ArtworkPiece, getDetailSingleLayout } from '@/components/artwork/artwork-piece';
+import { artworkPlaceholderKey } from '@/components/artwork/artwork-pieces';
 import { useArtworkUrlRecovery } from '@/components/artwork/artwork-piece-image';
 import { GalleryWalk } from '@/components/artwork/gallery-walk';
 import { GalleryWall } from '@/components/artwork/gallery-wall';
@@ -248,9 +249,15 @@ function ArtworkDetailStage({
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const assets = memory.mediaAssets;
+  // The detail wall shows the originals (decision C6, performance plan), but
+  // also signs each piece's Timeline preview in the same batch and seeds from
+  // the media-urls cache: the preview (already on disk under the Timeline's
+  // cacheKey) paints as a placeholder instead of a spinner while the
+  // original downloads.
   const { data: urls = {}, refetch } = useMediaUrls(
-    assets.map((asset) => asset.object_key),
+    assets.flatMap((asset) => [asset.object_key, artworkPlaceholderKey(asset) ?? '']),
     memory.updated_at,
+    { seedFromCache: true },
   );
   // Bounded: one re-sign per piece until an image loads (a failing URL must not
   // loop error -> refetch -> error).
@@ -287,6 +294,7 @@ function ArtworkDetailStage({
             onPress={() => onOpenFullScreen(0)}
             onUrlError={handleUrlError}
             onUrlLoad={handleUrlLoad}
+            placeholderUrl={urls[artworkPlaceholderKey(first) ?? '']}
             testID="memory-detail-artwork-frame"
             url={urls[first.object_key]}
           />
@@ -311,6 +319,7 @@ function MemoryDetailFramed({
   illustrationUrl,
   attributionName,
   initialMediaIndex,
+  isTransitionComplete,
   canEdit,
   onBack,
   onRegenerateIllustration,
@@ -330,6 +339,8 @@ function MemoryDetailFramed({
   illustrationUrl: string | null | undefined;
   attributionName: string;
   initialMediaIndex: number;
+  /** The push animation has finished (see useScreenTransitionEnded). */
+  isTransitionComplete: boolean;
   canEdit: boolean;
   onBack: () => void;
   onRegenerateIllustration?: () => void;
@@ -384,6 +395,7 @@ function MemoryDetailFramed({
         cacheVersion={memory.updated_at}
         initialIndex={initialMediaIndex}
         isActive={fullScreenIndex === null}
+        isPlaybackDeferred={!isTransitionComplete}
         mutedVideos={false}
         onActiveIndexChange={setActiveMediaIndex}
         onPress={setFullScreenIndex}
@@ -907,6 +919,38 @@ function MemoryDetailSound({
   );
 }
 
+/** Longest we wait for `transitionEnd` before assuming there is no push
+ * animation (replace with animation: none, or an event that never fires). */
+const TRANSITION_END_FALLBACK_MS = 500;
+
+/**
+ * True once this screen's native-stack transition has finished. Gates video
+ * autoplay: the player is created and play() called on mount, which would
+ * otherwise start decoding (and audio, `mutedVideos={false}`) during the push
+ * animation. The poster is already on screen until the first frame, so
+ * waiting costs nothing visible. Falls back to a timer for screens that mount
+ * without a transition. Lives on the screen (not the memory body) because the
+ * body can mount long after the transition ended -- a late listener would
+ * wait out the fallback for nothing.
+ */
+function useScreenTransitionEnded(): boolean {
+  const navigation = useNavigation() as unknown as {
+    addListener: (type: 'transitionEnd', listener: () => void) => () => void;
+  };
+  const [hasEnded, setHasEnded] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('transitionEnd', () => setHasEnded(true));
+    const fallback = setTimeout(() => setHasEnded(true), TRANSITION_END_FALLBACK_MS);
+    return () => {
+      unsubscribe();
+      clearTimeout(fallback);
+    };
+  }, [navigation]);
+
+  return hasEnded;
+}
+
 const ILLUSTRATION_REVIEW_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 // ── Root ──────────────────────────────────────────────────────────────────────
@@ -917,6 +961,7 @@ export default function MemoryDetailScreen() {
     mediaIndex?: string;
   }>();
   const { data: memory, isLoading, isError } = useMemory(id);
+  const isTransitionComplete = useScreenTransitionEnded();
   // Which carousel page the caller was looking at (see memoryDetailRoute).
   // Anything unparseable falls back to the first asset; the carousel clamps
   // an index past the end of the asset list.
@@ -1289,6 +1334,7 @@ export default function MemoryDetailScreen() {
         illustrationUrl={illustrationUrl}
         attributionName={attributionName}
         initialMediaIndex={initialMediaIndex}
+        isTransitionComplete={isTransitionComplete}
         canEdit={canEdit}
         onBack={leaveMemoryDetail}
         onRegenerateIllustration={

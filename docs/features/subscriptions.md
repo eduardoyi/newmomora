@@ -268,6 +268,25 @@ family status/admission check.
   `allow_sandbox_access` flag disabled outside a short, explicitly controlled
   QA window.
 
+### Cold start and persisted status
+
+`family-billing-status` is on the query-persistence allow-list, so a cold
+start restores the last status synchronously with the rest of the cache and
+revalidates in the background (it is older than the 60s `staleTime`, so it
+refetches on mount). Without this, `app/index.tsx` held the branded splash on
+`fetchFamilyBillingStatus` (NetInfo + RPC) every launch. A restored
+`has_write_access: true` can therefore be shown briefly for a family whose
+access has since lapsed; that is accepted because the existing AsyncStorage
+status cache in `services/billing.ts` already serves stale status offline for up
+to 15 minutes, the server (RLS / write RPCs) remains the enforcement point, and
+the revalidation corrects the UI within one round trip. Only a real success
+payload persists: a resolved `{ data: null, error }` or an `is_offline`
+fallback is never dehydrated (otherwise the next launch would open on
+`BillingStatusGate`). The key includes `familyId`; sign-out and family loss purge
+the whole persisted cache, and `BillingProvider` removes billing queries once
+auth settles signed out (not while auth is still resolving, which would delete
+the just-restored status). RevenueCat offerings are not persisted.
+
 ## Dependencies
 
 - Depends on: onboarding, family-sharing, memories, usage-limits, Supabase
@@ -375,6 +394,7 @@ npm run test:edge
 
 | Date | Change |
 |------|--------|
+| 2026-11-04 | Billing status is persisted (success payloads only) so cold start no longer blocks on `fetchFamilyBillingStatus`; see "Cold start and persisted status". |
 | 2026-10-28 | iOS Apple Ads attribution: AdServices token collection after RevenueCat configure (standard attribution, no ATT). Ships with the 1.5.1 store build. |
 | 2026-08-04 | Unblocked Android sandbox purchases: paused the stale "Security Enhancements" closed track that pinned tester accounts to pre-billing v1.1.1, disabled Play automatic protection (incompatible with license testing; requires a fresh AAB ≥ build 40), and documented the Android on-device billing test requirements. Discovered live v1.1.1 cannot onboard new users under `all_families` enforcement (pre-RPC client inserts hit billing RLS) — production needs 1.2.0 or an enforcement decision. |
 | 2026-08-03 | Fixed Android paid-now paywall for trial-eligible owners: replaced the new-customer-acquisition Google Play offer with developer-determined `annual-7d-trial-v2` (Google was filtering the offer by Google-account history the server cannot see) and added the dev-only `[billing:android-trial]` eligibility diagnostic log. |
