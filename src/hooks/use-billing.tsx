@@ -28,7 +28,11 @@ interface BillingContextValue {
   offerings: BillingOfferings | null;
   status: Awaited<ReturnType<typeof fetchFamilyBillingStatus>>['data'];
   isConfigured: boolean;
+  // Offerings (store prices) AND status. Only paywall/trial need this.
   isLoading: boolean;
+  // Subscription status only -- gates on write access (composer shortcuts,
+  // cold-start routing, Settings caption) must not wait on store prices.
+  isStatusLoading: boolean;
   isOffline: boolean;
   billingStatusError: BillingServiceError | Error | null;
   offeringsError: Error | null;
@@ -261,7 +265,8 @@ export function BillingProvider({ children }: { children: ReactNode }) {
 
   const offerings = offeringsQuery.data ?? null;
   const status = statusQuery.data?.data ?? null;
-  const isLoading = offeringsQuery.isLoading || statusQuery.isLoading;
+  const isStatusLoading = statusQuery.isLoading;
+  const isLoading = offeringsQuery.isLoading || isStatusLoading;
   const isOffline = Boolean(status?.is_offline);
   const billingStatusError = useMemo<BillingServiceError | Error | null>(
     () =>
@@ -285,6 +290,7 @@ export function BillingProvider({ children }: { children: ReactNode }) {
       status,
       isConfigured,
       isLoading,
+      isStatusLoading,
       isOffline,
       billingStatusError,
       offeringsError,
@@ -298,6 +304,7 @@ export function BillingProvider({ children }: { children: ReactNode }) {
       status,
       isConfigured,
       isLoading,
+      isStatusLoading,
       isOffline,
       billingStatusError,
       offeringsError,

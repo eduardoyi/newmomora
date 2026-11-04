@@ -33,11 +33,6 @@ jest.mock('expo-router', () => {
   };
 });
 jest.mock('expo-haptics', () => ({ selectionAsync: jest.fn(() => Promise.resolve()) }));
-jest.mock('lucide-react-native', () => ({
-  ArrowLeft: () => null, ArrowRight: () => null, ChevronLeft: () => null,
-  ChevronRight: () => null, Layers3: () => null, Volume2: () => null,
-  VolumeX: () => null, X: () => null,
-}));
 const mockUseFamily = jest.fn();
 const mockUseContentSafety = jest.fn();
 const mockUseLookingBackPackages = jest.fn();

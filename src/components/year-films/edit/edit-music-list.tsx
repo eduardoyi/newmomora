@@ -1,7 +1,8 @@
 // "Music" section of the Year Film edit sheet: the beds that suit the film,
 // current one checked, each with a play/stop button for its bundled ~5 s
 // preview.
-import { Play, Square } from 'lucide-react-native';
+import Play from 'lucide-react-native/icons/play';
+import Square from 'lucide-react-native/icons/square';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { RadioDot } from '@/components/year-films/edit/edit-quote-list';

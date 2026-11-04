@@ -169,6 +169,7 @@ describe('Settings Family section', () => {
       status: null,
       isConfigured: false,
       isLoading: false,
+      isStatusLoading: false,
       isOffline: false,
       purchase: jest.fn(),
       restore: jest.fn(),

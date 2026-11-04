@@ -408,7 +408,7 @@ describe('NewMemoryScreen -- capture-date prefill integration', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -667,7 +667,7 @@ describe('NewMemoryScreen -- draft autosave and prompt placeholder integration',
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -919,7 +919,7 @@ describe('NewMemoryScreen -- memory_saved / memory_save_failed analytics', () =>
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -1165,7 +1165,7 @@ describe('NewMemoryScreen -- audio memories (emergent type)', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -1780,7 +1780,7 @@ describe('NewMemoryScreen -- audio trim and import', () => {
     );
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -2801,7 +2801,7 @@ describe('NewMemoryScreen -- artwork scanning', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',
@@ -3316,7 +3316,7 @@ describe('NewMemoryScreen -- share-copy cleanup', () => {
       canAskAgain: true,
     } as ImagePicker.MediaLibraryPermissionResponse);
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',

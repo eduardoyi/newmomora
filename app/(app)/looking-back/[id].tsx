@@ -1,7 +1,14 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { StatusBar } from 'expo-status-bar';
-import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight, Layers3, Volume2, VolumeX, X } from 'lucide-react-native';
+import ArrowLeft from 'lucide-react-native/icons/arrow-left';
+import ArrowRight from 'lucide-react-native/icons/arrow-right';
+import ChevronLeft from 'lucide-react-native/icons/chevron-left';
+import ChevronRight from 'lucide-react-native/icons/chevron-right';
+import Layers3 from 'lucide-react-native/icons/layers';
+import Volume2 from 'lucide-react-native/icons/volume-2';
+import VolumeX from 'lucide-react-native/icons/volume-x';
+import X from 'lucide-react-native/icons/x';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, AppState, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';

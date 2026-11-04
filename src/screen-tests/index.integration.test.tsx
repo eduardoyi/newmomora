@@ -99,6 +99,7 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
       },
       billingStatusError: null,
       isLoading: false,
+      isStatusLoading: false,
       refresh: jest.fn(),
     } as never);
 
@@ -130,6 +131,7 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
       status: null,
       billingStatusError: null,
       isLoading: false,
+      isStatusLoading: false,
       refresh: jest.fn(),
     } as never);
 
@@ -161,6 +163,7 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
       },
       billingStatusError: null,
       isLoading: false,
+      isStatusLoading: false,
       refresh: jest.fn(),
     } as never);
 
@@ -185,6 +188,7 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
       status: null,
       billingStatusError: null,
       isLoading: true,
+      isStatusLoading: true,
       refresh: jest.fn(),
     } as never);
 
@@ -212,6 +216,7 @@ describe('IndexScreen -- post_auth_destination_resolved + person properties', ()
         },
         billingStatusError: null,
         isLoading: false,
+        isStatusLoading: false,
         refresh: jest.fn(),
       } as never);
     }

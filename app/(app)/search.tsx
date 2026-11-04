@@ -1,5 +1,6 @@
 import { router } from 'expo-router';
-import { Search, X } from 'lucide-react-native';
+import Search from 'lucide-react-native/icons/search';
+import X from 'lucide-react-native/icons/x';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,

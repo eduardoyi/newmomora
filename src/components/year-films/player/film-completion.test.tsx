@@ -3,7 +3,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { FilmCompletion } from '@/components/year-films/player/film-completion';
 
-jest.mock('lucide-react-native', () => ({ RotateCcw: () => null, Share2: () => null }));
 
 const safeAreaMetrics = {
   frame: { height: 844, width: 390, x: 0, y: 0 },

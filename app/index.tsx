@@ -45,7 +45,7 @@ export default function IndexScreen() {
   const {
     status: billingStatus,
     billingStatusError,
-    isLoading: isBillingLoading,
+    isStatusLoading: isBillingStatusLoading,
     refresh: refreshBilling,
   } = useBilling();
   const [deviceState, setDeviceState] = useState<{
@@ -73,7 +73,7 @@ export default function IndexScreen() {
     };
   }, [session]);
 
-  const isBillingBlocked = memberships.length > 0 && !billingStatus && isBillingLoading;
+  const isBillingBlocked = memberships.length > 0 && !billingStatus && isBillingStatusLoading;
   const isBillingFailed = Boolean(memberships.length > 0 && !billingStatus && billingStatusError);
   // Mirrors the early-return loading/gate checks below exactly -- once none
   // of them fire, these are all the conditions that must already be false,

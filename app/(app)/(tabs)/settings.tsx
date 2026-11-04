@@ -246,7 +246,7 @@ export default function SettingsScreen() {
   const { familyId, role } = useFamily();
   const isViewer = isViewerRole(role);
   const isOwner = isOwnerRole(role);
-  const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
+  const { status: billingStatus, isStatusLoading: isBillingStatusLoading } = useBilling();
   const [isExporting, setIsExporting] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -484,7 +484,7 @@ export default function SettingsScreen() {
   };
 
   const isComplimentary = billingStatus?.access_reason === 'complimentary';
-  const subscriptionCaption = isBillingLoading
+  const subscriptionCaption = isBillingStatusLoading
     ? 'Checking access…'
     : isComplimentary
       ? 'Complimentary Momora Plus access'

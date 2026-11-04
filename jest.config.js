@@ -8,6 +8,7 @@ module.exports = {
     '^react-native-purchases$': '<rootDir>/__mocks__/react-native-purchases.ts',
     '^posthog-react-native$': '<rootDir>/__mocks__/posthog-react-native.ts',
     '^expo-media-library$': '<rootDir>/__mocks__/expo-media-library.ts',
+    '^lucide-react-native/icons/(.*)$': '<rootDir>/__mocks__/lucide-icon.ts',
     '^expo-quick-actions$': '<rootDir>/__mocks__/expo-quick-actions.ts',
   },
   transformIgnorePatterns: [

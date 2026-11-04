@@ -5,7 +5,8 @@
 // (quote treatment for text-only, media treatment when a photo/video was
 // attached), but presentational only: no navigation, no engagement writes.
 import { Image } from 'expo-image';
-import { Heart, Play } from 'lucide-react-native';
+import Heart from 'lucide-react-native/icons/heart';
+import Play from 'lucide-react-native/icons/play';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 
 import { kidTint } from '@/components/onboarding/onb-illustration';

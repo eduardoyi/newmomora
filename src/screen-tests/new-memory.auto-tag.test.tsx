@@ -209,7 +209,7 @@ describe('NewMemoryScreen -- auto-tag the sole family member (WS1)', () => {
     } as ImagePicker.MediaLibraryPermissionResponse);
 
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } });
-    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false });
+    mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false });
     mockedUseFamily.mockReturnValue({
       role: 'manager',
       familyId: 'family-1',

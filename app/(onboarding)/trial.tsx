@@ -8,7 +8,9 @@
 // Same date also gave the screen more than a bare timeline: a "you're here"
 // Today node personalized on the kid, and a closing no-risk note.
 import { router } from 'expo-router';
-import { Check, Clock, Send } from 'lucide-react-native';
+import Check from 'lucide-react-native/icons/check';
+import Clock from 'lucide-react-native/icons/clock';
+import Send from 'lucide-react-native/icons/send';
 import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 

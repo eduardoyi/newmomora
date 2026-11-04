@@ -15,9 +15,6 @@ jest.mock('expo-router', () => ({
   useFocusEffect: jest.fn(),
 }));
 
-jest.mock('lucide-react-native', () => ({
-  Play: () => null,
-}));
 
 jest.mock('@/hooks/use-onboarding-flow', () => ({
   useOnboardingFlow: jest.fn(),

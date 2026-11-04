@@ -126,8 +126,8 @@ jest.mock('@/components/memory-media-picker', () => {
   };
 });
 
-// lucide-react-native (Mic, Square, Type, X) is stubbed globally in
-// jest.setup.ts -- no per-file mock needed here.
+// lucide-react-native icons (Mic, Square, Type, X) are stubbed globally via
+// moduleNameMapper in jest.config.js -- no per-file mock needed here.
 
 const mockedUseOnboardingFlow = useOnboardingFlow as jest.MockedFunction<typeof useOnboardingFlow>;
 const mockedEnsureAnonymousSession = ensureAnonymousSession as jest.MockedFunction<typeof ensureAnonymousSession>;

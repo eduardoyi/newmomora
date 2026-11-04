@@ -3,9 +3,11 @@ import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persi
 import { useIsRestoring, type InfiniteData, type Query } from '@tanstack/react-query';
 import {
   PersistQueryClientProvider,
+  persistQueryClientSave,
   type PersistedClient,
 } from '@tanstack/react-query-persist-client';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import { AppState, Platform, type AppStateStatus } from 'react-native';
 
 import { BrandSplash } from '@/components/brand-splash';
 import { isMemoriesListQueryKey } from '@/hooks/memory-cache';
@@ -141,6 +143,53 @@ export function shouldDehydrateQuery(query: Query): boolean {
   );
 }
 
+// Caps on what serializePersistedClient WRITES (the in-memory cache is
+// untouched). Each keeps the newest queries by `state.dataUpdatedAt`, so the
+// one AsyncStorage row stays bounded however long the app has been used.
+/** Newest memory-detail queries (under memoriesQueryKeyBase, segment 'detail') kept on disk. */
+export const PERSISTED_MEMORY_DETAIL_MAX = 30;
+/** Newest Timeline Calendar month-range queries kept on disk. */
+export const PERSISTED_CALENDAR_RANGE_MAX = 6;
+// The timeline's first page is re-fetched on every launch, so its media-urls
+// queries always carry the newest dataUpdatedAt and survive this cap -- an
+// offline cold start of the first page keeps its signed URLs.
+/** Newest 'media-urls' queries (each covers a group of up to 50 object keys) kept on disk. */
+export const PERSISTED_MEDIA_URLS_MAX = 400;
+
+type PersistedQueries = PersistedClient['clientState']['queries'];
+
+function isMemoryDetailQueryKey(queryKey: readonly unknown[]): boolean {
+  return queryKey[0] === memoriesQueryKeyBase && queryKey[2] === 'detail';
+}
+
+function isCalendarRangeQueryKey(queryKey: readonly unknown[]): boolean {
+  return queryKey[0] === calendarMemoriesQueryKeyBase;
+}
+
+function isMediaUrlsQueryKey(queryKey: readonly unknown[]): boolean {
+  return queryKey[0] === 'media-urls';
+}
+
+// Drops all but the `max` most recently updated queries among those matching
+// `matches`; non-matching queries and relative order are preserved.
+function keepNewest(
+  queries: PersistedQueries,
+  matches: (queryKey: readonly unknown[]) => boolean,
+  max: number,
+): PersistedQueries {
+  const matching = queries.filter((query) => matches(query.queryKey));
+  if (matching.length <= max) {
+    return queries;
+  }
+
+  const keep = new Set(
+    matching
+      .sort((a, b) => (b.state.dataUpdatedAt ?? 0) - (a.state.dataUpdatedAt ?? 0))
+      .slice(0, max),
+  );
+  return queries.filter((query) => !matches(query.queryKey) || keep.has(query));
+}
+
 function isInfiniteData(value: unknown): value is InfiniteData<unknown> {
   return Boolean(value) && typeof value === 'object' && Array.isArray((value as InfiniteData<unknown>).pages);
 }
@@ -152,13 +201,20 @@ function isInfiniteData(value: unknown): value is InfiniteData<unknown> {
 // the CursorWindow comment above. Restored data is stale-but-visible either
 // way; O3's reconnect/foreground trim-refresh reconciles from page 1
 // regardless of how many pages were cached in memory, so trimming before
-// persist is functionally free.
+// persist is functionally free. Memory-detail, calendar-range and media-urls
+// queries are additionally capped to their newest N (see the
+// PERSISTED_*_MAX constants).
 export function serializePersistedClient(persistedClient: PersistedClient): string {
+  let queries = persistedClient.clientState.queries;
+  queries = keepNewest(queries, isMemoryDetailQueryKey, PERSISTED_MEMORY_DETAIL_MAX);
+  queries = keepNewest(queries, isCalendarRangeQueryKey, PERSISTED_CALENDAR_RANGE_MAX);
+  queries = keepNewest(queries, isMediaUrlsQueryKey, PERSISTED_MEDIA_URLS_MAX);
+
   const trimmed: PersistedClient = {
     ...persistedClient,
     clientState: {
       ...persistedClient.clientState,
-      queries: persistedClient.clientState.queries.map((query) => {
+      queries: queries.map((query) => {
         if (!isMemoriesListQueryKey(query.queryKey)) {
           return query;
         }
@@ -185,11 +241,56 @@ export function serializePersistedClient(persistedClient: PersistedClient): stri
   return JSON.stringify(trimmed);
 }
 
-export const asyncStoragePersister = createAsyncStoragePersister({
-  storage: AsyncStorage,
-  key: PERSISTED_QUERY_CACHE_KEY,
-  serialize: serializePersistedClient,
-});
+// The library saves on every query-cache event (scrolling the timeline fires
+// them constantly), each a full re-serialize of the one row. 4s keeps writes
+// off the hot path; usePersistOnBackground flushes so the last change is
+// never lost to the wider window.
+export const PERSISTER_THROTTLE_MS = 4000;
+
+export function createQueryCachePersister(throttleTime: number) {
+  return createAsyncStoragePersister({
+    storage: AsyncStorage,
+    key: PERSISTED_QUERY_CACHE_KEY,
+    serialize: serializePersistedClient,
+    throttleTime,
+  });
+}
+
+export const asyncStoragePersister = createQueryCachePersister(PERSISTER_THROTTLE_MS);
+
+// Same key/serializer, no throttle. persistQueryClientSave on the throttled
+// persister would still wait out the remaining window (asyncThrottle sleeps
+// until nextExecutionTime), which is exactly what a background flush must not
+// do -- the JS thread can be suspended within seconds of leaving the app.
+const flushPersister = createQueryCachePersister(0);
+
+// Persists the live cache immediately when the app leaves the foreground.
+// 'inactive' is iOS-only (app-switcher / control-center pull-down); Android
+// goes straight to 'background'. `enabled` must be false until restore has
+// finished: flushing the still-empty cache would overwrite the stored one
+// before it was hydrated.
+function usePersistOnBackground(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) {
+      return undefined;
+    }
+
+    const subscription = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'background' || (state === 'inactive' && Platform.OS === 'ios')) {
+        void persistQueryClientSave({
+          queryClient,
+          persister: flushPersister,
+          buster: PERSISTED_QUERY_CACHE_BUSTER,
+          dehydrateOptions: { shouldDehydrateQuery },
+        }).catch(() => {
+          // Best-effort: the throttled subscriber write remains the fallback.
+        });
+      }
+    });
+
+    return () => subscription.remove();
+  }, [enabled]);
+}
 
 // Purges the persisted cache AND the live in-memory cache. Call on
 // sign-out, account deletion, and leaving/being removed from a family (see
@@ -210,6 +311,7 @@ export async function clearPersistedQueryCache(): Promise<void> {
 
 function RestoreGate({ children }: { children: ReactNode }) {
   const isRestoring = useIsRestoring();
+  usePersistOnBackground(!isRestoring);
 
   if (isRestoring) {
     return <BrandSplash />;

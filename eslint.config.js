@@ -18,4 +18,24 @@ module.exports = defineConfig([
       "react-hooks/set-state-in-effect": "warn",
     },
   },
+  {
+    // Metro has no tree shaking: the lucide barrel evaluates ~1,700 icon
+    // modules at startup. Deep-import each icon instead.
+    files: ["app/**/*.{ts,tsx}", "src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "lucide-react-native",
+              message:
+                "Don't import from the lucide-react-native barrel (it bundles every icon). Use a deep import: `import Search from 'lucide-react-native/icons/search';`",
+              allowTypeImports: true,
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);

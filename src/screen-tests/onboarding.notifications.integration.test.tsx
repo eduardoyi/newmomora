@@ -34,8 +34,8 @@ jest.mock('@/services/analytics', () => ({
   trackEvent: jest.fn(),
 }));
 
-// lucide-react-native (Moon, Sun, X) is stubbed globally in jest.setup.ts --
-// no per-file mock needed here.
+// lucide-react-native icons (Moon, Sun, X) are stubbed globally via
+// moduleNameMapper in jest.config.js -- no per-file mock needed here.
 
 // createEmptyOnboardingDraft lives in the same module as the real
 // AsyncStorage-backed persistence helpers (src/utils/onboarding-progress.ts)

@@ -24,7 +24,9 @@
 // the first three options is what makes the promise honest: the user sees
 // the exact time they're agreeing to.
 import { router } from 'expo-router';
-import { Moon, Sun, X } from 'lucide-react-native';
+import Moon from 'lucide-react-native/icons/moon';
+import Sun from 'lucide-react-native/icons/sun';
+import X from 'lucide-react-native/icons/x';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 

@@ -175,6 +175,26 @@ None. This feature is entirely client-side.
   data is stale-but-visible either way, and the reconnect/foreground
   trim-refresh reconciles from page 1 regardless of how many pages were
   cached in memory).
+- **Other persisted queries are capped, and writes are throttled
+  (2026-11-04).** `serializePersistedClient` also keeps only the newest N
+  (by `state.dataUpdatedAt`) of: memory-detail queries
+  (`PERSISTED_MEMORY_DETAIL_MAX` = 30), Timeline Calendar month-range queries
+  (`PERSISTED_CALENDAR_RANGE_MAX` = 6) and `media-urls` queries
+  (`PERSISTED_MEDIA_URLS_MAX` = 400; each query covers a batch of up to 50
+  object keys). Only the written row is capped — the in-memory cache is
+  untouched, and the allow-list and first-page list trim are unchanged.
+  The persister's `throttleTime` is `PERSISTER_THROTTLE_MS` (4s, was the 1s
+  default) so timeline scrolling is not a full re-serialize every second.
+  Because a 4s window can swallow the last change, `PersistedQueryProvider`
+  flushes on `AppState` `background` (and `inactive` on iOS) with
+  `persistQueryClientSave` through a second, **unthrottled** persister on the
+  same key/serializer (a save through the throttled persister would still
+  wait out the remaining window). The listener is only attached once restore
+  has finished, so it can never overwrite the stored cache with the empty
+  pre-restore client. No `PERSISTED_QUERY_CACHE_BUSTER` bump: the persisted
+  shape did not change. Extending: tune the three caps in
+  `src/lib/query-persistence.tsx`; any new unbounded per-id query base added
+  to the allow-list should get a cap there too.
 - **Restore failure is handled by the library, not custom code:** a
   corrupt or oversized persisted payload makes `persistQueryClientRestore`
   throw; the library's own `persist.ts` already calls `persister.removeClient()`
@@ -245,6 +265,14 @@ persisted URL is harmless either way: with `cacheKey` set, a disk-cache hit
 never touches the network at all, and a miss just fails exactly like having
 no URL would. Excluding it would silently cancel out the whole point of
 pinning `cacheKey` to the object key.
+
+The persisted `media-urls` set is capped to the 400 newest queries by
+`dataUpdatedAt` (`PERSISTED_MEDIA_URLS_MAX`). That cannot starve an offline
+cold start of the timeline's first page: the first page is fetched on every
+launch, so its `media-urls` queries always carry the newest timestamps and
+survive the cap; only URLs for older, deeper-scrolled items age out (their
+bytes remain in the `expo-image` disk cache, but a cold offline launch shows
+their placeholders until online).
 
 ### Cold-start query gates that are also on the allow-list (2026-11-04)
 
@@ -360,4 +388,5 @@ copy.
 
 | Date | Change |
 |------|--------|
+| 2026-11-04 | Persisted-cache caps (30 memory details / 6 calendar ranges / 400 media-urls, newest by `dataUpdatedAt`), 4s persister throttle, and an unthrottled flush on app background/inactive. |
 | 2026-08-05 | Initial implementation: connectivity foundation, offline banner, reconnect refetch strategy, cache persistence with restore gate and purge hooks, fail-fast mutations, pending-upload failure tagging + auto-retry, offline-gated background poll |

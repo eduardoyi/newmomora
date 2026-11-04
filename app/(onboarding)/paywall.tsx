@@ -4,7 +4,8 @@
 // seven-day introductory trial.
 import { Image } from 'expo-image';
 import { Link, router, useLocalSearchParams } from 'expo-router';
-import { Check, X } from 'lucide-react-native';
+import Check from 'lucide-react-native/icons/check';
+import X from 'lucide-react-native/icons/x';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 

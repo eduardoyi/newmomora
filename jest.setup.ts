@@ -153,32 +153,11 @@ jest.mock('expo-image-manipulator', () => ({
   SaveFormat: { JPEG: 'jpeg', PNG: 'png', WEBP: 'webp' },
 }));
 
-// lucide-react-native publishes ESM-only icon entrypoints. Icons are visual
-// decoration in Jest; interaction/accessibility assertions live on their
-// surrounding Pressables.
-jest.mock('lucide-react-native', () => ({
-  ArrowRight: () => null,
-  Bell: () => null,
-  CalendarDays: () => null,
-  Check: () => null,
-  Clock: () => null,
-  Heart: () => null,
-  Plus: () => null,
-  SmilePlus: () => null,
-  Image: () => null,
-  List: () => null,
-  MessageCircle: () => null,
-  Mic: () => null,
-  Moon: () => null,
-  Play: () => null,
-  Search: () => null,
-  Send: () => null,
-  Sparkles: () => null,
-  Square: () => null,
-  Sun: () => null,
-  Type: () => null,
-  X: () => null,
-}));
+// lucide-react-native icons are deep-imported (`lucide-react-native/icons/<name>`,
+// ESM-only) and stubbed to a null-rendering component via moduleNameMapper in
+// jest.config.js -> __mocks__/lucide-icon.ts. Icons are visual decoration in
+// Jest; interaction/accessibility assertions live on their surrounding
+// Pressables.
 
 // Native IME-inset controller. Its maintained Jest mock maps keyboard-aware
 // containers to React Native views while preserving their props for assertions.

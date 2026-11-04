@@ -173,7 +173,7 @@ function setParams(params: Record<string, string>) {
 }
 
 function setBilling(overrides: Record<string, unknown>) {
-  mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, ...overrides });
+  mockedUseBilling.mockReturnValue({ status: { has_write_access: true }, isLoading: false, isStatusLoading: false, ...overrides });
 }
 
 describe('NewMemoryScreen -- app shortcut actions', () => {
@@ -276,7 +276,7 @@ describe('NewMemoryScreen -- app shortcut actions', () => {
   });
 
   it.each([
-    ['billing still loading', () => setBilling({ isLoading: true })],
+    ['billing status still loading', () => setBilling({ isStatusLoading: true })],
     ['billing status missing', () => setBilling({ status: null })],
     ['no write access', () => setBilling({ status: { has_write_access: false } })],
     ['members still loading', () => mockedUseFamilyMembers.mockReturnValue({ members: [], isLoading: true })],
@@ -290,8 +290,17 @@ describe('NewMemoryScreen -- app shortcut actions', () => {
     expect(mockedSetParams).not.toHaveBeenCalled();
   });
 
+  it('fires while offerings are still loading once the status has resolved', async () => {
+    // isLoading covers offerings + status; the shortcut gate only needs status.
+    setBilling({ isLoading: true, isStatusLoading: false });
+    setParams({ action: 'photo', actionId: 'a1' });
+    await renderScreen();
+
+    expect(mockedImagePicker.launchCameraAsync).toHaveBeenCalledTimes(1);
+  });
+
   it('fires once the screen becomes ready', async () => {
-    setBilling({ isLoading: true });
+    setBilling({ isStatusLoading: true });
     setParams({ action: 'photo', actionId: 'a1' });
     const screen = await renderScreen();
     expect(mockedImagePicker.launchCameraAsync).not.toHaveBeenCalled();

@@ -2,7 +2,7 @@
 // film shows (plus ones already removed, so they can be restored). Tap
 // toggles hidden: dimmed with an eye-off badge.
 import { Image } from 'expo-image';
-import { EyeOff } from 'lucide-react-native';
+import EyeOff from 'lucide-react-native/icons/eye-off';
 import { memo, useMemo } from 'react';
 import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 

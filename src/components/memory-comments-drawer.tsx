@@ -1,4 +1,4 @@
-import { Send } from 'lucide-react-native';
+import Send from 'lucide-react-native/icons/send';
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
 import {

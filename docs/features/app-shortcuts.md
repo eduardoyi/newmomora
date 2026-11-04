@@ -25,7 +25,8 @@ parent skips a tap or two while the moment is happening.
   button, including the first-use intro sheet).
 - If the composer is already open, the action runs on that composer and the
   draft is kept; a second composer is never stacked.
-- Actions wait for the screen to be safe: billing loaded with write access,
+- Actions wait for the screen to be safe: billing status loaded with write access
+  (`isStatusLoading`, not `isLoading` -- RevenueCat offerings are not awaited),
   members loaded, draft restore settled. A viewer, a signed-out user, or a user
   with no family gets nothing (normal routing applies, and the action is not
   replayed after a later sign-in).

@@ -29,7 +29,8 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ArrowRight, Image as ImageIcon } from 'lucide-react-native';
+import ArrowRight from 'lucide-react-native/icons/arrow-right';
+import ImageIcon from 'lucide-react-native/icons/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Platform, StyleSheet, View } from 'react-native';
 

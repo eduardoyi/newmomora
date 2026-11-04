@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { Search } from 'lucide-react-native';
+import Search from 'lucide-react-native/icons/search';
 import { Pressable, StyleSheet } from 'react-native';
 
 import { colors } from '@/constants/theme';

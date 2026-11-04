@@ -1,5 +1,8 @@
 import * as Haptics from 'expo-haptics';
-import { MessageCircle, Plus, Send, SmilePlus } from 'lucide-react-native';
+import MessageCircle from 'lucide-react-native/icons/message-circle';
+import Plus from 'lucide-react-native/icons/plus';
+import Send from 'lucide-react-native/icons/send';
+import SmilePlus from 'lucide-react-native/icons/smile-plus';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 

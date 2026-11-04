@@ -150,7 +150,7 @@ export default function NewMemoryScreen() {
   const memorySavedSource = useMemo(() => normalizeMemorySavedSource(rawSource), [rawSource]);
   const { user } = useAuth();
   const { role, familyId } = useFamily();
-  const { status: billingStatus, isLoading: isBillingLoading } = useBilling();
+  const { status: billingStatus, isStatusLoading: isBillingStatusLoading } = useBilling();
   const { members, isLoading: isLoadingMembers } = useFamilyMembers();
   const { createMemory, isCreating } = useMemoryMutations();
   const { enqueue: enqueuePendingMemoryUpload } = usePendingMemoryUploads();
@@ -162,7 +162,7 @@ export default function NewMemoryScreen() {
     if (
       !familyId ||
       !canEditFamilyContent(role) ||
-      isBillingLoading ||
+      isBillingStatusLoading ||
       !billingStatus ||
       billingStatus.has_write_access ||
       role !== 'owner' ||
@@ -175,7 +175,7 @@ export default function NewMemoryScreen() {
       pathname: '/(onboarding)/paywall',
       params: { mode: 'resubscribe', source: 'new_memory_bounce' },
     });
-  }, [billingStatus, familyId, isBillingLoading, role, user?.id]);
+  }, [billingStatus, familyId, isBillingStatusLoading, role, user?.id]);
 
   // Subscription ownership belongs to the family owner. A manager must never
   // be sent to a purchase screen or charged for an owner's lapsed access.
@@ -184,14 +184,14 @@ export default function NewMemoryScreen() {
     if (
       !familyId ||
       role !== 'manager' ||
-      isBillingLoading ||
+      isBillingStatusLoading ||
       !billingStatus ||
       billingStatus.has_write_access
     ) {
       return;
     }
     navigateBack();
-  }, [billingStatus, familyId, isBillingLoading, role]);
+  }, [billingStatus, familyId, isBillingStatusLoading, role]);
 
   // Guard on mount: viewers reaching this route directly (FAB is hidden for
   // them) get bounced back rather than seeing a form whose save would be
@@ -685,7 +685,7 @@ export default function NewMemoryScreen() {
   const isShortcutReady =
     isPresentationSettled &&
     canEditFamilyContent(role) &&
-    !isBillingLoading &&
+    !isBillingStatusLoading &&
     billingStatus?.has_write_access === true &&
     !isLoadingMembers &&
     isDraftRestoreReady;

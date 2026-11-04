@@ -17,11 +17,6 @@ jest.mock('@/hooks/useYearFilmEditFrames', () => ({
     isLoading: false,
   }),
 }));
-jest.mock('lucide-react-native', () => ({
-  EyeOff: () => null,
-  Play: () => null,
-  Square: () => null,
-}));
 jest.mock('@/services/analytics', () => ({ trackEvent: jest.fn() }));
 
 interface MockPlayer {

@@ -34,7 +34,7 @@ export default function AuthLayout() {
   const {
     status: billingStatus,
     billingStatusError,
-    isLoading: isBillingLoading,
+    isStatusLoading: isBillingStatusLoading,
     refresh: refreshBilling,
   } = useBilling();
   const [deviceState, setDeviceState] = useState<{
@@ -74,7 +74,7 @@ export default function AuthLayout() {
     if (
       isFamilyLoading ||
       !deviceState.isHydrated ||
-      (memberships.length > 0 && !billingStatus && isBillingLoading)
+      (memberships.length > 0 && !billingStatus && isBillingStatusLoading)
     ) {
       return (
         <View style={styles.loading}>

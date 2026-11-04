@@ -1,5 +1,6 @@
 import { SymbolView } from 'expo-symbols';
-import { CalendarDays, List } from 'lucide-react-native';
+import CalendarDays from 'lucide-react-native/icons/calendar-days';
+import List from 'lucide-react-native/icons/list';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 

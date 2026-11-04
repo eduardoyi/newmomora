@@ -4,7 +4,8 @@
 // sheet) adds its "Edit" button through `renderExtraActions` without
 // restructuring this component. An optional quiet "Rate Momora" text link
 // (`onRate`) sits below the actions -- a plain store link, never a prompt.
-import { RotateCcw, Share2 } from 'lucide-react-native';
+import RotateCcw from 'lucide-react-native/icons/rotate-ccw';
+import Share2 from 'lucide-react-native/icons/share-2';
 import type { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

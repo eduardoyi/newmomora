@@ -1,6 +1,6 @@
 // The "Edit" action on the player's completion overlay (owners/managers).
 // Styled as FilmCompletion's secondary (outlined) button.
-import { Pencil } from 'lucide-react-native';
+import Pencil from 'lucide-react-native/icons/pencil';
 import { Pressable, StyleSheet, Text } from 'react-native';
 
 import { fonts } from '@/constants/theme';

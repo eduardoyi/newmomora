@@ -72,10 +72,6 @@ jest.mock('expo-video', () => ({
   createVideoPlayer: jest.fn(() => mockPlayer),
   VideoView: 'VideoView',
 }));
-jest.mock('lucide-react-native', () => ({
-  ChevronLeft: () => null, ChevronRight: () => null, Pause: () => null, Play: () => null,
-  Pencil: () => null, RotateCcw: () => null, Share2: () => null, Volume2: () => null, VolumeX: () => null, X: () => null,
-}));
 jest.mock('expo-file-system/legacy', () => ({
   cacheDirectory: 'file:///cache/',
   getInfoAsync: jest.fn(),

@@ -287,6 +287,14 @@ the whole persisted cache, and `BillingProvider` removes billing queries once
 auth settles signed out (not while auth is still resolving, which would delete
 the just-restored status). RevenueCat offerings are not persisted.
 
+`useBilling()` exposes two loading flags: `isLoading` is offerings **and**
+status (store prices — only the paywall and trial screens need it), while
+`isStatusLoading` is the status query alone. Anything that gates on write
+access (cold-start routing in `app/index.tsx` and `app/(auth)/_layout.tsx`,
+the composer's shortcut/paywall-bounce gates in `new-memory.tsx`, the Settings
+subscription caption) must use `isStatusLoading` so it never waits on the
+RevenueCat offerings round trip.
+
 ## Dependencies
 
 - Depends on: onboarding, family-sharing, memories, usage-limits, Supabase
@@ -394,6 +402,7 @@ npm run test:edge
 
 | Date | Change |
 |------|--------|
+| 2026-11-04 | Added `isStatusLoading` to `useBilling()` (status-only) and moved cold-start / composer / Settings gates off `isLoading` so they no longer wait on RevenueCat offerings. |
 | 2026-11-04 | Billing status is persisted (success payloads only) so cold start no longer blocks on `fetchFamilyBillingStatus`; see "Cold start and persisted status". |
 | 2026-10-28 | iOS Apple Ads attribution: AdServices token collection after RevenueCat configure (standard attribution, no ATT). Ships with the 1.5.1 store build. |
 | 2026-08-04 | Unblocked Android sandbox purchases: paused the stale "Security Enhancements" closed track that pinned tester accounts to pre-billing v1.1.1, disabled Play automatic protection (incompatible with license testing; requires a fresh AAB ≥ build 40), and documented the Android on-device billing test requirements. Discovered live v1.1.1 cannot onboard new users under `all_families` enforcement (pre-RPC client inserts hit billing RLS) — production needs 1.2.0 or an enforcement decision. |

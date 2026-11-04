@@ -9,7 +9,11 @@
 // KeyboardAwareScrollView handles keyboard avoidance for the compose state.
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { Mic, Play, Square, Type, X } from 'lucide-react-native';
+import Mic from 'lucide-react-native/icons/mic';
+import Play from 'lucide-react-native/icons/play';
+import Square from 'lucide-react-native/icons/square';
+import Type from 'lucide-react-native/icons/type';
+import X from 'lucide-react-native/icons/x';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,

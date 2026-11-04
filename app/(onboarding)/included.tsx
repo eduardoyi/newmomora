@@ -4,7 +4,7 @@
 // slightly rotated card with a Caveat tab breaking the top border, so it
 // reads as a signed promise rather than a fifth bullet point.
 import { router } from 'expo-router';
-import { Check } from 'lucide-react-native';
+import Check from 'lucide-react-native/icons/check';
 import { useEffect, useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 

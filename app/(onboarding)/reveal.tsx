@@ -30,7 +30,7 @@
 // birthday as incomplete.
 import { Image } from 'expo-image';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Heart } from 'lucide-react-native';
+import Heart from 'lucide-react-native/icons/heart';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 

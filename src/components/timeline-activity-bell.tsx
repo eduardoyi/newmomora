@@ -1,4 +1,4 @@
-import { Bell } from 'lucide-react-native';
+import Bell from 'lucide-react-native/icons/bell';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { colors } from '@/constants/theme';

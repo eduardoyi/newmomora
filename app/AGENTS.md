@@ -44,3 +44,4 @@ app/
 - Navigate with imperative refs — use Expo Router `router.push`.
 - Block UI on illustration completion — async status updates only.
 - Ship client work for a major feature without updating `docs/features/<name>.md`.
+- Import lucide icons from the `lucide-react-native` barrel — Metro has no tree shaking, so use `import Search from 'lucide-react-native/icons/search';` (ESLint `no-restricted-imports` enforces it; Jest stubs these via `moduleNameMapper`).

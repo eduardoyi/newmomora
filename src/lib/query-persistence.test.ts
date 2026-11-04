@@ -1,6 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { act, render, waitFor } from '@testing-library/react-native';
 import { QueryClient, type Query } from '@tanstack/react-query';
 import { persistQueryClientRestore, persistQueryClientSave } from '@tanstack/react-query-persist-client';
+
+import { AppState, Text } from 'react-native';
+import React from 'react';
 
 import {
   billingStatusQueryKeyBase,
@@ -18,9 +22,15 @@ import {
 import {
   asyncStoragePersister,
   clearPersistedQueryCache,
+  createQueryCachePersister,
+  PERSISTED_CALENDAR_RANGE_MAX,
+  PERSISTED_MEDIA_URLS_MAX,
+  PERSISTED_MEMORY_DETAIL_MAX,
   PERSISTED_QUERY_CACHE_BUSTER,
   PERSISTED_QUERY_CACHE_KEY,
   PERSISTED_QUERY_CACHE_MAX_AGE_MS,
+  PERSISTER_THROTTLE_MS,
+  PersistedQueryProvider,
   serializePersistedClient,
   shouldDehydrateQuery,
 } from '@/lib/query-persistence';
@@ -309,8 +319,214 @@ describe('serializePersistedClient', () => {
   });
 });
 
+describe('serializePersistedClient caps', () => {
+  function entry(queryKey: readonly unknown[], dataUpdatedAt: number) {
+    return {
+      queryKey,
+      queryHash: JSON.stringify(queryKey),
+      state: { data: { at: dataUpdatedAt }, status: 'success', dataUpdatedAt },
+    };
+  }
+
+  function serialize(queries: ReturnType<typeof entry>[]) {
+    const client = {
+      timestamp: Date.now(),
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      clientState: { mutations: [], queries },
+    } as never;
+    return (JSON.parse(serializePersistedClient(client)) as { clientState: { queries: ReturnType<typeof entry>[] } })
+      .clientState.queries;
+  }
+
+  // Oldest first: index i has dataUpdatedAt i + 1, so the newest are the tail.
+  const detail = (count: number) =>
+    Array.from({ length: count }, (_, i) => entry([memoriesQueryKeyBase, 'f1', 'detail', `m${i}`], i + 1));
+  const calendar = (count: number) =>
+    Array.from({ length: count }, (_, i) => entry([calendarMemoriesQueryKeyBase, 'f1', 'range', `s${i}`, `e${i}`], i + 1));
+  const media = (count: number) =>
+    Array.from({ length: count }, (_, i) => entry(['media-urls', `key-${i}`, ''], i + 1));
+
+  it('keeps only the newest memory-detail queries', () => {
+    const queries = serialize(detail(PERSISTED_MEMORY_DETAIL_MAX + 5));
+    expect(queries).toHaveLength(PERSISTED_MEMORY_DETAIL_MAX);
+    // m0..m4 are the five oldest and are the ones dropped.
+    expect(queries.map((q) => q.queryKey[3])).not.toContain('m0');
+    expect(queries.map((q) => q.queryKey[3])).not.toContain('m4');
+    expect(queries.map((q) => q.queryKey[3])).toContain('m5');
+    expect(queries.map((q) => q.queryKey[3])).toContain(`m${PERSISTED_MEMORY_DETAIL_MAX + 4}`);
+  });
+
+  it('keeps only the newest calendar range queries', () => {
+    const queries = serialize(calendar(PERSISTED_CALENDAR_RANGE_MAX + 3));
+    expect(queries.map((q) => q.queryKey[3])).toEqual(
+      Array.from({ length: PERSISTED_CALENDAR_RANGE_MAX }, (_, i) => `s${i + 3}`),
+    );
+  });
+
+  it('keeps only the newest media-urls queries', () => {
+    const queries = serialize(media(PERSISTED_MEDIA_URLS_MAX + 2));
+    expect(queries).toHaveLength(PERSISTED_MEDIA_URLS_MAX);
+    expect(queries.map((q) => q.queryKey[1])).not.toContain('key-0');
+    expect(queries.map((q) => q.queryKey[1])).not.toContain('key-1');
+    expect(queries.map((q) => q.queryKey[1])).toContain(`key-${PERSISTED_MEDIA_URLS_MAX + 1}`);
+  });
+
+  it('caps each category independently and leaves other queries (and lists) alone', () => {
+    const list = entry([memoriesQueryKeyBase, 'f1'], 1);
+    const members = entry([familyMembersQueryKeyBase, 'f1'], 1);
+    const queries = serialize([
+      list,
+      members,
+      ...detail(PERSISTED_MEMORY_DETAIL_MAX + 1),
+      ...calendar(PERSISTED_CALENDAR_RANGE_MAX + 1),
+      ...media(PERSISTED_MEDIA_URLS_MAX + 1),
+    ]);
+
+    expect(queries.filter((q) => q.queryKey[0] === memoriesQueryKeyBase && q.queryKey[2] === 'detail')).toHaveLength(
+      PERSISTED_MEMORY_DETAIL_MAX,
+    );
+    expect(queries.filter((q) => q.queryKey[0] === calendarMemoriesQueryKeyBase)).toHaveLength(
+      PERSISTED_CALENDAR_RANGE_MAX,
+    );
+    expect(queries.filter((q) => q.queryKey[0] === 'media-urls')).toHaveLength(PERSISTED_MEDIA_URLS_MAX);
+    // Not a detail query: the list is not counted against the detail cap.
+    expect(queries.some((q) => q.queryKey[0] === memoriesQueryKeyBase && q.queryKey.length === 2)).toBe(true);
+    expect(queries.some((q) => q.queryKey[0] === familyMembersQueryKeyBase)).toBe(true);
+  });
+
+  it('does not drop anything at or below the caps', () => {
+    const queries = serialize([
+      ...detail(PERSISTED_MEMORY_DETAIL_MAX),
+      ...calendar(PERSISTED_CALENDAR_RANGE_MAX),
+      ...media(PERSISTED_MEDIA_URLS_MAX),
+    ]);
+    expect(queries).toHaveLength(PERSISTED_MEMORY_DETAIL_MAX + PERSISTED_CALENDAR_RANGE_MAX + PERSISTED_MEDIA_URLS_MAX);
+  });
+});
+
+describe('persister throttle', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('uses a 4s write throttle', async () => {
+    expect(PERSISTER_THROTTLE_MS).toBe(4000);
+    jest.useFakeTimers();
+
+    const client = (marker: string) => ({
+      timestamp: Date.now(),
+      buster: PERSISTED_QUERY_CACHE_BUSTER,
+      clientState: {
+        mutations: [],
+        queries: [
+          {
+            queryKey: [familyMembersQueryKeyBase, marker],
+            queryHash: marker,
+            state: { data: [], status: 'success' },
+          },
+        ],
+      },
+    });
+
+    // The first write goes straight out; a second inside the window waits.
+    await asyncStoragePersister.persistClient(client('first') as never);
+    expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).toContain('first');
+
+    const second = asyncStoragePersister.persistClient(client('second') as never);
+    await jest.advanceTimersByTimeAsync(PERSISTER_THROTTLE_MS - 500);
+    expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).not.toContain('second');
+
+    await jest.advanceTimersByTimeAsync(1000);
+    await second;
+    expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).toContain('second');
+  });
+});
+
+function renderProvider() {
+  return React.createElement(PersistedQueryProvider, null, React.createElement(Text, null, 'ready'));
+}
+
+describe('background flush', () => {
+  type AppStateHandler = (state: string) => void;
+  let handlers: AppStateHandler[];
+  let remove: jest.Mock;
+  let addEventListener: jest.SpyInstance;
+
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+    queryClient.clear();
+    handlers = [];
+    remove = jest.fn();
+    addEventListener = jest.spyOn(AppState, 'addEventListener').mockImplementation(((
+      _type: string,
+      handler: AppStateHandler,
+    ) => {
+      handlers.push(handler);
+      return { remove };
+    }) as never);
+  });
+
+  afterEach(() => {
+    addEventListener.mockRestore();
+    jest.restoreAllMocks();
+    queryClient.clear();
+  });
+
+  it('persists immediately on background, ignores foreground, and cleans up on unmount', async () => {
+    queryClient.setQueryData([familyMembersQueryKeyBase, 'family-1'], [{ id: 'member-1' }]);
+
+    const view = render(renderProvider());
+    await waitFor(() => expect(view.getByText('ready')).toBeTruthy());
+    expect(handlers).toHaveLength(1);
+
+    // Make sure whatever the library's own subscriber wrote does not count.
+    await AsyncStorage.removeItem(PERSISTED_QUERY_CACHE_KEY);
+
+    await act(async () => {
+      handlers[0]('active');
+    });
+    expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).toBeNull();
+
+    await act(async () => {
+      handlers[0]('background');
+    });
+    await waitFor(async () => {
+      expect(await AsyncStorage.getItem(PERSISTED_QUERY_CACHE_KEY)).toContain('member-1');
+    });
+
+    view.unmount();
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not subscribe until the persisted cache has been restored', async () => {
+    let finishRestore: (value: undefined) => void = () => {};
+    jest.spyOn(asyncStoragePersister, 'restoreClient').mockImplementation(
+      () => new Promise((resolve) => { finishRestore = resolve; }),
+    );
+
+    const view = render(renderProvider());
+    expect(view.queryByText('ready')).toBeNull();
+    expect(addEventListener).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishRestore(undefined);
+    });
+    await waitFor(() => expect(view.getByText('ready')).toBeTruthy());
+    expect(addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+    view.unmount();
+  });
+});
+
 describe('purge / restore integration', () => {
   const dehydrateOptions = { shouldDehydrateQuery };
+  // asyncStoragePersister is throttled (4s) per write; these tests write
+  // back-to-back, so persist through an unthrottled persister on the same
+  // key/serializer and restore through the real one.
+  const savePersister = createQueryCachePersister(0);
 
   beforeEach(async () => {
     await AsyncStorage.clear();
@@ -344,7 +560,7 @@ describe('purge / restore integration', () => {
   });
 
   it('discards a persisted cache written under a different buster', async () => {
-    await asyncStoragePersister.persistClient({
+    await savePersister.persistClient({
       timestamp: Date.now(),
       buster: 'a-stale-buster',
       clientState: {
@@ -411,7 +627,7 @@ describe('purge / restore integration', () => {
 
     await persistQueryClientSave({
       queryClient,
-      persister: asyncStoragePersister,
+      persister: savePersister,
       buster: PERSISTED_QUERY_CACHE_BUSTER,
       dehydrateOptions,
     });
@@ -439,7 +655,7 @@ describe('purge / restore integration', () => {
 
     await persistQueryClientSave({
       queryClient,
-      persister: asyncStoragePersister,
+      persister: savePersister,
       buster: PERSISTED_QUERY_CACHE_BUSTER,
       dehydrateOptions,
     });
@@ -470,7 +686,7 @@ describe('purge / restore integration', () => {
 
     await persistQueryClientSave({
       queryClient,
-      persister: asyncStoragePersister,
+      persister: savePersister,
       buster: PERSISTED_QUERY_CACHE_BUSTER,
       dehydrateOptions,
     });
