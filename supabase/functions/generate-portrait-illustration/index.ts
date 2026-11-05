@@ -252,21 +252,49 @@ export async function handleGeneratePortraitIllustration(
     return errorResponse('Set a portrait date before generation', 400, 'DATE_REQUIRED');
   }
 
-  const billingResponse = await checkBillingAiGeneration(supabase, {
-    familyId: version.family_id,
-    actorUserId: user.id,
-    targetKind: 'portrait_version',
-    targetId: version.id,
-    requestIntent: 'initial',
-  });
+  const backend = getPortraitGenerationBackend();
+
+  // Latency: after authorization (role + date) these are independent, so run
+  // them together -- the billing check (kept AFTER the role check because it
+  // takes the owner's billing lock and must never run for an unauthorized
+  // caller) and three side-effect-free reads (member, family style, and, on
+  // the Cloudflare backend, the active-job lookup). Their results are then
+  // evaluated in the original order, so whichever check failed first before
+  // still wins: billing, then member/key validation, then the active-job
+  // lookup error / redispatch. Reads for an early return are simply unused.
+  const [billingResponse, memberRead, familyRead, activeJobRead] = await Promise.all([
+    checkBillingAiGeneration(supabase, {
+      familyId: version.family_id,
+      actorUserId: user.id,
+      targetKind: 'portrait_version',
+      targetId: version.id,
+      requestIntent: 'initial',
+    }),
+    supabase
+      .from('family_members')
+      .select('*')
+      .eq('id', version.family_member_id)
+      .eq('family_id', version.family_id)
+      .maybeSingle(),
+    supabase
+      .from('families')
+      .select('illustration_style')
+      .eq('id', version.family_id)
+      .maybeSingle(),
+    backend === 'cloudflare'
+      ? supabase
+        .from('portrait_generation_jobs')
+        .select('id, attempt_id, started_at')
+        .eq('portrait_version_id', version.id)
+        .in('status', ['queued', 'running'])
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      : Promise.resolve(null),
+  ]);
   if (billingResponse) return billingResponse;
 
-  const { data: member, error: memberError } = await supabase
-    .from('family_members')
-    .select('*')
-    .eq('id', version.family_member_id)
-    .eq('family_id', version.family_id)
-    .maybeSingle();
+  const { data: member, error: memberError } = memberRead;
   if (memberError || !member) return errorResponse('Family member not found', 404, 'MEMBER_NOT_FOUND');
 
   const parsedPhotoKey = parseStorageKey(version.profile_picture_key);
@@ -275,11 +303,7 @@ export async function handleGeneratePortraitIllustration(
     return errorResponse('Invalid profile photo key', 400, 'validation_error');
   }
 
-  const { data: family } = await supabase
-    .from('families')
-    .select('illustration_style')
-    .eq('id', version.family_id)
-    .maybeSingle();
+  const { data: family } = familyRead;
   const style = getIllustrationStyle(
     family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
   );
@@ -289,16 +313,8 @@ export async function handleGeneratePortraitIllustration(
     styleToken: style.token,
   });
 
-  const backend = getPortraitGenerationBackend();
-  if (backend === 'cloudflare') {
-    const { data: activeJob, error: activeJobError } = await supabase
-      .from('portrait_generation_jobs')
-      .select('id, attempt_id, started_at')
-      .eq('portrait_version_id', version.id)
-      .in('status', ['queued', 'running'])
-      .order('started_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  if (backend === 'cloudflare' && activeJobRead) {
+    const { data: activeJob, error: activeJobError } = activeJobRead;
     if (activeJobError) {
       return errorResponse('Failed to load active portrait generation', 500, 'internal_error');
     }
@@ -379,7 +395,14 @@ export async function handleGeneratePortraitIllustration(
   // its recovery window. It can no longer publish this version, so remove the
   // abandoned attempt object but never the portrait currently on display.
   if (version.generation_output_key && version.generation_output_key !== portraitKey) {
-    await dependencies.deleteObject(version.generation_output_key).catch(() => undefined);
+    // Nothing below depends on this cleanup (the new attempt key is distinct),
+    // so keep it off the dispatch critical path.
+    const staleDelete = dependencies.deleteObject(version.generation_output_key).catch(() => undefined);
+    try {
+      dependencies.waitUntil(staleDelete);
+    } catch {
+      await staleDelete;
+    }
   }
 
   if (backend === 'cloudflare') {

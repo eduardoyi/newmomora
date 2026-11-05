@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
+import { resetRealtimeStatusForTests, setPortraitRealtimeLive } from '@/hooks/realtime-status';
 import { useFamilyPortraitVersions, usePortraitVersions } from '@/hooks/usePortraitVersions';
 import {
   createPortraitVersion,
@@ -49,6 +50,7 @@ function createWrapper(queryClient = createQueryClient()) {
 describe('usePortraitVersions integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetRealtimeStatusForTests();
     mockedUseAuth.mockReturnValue({ user: { id: 'user-1' } } as never);
     mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'owner' } as never);
     mockedGenerate.mockResolvedValue({ data: null, error: null });
@@ -278,5 +280,94 @@ describe('usePortraitVersions integration', () => {
     await waitFor(() => expect(mockedGenerate).toHaveBeenCalledWith('foreground-pending-1'));
     unmount();
     focusManager.setFocused(undefined);
+  });
+
+  describe('pending-version polling vs realtime', () => {
+    const generating = {
+      id: 'gen-1',
+      family_member_id: 'member-1',
+      illustrated_profile_status: 'generating',
+      generation_token: 'token-1',
+      generation_started_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      deletion_token: null,
+    };
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('polls every 3s while the realtime channel is not SUBSCRIBED', async () => {
+      jest.useFakeTimers();
+      mockedFetch.mockResolvedValue({ data: [generating] as never, error: null });
+
+      const { unmount } = renderHook(() => useFamilyPortraitVersions(), { wrapper: createWrapper() });
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3000);
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      unmount();
+    });
+
+    it('does not poll while the realtime channel is SUBSCRIBED, and resumes polling when it drops', async () => {
+      jest.useFakeTimers();
+      mockedFetch.mockResolvedValue({ data: [generating] as never, error: null });
+      setPortraitRealtimeLive('family-1', true);
+
+      const { unmount } = renderHook(() => useFamilyPortraitVersions(), { wrapper: createWrapper() });
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(12_000);
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(1);
+
+      act(() => setPortraitRealtimeLive('family-1', false));
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3000);
+      });
+      expect(mockedFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+      unmount();
+    });
+
+    it('still recovers a never-dispatched pending version at 3:00 while realtime suppresses the poll', async () => {
+      jest.useFakeTimers();
+      mockedUseFamily.mockReturnValue({ familyId: 'family-1', role: 'owner' } as never);
+      setPortraitRealtimeLive('family-1', true);
+      mockedFetch.mockResolvedValue({
+        data: [{
+          id: 'pending-live',
+          family_member_id: 'member-1',
+          illustrated_profile_status: 'pending',
+          generation_token: null,
+          generation_started_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          deletion_token: null,
+        }] as never,
+        error: null,
+      });
+
+      const { unmount } = renderHook(() => useFamilyPortraitVersions(), { wrapper: createWrapper() });
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockedGenerate).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3 * 60 * 1000 + 1000);
+      });
+      expect(mockedGenerate).toHaveBeenCalledWith('pending-live');
+      unmount();
+    });
   });
 });

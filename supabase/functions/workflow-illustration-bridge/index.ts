@@ -10,6 +10,23 @@ export interface WorkflowIllustrationBridgeDependencies {
 
 const DEFAULT_DEPENDENCIES: WorkflowIllustrationBridgeDependencies = { createServiceClient };
 
+/**
+ * Runs the replay-ledger sweep without blocking the request: via
+ * EdgeRuntime.waitUntil when available, else a plain detached promise (tests,
+ * local serving). Errors are swallowed; the sweep is best-effort.
+ */
+function scheduleNonceSweep(sweep: () => PromiseLike<unknown>): void {
+  const task = Promise.resolve().then(sweep).then(
+    () => undefined,
+    () => {
+      console.error('workflow illustration bridge nonce sweep failed');
+    },
+  );
+  const edgeRuntime = (globalThis as unknown as { EdgeRuntime?: { waitUntil(task: Promise<void>): void } }).EdgeRuntime;
+  if (edgeRuntime) edgeRuntime.waitUntil(task);
+  else void task;
+}
+
 interface BridgeRequest {
   operation:
     | 'get_input'
@@ -302,11 +319,12 @@ export async function handleWorkflowIllustrationBridge(
   }
   if (classifyNonceInsertError(nonceError) === 'error') return errorResponse('Workflow replay guard unavailable', 500, 'internal_error');
   // Nonces carry no user data. Bound this replay ledger without another cron;
-  // every bridge request performs an indexed best-effort ten-minute sweep.
-  await supabase
+  // every bridge request performs an indexed best-effort ten-minute sweep,
+  // detached so it never delays the operation (the insert above stays awaited).
+  scheduleNonceSweep(() => supabase
     .from('memory_illustration_workflow_bridge_nonces')
     .delete()
-    .lt('received_at', new Date(Date.now() - 10 * 60_000).toISOString());
+    .lt('received_at', new Date(Date.now() - 10 * 60_000).toISOString()));
   try {
     switch (body.operation) {
       case 'get_input': {

@@ -1,14 +1,11 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { useFamily } from '@/hooks/use-family';
-import {
-  familyMembersQueryKeyBase,
-  memoriesQueryKeyBase,
-  portraitVersionsQueryKey,
-  portraitVersionsQueryKeyBase,
-} from '@/hooks/queryKeys';
+import { invalidatePortraitConsumers } from '@/hooks/portrait-invalidation';
+import { useIsPortraitRealtimeLive } from '@/hooks/realtime-status';
+import { portraitVersionsQueryKey } from '@/hooks/queryKeys';
 import {
   createPortraitVersion,
   deletePortraitVersion,
@@ -19,6 +16,8 @@ import {
 } from '@/services/portrait-versions';
 import {
   getPortraitGenerationRecoveryKey,
+  getPortraitGenerationRecoveryStartedAt,
+  getPortraitGenerationRecoveryThreshold,
   isPortraitGenerationStalled,
   isPortraitGenerationActive,
   shouldPollPortraitVersions,
@@ -80,16 +79,19 @@ function toError(error: unknown, fallback: string): Error {
   return new Error(fallback);
 }
 
-function invalidatePortraitConsumers(queryClient: ReturnType<typeof useQueryClient>): void {
-  queryClient.invalidateQueries({ queryKey: [portraitVersionsQueryKeyBase] });
-  queryClient.invalidateQueries({ queryKey: [familyMembersQueryKeyBase] });
-  queryClient.invalidateQueries({ queryKey: [memoriesQueryKeyBase] });
-}
-
 export function useFamilyPortraitVersions() {
   const { user } = useAuth();
   const { familyId, role } = useFamily();
   const queryClient = useQueryClient();
+  // While usePortraitVersionsRealtime's channel for this family is SUBSCRIBED,
+  // pushed row changes keep this query fresh and the 3s poll idles. Same
+  // reactive useSyncExternalStore-backed flag as useGenerationStatusPolling,
+  // so a CHANNEL_ERROR/TIMED_OUT/CLOSED re-renders this hook and re-arms the
+  // poll.
+  const isRealtimeLive = useIsPortraitRealtimeLive(familyId);
+  // Bumped by the boundary timer below so the recovery effect re-evaluates
+  // wall-clock thresholds even when no poll tick or realtime event arrives.
+  const [recoveryClock, setRecoveryClock] = useState(0);
 
   const query = useQuery({
     queryKey: portraitVersionsQueryKey(familyId),
@@ -106,9 +108,35 @@ export function useFamilyPortraitVersions() {
     // a backgrounded app can recover a never-dispatched pending version.
     refetchOnWindowFocus: 'always',
     refetchInterval: (queryState) => {
+      if (isRealtimeLive) return false;
       return shouldPollPortraitVersions(queryState.state.data ?? []) ? 3000 : false;
     },
   });
+
+  // The poll used to drive the recovery effect below (every tick changes
+  // dataUpdatedAt). With the poll idle under realtime, a never-dispatched
+  // pending version emits no events at all, so wake the effect exactly when
+  // the earliest active attempt crosses its recovery threshold. No network.
+  useEffect(() => {
+    if (!isRealtimeLive || !query.data) return;
+
+    const nowMs = Date.now();
+    let nextWakeMs: number | null = null;
+    for (const version of query.data) {
+      const threshold = getPortraitGenerationRecoveryThreshold(version);
+      const startedAt = getPortraitGenerationRecoveryStartedAt(version);
+      const startedAtMs = startedAt ? Date.parse(startedAt) : Number.NaN;
+      if (threshold === null || !Number.isFinite(startedAtMs)) continue;
+      const remaining = startedAtMs + threshold - nowMs;
+      if (remaining > 0 && (nextWakeMs === null || remaining < nextWakeMs)) {
+        nextWakeMs = remaining;
+      }
+    }
+    if (nextWakeMs === null) return;
+
+    const timer = setTimeout(() => setRecoveryClock((tick) => tick + 1), nextWakeMs + 250);
+    return () => clearTimeout(timer);
+  }, [isRealtimeLive, query.data, query.dataUpdatedAt, recoveryClock]);
 
   useEffect(() => {
     if (!user || !familyId || !canEditFamilyContent(role) || !query.data) {
@@ -145,7 +173,7 @@ export function useFamilyPortraitVersions() {
           invalidatePortraitConsumers(queryClient);
         });
     }
-  }, [familyId, query.data, query.dataUpdatedAt, queryClient, role, user]);
+  }, [familyId, query.data, query.dataUpdatedAt, queryClient, recoveryClock, role, user]);
 
   return query;
 }

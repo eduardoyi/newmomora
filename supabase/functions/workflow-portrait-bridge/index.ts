@@ -9,6 +9,10 @@ import { serveWithSentry } from '../_shared/sentry.ts';
 const MAX_SIGNATURE_AGE_MS = 5 * 60_000;
 const RETRIGGER_MIN_AGE_MS = 30_000;
 const RETRIGGER_MAX_CANDIDATES = 3;
+// Margin added so the follow-up pass lands just after the youngest-to-cross
+// memory clears RETRIGGER_MIN_AGE_MS.
+const RETRIGGER_RETRY_MARGIN_MS = 1_000;
+const RETRIGGER_YOUNG_LOOKUP_LIMIT = 50;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type BridgeOperation =
@@ -243,6 +247,42 @@ export function getPortraitReconcileAction(input: {
   return 'delete';
 }
 
+/**
+ * Bounds the replay ledger without blocking the request. The nonce insert (the
+ * replay guard) stays awaited before the operation; only this sweep is
+ * detached. It runs on every request via EdgeRuntime.waitUntil when available
+ * and is otherwise a plain detached promise (tests, local serving). Errors are
+ * swallowed: the sweep is best-effort and carries no user data.
+ */
+function scheduleNonceSweep(sweep: () => PromiseLike<unknown>): void {
+  const task = Promise.resolve().then(sweep).then(
+    () => undefined,
+    () => {
+      console.error('workflow portrait bridge nonce sweep failed');
+    },
+  );
+  const edgeRuntime = (globalThis as unknown as { EdgeRuntime?: { waitUntil(task: Promise<void>): void } }).EdgeRuntime;
+  if (edgeRuntime) edgeRuntime.waitUntil(task);
+  else void task;
+}
+
+/**
+ * How long until the youngest-to-cross pending memory clears the retrigger
+ * floor, or null when none are young. Clamped to [1s, floor + margin].
+ */
+export function computeRetriggerRetryAfterMs(
+  youngCreatedAts: ReadonlyArray<string | null | undefined>,
+  now = Date.now(),
+): number | null {
+  const times = youngCreatedAts
+    .map((value) => (typeof value === 'string' ? Date.parse(value) : Number.NaN))
+    .filter((value) => Number.isFinite(value));
+  if (times.length === 0) return null;
+  const oldest = Math.min(...times);
+  const waitMs = oldest + RETRIGGER_MIN_AGE_MS + RETRIGGER_RETRY_MARGIN_MS - now;
+  return Math.min(Math.max(waitMs, 1_000), RETRIGGER_MIN_AGE_MS + RETRIGGER_RETRY_MARGIN_MS);
+}
+
 async function invokeMemoryRecovery(
   fetchFn: typeof fetch,
   memoryId: string,
@@ -277,31 +317,56 @@ async function invokeMemoryRecovery(
   }
 }
 
+interface RetriggerOutcome {
+  requested: number;
+  retryAfterMs: number | null;
+}
+
 async function retriggerAffectedMemories(
   supabase: ReturnType<typeof createServiceClient>,
   job: TerminalJobRow,
   fetchFn: typeof fetch,
-): Promise<number> {
-  if (!['succeeded', 'failed', 'superseded'].includes(job.status) || !job.actor_user_id) return 0;
+): Promise<RetriggerOutcome> {
+  if (!['succeeded', 'failed', 'superseded'].includes(job.status) || !job.actor_user_id) {
+    return { requested: 0, retryAfterMs: null };
+  }
   const { data: version, error: versionError } = await supabase
     .from('family_member_portrait_versions')
     .select('family_member_id')
     .eq('id', job.portrait_version_id)
     .maybeSingle();
   if (versionError) throw versionError;
-  if (!version) return 0;
+  if (!version) return { requested: 0, retryAfterMs: null };
 
   // Query through the tag join so three unrelated pending memories cannot
   // starve the memory that was actually waiting on this portrait.
-  const { data: rows, error: rowsError } = await supabase
+  const floorIso = new Date(Date.now() - RETRIGGER_MIN_AGE_MS).toISOString();
+  const eligibleQuery = supabase
     .from('memory_family_members')
     .select('memory_id, memories!inner(id, family_id, memory_type, illustration_status, created_at)')
     .eq('family_member_id', version.family_member_id)
     .eq('memories.family_id', job.family_id)
     .eq('memories.memory_type', 'text_illustration')
     .eq('memories.illustration_status', 'pending')
-    .lt('memories.created_at', new Date(Date.now() - RETRIGGER_MIN_AGE_MS).toISOString())
+    .lt('memories.created_at', floorIso)
     .limit(RETRIGGER_MAX_CANDIDATES);
+  // Same join/filters, but YOUNGER than the floor: those are skipped now so we
+  // never race a brand-new memory's own initial generate-illustration call.
+  // The caller is told when the first of them crosses the floor. This lookup is
+  // advisory, so a failure degrades to "no hint" instead of failing the op.
+  const youngQuery = supabase
+    .from('memory_family_members')
+    .select('memory_id, memories!inner(id, family_id, memory_type, illustration_status, created_at)')
+    .eq('family_member_id', version.family_member_id)
+    .eq('memories.family_id', job.family_id)
+    .eq('memories.memory_type', 'text_illustration')
+    .eq('memories.illustration_status', 'pending')
+    .gte('memories.created_at', floorIso)
+    .limit(RETRIGGER_YOUNG_LOOKUP_LIMIT);
+  const [{ data: rows, error: rowsError }, youngResult] = await Promise.all([
+    eligibleQuery,
+    Promise.resolve(youngQuery).then((result) => result, () => null),
+  ]);
   if (rowsError) throw rowsError;
 
   const memoryIds = [...new Set((rows ?? []).map((row) => row.memory_id))];
@@ -314,7 +379,15 @@ async function retriggerAffectedMemories(
     // a successful concurrent dispatch in invokeMemoryRecovery.
     throw new Error('Dependent memory recovery dispatch failed');
   }
-  return memoryIds.length;
+  // `memories!inner` is a to-one embed, but older generated types may infer an
+  // array; accept both shapes.
+  const youngCreatedAts = youngResult && !youngResult.error
+    ? (youngResult.data ?? []).map((row: { memories?: unknown }) => {
+      const memory = Array.isArray(row.memories) ? row.memories[0] : row.memories;
+      return (memory as { created_at?: string } | null | undefined)?.created_at;
+    })
+    : [];
+  return { requested: memoryIds.length, retryAfterMs: computeRetriggerRetryAfterMs(youngCreatedAts) };
 }
 
 export async function handleWorkflowPortraitBridge(
@@ -352,10 +425,12 @@ export async function handleWorkflowPortraitBridge(
   const nonceState = classifyPortraitNonceInsertError(nonceError);
   if (nonceState === 'replay') return errorResponse('Workflow request replayed', 409, 'replayed_request');
   if (nonceState === 'error') return errorResponse('Workflow replay guard unavailable', 500, 'internal_error');
-  await supabase
+  // Nonces carry no user data. The sweep runs on every request but is
+  // detached (best-effort) so it never delays the operation below.
+  scheduleNonceSweep(() => supabase
     .from('portrait_generation_workflow_bridge_nonces')
     .delete()
-    .lt('received_at', new Date(Date.now() - 10 * 60_000).toISOString());
+    .lt('received_at', new Date(Date.now() - 10 * 60_000).toISOString()));
 
   try {
     switch (body.operation) {
@@ -571,8 +646,14 @@ export async function handleWorkflowPortraitBridge(
         if (!['succeeded', 'failed', 'superseded'].includes(job.status)) {
           return errorResponse('Job is not terminal', 409, 'JOB_NOT_TERMINAL');
         }
-        const requested = await retriggerAffectedMemories(supabase, job as TerminalJobRow, dependencies.fetch);
-        return jsonResponse({ requested });
+        const { requested, retryAfterMs } = await retriggerAffectedMemories(
+          supabase,
+          job as TerminalJobRow,
+          dependencies.fetch,
+        );
+        // `retryAfterMs` is additive: non-null only when pending dependent
+        // memories were younger than the retrigger floor. Old workers ignore it.
+        return jsonResponse({ requested, retryAfterMs });
       }
     }
   } catch {

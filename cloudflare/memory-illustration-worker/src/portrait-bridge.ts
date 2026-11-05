@@ -215,10 +215,23 @@ export async function failPortrait(
   };
 }
 
+/** Upper bound the bridge may ask the Worker to wait (floor 30s + 1s margin). */
+export const MAX_RETRIGGER_RETRY_AFTER_MS = 31_000;
+
 /**
  * This uses a bridge-only credential rather than a user's expiring JWT. The
  * bridge revalidates the original actor's current family-manager authority.
+ *
+ * Returns the bridge's optional `retryAfterMs` hint (set when dependent
+ * pending memories were too young to retrigger yet), or null when it is
+ * absent or invalid. An older bridge omits the field, which is also null.
  */
-export async function retriggerPortraitDependentMemories(env: Env, jobId: string): Promise<void> {
-  await callPortraitBridge<unknown>(env, 'retrigger_memories', { jobId });
+export async function retriggerPortraitDependentMemories(env: Env, jobId: string): Promise<number | null> {
+  const response = await callPortraitBridge<unknown>(env, 'retrigger_memories', { jobId });
+  if (!isRecord(response)) return null;
+  const value = response.retryAfterMs;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 &&
+    value <= MAX_RETRIGGER_RETRY_AFTER_MS
+    ? value
+    : null;
 }

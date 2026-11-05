@@ -1,7 +1,10 @@
 import { act, renderHook } from '@testing-library/react-native';
 
 import {
+  clearPortraitRealtimeStatus,
   clearRealtimeStatus,
+  setPortraitRealtimeLive,
+  useIsPortraitRealtimeLive,
   resetRealtimeStatusForTests,
   setRealtimeLive,
   useIsRealtimeLive,
@@ -57,5 +60,19 @@ describe('realtime-status', () => {
     const { result } = renderHook(() => useIsRealtimeLive(undefined));
     act(() => setRealtimeLive('family-1', true));
     expect(result.current).toBe(false);
+  });
+
+  it('tracks the portrait channel independently of the memories channel', () => {
+    const memories = renderHook(() => useIsRealtimeLive('family-1'));
+    const portraits = renderHook(() => useIsPortraitRealtimeLive('family-1'));
+
+    act(() => setPortraitRealtimeLive('family-1', true));
+    expect(portraits.result.current).toBe(true);
+    expect(memories.result.current).toBe(false);
+
+    act(() => setRealtimeLive('family-1', true));
+    act(() => clearPortraitRealtimeStatus('family-1'));
+    expect(portraits.result.current).toBe(false);
+    expect(memories.result.current).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { assertEquals, assertThrows } from 'jsr:@std/assert@1';
 import {
   classifyPortraitNonceInsertError,
+  computeRetriggerRetryAfterMs,
   getPortraitReconcileAction,
   handleWorkflowPortraitBridge,
   isSignedPortraitWorkflowRequest,
@@ -82,8 +83,17 @@ function createHandlerClient(input: {
   publishOutcome?: Record<string, unknown>;
   portraitMemberId?: string;
   taggedMemoryIds?: string[];
+  youngMemoryCreatedAts?: string[];
+  youngLookupFails?: boolean;
+  neverResolvingSweep?: boolean;
+  replay?: boolean;
 }) {
-  const calls = { rpc: [] as string[], rpcArgs: [] as Array<{ name: string; args: Record<string, unknown> }>, memberIds: [] as string[] };
+  const calls = {
+    rpc: [] as string[],
+    rpcArgs: [] as Array<{ name: string; args: Record<string, unknown> }>,
+    memberIds: [] as string[],
+    sweeps: 0,
+  };
   const job = {
     id: JOB_ID,
     status: input.status ?? 'queued',
@@ -103,8 +113,15 @@ function createHandlerClient(input: {
       from(table: string) {
         if (table === 'portrait_generation_workflow_bridge_nonces') {
           return {
-            insert: async () => ({ data: null, error: null }),
-            delete: () => ({ lt: async () => ({ error: null }) }),
+            insert: async () => ({ data: null, error: input.replay ? { code: '23505' } : null }),
+            delete: () => ({
+              lt: () => {
+                calls.sweeps += 1;
+                return input.neverResolvingSweep
+                  ? new Promise<never>(() => {})
+                  : Promise.resolve({ error: null });
+              },
+            }),
           };
         }
         if (table === 'portrait_generation_jobs') {
@@ -126,6 +143,7 @@ function createHandlerClient(input: {
           };
         }
         if (table === 'memory_family_members') {
+          let young = false;
           const query = {
             select: () => query,
             eq: (column: string, value: string) => {
@@ -133,10 +151,26 @@ function createHandlerClient(input: {
               return query;
             },
             lt: () => query,
-            limit: async () => ({
-              data: (input.taggedMemoryIds ?? []).map((memory_id) => ({ memory_id })),
-              error: null,
-            }),
+            gte: () => {
+              young = true;
+              return query;
+            },
+            limit: async () => {
+              if (young) {
+                if (input.youngLookupFails) throw new Error('young lookup failed');
+                return {
+                  data: (input.youngMemoryCreatedAts ?? []).map((created_at, index) => ({
+                    memory_id: `99999999-9999-4999-8999-99999999999${index}`,
+                    memories: { created_at },
+                  })),
+                  error: null,
+                };
+              }
+              return {
+                data: (input.taggedMemoryIds ?? []).map((memory_id) => ({ memory_id })),
+                error: null,
+              };
+            },
           };
           return query;
         }
@@ -394,8 +428,9 @@ Deno.test('portrait bridge retriggers only memories tagged with the resolved por
         }) as typeof fetch,
       },
     );
-    assertEquals(await response.json(), { requested: 1 });
-    assertEquals(scoped.calls.memberIds, ['77777777-7777-4777-8777-777777777777']);
+    assertEquals(await response.json(), { requested: 1, retryAfterMs: null });
+    // Eligible query and young-memory lookup are both scoped to the same member.
+    assertEquals(scoped.calls.memberIds, Array(2).fill('77777777-7777-4777-8777-777777777777'));
     assertEquals(JSON.parse(recoveryBodies[0]), {
       memoryId: '88888888-8888-4888-8888-888888888888',
       requestIntent: 'recovery',
@@ -471,4 +506,88 @@ Deno.test('portrait bridge emits only complete v2 usage protocol fields', () => 
   assertThrows(() => toPortraitWorkflowJobInput({
     ...base, usage_request_id: null, usage_protocol_version: 3,
   }), TypeError, 'Unsupported portrait workflow usage protocol version');
+});
+
+Deno.test('portrait bridge retrigger reports when a young pending dependent memory will cross the 30s floor', async () => {
+  await withBridgeEnv(async () => {
+    const now = Date.now();
+    const recoveryBodies: string[] = [];
+    const run = async (input: Parameters<typeof createHandlerClient>[0], nonceSuffix: string) => {
+      const handler = createHandlerClient({ status: 'succeeded', ...input });
+      const response = await handleWorkflowPortraitBridge(
+        await signedRequest({ operation: 'retrigger_memories', jobId: JOB_ID }, `33333333-3333-4333-8333-3333333333${nonceSuffix}`),
+        {
+          createServiceClient: () => handler.client as never,
+          fetch: (async (_input, init) => {
+            recoveryBodies.push(String(init?.body));
+            return new Response(null, { status: 202 });
+          }) as typeof fetch,
+        },
+      );
+      assertEquals(response.status, 200);
+      return await response.json() as { requested: number; retryAfterMs: number | null };
+    };
+
+    // Youngest-to-cross is the OLDEST of the young memories (created 12s and 4s ago).
+    const young = await run({
+      youngMemoryCreatedAts: [new Date(now - 4_000).toISOString(), new Date(now - 12_000).toISOString()],
+    }, '51');
+    assertEquals(young.requested, 0);
+    assertEquals(young.retryAfterMs !== null, true);
+    // 12s old => ~19s until 31s; allow scheduling slack.
+    assertEquals(young.retryAfterMs! > 18_000 && young.retryAfterMs! <= 19_000, true);
+    assertEquals(recoveryBodies.length, 0);
+
+    // Old tagged memory still dispatches exactly as before alongside a young one.
+    const mixed = await run({
+      taggedMemoryIds: ['88888888-8888-4888-8888-888888888888'],
+      youngMemoryCreatedAts: [new Date(now - 1_000).toISOString()],
+    }, '52');
+    assertEquals(mixed.requested, 1);
+    assertEquals(mixed.retryAfterMs !== null && mixed.retryAfterMs > 29_000, true);
+    assertEquals(recoveryBodies.length, 1);
+
+    // No young memories => null.
+    assertEquals((await run({ taggedMemoryIds: [] }, '53')).retryAfterMs, null);
+
+    // An advisory lookup failure must not fail the operation.
+    assertEquals((await run({ youngLookupFails: true }, '54')).retryAfterMs, null);
+  });
+});
+
+Deno.test('computeRetriggerRetryAfterMs picks the first memory to cross the floor and clamps to [1s, 31s]', () => {
+  const now = Date.parse('2026-07-22T12:00:00.000Z');
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  assertEquals(computeRetriggerRetryAfterMs([], now), null);
+  assertEquals(computeRetriggerRetryAfterMs([null, undefined, 'not a date'], now), null);
+  assertEquals(computeRetriggerRetryAfterMs([ago(5_000), ago(20_000)], now), 11_000);
+  assertEquals(computeRetriggerRetryAfterMs([ago(0)], now), 31_000);
+  // Future-dated rows (clock skew) clamp to the 31s ceiling; already-crossed rows to 1s.
+  assertEquals(computeRetriggerRetryAfterMs([new Date(now + 60_000).toISOString()], now), 31_000);
+  assertEquals(computeRetriggerRetryAfterMs([ago(30_500)], now), 1_000);
+});
+
+Deno.test('portrait bridge keeps nonce replay rejection and does not wait for the nonce sweep', async () => {
+  await withBridgeEnv(async () => {
+    const replayed = createHandlerClient({ status: 'succeeded', replay: true });
+    const replayResponse = await handleWorkflowPortraitBridge(
+      await signedRequest({ operation: 'retrigger_memories', jobId: JOB_ID }, '33333333-3333-4333-8333-333333333361'),
+      { createServiceClient: () => replayed.client as never },
+    );
+    assertEquals(replayResponse.status, 409);
+    assertEquals(replayed.calls.sweeps, 0);
+
+    // A sweep that never settles must not block the operation, and still ran.
+    const hanging = createHandlerClient({ status: 'succeeded', neverResolvingSweep: true });
+    const response = await Promise.race([
+      handleWorkflowPortraitBridge(
+        await signedRequest({ operation: 'retrigger_memories', jobId: JOB_ID }, '33333333-3333-4333-8333-333333333362'),
+        { createServiceClient: () => hanging.client as never },
+      ),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
+    ]);
+    assertEquals(response === 'timeout', false);
+    assertEquals((response as Response).status, 200);
+    assertEquals(hanging.calls.sweeps, 1);
+  });
 });

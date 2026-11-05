@@ -42,6 +42,9 @@ jest.mock('@/services/ai', () => ({
 jest.mock('@/hooks/useMemoriesRealtime', () => ({
   useMemoriesRealtime: jest.fn(),
 }));
+jest.mock('@/hooks/usePortraitVersionsRealtime', () => ({
+  usePortraitVersionsRealtime: jest.fn(),
+}));
 
 jest.mock('@/utils/gallery-import-checkpoint', () => ({
   clearGalleryImportCheckpointsForScope: jest.fn().mockResolvedValue(undefined),

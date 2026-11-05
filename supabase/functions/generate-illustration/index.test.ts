@@ -1383,3 +1383,467 @@ Deno.test(
     );
   },
 );
+
+// -- Speculative safety rewrite + parallel preparation reads ----------------
+
+interface ChatCall {
+  operation: string | undefined;
+  signal: AbortSignal | undefined;
+  systemPrompt: string;
+  userPrompt: string;
+}
+
+type ChatJsonMock = <T>(
+  systemPrompt: string,
+  userPrompt: string,
+  options?: { signal?: AbortSignal; usageContext?: { operation?: string } },
+) => Promise<T>;
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+// Wraps whatever fetch is installed (withMockedIllustrationNetwork's) so a test
+// can override individual Supabase requests; return undefined to fall through.
+function interceptFetch(
+  handler: (request: Request, url: URL) => Response | undefined | Promise<Response | undefined>,
+): void {
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const handled = await handler(request.clone(), new URL(request.url));
+    return handled ?? inner(request);
+  };
+}
+
+function collectUnhandledRejections(): { seen: unknown[]; stop: () => void } {
+  const seen: unknown[] = [];
+  const listener = (event: PromiseRejectionEvent) => {
+    event.preventDefault();
+    seen.push(event.reason);
+  };
+  globalThis.addEventListener('unhandledrejection', listener);
+  return { seen, stop: () => globalThis.removeEventListener('unhandledrejection', listener) };
+}
+
+const macrotask = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+Deno.test(
+  'generate-illustration starts the safety rewrite before the emotion analysis resolves and uses its result',
+  async () => {
+    await withMockedIllustrationNetwork(
+      'A quiet afternoon drawing with crayons.',
+      async (network) => {
+        const events: string[] = [];
+        const emotionGate = deferred<{ emotion: string }>();
+        const safetyStarted = deferred();
+        const calls: ChatCall[] = [];
+        const chatJson: ChatJsonMock = async <T>(systemPrompt: string, userPrompt: string, options = {} as {
+          signal?: AbortSignal;
+          usageContext?: { operation?: string };
+        }) => {
+          const operation = options.usageContext?.operation;
+          calls.push({ operation, signal: options.signal, systemPrompt, userPrompt });
+          events.push(`${operation}:start`);
+          if (operation === 'emotion_chat') {
+            const result = await emotionGate.promise;
+            events.push('emotion_chat:end');
+            return result as T;
+          }
+          safetyStarted.resolve();
+          return { safeDescription: 'SAFE-SCENE-FROM-SPECULATIVE-CALL', expressionStyle: 'tender' } as T;
+        };
+
+        const handled = handleGenerateIllustration(authenticatedRequest(), {
+          chatJson,
+          getObjectBytes: async () => TINY_IMAGE_BYTES,
+        });
+        // The safety call must be issued while the emotion call is still pending.
+        await Promise.race([
+          safetyStarted.promise,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('safety call never started')), 2_000)),
+        ]);
+        assertEquals(events, ['emotion_chat:start', 'safety_chat:start']);
+        emotionGate.resolve({ emotion: 'joy' });
+        const response = await handled;
+        await response.json();
+
+        // The mock image provider fails after capturing its prompt; the
+        // assertion is that the speculative result (not a second call) fed it.
+        assertEquals(calls.filter((call) => call.operation === 'safety_chat').length, 1);
+        assertEquals(calls.filter((call) => call.operation === 'emotion_chat').length, 1);
+        assertEquals(network.openAiImagePrompts.length > 0, true);
+        assertEquals(
+          network.openAiImagePrompts.every((prompt) => prompt.includes('SAFE-SCENE-FROM-SPECULATIVE-CALL')),
+          true,
+        );
+        const safetyCall = calls.find((call) => call.operation === 'safety_chat')!;
+        assertEquals(safetyCall.userPrompt, 'A quiet afternoon drawing with crayons.');
+        assertStringIncludes(safetyCall.systemPrompt, 'Nickname mapping: cheeky monkey → Avery.');
+      },
+      [MEMBER_ID],
+      { emotion: null },
+    );
+  },
+);
+
+Deno.test(
+  'generate-illustration queues a Cloudflare job from the speculative safety result and backgrounds the old-output delete',
+  async () => {
+    const env = {
+      MEMORY_ILLUSTRATION_BACKEND: 'cloudflare',
+      CLOUDFLARE_ILLUSTRATION_WORKFLOW_URL: 'https://illustration-worker.test/dispatch',
+      CLOUDFLARE_ILLUSTRATION_DISPATCH_SECRET: 'dispatch-test-secret',
+    };
+    const previous = new Map(Object.keys(env).map((key) => [key, Deno.env.get(key)]));
+    for (const [key, value] of Object.entries(env)) Deno.env.set(key, value);
+    try {
+      await withMockedIllustrationNetwork(
+        'A quiet afternoon drawing with crayons.',
+        async () => {
+          const inserted: Record<string, unknown>[] = [];
+          const dispatched: string[] = [];
+          const deleteGate = deferred();
+          const deleted: string[] = [];
+          const backgroundTasks: Promise<void>[] = [];
+          const calls: Array<string | undefined> = [];
+          interceptFetch(async (request, url) => {
+            if (url.pathname.endsWith('/rest/v1/rpc/claim_memory_illustration_workflow_generation')) {
+              return jsonResponse(true);
+            }
+            if (url.pathname.endsWith('/rest/v1/rpc/supersede_memory_illustration_workflow_jobs')) {
+              return jsonResponse([{ superseded: true, output_key: 'old/superseded-output.webp' }]);
+            }
+            if (url.pathname === '/rest/v1/memory_illustration_jobs' && request.method === 'GET') {
+              return jsonResponse([]);
+            }
+            if (url.pathname === '/rest/v1/memory_illustration_jobs' && request.method === 'POST') {
+              inserted.push(await request.json());
+              return new Response(null, { status: 201 });
+            }
+            return undefined;
+          });
+          const response = await handleGenerateIllustration(authenticatedRequest(), {
+            chatJson: async <T>(_system: string, _user: string, options = {} as {
+              usageContext?: { operation?: string };
+            }) => {
+              calls.push(options.usageContext?.operation);
+              return (options.usageContext?.operation === 'emotion_chat'
+                ? { emotion: 'joy' }
+                : { safeDescription: 'SAFE-SCENE-FOR-JOB', expressionStyle: 'comedic' }) as T;
+            },
+            fetch: (async (_input, init) => {
+              dispatched.push(String(init?.body));
+              return new Response(null, { status: 202 });
+            }) as typeof fetch,
+            deleteObject: async (key) => {
+              deleted.push(key);
+              await deleteGate.promise;
+            },
+            waitUntil: (task) => { backgroundTasks.push(task); },
+          });
+          const body = await response.json();
+
+          // The response was produced while the old-output delete is still
+          // blocked: it is no longer on the dispatch critical path.
+          assertEquals(response.status, 202);
+          assertEquals(body.queued, true);
+          assertEquals(deleted, ['old/superseded-output.webp']);
+          assertEquals(backgroundTasks.length, 1);
+          deleteGate.resolve();
+          await Promise.all(backgroundTasks);
+
+          assertEquals(calls, ['emotion_chat', 'safety_chat']);
+          assertEquals(inserted.length, 1);
+          assertEquals(inserted[0].safe_scene_description, 'SAFE-SCENE-FOR-JOB');
+          assertEquals(inserted[0].expression_style, 'comedic');
+          assertEquals(inserted[0].style_description !== undefined, true);
+          assertEquals(dispatched.length, 1);
+          assertEquals(JSON.parse(dispatched[0]).jobId, body.jobId);
+        },
+        [MEMBER_ID],
+        { emotion: null },
+      );
+    } finally {
+      for (const [key] of Object.entries(env)) {
+        const value = previous.get(key);
+        if (value === undefined) Deno.env.delete(key);
+        else Deno.env.set(key, value);
+      }
+    }
+  },
+);
+
+Deno.test(
+  'generate-illustration returns the same failure whether the safety rewrite ran speculatively or inline',
+  async () => {
+    const failingSafety: ChatJsonMock = async <T>(
+      _system: string,
+      _user: string,
+      options = {} as { usageContext?: { operation?: string } },
+    ) => {
+      if (options.usageContext?.operation === 'safety_chat') throw new Error('safety provider exploded');
+      return { emotion: 'joy' } as T;
+    };
+    const outcomes: Array<{ status: number; body: unknown; resetToFailed: boolean }> = [];
+    for (const emotion of [null, 'joy']) {
+      await withMockedIllustrationNetwork(
+        'A quiet afternoon drawing with crayons.',
+        async (network) => {
+          const response = await handleGenerateIllustration(authenticatedRequest(), {
+            chatJson: failingSafety,
+            createId: () => 'attempt-token',
+          });
+          outcomes.push({
+            status: response.status,
+            body: await response.json(),
+            resetToFailed: network.memoryPatches.some(({ payload, url }) =>
+              payload.illustration_status === 'failed' &&
+              payload.illustration_generation_attempt_id === null &&
+              url.includes('illustration_generation_attempt_id=eq.attempt-token')
+            ),
+          });
+        },
+        [MEMBER_ID],
+        { emotion },
+      );
+    }
+    assertEquals(outcomes[0].status, 500);
+    assertEquals((outcomes[0].body as { code: string }).code, 'GENERATION_FAILED');
+    assertEquals(outcomes[0].resetToFailed, true);
+    assertEquals(outcomes[0], outcomes[1]);
+  },
+);
+
+for (const rejectMode of ['on-abort', 'immediately'] as const) {
+  Deno.test(
+    `generate-illustration aborts a rejecting speculative safety call on GENERATION_SUPERSEDED without an unhandled rejection (${rejectMode})`,
+    async () => {
+      const rejections = collectUnhandledRejections();
+      try {
+        await withMockedIllustrationNetwork(
+          'A quiet afternoon drawing with crayons.',
+          async (network) => {
+            // Lose the claim CAS: a null row from the guarded UPDATE.
+            interceptFetch(async (request, url) => {
+              if (request.method !== 'PATCH' || url.pathname !== '/rest/v1/memories') return undefined;
+              const payload = await request.json();
+              return payload.illustration_status === 'generating' ? jsonResponse(null) : undefined;
+            });
+            let safetySignal: AbortSignal | undefined;
+            const safetySettled = deferred();
+            const response = await handleGenerateIllustration(authenticatedRequest(), {
+              createId: () => 'attempt-token',
+              chatJson: async <T>(
+                _system: string,
+                _user: string,
+                options = {} as { signal?: AbortSignal; usageContext?: { operation?: string } },
+              ) => {
+                if (options.usageContext?.operation === 'emotion_chat') return { emotion: 'joy' } as T;
+                safetySignal = options.signal;
+                try {
+                  if (rejectMode === 'immediately') throw new Error('speculative safety failed');
+                  await new Promise<void>((_resolve, reject) => {
+                    options.signal?.addEventListener(
+                      'abort',
+                      () => reject(new DOMException('Aborted', 'AbortError')),
+                      { once: true },
+                    );
+                  });
+                  return {} as T;
+                } finally {
+                  safetySettled.resolve();
+                }
+              },
+            });
+            const body = await response.json();
+            assertEquals(response.status, 409);
+            assertEquals(body.code, 'GENERATION_SUPERSEDED');
+            // The speculative controller was aborted, the call settled, and
+            // nothing leaked or went unhandled.
+            await safetySettled.promise;
+            await macrotask();
+            assertEquals(safetySignal?.aborted, true);
+            assertEquals(rejections.seen, []);
+            assertEquals(network.openAiImagePrompts, []);
+          },
+          [MEMBER_ID],
+          { emotion: null },
+        );
+      } finally {
+        rejections.stop();
+      }
+    },
+  );
+}
+
+Deno.test(
+  'generate-illustration keeps PORTRAITS_NOT_READY deferral behavior when the safety rewrite ran speculatively',
+  async () => {
+    const rejections = collectUnhandledRejections();
+    try {
+      await withMockedIllustrationNetwork(
+        'A quiet afternoon drawing with crayons.',
+        async (network) => {
+          const retrigger = trackedRetriggerDependencies();
+          let safetySignal: AbortSignal | undefined;
+          const response = await handleGenerateIllustration(authenticatedRequest(), {
+            invokeGenerateIllustration: retrigger.invokeGenerateIllustration,
+            waitUntil: retrigger.waitUntil,
+            chatJson: async <T>(
+              _system: string,
+              _user: string,
+              options = {} as { signal?: AbortSignal; usageContext?: { operation?: string } },
+            ) => {
+              if (options.usageContext?.operation === 'emotion_chat') return { emotion: 'joy' } as T;
+              safetySignal = options.signal;
+              return { safeDescription: 'unused', expressionStyle: 'neutral' } as T;
+            },
+          });
+          const body = await response.json();
+
+          assertEquals(response.status, 409);
+          assertEquals(body.code, 'PORTRAITS_NOT_READY');
+          // Same reset as the non-speculative deferral: parked at 'pending'.
+          assertEquals(
+            network.memoryPatches.some(
+              ({ payload, url }) =>
+                payload.illustration_status === 'pending' &&
+                payload.illustration_generation_attempt_id === null &&
+                url.includes('illustration_status=eq.generating'),
+            ),
+            true,
+          );
+          await retrigger.backgroundTask();
+          assertEquals(retrigger.calls.length, 0);
+          // The unused speculative call was released, and no image work ran.
+          assertEquals(safetySignal?.aborted, true);
+          assertEquals(network.openAiImagePrompts, []);
+          await macrotask();
+          assertEquals(rejections.seen, []);
+        },
+        [MEMBER_ID],
+        { emotion: null },
+        { portraitVersions: () => [freshUnclaimedPendingPortraitRow()] },
+      );
+    } finally {
+      rejections.stop();
+    }
+  },
+);
+
+Deno.test(
+  'generate-illustration returns the same 500 for a family name read error with or without the speculative prefetch',
+  async () => {
+    const outcomes: Array<{ status: number; body: unknown }> = [];
+    const safetyOperations: Array<string | undefined> = [];
+    for (const emotion of [null, 'joy']) {
+      await withMockedIllustrationNetwork(
+        'A quiet afternoon drawing with crayons.',
+        async () => {
+          interceptFetch((request, url) =>
+            request.method === 'GET' && url.pathname === '/rest/v1/family_members' &&
+              url.searchParams.get('select') === 'id,name,nicknames'
+              ? new Response(JSON.stringify({ message: 'boom' }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' },
+              })
+              : undefined
+          );
+          const response = await handleGenerateIllustration(authenticatedRequest(), {
+            chatJson: async <T>(
+              _system: string,
+              _user: string,
+              options = {} as { usageContext?: { operation?: string } },
+            ) => {
+              safetyOperations.push(options.usageContext?.operation);
+              return { emotion: 'joy' } as T;
+            },
+          });
+          outcomes.push({ status: response.status, body: await response.json() });
+        },
+        [MEMBER_ID],
+        { emotion },
+      );
+    }
+    assertEquals(outcomes[0].status, 500);
+    assertEquals((outcomes[0].body as { code: string }).code, 'internal_error');
+    assertEquals((outcomes[0].body as { error: string }).error, 'Failed to load family members');
+    assertEquals(outcomes[0], outcomes[1]);
+    // No paid safety call is made once the name rows failed to load.
+    assertEquals(safetyOperations.filter((operation) => operation === 'safety_chat'), []);
+  },
+);
+
+Deno.test(
+  'generate-illustration discards a speculative safety result whose content differs from the claimed memory',
+  async () => {
+    let memoryReads = 0;
+    await withMockedIllustrationNetwork(
+      'Original text about a picnic.',
+      async (network) => {
+        // After the emotion write the refresh returns edited content, so the
+        // claim (which pins the refreshed content) is for different text than
+        // the speculative safety call was run on.
+        interceptFetch(async (request, url) => {
+          if (request.method === 'PATCH' && url.pathname === '/rest/v1/memories') {
+            // The guarded emotion write succeeds, so the memory is re-read.
+            const payload = await request.json();
+            if (payload.emotion) return jsonResponse({ id: MEMORY_ID });
+          }
+          if (request.method === 'GET' && url.pathname === '/rest/v1/memories') {
+            memoryReads += 1;
+            if (memoryReads > 1) {
+              return jsonResponse({
+                id: MEMORY_ID,
+                family_id: FAMILY_ID,
+                content: 'Edited text about a bike ride.',
+                memory_date: '2026-07-12',
+                emotion: 'joy',
+                illustration_key: null,
+                illustration_generation_id: null,
+                illustration_generation_attempt_id: null,
+                illustration_status: 'pending',
+                updated_at: '2026-07-12T00:00:01.000Z',
+                memory_type: 'text_illustration',
+              });
+            }
+          }
+          return undefined;
+        });
+        const safetyInputs: string[] = [];
+        const response = await handleGenerateIllustration(authenticatedRequest(), {
+          getObjectBytes: async () => TINY_IMAGE_BYTES,
+          chatJson: async <T>(
+            _system: string,
+            user: string,
+            options = {} as { usageContext?: { operation?: string } },
+          ) => {
+            if (options.usageContext?.operation === 'emotion_chat') return { emotion: 'joy' } as T;
+            safetyInputs.push(user);
+            return { safeDescription: `SAFE:${user}`, expressionStyle: 'neutral' } as T;
+          },
+        });
+        await response.json();
+        // One speculative call on the original text, then the inline call on
+        // the claimed text; only the latter reaches the image prompt.
+        assertEquals(safetyInputs, ['Original text about a picnic.', 'Edited text about a bike ride.']);
+        assertEquals(network.openAiImagePrompts.length > 0, true);
+        assertEquals(
+          network.openAiImagePrompts.every((prompt) =>
+            prompt.includes('SAFE:Edited text about a bike ride.') && !prompt.includes('picnic')
+          ),
+          true,
+        );
+      },
+      [MEMBER_ID],
+      { emotion: null },
+    );
+  },
+);

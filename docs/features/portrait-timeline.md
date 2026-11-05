@@ -112,10 +112,14 @@ The generation endpoint intentionally no longer accepts `{ familyMemberId }`. Th
 | Layer | Files |
 |-------|-------|
 | Route | `app/(app)/family/[id]/portraits.tsx` |
-| Hooks | `src/hooks/usePortraitVersions.ts`, `src/hooks/useFamilyMembers.ts`, `src/hooks/useMemories.ts` |
+| Hooks | `src/hooks/usePortraitVersions.ts`, `src/hooks/usePortraitVersionsRealtime.ts`, `src/hooks/portrait-invalidation.ts`, `src/hooks/useFamilyMembers.ts`, `src/hooks/useMemories.ts` |
 | Services | `src/services/portrait-versions.ts`, `src/services/family-members.ts`, `src/services/memories.ts` |
 | Components | `src/components/portrait-timeline.tsx`, `src/components/cast-card.tsx` |
 | Utils | `src/utils/portrait-versions.ts`, `src/utils/family-profile-photo-picker.ts`, `src/utils/storage-keys.ts` |
+
+### Realtime
+
+Portrait readiness is pushed, not polled. `family_member_portrait_versions` is in the `supabase_realtime` publication (`20261105120000_portrait_versions_realtime.sql`); RLS (`"Portrait versions: select"`, `is_family_member(family_id)`) gates delivery. `usePortraitVersionsRealtime` is mounted once in `FamilyProvider` (next to `useMemoriesRealtime`), subscribes with `family_id=eq.<familyId>`, and on any event invalidates the family-batched `portrait-versions` query; a transition into `ready`/`failed` also runs `invalidatePortraitConsumers` (family members + memories). The payload is a refetch signal only — never patched into the cache, since the row also carries generation/deletion tokens. `useFamilyPortraitVersions` keeps its 3s poll only while the channel is not `SUBSCRIBED` (`useIsPortraitRealtimeLive`, separate from the memories flag), and a local one-shot timer still wakes the 3:00/5:30 recovery check because a never-dispatched pending version emits no events. On every rejoin, or when an active version is already cached at subscribe time, the query is reconciled once.
 
 Portrait-version queries are family-batched, then grouped by member. Memory lists batch portrait rows and signed URL requests; do not issue one version or signing request per `(memory, member)` chip.
 
@@ -138,6 +142,7 @@ The new client may fall back to legacy member columns only during controlled rol
 
 ## Extension guide
 
+- Dependent-memory retrigger: the bridge only recovers pending memories at least 30s old (so it never races a new memory's own initial generation; do not lower this floor). `retrigger_memories` also returns an additive `retryAfterMs` for younger dependent pending memories (oldest young memory's age-out + 1s, clamped 1s–31s, else null). `retriggerDependentMemories` in `portrait-workflow.ts` sleeps that long and runs exactly one more best-effort `retrigger young portrait-dependent memories` step; keep step names deterministic and never loop.
 - Follow the [Durable AI generation workflow playbook](../durable-ai-generation-workflows.md) when extending this executor. Do not flatten portrait claims, retained-output rules, deletion races, or dependent-memory retriggers into the memory state machine.
 - Reuse `resolvePortraitVersion`; do not implement local “closest portrait” variants.
 - Add new visual consumers by loading versions in batches and resolving against that consumer's target date.
@@ -166,7 +171,7 @@ The new client may fall back to legacy member columns only during controlled rol
 | Layer | Files |
 |-------|-------|
 | Unit | `src/utils/portrait-versions.test.ts`, `src/hooks/useMediaUrls.test.ts`, `src/components/portrait-timeline.test.tsx`, `src/components/cast-card.test.tsx` |
-| Integration | `src/services/portrait-versions.integration.test.ts`, `src/services/family-members.integration.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `src/hooks/useFamilyMembers.integration.test.tsx`, `src/hooks/useMemories.integration.test.tsx`, `src/screen-tests/add-family-member-photo-date.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx`, `src/screen-tests/portrait-timeline.integration.test.tsx` |
+| Integration | `src/services/portrait-versions.integration.test.ts`, `src/services/family-members.integration.test.ts`, `src/hooks/usePortraitVersions.integration.test.tsx`, `src/hooks/usePortraitVersionsRealtime.test.tsx`, `src/hooks/useFamilyMembers.integration.test.tsx`, `src/hooks/useMemories.integration.test.tsx`, `src/screen-tests/add-family-member-photo-date.integration.test.tsx`, `src/screen-tests/family-member-portrait-entry.integration.test.tsx`, `src/screen-tests/portrait-timeline.integration.test.tsx` |
 | E2E | `.maestro/flows/portraits/view-portrait-timeline.yaml` |
 | Deno | `supabase/functions/_shared/portrait-versions.test.ts`, `generate-portrait-illustration/index.test.ts`, `workflow-portrait-bridge/index.test.ts`, `generate-illustration/index.test.ts`, `delete-portrait-version/index.test.ts`, `delete-family-member/index.test.ts`, `hard-delete-expired-accounts/index.test.ts`, `_shared/storage-keys.test.ts`, `_shared/family-access.test.ts` |
 | Worker | `cloudflare/memory-illustration-worker/test/portrait-*.test.ts` — signed dispatch, reference loading/order, WebP/OpenAI policy, replay/reservation, publication reconciliation, cleanup, and dependent-memory retrigger |

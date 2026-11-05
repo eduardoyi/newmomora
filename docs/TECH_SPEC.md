@@ -1623,6 +1623,21 @@ push/poll split this powers, and the A5 poll (`useGenerationStatusPolling`)
 that stays as the fallback whenever realtime is disconnected or the
 publication is missing in an environment.
 
+`public.family_member_portrait_versions` is added the same way
+(`supabase/migrations/20261105120000_portrait_versions_realtime.sql`,
+idempotent). `usePortraitVersionsRealtime`
+(`src/hooks/usePortraitVersionsRealtime.ts`, mounted once in `FamilyProvider`
+beside `useMemoriesRealtime`) subscribes with `filter: family_id=eq.<id>` and
+uses events only as a signal to refetch the family-batched
+`portrait-versions` query (and, on a ready/failed transition, the same
+consumer invalidation as `invalidatePortraitConsumers`); row data is never
+patched into the cache. Default `REPLICA IDENTITY` is sufficient. Access is
+gated by the existing `"Portrait versions: select"` RLS policy
+(`is_family_member(family_id)`) plus the restrictive anonymous-deny policy.
+The 3s poll in `useFamilyPortraitVersions` runs only while that channel is not
+`SUBSCRIBED`. Verify with
+`select * from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'family_member_portrait_versions';`.
+
 ### 2.3 Row Level Security
 
 All tables enable RLS. Access is scoped by **family membership**, not
@@ -2466,9 +2481,9 @@ Generates or regenerates the character portrait for one immutable portrait versi
 6. The Workflow makes at most one `gpt-image-2.6-flare` attempt (`complexity: medium`) (up to 180s). Retryable provider failures may make one `gpt-image-1.5` attempt (up to 60s with `input_fidelity: high`). It requests 1024px WebP with compression 85 and never uses a text-only fallback. Moderation and deterministic validation failures do not fall back.
 7. OpenAI plus R2 upload stay in the same Workflow step; only `{ outputKey, model }` is returned. The deterministic output head plus atomic provider-attempt reservation make step replay fail closed rather than purchase a second image. R2 upload retries reuse the in-memory image bytes.
 8. The signed bridge publishes with the portrait generation-token/deletion CAS, reconciles ambiguous publication, deletes a superseded output, and deletes a replaced old portrait only after successful publication. Terminal private prompt/reference fields are scrubbed.
-9. On terminal success, failure, or supersession, the bridge rechecks up to three pending illustrated memories older than 30 seconds and asks the normal memory dispatcher to recover them via a separate timestamped HMAC request. The stored actor's current manager role is revalidated; no expiring user JWT crosses Cloudflare. Client memory recovery remains the backstop.
+9. On terminal success, failure, or supersession, the bridge rechecks up to three pending illustrated memories older than 30 seconds and asks the normal memory dispatcher to recover them via a separate timestamped HMAC request. The 30-second floor stays (it avoids racing a brand-new memory's own initial generation), but pending dependent memories *younger* than the floor are no longer stranded: `retrigger_memories` also returns `retryAfterMs` (additive; null/absent when none are young) — the time until the oldest young pending memory crosses the floor plus a 1s margin, clamped to 1s–31s. The portrait Workflow sleeps that long and runs exactly one more retrigger step (`retrigger young portrait-dependent memories`), never looping; both steps are best-effort and cannot fail the Workflow. The bridge's nonce-ledger sweep (both bridges) is detached via `EdgeRuntime.waitUntil`; only the nonce insert stays awaited before the operation. The stored actor's current manager role is revalidated; no expiring user JWT crosses Cloudflare. Client memory recovery remains the backstop.
 
-The durable application lease is five minutes. The client treats an unclaimed pending version as recoverable at three minutes (from immutable `created_at`) and claimed work at five minutes thirty seconds (from `generation_started_at`). Automatic recovery is owner/manager-only, once per version/attempt clock, and only re-invokes this endpoint; it never writes status or claim fields. Failed versions require manual retry. The active-version query polls every three seconds and always refetches on app foreground so an app killed before initial dispatch can recover.
+The durable application lease is five minutes. The client treats an unclaimed pending version as recoverable at three minutes (from immutable `created_at`) and claimed work at five minutes thirty seconds (from `generation_started_at`). Automatic recovery is owner/manager-only, once per version/attempt clock, and only re-invokes this endpoint; it never writes status or claim fields. Failed versions require manual retry. The active-version query is updated by Realtime (`usePortraitVersionsRealtime`, see 2.2a) and polls every three seconds only while that channel is not `SUBSCRIBED`; it always refetches on app foreground so an app killed before initial dispatch can recover, and a one-shot local timer re-evaluates the 3:00/5:30 recovery thresholds while the poll is idle.
 
 **Response**
 

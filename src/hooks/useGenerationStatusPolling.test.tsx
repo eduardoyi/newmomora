@@ -255,7 +255,7 @@ describe('useGenerationStatusPolling', () => {
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 
-  it('invalidates media-urls and calendar when a status transitions to ready', async () => {
+  it('invalidates calendar (not media-urls) when a status transitions to ready', async () => {
     queryClient.setQueryData(
       memoriesQueryKey(FAMILY_ID),
       buildInfiniteData([buildMemory({ id: 'memory-1', illustration_status: 'generating' })]),
@@ -278,9 +278,9 @@ describe('useGenerationStatusPolling', () => {
 
     await waitFor(() => expect(mockedFetchStatuses).toHaveBeenCalled());
     await waitFor(() =>
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['media-urls'] }),
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['calendar-memories'] }),
     );
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['calendar-memories'] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
   });
 
   // Bug B (docs/plans/share-card-store-through.md's incident follow-up,

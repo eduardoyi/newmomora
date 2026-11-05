@@ -72,6 +72,9 @@ jest.mock('@/hooks/use-auth-url-handler', () => ({
 jest.mock('@/hooks/useMemoriesRealtime', () => ({
   useMemoriesRealtime: jest.fn(),
 }));
+jest.mock('@/hooks/usePortraitVersionsRealtime', () => ({
+  usePortraitVersionsRealtime: jest.fn(),
+}));
 
 // The whole point of this suite: a hand-rolled auth mock that reproduces
 // real timing (SIGNED_IN fires from *inside* verifyOtp(), before it

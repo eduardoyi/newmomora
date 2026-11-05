@@ -26,9 +26,8 @@ import { warmShareCardFireAndForget } from '@/services/share-card';
 // useMemoriesRealtime's UPDATE handler (useMemories.ts,
 // useGenerationStatusPolling.ts, useMemoriesRealtime.ts respectively) --
 // so this is the ONE place that both invalidates the caches a finished
-// illustration affects (unchanged from before this function existed: signed
-// media URLs need a fresh look, and the calendar's cached rows for this
-// memory are stale) AND fires the store-through share-card cache warm,
+// illustration affects (the calendar's cached rows for this memory are
+// stale) AND fires the store-through share-card cache warm,
 // deduped so the three observers produce exactly one warm request per
 // illustration generation (see share-card-warm-dedupe.ts's header for why
 // text_illustration is the only memory type that reaches this transition,
@@ -36,12 +35,23 @@ import { warmShareCardFireAndForget } from '@/services/share-card';
 // incident this warm timing fixes -- warming at illustration-ready instead
 // of at memory-create time means compose-share-card never renders a card
 // before the illustration it depends on actually exists).
+//
+// Deliberately NO ['media-urls'] invalidation. That used to refetch (re-sign)
+// EVERY mounted signed-URL query on the timeline -- one get-media-url Edge call
+// per card -- competing with the single request that matters. It is
+// unnecessary: the finished illustration lives at a brand-new object key that
+// is committed to `memories.illustration_key` atomically with
+// status='ready' (after the object is uploaded), and the same write bumps
+// `updated_at`. Every consumer keys its media-urls query on that key
+// (['media-urls', <keys>, <updated_at>]) and passes null while the key is
+// absent, so the arrival of the new key/updated_at is itself a brand-new query
+// that fetches on its own. No client can hold a null/stale entry under the new
+// key, because it never knew that key before the ready commit.
 export function handleIllustrationReadyTransition(
   queryClient: QueryClient,
   memoryId: string,
   illustrationGenerationId: string | null,
 ): void {
-  queryClient.invalidateQueries({ queryKey: ['media-urls'] });
   queryClient.invalidateQueries({ queryKey: [calendarMemoriesQueryKeyBase] });
 
   if (shouldWarmShareCardForReadyTransition(memoryId, illustrationGenerationId)) {

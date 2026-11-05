@@ -1,4 +1,4 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 
 const mockWarmShareCardFireAndForget = jest.fn();
 jest.mock('@/services/share-card', () => ({
@@ -22,14 +22,39 @@ describe('handleIllustrationReadyTransition', () => {
     mockWarmShareCardFireAndForget.mockClear();
   });
 
-  it('invalidates media-urls and calendar queries', () => {
+  it('invalidates the calendar queries', () => {
     const queryClient = createQueryClient();
     const spy = jest.spyOn(queryClient, 'invalidateQueries');
 
     handleIllustrationReadyTransition(queryClient, 'ready-memory-1', 'gen-1');
 
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['media-urls'] });
     expect(spy).toHaveBeenCalledWith({ queryKey: [calendarMemoriesQueryKeyBase] });
+  });
+
+  it('does not invalidate or refetch unrelated media-urls queries', async () => {
+    const queryClient = createQueryClient();
+    const unrelatedFetch = jest.fn().mockResolvedValue({ 'other/key.webp': 'https://signed/other' });
+    await queryClient.fetchQuery({
+      queryKey: ['media-urls', 'other/key.webp', '2026-01-01T00:00:00Z'],
+      queryFn: unrelatedFetch,
+    });
+    // An active observer is what invalidateQueries would refetch.
+    const unsubscribe = new QueryObserver(queryClient, {
+      queryKey: ['media-urls', 'other/key.webp', '2026-01-01T00:00:00Z'],
+      queryFn: unrelatedFetch,
+    }).subscribe(() => undefined);
+    const spy = jest.spyOn(queryClient, 'invalidateQueries');
+    unrelatedFetch.mockClear();
+
+    handleIllustrationReadyTransition(queryClient, 'ready-memory-1b', 'gen-1');
+    await Promise.resolve();
+
+    expect(spy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
+    expect(
+      queryClient.getQueryState(['media-urls', 'other/key.webp', '2026-01-01T00:00:00Z'])?.isInvalidated,
+    ).toBe(false);
+    expect(unrelatedFetch).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it('warms the share card once for a given memory + illustration_generation_id', () => {
@@ -66,14 +91,13 @@ describe('handleIllustrationReadyTransition', () => {
     expect(mockWarmShareCardFireAndForget).toHaveBeenNthCalledWith(2, 'ready-memory-4');
   });
 
-  it('still invalidates caches even when the warm is deduped away', () => {
+  it('still invalidates the calendar even when the warm is deduped away', () => {
     const queryClient = createQueryClient();
     handleIllustrationReadyTransition(queryClient, 'ready-memory-5', 'gen-1');
 
     const spy = jest.spyOn(queryClient, 'invalidateQueries');
     handleIllustrationReadyTransition(queryClient, 'ready-memory-5', 'gen-1');
 
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['media-urls'] });
     expect(spy).toHaveBeenCalledWith({ queryKey: [calendarMemoriesQueryKeyBase] });
     expect(mockWarmShareCardFireAndForget).toHaveBeenCalledTimes(1);
   });

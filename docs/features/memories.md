@@ -536,3 +536,64 @@ Measured with `npm run eval:illustration -- --variant <model>[:<complexity>]`
 10.1s / 11.1s. Quality was visually equivalent. Re-run that A/B before
 changing `complexity`; the Worker (`src/openai.ts`) and Edge
 (`_shared/openai.ts`) constants must stay in sync.
+
+### Preparation latency (2026-11-05)
+
+The pre-dispatch work in `generate-illustration` (everything before the Worker
+is queued) used to be strictly serial. What now overlaps:
+
+- **Safety rewrite runs speculatively beside emotion analysis.** Right after
+  `begin_memory_illustration_usage` returns, and only when emotion analysis
+  will run (`shouldAnalyzeMissingEmotion`), the function starts a prefetch:
+  the family `family_members` name rows (user-scoped client, same select) and
+  then the `safety_chat` `chatJson` call (same prompt and `usageContext`),
+  under its own `AbortController`. The safety prompt depends only on the name
+  rows and `stripUrls(content)`, never on the emotion result. When emotion is
+  already present nothing is prefetched; the name read and safety call stay
+  after the claim.
+- **Post-claim reads are batched.** Tags and the name rows (reused from the
+  prefetch when present) run together; members, portrait versions and the
+  `families.illustration_style` row then run together.
+- **The superseded old-output R2 delete is backgrounded** with
+  `dependencies.waitUntil` (Cloudflare branch only). If `waitUntil` throws it
+  falls back to awaiting the delete. `generate-portrait-illustration` does the
+  same for its stale `generation_output_key`, and runs its billing check
+  together with the member, family-style and active-job reads once the caller
+  is authorized.
+
+Invariants to keep when touching this:
+
+1. **Never consume the prefetch unless it matches the claimed content.** The
+   claim CAS pins `p_expected_content`. After the claim, the prefetch is used
+   only if `stripUrls(memory.content)` equals the text it ran on; otherwise it
+   is aborted and the safety call runs inline. A safety result must always
+   correspond to the claimed content.
+2. **Every prefetch promise is `settle`d** (`{ok, value} | {ok: false, error}`)
+   so an abandoned or aborted call can never become an unhandled rejection. A
+   failure is re-thrown at the original consume point, so it takes the same
+   `catch`/`finally` path (500 `GENERATION_FAILED`, or 504 on the deadline) as
+   the old inline call. A name-read error returns the same 500 `Failed to load
+   family members` at the same point, after the tags error and the member-limit
+   check; no safety call is paid for once the name read has failed.
+3. **Abort on every non-consuming exit.** `discardSpeculativeSafety()` runs on
+   the ready / in-progress short-circuits, claim errors, claim loss
+   (`GENERATION_SUPERSEDED`) and in `finally` (deferral, validation failures,
+   errors). After the claim the prefetch controller is linked to the claim
+   deadline `generationController`. A wasted cheap `gpt-4o-mini` call is
+   acceptable; a leaked timer or unhandled rejection is not.
+4. **Parallel reads keep today's error precedence.** Results are awaited
+   together and then evaluated in the original order (tags, member limit, names,
+   members, portraits, readiness/deferral, empty content, style). The style
+   read is `settle`d and only consumed after the deferral checks, so early
+   returns ignore it. Readiness/deferral (`PORTRAITS_NOT_READY`) logic and its
+   `finally` reset are unchanged.
+5. **Billing stays after the role check.** `billing_ai_generation_check` takes
+   the owner's billing lock; it must never run for an unauthorized caller, and
+   `begin_*_usage`, the claim, supersede, job insert, promote and dispatch stay
+   serial and in order.
+
+Tests: `generate-illustration/index.test.ts` (speculative ordering, job input,
+failure parity, supersede/deferral without unhandled rejections, name-read 500,
+content-mismatch discard, backgrounded delete) and
+`generate-portrait-illustration/index.test.ts` (precedence, unauthorized caller,
+backgrounded delete).

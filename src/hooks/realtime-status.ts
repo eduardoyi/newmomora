@@ -22,49 +22,66 @@ interface RealtimeStatusState {
   isLive: boolean;
 }
 
-let state: RealtimeStatusState = { familyId: null, isLive: false };
-const listeners = new Set<() => void>();
+// One independent store per realtime channel kind (memories, portrait
+// versions). Each hook family mounts exactly one channel at a time, so each
+// kind needs only a single "current family" slot.
+function createRealtimeStatusStore() {
+  let state: RealtimeStatusState = { familyId: null, isLive: false };
+  const listeners = new Set<() => void>();
 
-function notify(): void {
-  for (const listener of listeners) {
-    listener();
+  function notify(): void {
+    for (const listener of listeners) {
+      listener();
+    }
   }
+
+  function subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }
+
+  function getSnapshot(): RealtimeStatusState {
+    return state;
+  }
+
+  function setLive(familyId: string, isLive: boolean): void {
+    if (state.familyId === familyId && state.isLive === isLive) {
+      return;
+    }
+    state = { familyId, isLive };
+    notify();
+  }
+
+  function clear(familyId: string): void {
+    if (state.familyId !== familyId || !state.isLive) {
+      return;
+    }
+    state = { familyId, isLive: false };
+    notify();
+  }
+
+  function reset(): void {
+    state = { familyId: null, isLive: false };
+  }
+
+  function useIsLive(familyId: string | null | undefined): boolean {
+    const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    return Boolean(familyId) && snapshot.familyId === familyId && snapshot.isLive;
+  }
+
+  return { setLive, clear, reset, useIsLive };
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-function getSnapshot(): RealtimeStatusState {
-  return state;
-}
+const memoriesStatusStore = createRealtimeStatusStore();
+const portraitStatusStore = createRealtimeStatusStore();
 
 /** Called by useMemoriesRealtime on every channel status transition. */
-export function setRealtimeLive(familyId: string, isLive: boolean): void {
-  if (state.familyId === familyId && state.isLive === isLive) {
-    return;
-  }
-  state = { familyId, isLive };
-  notify();
-}
+export const setRealtimeLive = memoriesStatusStore.setLive;
 
 /** Called on unmount / resubscribe so a torn-down channel never leaves a stale "live" flag behind. */
-export function clearRealtimeStatus(familyId: string): void {
-  if (state.familyId !== familyId || !state.isLive) {
-    return;
-  }
-  state = { familyId, isLive: false };
-  notify();
-}
-
-// Only for tests -- production code has no reason to reset the module-level
-// singleton mid-session.
-export function resetRealtimeStatusForTests(): void {
-  state = { familyId: null, isLive: false };
-}
+export const clearRealtimeStatus = memoriesStatusStore.clear;
 
 /**
  * True only when the realtime channel for THIS familyId is currently
@@ -72,7 +89,17 @@ export function resetRealtimeStatusForTests(): void {
  * switch) is treated as "not live" so the poll stays on the safe default
  * rather than assuming coverage from a channel scoped to a different family.
  */
-export function useIsRealtimeLive(familyId: string | null | undefined): boolean {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return Boolean(familyId) && snapshot.familyId === familyId && snapshot.isLive;
+export const useIsRealtimeLive = memoriesStatusStore.useIsLive;
+
+// Same contract for the portrait-versions channel (usePortraitVersionsRealtime),
+// kept separate so one channel being down never suppresses the other's poll.
+export const setPortraitRealtimeLive = portraitStatusStore.setLive;
+export const clearPortraitRealtimeStatus = portraitStatusStore.clear;
+export const useIsPortraitRealtimeLive = portraitStatusStore.useIsLive;
+
+// Only for tests -- production code has no reason to reset the module-level
+// singletons mid-session.
+export function resetRealtimeStatusForTests(): void {
+  memoriesStatusStore.reset();
+  portraitStatusStore.reset();
 }

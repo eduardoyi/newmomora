@@ -373,12 +373,44 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
-function logGenerationPhase(memoryId: string, phase: string, startedAt: number): void {
+function logGenerationPhaseDuration(memoryId: string, phase: string, durationMs: number): void {
   console.info('generate-illustration phase complete', {
     memoryId,
     phase,
-    durationMs: Date.now() - startedAt,
+    durationMs,
   });
+}
+
+function logGenerationPhase(memoryId: string, phase: string, startedAt: number): void {
+  logGenerationPhaseDuration(memoryId, phase, Date.now() - startedAt);
+}
+
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+/**
+ * Converts a promise into one that never rejects. Used for work that starts
+ * before its consumer is ready (speculative prefetches, reads that may be
+ * abandoned on an early return): a rejection nobody awaited would otherwise
+ * surface as an unhandled rejection. The consumer re-throws `error` at the
+ * exact point the un-parallelized code would have thrown.
+ */
+async function settle<T>(run: () => PromiseLike<T>): Promise<Settled<T>> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+async function timed<T>(promise: PromiseLike<T>): Promise<{ value: T; durationMs: number }> {
+  const startedAt = Date.now();
+  const value = await promise;
+  return { value, durationMs: Date.now() - startedAt };
+}
+
+interface SafetyRewriteResult {
+  safeDescription?: string;
+  expressionStyle?: string;
 }
 
 function remainingPreFinalizationDeadlineMs(
@@ -454,6 +486,17 @@ export async function handleGenerateIllustration(
   const supabase = internalPortraitRetrigger
     ? dependencies.createServiceClient()
     : createUserClient(authHeader!);
+
+  // Name/nickname rows for the whole family: used for the no-tag fallback
+  // member match and for the safety-rewrite nickname mapping, so any nickname
+  // mentioned in the text gets resolved even for members that aren't tagged.
+  const loadFamilyNameRows = (familyId: string, signal: AbortSignal) =>
+    supabase
+      .from('family_members')
+      .select('id, name, nicknames')
+      .eq('family_id', familyId)
+      .abortSignal(signal);
+  type FamilyNameRowsResult = Awaited<ReturnType<typeof loadFamilyNameRows>>;
 
   let { data: memory, error: memoryError } = await supabase
     .from('memories')
@@ -586,6 +629,55 @@ export async function handleGenerateIllustration(
   let analyzedPalette: string | undefined;
   const shouldAnalyzeMissingEmotion = !memory.emotion &&
     (requestIntent === 'initial' || requestIntent === 'recovery' || !forceRegenerate);
+
+  // Latency: the safety rewrite depends only on the family's name rows and the
+  // URL-stripped content, never on the emotion result, so when emotion
+  // analysis is about to run we start the safety rewrite alongside it instead
+  // of after the claim. This is speculative: it is consumed only after the
+  // claim succeeds and only if the CLAIMED content matches what it was run on
+  // (the claim CAS pins p_expected_content). Every exit that does not consume
+  // it aborts it via `discardSpeculativeSafety`. All of its promises are
+  // `settle`d, so an abandoned or aborted call can never become an unhandled
+  // rejection; a wasted (cheap, gpt-4o-mini) call is the accepted worst case.
+  let speculativeSafety: {
+    controller: AbortController;
+    strippedContent: string;
+    nameRows: Promise<Settled<FamilyNameRowsResult>>;
+    safety: Promise<Settled<SafetyRewriteResult> | null>;
+  } | null = null;
+  const discardSpeculativeSafety = () => {
+    speculativeSafety?.controller.abort();
+    speculativeSafety = null;
+  };
+  if (shouldAnalyzeMissingEmotion) {
+    const controller = new AbortController();
+    const prefetchContent = stripUrls(memory.content);
+    const prefetchFamilyId = memory.family_id;
+    const prefetchNameRows = settle(() => loadFamilyNameRows(prefetchFamilyId, controller.signal));
+    speculativeSafety = {
+      controller,
+      strippedContent: prefetchContent,
+      nameRows: prefetchNameRows,
+      safety: prefetchContent.trim()
+        ? prefetchNameRows.then((nameRowsResult) => {
+          // A failed name read returns 500 at the consume point before any
+          // safety call would have been made, so do not pay for one.
+          if (!nameRowsResult.ok || nameRowsResult.value.error) return null;
+          const prefetchMembers: SafetyPromptMember[] = nameRowsResult.value.data ?? [];
+          return settle(() =>
+            dependencies.chatJson<SafetyRewriteResult>(
+              buildSafetySystemPrompt(prefetchMembers),
+              prefetchContent,
+              {
+                signal: controller.signal,
+                usageContext: { attributionScope: 'family', familyId: prefetchFamilyId, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
+              },
+            )
+          );
+        })
+        : Promise.resolve(null),
+    };
+  }
   if (shouldAnalyzeMissingEmotion) {
     for (let analysisAttempt = 0; analysisAttempt < 2; analysisAttempt += 1) {
       try {
@@ -637,6 +729,7 @@ export async function handleGenerateIllustration(
     memory.illustration_key &&
     memory.illustration_generation_id
   ) {
+    discardSpeculativeSafety();
     const response: GenerateIllustrationResponse = {
       success: true,
       illustrationKey: memory.illustration_key,
@@ -654,6 +747,7 @@ export async function handleGenerateIllustration(
       memory.illustration_generation_started_at,
     )
   ) {
+    discardSpeculativeSafety();
     return errorResponse('Illustration generation in progress', 409, 'GENERATION_IN_PROGRESS');
   }
 
@@ -679,6 +773,7 @@ export async function handleGenerateIllustration(
       },
     );
     if (error) {
+      discardSpeculativeSafety();
       if (error.message === 'Illustration output upload is still active') {
         return errorResponse('Illustration output upload is still in progress', 409, 'GENERATION_IN_PROGRESS');
       }
@@ -717,6 +812,7 @@ export async function handleGenerateIllustration(
       .select('id')
       .maybeSingle();
     if (startError) {
+      discardSpeculativeSafety();
       console.error('generate-illustration start update failed', startError.message);
       return errorResponse('Failed to start illustration generation', 500, 'internal_error');
     }
@@ -724,11 +820,28 @@ export async function handleGenerateIllustration(
   }
 
   if (!generationClaimed) {
+    discardSpeculativeSafety();
     return errorResponse('Illustration generation was superseded', 409, 'GENERATION_SUPERSEDED');
   }
 
   const generationStartedAt = Date.now();
   const generationController = new AbortController();
+  if (speculativeSafety) {
+    if (speculativeSafety.strippedContent !== stripUrls(memory.content)) {
+      // The safety rewrite must correspond to the CLAIMED content. The claim
+      // CAS should have failed on any difference; if it somehow did not, drop
+      // the prefetch and let the inline path below recompute everything.
+      discardSpeculativeSafety();
+    } else {
+      // Bind the speculative call to the same claim-scoped deadline.
+      const linkedSpeculativeController = speculativeSafety.controller;
+      generationController.signal.addEventListener(
+        'abort',
+        () => linkedSpeculativeController.abort(generationController.signal.reason),
+        { once: true },
+      );
+    }
+  }
   let generationPhase = 'preparation';
   // Keep a small, bounded portion of the one claim-scoped budget for the
   // immutable upload + checked DB swap. Aborting those operations can make an
@@ -824,19 +937,33 @@ export async function handleGenerateIllustration(
 
   try {
     throwIfAborted(generationController.signal);
-    const tagPhaseStartedAt = Date.now();
-    const { data: tagRows, error: tagError } = await supabase
-      .from('memory_family_members')
-      .select('family_member_id')
-      .eq('memory_id', memoryId)
-      .abortSignal(generationController.signal);
+    // Tags and the family name rows are independent reads: run them together.
+    // When the speculative safety prefetch already started the name read, reuse
+    // it. Error precedence is unchanged: tags error, then the member limit,
+    // then the name-rows error.
+    generationPhase = 'family-member-lookup';
+    const tagsAndNamesStartedAt = Date.now();
+    const prefetchedNameRows = speculativeSafety?.nameRows ?? null;
+    const [tagsRead, nameRowsRead] = await Promise.all([
+      timed(
+        supabase
+          .from('memory_family_members')
+          .select('family_member_id')
+          .eq('memory_id', memoryId)
+          .abortSignal(generationController.signal),
+      ),
+      prefetchedNameRows
+        ? prefetchedNameRows
+        : settle(() => loadFamilyNameRows(memory.family_id, generationController.signal)),
+    ]);
+    const { data: tagRows, error: tagError } = tagsRead.value;
 
     throwIfAborted(generationController.signal);
     if (tagError) {
       console.error('generate-illustration tag lookup failed', tagError.message);
       return errorResponse('Failed to load memory tags', 500, 'internal_error');
     }
-    logGenerationPhase(memoryId, 'tags', tagPhaseStartedAt);
+    logGenerationPhaseDuration(memoryId, 'tags', tagsRead.durationMs);
 
     const taggedMemberIds = (tagRows ?? []).map((row) => row.family_member_id);
 
@@ -848,23 +975,17 @@ export async function handleGenerateIllustration(
       );
     }
 
-    // Always load name/nickname rows for the whole family: used both for the
-    // no-tag fallback member match below and for the safety-rewrite nickname
-    // mapping, so any nickname mentioned in the text gets resolved even for
-    // members that aren't tagged on this memory.
-    generationPhase = 'family-member-lookup';
-    const memberLookupPhaseStartedAt = Date.now();
-    const { data: nameRows, error: nameRowsError } = await supabase
-      .from('family_members')
-      .select('id, name, nicknames')
-      .eq('family_id', memory.family_id)
-      .abortSignal(generationController.signal);
+    // A thrown (not returned) name-read failure surfaces here, where the
+    // serial code would have thrown it.
+    if (!nameRowsRead.ok) throw nameRowsRead.error;
+    const { data: nameRows, error: nameRowsError } = nameRowsRead.value;
 
     throwIfAborted(generationController.signal);
     if (nameRowsError) {
       console.error('generate-illustration name lookup failed', nameRowsError.message);
       return errorResponse('Failed to load family members', 500, 'internal_error');
     }
+    logGenerationPhase(memoryId, generationPhase, tagsAndNamesStartedAt);
 
     // URLs can't match member names, but strip for consistency with every
     // other content->prompt call site (docs/plans/inline-links.md §8).
@@ -875,12 +996,47 @@ export async function handleGenerateIllustration(
       MAX_ILLUSTRATION_MEMBERS,
     );
 
-    const { data: members, error: membersError } = await supabase
-      .from('family_members')
-      .select('id, name, nicknames, date_of_birth, gender, additional_info')
-      .eq('family_id', memory.family_id)
-      .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
-      .abortSignal(generationController.signal);
+    // Members, portrait versions and the family style depend only on
+    // `memberIds` (style on nothing): read them together. The style result is
+    // only consumed after the readiness/deferral checks below, so early
+    // returns simply ignore it (it is `settle`d, so it cannot reject
+    // unhandled).
+    generationPhase = 'portrait-lookup';
+    const portraitLookupStartedAt = Date.now();
+    const [membersRead, portraitVersionsRead, styleRead] = await Promise.all([
+      timed(
+        supabase
+          .from('family_members')
+          .select('id, name, nicknames, date_of_birth, gender, additional_info')
+          .eq('family_id', memory.family_id)
+          .in('id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+          .abortSignal(generationController.signal),
+      ),
+      // No `.not('illustrated_profile_key', 'is', null)` filter here: that
+      // would hide in-flight versions from the fresh-in-flight check below.
+      // `resolvePortraitVersionAtDate` still requires `ready`, so it is
+      // unaffected by widening this select.
+      timed(
+        supabase
+          .from('family_member_portrait_versions')
+          .select(
+            'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, generation_token, generation_started_at, created_at',
+          )
+          .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
+          .abortSignal(generationController.signal),
+      ),
+      settle(() =>
+        timed(
+          supabase
+            .from('families')
+            .select('illustration_style')
+            .eq('id', memory.family_id)
+            .abortSignal(generationController.signal)
+            .maybeSingle(),
+        )
+      ),
+    ]);
+    const { data: members, error: membersError } = membersRead.value;
 
     throwIfAborted(generationController.signal);
     if (membersError) {
@@ -888,24 +1044,14 @@ export async function handleGenerateIllustration(
       return errorResponse('Failed to load family members', 500, 'internal_error');
     }
 
-    // No `.not('illustrated_profile_key', 'is', null)` filter here: that
-    // would hide in-flight versions from the fresh-in-flight check below.
-    // `resolvePortraitVersionAtDate` still requires `ready`, so it is
-    // unaffected by widening this select.
-    const { data: portraitVersions, error: portraitVersionsError } = await supabase
-      .from('family_member_portrait_versions')
-      .select(
-        'id, family_member_id, reference_date, profile_picture_key, illustrated_profile_key, illustrated_profile_status, deletion_token, generation_token, generation_started_at, created_at',
-      )
-      .in('family_member_id', memberIds.length > 0 ? memberIds : [EMPTY_MEMBER_ID])
-      .abortSignal(generationController.signal);
+    const { data: portraitVersions, error: portraitVersionsError } = portraitVersionsRead.value;
 
     throwIfAborted(generationController.signal);
     if (portraitVersionsError) {
       console.error('generate-illustration portrait lookup failed', portraitVersionsError.message);
       return errorResponse('Failed to load character portraits', 500, 'internal_error');
     }
-    logGenerationPhase(memoryId, generationPhase, memberLookupPhaseStartedAt);
+    logGenerationPhase(memoryId, generationPhase, portraitLookupStartedAt);
 
     const portraitVersionRows = (portraitVersions ?? []) as PortraitFreshnessCandidate[];
     const versionsByMember = new Map<string, PortraitFreshnessCandidate[]>();
@@ -985,16 +1131,12 @@ export async function handleGenerateIllustration(
       return errorResponse('Illustration requires descriptive text, not just a link', 400, 'EMPTY_CONTENT');
     }
 
+    // The style row was read together with the members/portraits above.
     generationPhase = 'style-lookup';
-    const stylePhaseStartedAt = Date.now();
-    const { data: family } = await supabase
-      .from('families')
-      .select('illustration_style')
-      .eq('id', memory.family_id)
-      .abortSignal(generationController.signal)
-      .maybeSingle();
+    if (!styleRead.ok) throw styleRead.error;
+    const { data: family } = styleRead.value.value;
     throwIfAborted(generationController.signal);
-    logGenerationPhase(memoryId, generationPhase, stylePhaseStartedAt);
+    logGenerationPhaseDuration(memoryId, generationPhase, styleRead.value.durationMs);
 
     const styleDescription = getStyleDescription(
       family?.illustration_style ?? DEFAULT_ILLUSTRATION_STYLE_TOKEN,
@@ -1016,13 +1158,25 @@ export async function handleGenerateIllustration(
     generationPhase = 'safety-precheck';
     const safetyPhaseStartedAt = Date.now();
     const safetyMembers: SafetyPromptMember[] = nameRows ?? [];
-    const safety = await dependencies.chatJson<{
-      safeDescription?: string;
-      expressionStyle?: string;
-    }>(buildSafetySystemPrompt(safetyMembers), strippedContent, {
-      signal: generationController.signal,
-      usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
-    });
+    // Use the speculative result when one ran for exactly the claimed content
+    // (see the claim-time check above); otherwise run the call inline as
+    // before. A failed speculative call re-throws here, i.e. down the same
+    // catch/finally path as a failure of the inline call.
+    const prefetchedSafety = speculativeSafety ? await speculativeSafety.safety : null;
+    let safety: SafetyRewriteResult;
+    if (prefetchedSafety) {
+      if (!prefetchedSafety.ok) throw prefetchedSafety.error;
+      safety = prefetchedSafety.value;
+    } else {
+      safety = await dependencies.chatJson<SafetyRewriteResult>(
+        buildSafetySystemPrompt(safetyMembers),
+        strippedContent,
+        {
+          signal: generationController.signal,
+          usageContext: { attributionScope: 'family', familyId: memory.family_id, actorUserId: callerId, usageRequestId, operation: 'safety_chat' },
+        },
+      );
+    }
     throwIfAborted(generationController.signal);
     logGenerationPhase(memoryId, generationPhase, safetyPhaseStartedAt);
 
@@ -1062,7 +1216,15 @@ export async function handleGenerateIllustration(
         return errorResponse('Illustration output upload is still in progress', 409, 'GENERATION_IN_PROGRESS');
       }
       if (supersedeOutcome.output_key && supersedeOutcome.output_key !== memory.illustration_key) {
-        await dependencies.deleteObject(supersedeOutcome.output_key).catch(() => undefined);
+        // Best-effort cleanup of a superseded output nobody references any
+        // more; nothing below depends on it, so it must not sit on the
+        // dispatch critical path.
+        const staleDelete = dependencies.deleteObject(supersedeOutcome.output_key).catch(() => undefined);
+        try {
+          dependencies.waitUntil(staleDelete);
+        } catch {
+          await staleDelete;
+        }
       }
       const { error: jobError } = await service.from('memory_illustration_jobs').insert({
         id: jobId,
@@ -1272,6 +1434,9 @@ export async function handleGenerateIllustration(
     return errorResponse('Illustration generation failed', 500, 'GENERATION_FAILED');
   } finally {
     clearTimeout(generationTimeoutId);
+    // No-op once consumed; aborts a still-running speculative call on every
+    // exit that did not use it (deferral, validation failure, errors).
+    discardSpeculativeSafety();
     if (!generationSucceeded && !generationDispatched && !durableJobCreated) {
       if (usageRequestId && preparationToken) {
         await dependencies.createServiceClient().rpc('release_ai_image_preparation', {

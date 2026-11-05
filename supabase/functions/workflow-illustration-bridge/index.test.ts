@@ -209,3 +209,53 @@ Deno.test('illustration bridge records grandfathered v1 Worker usage with server
     else Deno.env.set('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET', previous);
   }
 });
+
+Deno.test('illustration bridge rejects a replayed nonce and does not wait for the nonce sweep', async () => {
+  const previous = Deno.env.get('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET');
+  Deno.env.set('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET', 'bridge-test-secret');
+  try {
+    let sweeps = 0;
+    const clientFor = (insertError: { code: string } | null) => ({
+      from(table: string) {
+        if (table === 'memory_illustration_workflow_bridge_nonces') return {
+          insert: async () => ({ error: insertError }),
+          delete: () => ({
+            lt: () => {
+              sweeps += 1;
+              return new Promise<never>(() => {});
+            },
+          }),
+        };
+        const query = {
+          select: () => query, eq: () => query,
+          maybeSingle: async () => ({ data: { usage_request_id: null, usage_protocol_version: 1 }, error: null }),
+        };
+        return query;
+      },
+      rpc: async () => ({ data: true, error: null }),
+    });
+    const body = {
+      operation: 'reserve_attempt', jobId: '22222222-2222-4222-8222-222222222222',
+      provider: 'primary', model: 'gpt-image-2.6-flare', attemptNumber: 1,
+    };
+
+    const replay = await handleWorkflowIllustrationBridge(await signedRequest(body), {
+      createServiceClient: () => clientFor({ code: '23505' }) as never,
+    });
+    assertEquals(replay.status, 409);
+    assertEquals(sweeps, 0);
+
+    const outcome = await Promise.race([
+      handleWorkflowIllustrationBridge(await signedRequest(body), {
+        createServiceClient: () => clientFor(null) as never,
+      }),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 2_000)),
+    ]);
+    assertEquals(outcome === 'timeout', false);
+    assertEquals(await (outcome as Response).json(), { reserved: true });
+    assertEquals(sweeps, 1);
+  } finally {
+    if (previous === undefined) Deno.env.delete('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET');
+    else Deno.env.set('CLOUDFLARE_ILLUSTRATION_BRIDGE_SECRET', previous);
+  }
+});

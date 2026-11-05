@@ -3,6 +3,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 
 import { BridgeError } from './bridge';
 import {
+  MAX_RETRIGGER_RETRY_AFTER_MS,
   authorizePortraitUpload,
   failPortrait,
   getPortraitInput,
@@ -323,14 +324,32 @@ async function retriggerDependentMemories(
   jobId: string,
 ): Promise<void> {
   try {
-    await step.do(
+    const first = await step.do(
       'retrigger portrait-dependent memories',
       { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds', sensitive: 'output' },
       async () => {
-        await retriggerPortraitDependentMemories(env, jobId);
-        return { jobId, requested: true };
+        const retryAfterMs = await retriggerPortraitDependentMemories(env, jobId);
+        // Persisted step output: a plain number (or null), no PII.
+        return { jobId, requested: true, retryAfterMs };
       },
     );
+    // A dependent memory younger than the bridge's 30s floor was skipped (it
+    // may still be running its own initial generation). Wait until it crosses
+    // the floor and sweep exactly once more -- never a loop. Out-of-range or
+    // missing values (including output persisted by older runs) skip this.
+    const waitMs = (first as { retryAfterMs?: unknown } | undefined)?.retryAfterMs;
+    if (typeof waitMs === 'number' && Number.isFinite(waitMs) && waitMs > 0 &&
+      waitMs <= MAX_RETRIGGER_RETRY_AFTER_MS) {
+      await step.sleep('wait for young dependent memories', waitMs);
+      await step.do(
+        'retrigger young portrait-dependent memories',
+        { retries: BRIDGE_STEP_RETRIES, timeout: '30 seconds', sensitive: 'output' },
+        async () => {
+          await retriggerPortraitDependentMemories(env, jobId);
+          return { jobId, requested: true };
+        },
+      );
+    }
   } catch {
     // Publication/failure has already been committed. A client recovery loop
     // remains the backstop when this best-effort server retrigger is offline.

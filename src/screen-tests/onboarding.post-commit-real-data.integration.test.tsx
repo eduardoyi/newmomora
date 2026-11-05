@@ -133,6 +133,9 @@ jest.mock('@/hooks/use-pending-memory-uploads', () => ({
 jest.mock('@/hooks/useMemoriesRealtime', () => ({
   useMemoriesRealtime: jest.fn(),
 }));
+jest.mock('@/hooks/usePortraitVersionsRealtime', () => ({
+  usePortraitVersionsRealtime: jest.fn(),
+}));
 
 // Service/network boundary mocks -- everything commitOnboarding,
 // FamilyProvider, useFamilyMembers, usePortraitVersions, and useMediaUrl

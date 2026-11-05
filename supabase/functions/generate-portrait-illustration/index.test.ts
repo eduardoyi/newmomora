@@ -1070,3 +1070,159 @@ Deno.test(
 Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
   assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
 });
+
+// -- Parallel pre-dispatch reads: precedence + backgrounded cleanup ----------
+
+function precedenceClient(input: {
+  billing: () => Promise<{ data: unknown; error: unknown }>;
+  member: Record<string, unknown> | null;
+  sourceKey?: string;
+  log: string[];
+}) {
+  const sourceKey = input.sourceKey ??
+    `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/photo.jpg`;
+  const version = {
+    id: VERSION_ID,
+    family_id: FAMILY_ID,
+    family_member_id: MEMBER_ID,
+    reference_date: "2026-07-20",
+    profile_picture_key: sourceKey,
+    illustrated_profile_key: null,
+    illustrated_profile_status: "pending",
+    generation_token: null,
+    generation_started_at: null,
+    generation_output_key: null,
+    created_at: new Date().toISOString(),
+  };
+  const rowFor = (table: string) =>
+    table === "family_member_portrait_versions"
+      ? version
+      : table === "family_members"
+      ? input.member
+      : { illustration_style: "default" };
+  return {
+    from(table: string) {
+      input.log.push(`read:${table}`);
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        maybeSingle: async () => ({ data: rowFor(table), error: null }),
+      };
+      return builder;
+    },
+    rpc: async (name: string) => {
+      input.log.push(`rpc:${name}`);
+      if (name === "billing_ai_generation_check") return await input.billing();
+      return { data: null, error: null };
+    },
+  };
+}
+
+const MEMBER_ROW = {
+  id: MEMBER_ID,
+  family_id: FAMILY_ID,
+  name: "Lila",
+  date_of_birth: "2024-01-01",
+  gender: null,
+  additional_info: null,
+};
+
+Deno.test("portrait: the billing denial still wins over a missing member, and the member read overlaps billing", async () => {
+  const log: string[] = [];
+  let releaseBilling!: () => void;
+  const billingGate = new Promise<void>((resolve) => { releaseBilling = resolve; });
+  const client = precedenceClient({
+    log,
+    member: null, // would be 404 if billing had passed
+    billing: async () => {
+      await billingGate;
+      return {
+        data: [{ allowed: false, scope: null, retry_after_iso: null, error_code: "SUBSCRIPTION_REQUIRED" }],
+        error: null,
+      };
+    },
+  });
+  const pending = handleGeneratePortraitIllustration(authenticatedRequest(), {
+    getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+    getCallerFamilyRole: async () => "manager",
+    createServiceClient: () => client as never,
+  });
+  // Billing is still blocked, yet the independent reads have already been issued.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assertEquals(log.includes("read:family_members"), true);
+  assertEquals(log.includes("read:families"), true);
+  assertEquals(log.includes("rpc:begin_portrait_generation_usage"), false);
+  releaseBilling();
+  const response = await pending;
+  assertEquals(response.status, 403);
+  assertEquals((await response.json()).code, "SUBSCRIPTION_REQUIRED");
+  assertEquals(log.includes("rpc:begin_portrait_generation_usage"), false);
+});
+
+Deno.test("portrait: a missing member (404) still wins over an invalid source key", async () => {
+  const log: string[] = [];
+  const client = precedenceClient({
+    log,
+    member: null,
+    sourceKey: `${USER_ID}/family/${MEMBER_ID}/photo.webp`, // invalid key
+    billing: async () => ({
+      data: [{ allowed: true, scope: null, retry_after_iso: null, error_code: null }],
+      error: null,
+    }),
+  });
+  const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+    getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+    getCallerFamilyRole: async () => "manager",
+    createServiceClient: () => client as never,
+  });
+  assertEquals(response.status, 404);
+  assertEquals((await response.json()).code, "MEMBER_NOT_FOUND");
+});
+
+Deno.test("portrait: an unauthorized caller never reaches billing or the member/style reads", async () => {
+  const log: string[] = [];
+  const client = precedenceClient({
+    log,
+    member: MEMBER_ROW,
+    billing: async () => ({ data: null, error: null }),
+  });
+  const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+    getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+    getCallerFamilyRole: async () => "viewer",
+    createServiceClient: () => client as never,
+  });
+  assertEquals(response.status, 403);
+  assertEquals(log, ["read:family_member_portrait_versions"]);
+});
+
+Deno.test("portrait: the stale-output delete is backgrounded and does not delay dispatch", async () => {
+  await withCloudflarePortraitEnv(async () => {
+    const mock = cloudflarePortraitClient({
+      version: {
+        generation_token: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        generation_started_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+        generation_output_key: "stale/attempt.webp",
+        created_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+      },
+    });
+    let releaseDelete!: () => void;
+    const deleteGate = new Promise<void>((resolve) => { releaseDelete = resolve; });
+    const deleted: string[] = [];
+    const background: Promise<void>[] = [];
+    const response = await handleGeneratePortraitIllustration(authenticatedRequest(), {
+      getAuthenticatedUser: async () => ({ id: USER_ID }) as never,
+      getCallerFamilyRole: async () => "manager",
+      createServiceClient: () => mock.client as never,
+      deleteObject: async (key) => { deleted.push(key); await deleteGate; },
+      waitUntil: (task) => { background.push(task); },
+      fetch: (async () => new Response(null, { status: 202 })) as typeof fetch,
+    });
+    // Dispatched and answered while the delete is still blocked.
+    assertEquals(response.status, 202);
+    assertEquals(mock.inserted.length, 1);
+    assertEquals(deleted, ["stale/attempt.webp"]);
+    assertEquals(background.length, 1);
+    releaseDelete();
+    await Promise.all(background);
+  });
+});

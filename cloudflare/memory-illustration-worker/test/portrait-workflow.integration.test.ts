@@ -109,6 +109,21 @@ function fakeStep(): WorkflowStep {
   } as unknown as WorkflowStep;
 }
 
+function recordingStep() {
+  const events: Array<{ type: 'do' | 'sleep'; name: string; ms?: unknown }> = [];
+  const step = {
+    do: async (name: string, configOrCallback: unknown, maybeCallback?: unknown) => {
+      events.push({ type: 'do', name });
+      const callback = typeof configOrCallback === 'function' ? configOrCallback : maybeCallback;
+      return await (callback as () => Promise<unknown>)();
+    },
+    sleep: async (name: string, ms: unknown) => {
+      events.push({ type: 'sleep', name, ms });
+    },
+  } as unknown as WorkflowStep;
+  return { step, events };
+}
+
 function workflowWithEnv(env: Env): PortraitGenerationWorkflow {
   const workflow = Object.create(PortraitGenerationWorkflow.prototype) as PortraitGenerationWorkflow;
   (workflow as unknown as { env: Env }).env = env;
@@ -780,5 +795,86 @@ describe('portrait Workflow', () => {
     expect(setup.portraits.delete).toHaveBeenCalledWith(setup.workflowJob.outputKey);
     expect(setup.portraits.delete).not.toHaveBeenCalledWith(setup.workflowJob.oldPortraitKey);
     expect(operations.map((operation) => operation.operation)).toContain('retrigger_memories');
+  });
+});
+
+describe('portrait Workflow young dependent memory retrigger', () => {
+  const FIRST = 'retrigger portrait-dependent memories';
+  const SLEEP = 'wait for young dependent memories';
+  const SECOND = 'retrigger young portrait-dependent memories';
+
+  async function runWith(
+    retriggerResponses: Response[],
+    options: { openAiResponses?: Response[] } = {},
+  ) {
+    const setup = createEnvironment();
+    const { fetchMock, operations } = bridgeAndOpenAiFetch(setup.workflowJob, {
+      ...options,
+      bridgeResponses: { retrigger_memories: retriggerResponses },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { step, events } = recordingStep();
+    const result = await workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>,
+      step,
+    );
+    const retriggers = operations.filter((operation) => operation.operation === 'retrigger_memories');
+    return { result, events, retriggers };
+  }
+
+  it('sleeps the bridge-provided duration then retriggers exactly once more', async () => {
+    const { result, events, retriggers } = await runWith([
+      Response.json({ requested: 0, retryAfterMs: 19_500 }),
+      // A second hint must never cause a third pass.
+      Response.json({ requested: 1, retryAfterMs: 5_000 }),
+    ]);
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(retriggers).toHaveLength(2);
+    const names = events.map((event) => event.name).filter((name) => [FIRST, SLEEP, SECOND].includes(name));
+    expect(names).toEqual([FIRST, SLEEP, SECOND]);
+    expect(events.find((event) => event.type === 'sleep')).toMatchObject({ name: SLEEP, ms: 19_500 });
+  });
+
+  it('also waits on the failure terminal path', async () => {
+    const { result, events, retriggers } = await runWith(
+      [Response.json({ requested: 0, retryAfterMs: 12_000 }), Response.json({ requested: 1, retryAfterMs: null })],
+      { openAiResponses: [Response.json({ error: { code: 'moderation_blocked' } }, { status: 400 })] },
+    );
+    expect(result).toMatchObject({ status: 'failed' });
+    expect(retriggers).toHaveLength(2);
+    expect(events.find((event) => event.type === 'sleep')).toMatchObject({ ms: 12_000 });
+  });
+
+  it.each([
+    ['null', { requested: 1, retryAfterMs: null }],
+    ['absent (older bridge)', { requested: 1 }],
+    ['zero', { requested: 1, retryAfterMs: 0 }],
+    ['negative', { requested: 1, retryAfterMs: -5 }],
+    ['above the 31s ceiling', { requested: 1, retryAfterMs: 31_001 }],
+    ['not a number', { requested: 1, retryAfterMs: '5000' }],
+  ])('retriggers once and never sleeps when retryAfterMs is %s', async (_label, payload) => {
+    const { result, events, retriggers } = await runWith([Response.json(payload)]);
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(retriggers).toHaveLength(1);
+    expect(events.some((event) => event.type === 'sleep')).toBe(false);
+    expect(events.some((event) => event.name === SECOND)).toBe(false);
+  });
+
+  it('accepts the 31s ceiling', async () => {
+    const { events, retriggers } = await runWith([
+      Response.json({ requested: 0, retryAfterMs: 31_000 }),
+      Response.json({ requested: 0, retryAfterMs: null }),
+    ]);
+    expect(retriggers).toHaveLength(2);
+    expect(events.find((event) => event.type === 'sleep')).toMatchObject({ ms: 31_000 });
+  });
+
+  it('never fails the workflow when the second retrigger fails', async () => {
+    const { result, retriggers } = await runWith([
+      Response.json({ requested: 0, retryAfterMs: 8_000 }),
+      Response.json({ code: 'BAD' }, { status: 400 }),
+    ]);
+    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.6-flare' });
+    expect(retriggers).toHaveLength(2);
   });
 });

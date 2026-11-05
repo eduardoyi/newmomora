@@ -216,7 +216,7 @@ describe('useMemoriesRealtime', () => {
     });
   });
 
-  it('invalidates media-urls and calendar when an UPDATE transitions to ready', () => {
+  it('invalidates calendar (not media-urls) when an UPDATE transitions to ready', () => {
     queryClient.setQueryData(
       memoriesQueryKey(FAMILY_ID),
       buildInfiniteData([buildMemoryWithTags({ illustration_status: 'generating' })]),
@@ -230,7 +230,7 @@ describe('useMemoriesRealtime', () => {
       old: { id: 'memory-1' },
     });
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['media-urls'] });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['media-urls'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['calendar-memories'] });
   });
 

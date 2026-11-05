@@ -20,6 +20,7 @@ import {
   memoriesQueryKeyBase,
 } from '@/hooks/queryKeys';
 import { useMemoriesRealtime } from '@/hooks/useMemoriesRealtime';
+import { usePortraitVersionsRealtime } from '@/hooks/usePortraitVersionsRealtime';
 import { clearPersistedQueryCache } from '@/lib/query-persistence';
 import { clearGalleryImportCheckpointsForScope } from '@/utils/gallery-import-checkpoint';
 import { fetchMyFamilyMemberships } from '@/services/family';
@@ -148,6 +149,9 @@ export function FamilyProvider({ children }: { children: ReactNode }) {
   // computes the resolved active familyId reactively, so a family switch
   // naturally resubscribes the channel via this hook's own effect deps.
   useMemoriesRealtime(resolvedMembership?.familyId ?? null);
+  // Same placement/rationale for portrait-version readiness; the 3s poll in
+  // useFamilyPortraitVersions only runs while this channel is not SUBSCRIBED.
+  usePortraitVersionsRealtime(resolvedMembership?.familyId ?? null);
 
   // Stale/removed active_family_id: fall back to the first membership and
   // persist the correction so future loads don't need to re-derive it.
