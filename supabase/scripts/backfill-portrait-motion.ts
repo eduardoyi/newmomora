@@ -3,13 +3,14 @@
  * deployed `portrait-motion-backfill` Edge Function in batches until no
  * portrait is left without a loop. Prints counts only (no names, keys or ids).
  *
- *   npm run backfill:portrait-motion -- [--dry-run] [--batch 10] [--pause 45] [--max-batches N]
+ *   npm run backfill:portrait-motion -- [--dry-run] [--batch 10] [--pause 45] [--max-batches N] [--all]
  *
  *   --dry-run    one call, reports how many portraits are eligible; claims nothing
  *   --batch N    portraits per call, 1-25 (default 10)
  *   --pause S    seconds to wait between batches (default 45, lets the Worker
  *                finish a batch before the next one starts)
  *   --max-batches N  stop after N batches (e.g. `--batch 1 --max-batches 1` to try one)
+ *   --all        every ready portrait version, not just each member's current one
  *
  * Uses the service role bearer from the env file
  * (SUPABASE_URL or EXPO_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, the
@@ -28,6 +29,7 @@ interface CliOptions {
   batch: number;
   pauseSeconds: number;
   maxBatches: number | null;
+  all: boolean;
 }
 
 // A batch that claims nothing while work remains would loop forever; stop
@@ -35,11 +37,13 @@ interface CliOptions {
 const MAX_STALLED_BATCHES = 3;
 
 function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { dryRun: false, batch: 10, pauseSeconds: 45, maxBatches: null };
+  const options: CliOptions = { dryRun: false, batch: 10, pauseSeconds: 45, maxBatches: null, all: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') {
       options.dryRun = true;
+    } else if (arg === '--all') {
+      options.all = true;
     } else if (arg === '--batch' || arg === '--pause') {
       const value = Number(argv[index + 1]);
       index += 1;
@@ -65,7 +69,7 @@ function parseArgs(argv: string[]): CliOptions {
 async function callBackfill(
   baseUrl: string,
   serviceRoleKey: string,
-  body: { limit: number; dryRun: boolean },
+  body: { limit: number; dryRun: boolean; scope: 'current' | 'all' },
 ): Promise<BackfillCounts> {
   const response = await fetch(`${baseUrl}/functions/v1/portrait-motion-backfill`, {
     method: 'POST',
@@ -98,7 +102,7 @@ async function main(): Promise<void> {
   }
 
   if (options.dryRun) {
-    const counts = await callBackfill(baseUrl, serviceRoleKey, { limit: options.batch, dryRun: true });
+    const counts = await callBackfill(baseUrl, serviceRoleKey, { limit: options.batch, dryRun: true, scope: options.all ? 'all' : 'current' });
     console.log(`dry run: ${counts.eligible} portraits would get a living portrait`);
     return;
   }
@@ -108,7 +112,7 @@ async function main(): Promise<void> {
   let stalled = 0;
   for (;;) {
     batch += 1;
-    const counts = await callBackfill(baseUrl, serviceRoleKey, { limit: options.batch, dryRun: false });
+    const counts = await callBackfill(baseUrl, serviceRoleKey, { limit: options.batch, dryRun: false, scope: options.all ? 'all' : 'current' });
     if (batch === 1) totals.eligible = counts.eligible;
     totals.claimed += counts.claimed;
     totals.dispatched += counts.dispatched;

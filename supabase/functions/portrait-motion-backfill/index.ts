@@ -23,6 +23,8 @@ const MOTION_IN_FLIGHT_MS = 15 * 60_000;
 export interface PortraitMotionBackfillRequest {
   limit?: number;
   dryRun?: boolean;
+  /** `current` (default): each member's current portrait. `all`: every ready version. */
+  scope?: 'current' | 'all';
 }
 
 export interface PortraitMotionBackfillResponse {
@@ -126,7 +128,13 @@ export function selectBackfillCandidates(
   versions: readonly BackfillVersionRow[],
   todayIso: string,
   nowMs: number,
+  scope: 'current' | 'all' = 'current',
 ): BackfillVersionRow[] {
+  if (scope === 'all') {
+    // Older timeline versions loop on Then & now and in full screen too.
+    return versions.filter((version) => needsPortraitMotion(version, nowMs))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
   const byMember = new Map<string, BackfillVersionRow[]>();
   for (const version of versions) {
     const list = byMember.get(version.family_member_id) ?? [];
@@ -279,8 +287,9 @@ export async function handlePortraitMotionBackfill(
   }
   const limit = body.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT ||
-    (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')) {
-    return errorResponse('limit must be 1-25 and dryRun a boolean', 400, 'validation_error');
+    (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') ||
+    (body.scope !== undefined && body.scope !== 'current' && body.scope !== 'all')) {
+    return errorResponse('limit must be 1-25, dryRun a boolean and scope current|all', 400, 'validation_error');
   }
 
   const supabase = dependencies.createServiceClient();
@@ -292,6 +301,7 @@ export async function handlePortraitMotionBackfill(
       versions.filter((v) => !fenced.families.has(v.family_id) && !fenced.members.has(v.family_member_id)),
       now.toISOString().slice(0, 10),
       now.getTime(),
+      body.scope ?? 'current',
     );
   } catch {
     console.error('portrait-motion-backfill candidate lookup failed');

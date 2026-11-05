@@ -75,6 +75,30 @@ Deno.test('selectBackfillCandidates only considers each member\'s current versio
   assertEquals(candidates.map((c) => c.id), ['a-cur']);
 });
 
+Deno.test('selectBackfillCandidates scope all includes older versions but still skips done ones', () => {
+  const memberAOld = version({ id: 'a-old', reference_date: '2025-01-01' });
+  const memberACurrent = version({ id: 'a-cur', reference_date: '2026-06-01' });
+  const memberBCurrent = version({
+    id: 'b-cur', family_member_id: MEMBER_B,
+    motion_status: 'ready', motion_source_key: 'still/b-cur.webp',
+  });
+  const memberBFailed = version({
+    id: 'b-old', family_member_id: MEMBER_B, reference_date: '2024-01-01',
+    motion_status: 'failed', motion_source_key: 'still/b-old.webp',
+  });
+  const candidates = selectBackfillCandidates(
+    [memberAOld, memberACurrent, memberBCurrent, memberBFailed], TODAY, NOW.getTime(), 'all',
+  );
+  assertEquals(candidates.map((c) => c.id), ['a-cur', 'a-old']);
+});
+
+Deno.test('portrait-motion-backfill rejects an unknown scope', async () => {
+  await withEnv(async () => {
+    const response = await handlePortraitMotionBackfill(request({ scope: 'everything' }), deps(createFixture()));
+    assertEquals(response.status, 400);
+  });
+});
+
 Deno.test('toPortraitMotionDispatchUrl swaps only the dispatch path and rejects unexpected URLs', () => {
   assertEquals(
     toPortraitMotionDispatchUrl('https://worker.example.test/dispatch/portrait'),
