@@ -166,14 +166,36 @@ async function withEnv(run: () => Promise<void>): Promise<void> {
   }
 }
 
-function deps(fixture: ReturnType<typeof createFixture>, fetchImpl: typeof fetch = async () => new Response('', { status: 202 }), extra: { deleteObject?: (key: string) => Promise<void> } = {}) {
+function deps(fixture: ReturnType<typeof createFixture>, fetchImpl: typeof fetch = async () => new Response('', { status: 202 }), extra: { deleteObject?: (key: string) => Promise<void>; verifyServiceKey?: (token: string) => Promise<boolean> } = {}) {
   return {
     createServiceClient: () => fixture.client as never,
     fetch: fetchImpl,
     deleteObject: extra.deleteObject ?? (async () => {}),
     now: () => NOW,
+    verifyServiceKey: extra.verifyServiceKey ?? (async () => false),
   };
 }
+
+Deno.test('portrait-motion-backfill accepts another service-level key only when Auth verifies it', async () => {
+  await withEnv(async () => {
+    const seen: string[] = [];
+    const verifyServiceKey = async (token: string) => {
+      seen.push(token);
+      return token === 'sb_secret_other_format';
+    };
+    const accepted = await handlePortraitMotionBackfill(
+      request({ dryRun: true }, { Authorization: 'Bearer sb_secret_other_format' }),
+      deps(createFixture(), undefined, { verifyServiceKey }),
+    );
+    assertEquals(accepted.status, 200);
+    const rejected = await handlePortraitMotionBackfill(
+      request({ dryRun: true }, { Authorization: 'Bearer anon-or-user-token' }),
+      deps(createFixture(), undefined, { verifyServiceKey }),
+    );
+    assertEquals(rejected.status, 401);
+    assertEquals(seen, ['sb_secret_other_format', 'anon-or-user-token']);
+  });
+});
 
 Deno.test('portrait-motion-backfill rejects missing or wrong credentials and non-POST methods', async () => {
   await withEnv(async () => {

@@ -37,6 +37,28 @@ export interface PortraitMotionBackfillDependencies {
   fetch: typeof fetch;
   deleteObject: typeof deleteObject;
   now: () => Date;
+  /** True when `token` is a service-level key for this project (see verifyServiceKeyWithAuth). */
+  verifyServiceKey: (token: string) => Promise<boolean>;
+}
+
+/**
+ * A project can hold both a legacy service_role JWT and a newer `sb_secret_`
+ * key, so the local script's key need not string-match this function's
+ * SUPABASE_SERVICE_ROLE_KEY. The Auth admin API only answers service-level
+ * keys (anon keys and user JWTs get 401/403), so a 200 proves the caller holds one.
+ */
+async function verifyServiceKeyWithAuth(token: string): Promise<boolean> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  if (!supabaseUrl || !token) return false;
+  try {
+    const response = await fetch(`${supabaseUrl}/auth/v1/admin/users?page=1&per_page=1`, {
+      headers: { apikey: token, Authorization: `Bearer ${token}` },
+    });
+    await response.body?.cancel();
+    return response.status === 200;
+  } catch {
+    return false;
+  }
 }
 
 const DEFAULT_DEPENDENCIES: PortraitMotionBackfillDependencies = {
@@ -44,6 +66,7 @@ const DEFAULT_DEPENDENCIES: PortraitMotionBackfillDependencies = {
   fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
   deleteObject,
   now: () => new Date(),
+  verifyServiceKey: verifyServiceKeyWithAuth,
 };
 
 export interface BackfillVersionRow {
@@ -233,7 +256,12 @@ export async function handlePortraitMotionBackfill(
 ): Promise<Response> {
   const dependencies = { ...DEFAULT_DEPENDENCIES, ...dependencyOverrides };
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405, 'method_not_allowed');
-  if (!validateCronSecret(req) && !(await isServiceRoleBearer(req))) {
+  const bearer = req.headers.get('Authorization')?.match(/^Bearer (.+)$/)?.[1] ?? '';
+  if (
+    !validateCronSecret(req) &&
+    !(await isServiceRoleBearer(req)) &&
+    !(bearer && await dependencies.verifyServiceKey(bearer))
+  ) {
     return errorResponse('Unauthorized', 401, 'unauthorized');
   }
 
