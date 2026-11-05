@@ -28,6 +28,13 @@ jest.mock('expo-video', () => ({
   VideoView: 'VideoView',
 }));
 
+jest.mock('@/components/living-portrait-overlay', () => ({
+  LivingPortraitOverlay: ({ motion }: { motion: { key: string } }) => {
+    const { Text } = jest.requireActual('react-native') as typeof import('react-native');
+    return <Text testID="living-portrait-overlay">{motion.key}</Text>;
+  },
+}));
+
 const mockedUseMediaUrls = useMediaUrls as jest.MockedFunction<typeof useMediaUrls>;
 const mockRefetchMediaUrls = jest.fn();
 const safeAreaMetrics = {
@@ -115,6 +122,25 @@ describe('FullScreenMediaViewer integration', () => {
 
     expect(getByTestId('full-screen-media-image-illustration')).toBeTruthy();
     expect(queryByTestId('full-screen-media-counter')).toBeNull();
+    expect(queryByTestId('living-portrait-overlay')).toBeNull();
+  });
+
+  it('loops a living portrait inside the zoom layer when the item has one', () => {
+    const { getByTestId } = renderWithSafeArea(
+      <FullScreenMediaViewer
+        items={[{
+          id: 'portrait',
+          contentType: 'image/webp',
+          uri: 'https://example.com/portrait.webp',
+          motion: { key: 'owner/family/m/portraits/v/motion/t.webp', columns: 3, rows: 3 },
+        }]}
+        onClose={jest.fn()}
+      />,
+    );
+
+    const zoomLayer = getByTestId('full-screen-media-image-portrait-zoom-layer');
+    expect(within(zoomLayer).getByTestId('living-portrait-overlay').props.children)
+      .toBe('owner/family/m/portraits/v/motion/t.webp');
   });
 
   it('uses an object-key cache identity and refreshes a failed signed image URL', () => {

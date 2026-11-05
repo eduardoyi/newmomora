@@ -26,8 +26,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
+import { LivingPortraitOverlay } from '@/components/living-portrait-overlay';
 import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
+import type { PortraitMotion } from '@/utils/portrait-motion';
 import { isVideoContentType } from '@/utils/media-validation';
 
 // Illustrations are generated at 1024x1024 and photos are uploaded at their
@@ -47,6 +49,8 @@ export interface FullScreenMediaItem {
   contentType: string;
   objectKey?: string;
   uri?: string | null;
+  /** Living-portrait loop over a square portrait still (docs/features/living-portraits.md). */
+  motion?: PortraitMotion | null;
 }
 
 interface FullScreenMediaViewerProps {
@@ -175,6 +179,7 @@ interface ZoomableImageProps {
    * owns a drag at any moment.
    */
   isPanEnabled: boolean;
+  motion?: PortraitMotion | null;
   onError?: () => void;
   onZoomedChange: (isZoomed: boolean) => void;
   testID: string;
@@ -192,6 +197,7 @@ function ZoomableImage({
   cacheKey,
   isActive,
   isPanEnabled,
+  motion,
   onError,
   onZoomedChange,
   testID,
@@ -404,6 +410,16 @@ function ZoomableImage({
             style={styles.mediaPage}
             testID={testID}
           />
+          {motion ? (
+            // Inside the zoom layer so the loop pinches/pans with the still.
+            // Portraits are square and the app is portrait-locked, so the
+            // contain-fitted still is a full-width square centred in the page.
+            <View pointerEvents="none" style={styles.motionCenter}>
+              <View style={styles.motionSquare}>
+                <LivingPortraitOverlay motion={motion} />
+              </View>
+            </View>
+          ) : null}
         </Animated.View>
       </View>
     </GestureDetector>
@@ -486,6 +502,7 @@ export function FullScreenMediaViewer({
                       cacheKey={`${item.objectKey ?? item.uri ?? item.id}:${cacheVersion ?? ''}`}
                       isActive={index === activeIndex}
                       isPanEnabled={isZoomed}
+                      motion={item.motion}
                       onError={item.objectKey ? () => void refetchMediaUrls() : undefined}
                       onZoomedChange={setIsZoomed}
                       testID={`full-screen-media-image-${item.id}`}
@@ -551,6 +568,15 @@ const styles = StyleSheet.create({
   },
   mediaPage: {
     height: '100%',
+    width: '100%',
+  },
+  motionCenter: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  motionSquare: {
+    aspectRatio: 1,
     width: '100%',
   },
   playOverlay: {

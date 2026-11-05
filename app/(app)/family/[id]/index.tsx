@@ -52,6 +52,7 @@ import { isInviteTargetEligible, isLinkableMember, relationshipSubtitle } from '
 import { formatInviteExpiry, liveInviteForMember } from '@/utils/invites';
 import { isAlreadyLinkedError, linkAccountErrorAlert } from '@/services/family-relationships';
 import { formatDisplayDate } from '@/utils/memories';
+import { getPortraitMotion } from '@/utils/portrait-motion';
 
 // ── Thumbnail for the memories list ──────────────────────────────────────────
 function MemoryThumb({
@@ -699,6 +700,7 @@ export default function ViewFamilyMemberScreen() {
             contentType: 'image/webp',
             objectKey: portraitKey ?? undefined,
             uri: portraitUrl,
+            motion: member.resolvedPortraitVersion ? getPortraitMotion(member.resolvedPortraitVersion) : null,
           }]}
           onClose={() => setIsPortraitFullScreen(false)}
         />

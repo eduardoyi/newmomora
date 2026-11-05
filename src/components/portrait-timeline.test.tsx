@@ -28,9 +28,20 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('@/components/full-screen-media-viewer', () => ({
-  FullScreenMediaViewer: ({ items, initialIndex }: { items: unknown[]; initialIndex: number }) => {
+  FullScreenMediaViewer: ({ items, initialIndex }: { items: { motion?: { key: string } | null }[]; initialIndex: number }) => {
+    const { Text, View } = jest.requireActual('react-native') as typeof import('react-native');
+    return (
+      <View>
+        <Text testID="portrait-fullscreen-mock">{`${initialIndex}:${items.length}`}</Text>
+        <Text testID="portrait-fullscreen-motion">{items.map((item) => item.motion?.key ?? '-').join(',')}</Text>
+      </View>
+    );
+  },
+}));
+jest.mock('@/components/living-portrait-overlay', () => ({
+  LivingPortraitOverlay: ({ motion }: { motion: { key: string } }) => {
     const { Text } = jest.requireActual('react-native') as typeof import('react-native');
-    return <Text testID="portrait-fullscreen-mock">{`${initialIndex}:${items.length}`}</Text>;
+    return <Text testID="living-portrait-overlay">{motion.key}</Text>;
   },
 }));
 
@@ -183,6 +194,27 @@ describe('PortraitTimeline', () => {
     fireEvent.press(getByTestId('portrait-version-ready-1-portrait'));
 
     expect(getByTestId('portrait-fullscreen-mock').props.children).toBe('1:2');
+  });
+
+  it('loops the living portrait on versions that have one, card and full screen', () => {
+    const animated: PortraitTimelineVersion = {
+      ...ready,
+      motion: { key: 'user/family/member/portraits/ready-1/motion/token.webp', columns: 3, rows: 3 },
+    };
+    const { getByTestId, getAllByTestId } = render(
+      <PortraitTimeline {...baseProps} versions={[failed, animated]} />,
+    );
+
+    // Only the version with a sheet animates; the failed one has no still to loop.
+    expect(getAllByTestId('living-portrait-overlay')).toHaveLength(1);
+    fireEvent.press(getByTestId('portrait-version-ready-1-portrait'));
+    expect(getByTestId('portrait-fullscreen-motion').props.children)
+      .toBe(`-,${animated.motion!.key}`);
+  });
+
+  it('shows no loop for versions without a sheet', () => {
+    const { queryByTestId } = render(<PortraitTimeline {...baseProps} />);
+    expect(queryByTestId('living-portrait-overlay')).toBeNull();
   });
 
   it('keeps viewer access read-only', () => {

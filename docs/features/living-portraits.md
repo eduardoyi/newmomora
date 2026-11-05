@@ -12,16 +12,19 @@ Animated "living portrait" loops over each person's current character portrait.
   blink, the smile warming and settling. No hands or gestures. It loops forever:
   frame 1 held 800ms, then 150ms per frame, **hard cuts** (crossfading ghosted two
   heads and was rejected).
-- Shown on three surfaces only: the member profile header and the Family tab cast
-  cards (both `CastCard` → `FamilyProfilePortraitPhoto animated`), and the onboarding
-  reveal (`app/(onboarding)/reveal.tsx`). Everywhere else (chips, pickers, footers,
-  full-screen viewer) stays still.
+- Shown on: the member profile header and the Family tab cast cards (both `CastCard` →
+  `FamilyProfilePortraitPhoto animated`), the onboarding reveal (`app/(onboarding)/reveal.tsx`),
+  the full-screen portrait viewer (`FullScreenMediaItem.motion`, inside the zoom layer so it
+  pinches with the still), and the "Then & now" portrait timeline cards for every version
+  that has a sheet (`PortraitTimelineVersion.motion`). Everywhere else (chips, pickers,
+  footers) stays still.
 - The still always renders first and stays underneath; the loop appears once its
   sheet has loaded. Reduce Motion → still only. App backgrounded → paused on frame 1.
 - After a new photo: the still appears as it does today; ~15–25s later the portrait
   comes alive (live via the portrait-versions Realtime channel).
-- A regenerated still hides its old loop until a new one is published. Older portrait
-  versions on the timeline never animate.
+- A regenerated still hides its old loop until a new one is published. Every newly
+  published version gets a sheet; the 2026-11-05 backfill covered only each member's
+  current version, so older timeline versions animate only once they get one.
 - Failures are silent: the person keeps the still.
 
 ## Architecture

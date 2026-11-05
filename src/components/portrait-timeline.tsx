@@ -25,7 +25,9 @@ import { colors, fonts, radius, spacing } from '@/constants/theme';
 import { useMediaUrls } from '@/hooks/useMediaUrls';
 import { useContentSafety } from '@/hooks/useContentSafety';
 import type { FamilyMember } from '@/services/family-members';
+import { LivingPortraitOverlay } from '@/components/living-portrait-overlay';
 import { mediaImageSource } from '@/utils/media-image-source';
+import type { PortraitMotion } from '@/utils/portrait-motion';
 import { getLocalTodayIso } from '@/utils/portrait-versions';
 
 export type PortraitDateSource = 'exif' | 'manual' | 'default_today' | 'legacy_unknown';
@@ -38,6 +40,8 @@ export interface PortraitTimelineVersion {
   status: PortraitTimelineStatus;
   sourcePhotoKey: string;
   portraitKey: string | null;
+  /** Living-portrait loop for this version's published still, when one exists. */
+  motion?: PortraitMotion | null;
   createdAt: string;
   updatedAt: string;
   isGenerating?: boolean;
@@ -237,12 +241,15 @@ function VersionCard({
           {hasPortraitKey ? (
             <>
               {portraitUri ? (
-                <Image
-                  contentFit="cover"
-                  source={mediaImageSource(portraitUri, version.portraitKey)}
-                  style={styles.visual}
-                  testID={`portrait-version-${version.id}-portrait-image`}
-                />
+                <>
+                  <Image
+                    contentFit="cover"
+                    source={mediaImageSource(portraitUri, version.portraitKey)}
+                    style={styles.visual}
+                    testID={`portrait-version-${version.id}-portrait-image`}
+                  />
+                  {version.motion ? <LivingPortraitOverlay motion={version.motion} /> : null}
+                </>
               ) : (
                 <View style={[styles.visual, styles.photoFallback]}>
                   <ActivityIndicator color={colors.ink3} size="small" />
@@ -553,6 +560,7 @@ export function PortraitTimeline({
       id: `${viewer.version.id}-portrait`,
       contentType: 'image/webp',
       objectKey: viewer.version.portraitKey,
+      motion: viewer.version.motion ?? null,
     }] : []),
   ] : [];
   const focusedIsLastUsablePortrait = Boolean(

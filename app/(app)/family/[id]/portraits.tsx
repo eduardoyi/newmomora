@@ -22,6 +22,7 @@ import {
   isPortraitGenerationStalled,
   resolvePortraitVersion,
 } from '@/utils/portrait-versions';
+import { getPortraitMotion } from '@/utils/portrait-motion';
 import { canEditFamilyContent } from '@/utils/roles';
 
 function pickResultToDraft(
@@ -92,6 +93,7 @@ export default function PortraitTimelineScreen() {
     status: version.illustrated_profile_status,
     sourcePhotoKey: version.profile_picture_key,
     portraitKey: version.illustrated_profile_key,
+    motion: getPortraitMotion(version),
     createdAt: version.created_at,
     updatedAt: version.updated_at,
     isGenerating:
