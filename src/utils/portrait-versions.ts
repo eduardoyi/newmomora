@@ -13,6 +13,7 @@ export const PORTRAIT_DATE_SOURCES = [
 
 export type PortraitDateSource = (typeof PORTRAIT_DATE_SOURCES)[number];
 export type PortraitGenerationStatus = 'pending' | 'generating' | 'ready' | 'failed';
+export type PortraitMotionStatus = 'pending' | 'ready' | 'failed';
 
 /** A pending row with no claim means the first client dispatch may never have run. */
 export const PORTRAIT_PENDING_RECOVERY_MS = 3 * 60 * 1000;
@@ -35,6 +36,16 @@ export interface FamilyMemberPortraitVersion {
   generation_output_key: string | null;
   deletion_token: string | null;
   deletion_started_at: string | null;
+  /**
+   * Living-portrait sheet (docs/plans/living-portraits.md). Optional: persisted
+   * query caches predate these columns, so read them defensively -- use
+   * `getPortraitMotion` rather than touching them directly.
+   */
+  motion_status?: PortraitMotionStatus | null;
+  motion_key?: string | null;
+  motion_source_key?: string | null;
+  motion_columns?: number | null;
+  motion_rows?: number | null;
   created_at: string;
   updated_at: string;
 }

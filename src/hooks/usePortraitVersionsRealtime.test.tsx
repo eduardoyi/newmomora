@@ -165,6 +165,83 @@ describe('usePortraitVersionsRealtime', () => {
     expect(invalidateSpy).toHaveBeenCalledTimes(3);
   });
 
+  it('fans out to the consumers when a living-portrait sheet becomes ready', () => {
+    queryClient.setQueryData(portraitVersionsQueryKey('family-1'), [
+      version({ illustrated_profile_status: 'ready', generation_token: null, motion_status: 'pending', motion_key: null }),
+    ]);
+    renderHook(() => usePortraitVersionsRealtime('family-1'), { wrapper });
+
+    fakes[0].emit({
+      eventType: 'UPDATE',
+      new: version({
+        illustrated_profile_status: 'ready',
+        generation_token: null,
+        motion_status: 'ready',
+        motion_key: 'motion-1.webp',
+      }),
+    });
+
+    const keys = invalidateSpy.mock.calls.map(([filters]) => filters.queryKey[0]);
+    expect(keys).toEqual(expect.arrayContaining(['portrait-versions', 'family-members', 'memories']));
+  });
+
+  it('fans out when a cache that predates the motion columns first sees a ready sheet', () => {
+    queryClient.setQueryData(portraitVersionsQueryKey('family-1'), [
+      version({ illustrated_profile_status: 'ready', generation_token: null }),
+    ]);
+    renderHook(() => usePortraitVersionsRealtime('family-1'), { wrapper });
+
+    fakes[0].emit({
+      eventType: 'UPDATE',
+      new: version({
+        illustrated_profile_status: 'ready',
+        generation_token: null,
+        motion_status: 'ready',
+        motion_key: 'motion-1.webp',
+      }),
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('fans out when the motion_key is replaced or cleared', () => {
+    const ready = { illustrated_profile_status: 'ready', generation_token: null, motion_status: 'ready' };
+    queryClient.setQueryData(portraitVersionsQueryKey('family-1'), [version({ ...ready, motion_key: 'motion-1.webp' })]);
+    renderHook(() => usePortraitVersionsRealtime('family-1'), { wrapper });
+
+    fakes[0].emit({ eventType: 'UPDATE', new: version({ ...ready, motion_key: 'motion-2.webp' }) });
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
+
+    invalidateSpy.mockClear();
+    fakes[0].emit({
+      eventType: 'UPDATE',
+      new: version({ ...ready, motion_status: 'pending', motion_key: null }),
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not fan out for unchanged or in-flight motion on an already-ready still', () => {
+    const ready = { illustrated_profile_status: 'ready', generation_token: null };
+    queryClient.setQueryData(portraitVersionsQueryKey('family-1'), [
+      version({ ...ready, motion_status: 'ready', motion_key: 'motion-1.webp' }),
+    ]);
+    renderHook(() => usePortraitVersionsRealtime('family-1'), { wrapper });
+
+    // Unrelated edit; motion untouched.
+    fakes[0].emit({
+      eventType: 'UPDATE',
+      new: version({ ...ready, motion_status: 'ready', motion_key: 'motion-1.webp' }),
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+
+    // Pending / failed motion with no key is not a signal to the consumers.
+    invalidateSpy.mockClear();
+    queryClient.setQueryData(portraitVersionsQueryKey('family-1'), [version({ ...ready })]);
+    fakes[0].emit({ eventType: 'UPDATE', new: version({ ...ready, motion_status: 'pending', motion_key: null }) });
+    fakes[0].emit({ eventType: 'UPDATE', new: version({ ...ready, motion_status: 'failed', motion_key: null }) });
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes the list on INSERT and the consumers on DELETE', () => {
     renderHook(() => usePortraitVersionsRealtime('family-1'), { wrapper });
 

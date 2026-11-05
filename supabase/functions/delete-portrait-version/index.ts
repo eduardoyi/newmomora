@@ -93,7 +93,10 @@ export async function handleDeletePortraitVersion(
 
   const prefix = version.profile_picture_key.slice(0, -'photo.jpg'.length);
   try {
-    const keys = await dependencies.listObjectKeys(prefix);
+    const listed = await dependencies.listObjectKeys(prefix);
+    // The living-portrait sheet lives under this prefix; the explicit key is a
+    // belt for a listing that lags the published pointer.
+    const keys = new Set(version.motion_key ? [...listed, version.motion_key] : listed);
     for (const key of keys) await dependencies.deleteObject(key);
   } catch (storageError) {
     console.error(

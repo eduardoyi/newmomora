@@ -4,10 +4,13 @@ import { sentryOptions } from './sentry';
 import { verifySignedBody } from './crypto';
 import { GalleryImportWorkflow } from './gallery-workflow';
 import { PortraitGenerationWorkflow } from './portrait-workflow';
+import { PortraitMotionWorkflow } from './portrait-motion-workflow';
+import { isDuplicateWorkflowError } from './workflow-errors';
 import { MemoryIllustrationWorkflow } from './workflow';
 import {
   WORKFLOW_JOB_ID_PATTERN,
   type GalleryWorkflowDispatchPayload,
+  type PortraitMotionDispatchPayload,
   type WorkflowDispatchPayload,
 } from './types';
 
@@ -15,15 +18,6 @@ const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 
 function response(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
-}
-
-function isDuplicateWorkflowError(error: unknown): boolean {
-  // The Workflows binding surfaces a duplicate-instance-id rejection as a
-  // plain Error with a human-readable message (no documented numeric code
-  // in @cloudflare/workers-types' `WorkflowError` as of this writing); match
-  // its wording rather than relying on an unstable code.
-  const message = error instanceof Error ? error.message : '';
-  return /already exists|duplicate|unique/i.test(message);
 }
 
 interface DispatchTarget {
@@ -72,6 +66,48 @@ async function handleDispatch(
   } catch (error) {
     if (isDuplicateWorkflowError(error)) {
       return response({ accepted: true, jobId: payload.jobId, duplicate: true }, 202);
+    }
+    return response({ error: 'Workflow dispatch failed', code: 'DISPATCH_FAILED' }, 502);
+  }
+}
+
+async function handleMotionDispatch(request: Request, signingSecret: string, workflow: Workflow<PortraitMotionDispatchPayload>): Promise<Response> {
+  const rawBody = await request.text();
+  const verified = await verifySignedBody(
+    signingSecret,
+    request.headers.get('x-dispatch-timestamp'),
+    request.headers.get('x-dispatch-nonce'),
+    request.headers.get('x-dispatch-signature'),
+    rawBody,
+  );
+  if (!verified) return response({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401);
+
+  let payload: PortraitMotionDispatchPayload;
+  try {
+    payload = JSON.parse(rawBody) as PortraitMotionDispatchPayload;
+  } catch {
+    return response({ error: 'Invalid request', code: 'INVALID_REQUEST' }, 400);
+  }
+  if (!WORKFLOW_JOB_ID_PATTERN.test(payload?.versionId ?? '')) {
+    return response({ error: 'Invalid request', code: 'INVALID_VERSION_ID' }, 400);
+  }
+  if (!WORKFLOW_JOB_ID_PATTERN.test(payload?.motionToken ?? '')) {
+    return response({ error: 'Invalid request', code: 'INVALID_MOTION_TOKEN' }, 400);
+  }
+
+  try {
+    await workflow.create({
+      // The claim token makes every claim its own instance; a re-dispatch of
+      // the same claim is an idempotent 202. Keep in sync with the in-run
+      // trigger in portrait-workflow.ts.
+      id: `motion-${payload.motionToken}`,
+      params: { versionId: payload.versionId, motionToken: payload.motionToken },
+      retention: { successRetention: '1 day', errorRetention: '1 day' },
+    });
+    return response({ accepted: true, versionId: payload.versionId }, 202);
+  } catch (error) {
+    if (isDuplicateWorkflowError(error)) {
+      return response({ accepted: true, versionId: payload.versionId, duplicate: true }, 202);
     }
     return response({ error: 'Workflow dispatch failed', code: 'DISPATCH_FAILED' }, 502);
   }
@@ -128,8 +164,9 @@ async function handleGalleryDispatch(request: Request, target: GalleryDispatchTa
 const InstrumentedGalleryImportWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, GalleryImportWorkflow);
 const InstrumentedMemoryIllustrationWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, MemoryIllustrationWorkflow);
 const InstrumentedPortraitGenerationWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, PortraitGenerationWorkflow);
+const InstrumentedPortraitMotionWorkflow = Sentry.instrumentWorkflowWithSentry(sentryOptions, PortraitMotionWorkflow);
 // Instrumented so errors inside Workflow steps reach Sentry too.
-export { InstrumentedGalleryImportWorkflow as GalleryImportWorkflow, InstrumentedMemoryIllustrationWorkflow as MemoryIllustrationWorkflow, InstrumentedPortraitGenerationWorkflow as PortraitGenerationWorkflow };
+export { InstrumentedGalleryImportWorkflow as GalleryImportWorkflow, InstrumentedMemoryIllustrationWorkflow as MemoryIllustrationWorkflow, InstrumentedPortraitGenerationWorkflow as PortraitGenerationWorkflow, InstrumentedPortraitMotionWorkflow as PortraitMotionWorkflow };
 export default Sentry.withSentry(sentryOptions, {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -144,6 +181,13 @@ export default Sentry.withSentry(sentryOptions, {
         workflow: env.PORTRAIT_GENERATION_WORKFLOW,
         signingSecret: env.PORTRAIT_DISPATCH_SIGNING_SECRET,
       });
+    }
+    if (request.method === 'POST' && url.pathname === '/dispatch/portrait-motion') {
+      return await handleMotionDispatch(
+        request,
+        env.PORTRAIT_DISPATCH_SIGNING_SECRET,
+        env.PORTRAIT_MOTION_WORKFLOW,
+      );
     }
     if (request.method === 'POST' && url.pathname === '/dispatch/gallery') {
       return await handleGalleryDispatch(request, {

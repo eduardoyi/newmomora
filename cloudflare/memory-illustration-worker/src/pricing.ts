@@ -1,4 +1,4 @@
-import type { IllustrationModel, ImageUsage } from './types';
+import type { IllustrationModel, ImageUsage, VisionUsage } from './types';
 
 export const IMAGE_PRICING_VERSION = 'openai-image-2026-11-04';
 
@@ -44,4 +44,24 @@ export function priceImageUsage(model: IllustrationModel, usage: ImageUsage | nu
     usage.outputImageTokens! * rates.outputImage
   ) / 1_000_000;
   return { costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: cost };
+}
+
+// Mirrors supabase/functions/_shared/ai-pricing.ts (gpt-4o-mini, legacy
+// version string). Text and image input share one rate for this model.
+export const VISION_PRICING_VERSION = 'openai-2026-07-27';
+const GPT_4O_MINI_USD_PER_MILLION = { input: 0.15, output: 0.60 };
+
+export function priceVisionUsage(usage: VisionUsage | null): PricedImageUsage {
+  if (!usage) return { costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
+  if (usage.inputTokens === null || usage.outputTokens === null) {
+    return { costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
+  }
+  return {
+    costBasis: 'provider_usage',
+    costIsComplete: true,
+    estimatedCostUsd: (
+      usage.inputTokens * GPT_4O_MINI_USD_PER_MILLION.input +
+      usage.outputTokens * GPT_4O_MINI_USD_PER_MILLION.output
+    ) / 1_000_000,
+  };
 }

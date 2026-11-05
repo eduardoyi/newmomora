@@ -196,6 +196,19 @@ create table public.family_member_portrait_versions (
   generation_output_key text,
   deletion_token uuid,
   deletion_started_at timestamptz,
+  -- Living portrait (docs/plans/living-portraits.md): server-managed (client
+  -- writes rejected by protect_portrait_motion_columns). Null status = never
+  -- attempted. A frame sheet exists iff status = 'ready':
+  -- (motion_status = 'ready') = (motion_key is not null), ready => grid set.
+  motion_status text check (motion_status in ('pending', 'ready', 'failed')),
+  motion_key text,                   -- published sheet (webp), R2
+  motion_source_key text,            -- illustrated_profile_key the claim/sheet derives from
+  motion_token uuid,                 -- current claim token (CAS fence)
+  motion_attempts smallint not null default 0,
+  motion_columns smallint check (motion_columns between 1 and 4),
+  motion_rows smallint check (motion_rows between 1 and 4),
+  motion_started_at timestamptz,     -- claim time; a pending claim is stale after 15 min
+  motion_updated_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   foreign key (family_member_id, family_id)
@@ -2273,6 +2286,7 @@ Momora uses a **single private R2 bucket** (`R2_BUCKET`, e.g. `momora-prod`) wit
 | `{userId}/family/{memberId}/portrait.webp` | Private (presigned) | AI character portraits |
 | `{userId}/family/{memberId}/portraits/{versionId}/photo.jpg` | Private (presigned) | Immutable portrait-version source photo |
 | `{userId}/family/{memberId}/portraits/{versionId}/portrait/{attemptId}.webp` | Private (presigned) | Immutable durable portrait attempt/output. `.webp` is a REQUEST, not a guarantee — see footnote below. |
+| `{userId}/family/{memberId}/portraits/{versionId}/motion/{motionToken}.webp` | Private (presigned) | Living-portrait frame sheet (3x3 grid, 1536x1536). Deterministic per claim token; `{userId}` is the first segment of the version's source photo key. Parsed as kind `portrait_version_motion`; referenced via `family_member_portrait_versions.motion_key`. |
 | `{userId}/memories/{memoryId}/illustrations/{generationId}.{webp\|jpg}` | Private (presigned) | Immutable AI memory-illustration generation (`text_illustration` type). See footnote below. |
 | `{userId}/memories/{memoryId}/media/{mediaAssetId}.{ext}` | Private (presigned) | Ordered user-uploaded memory photo/video assets (`media` type), or the single kept clip (`audio` type, `ext` = `m4a`) — see [audio-memories.md](./features/audio-memories.md) |
 | `{userId}/gallery-import/{runId}/previews/{assetToken}.jpg` | Private, run-bound presigned PUT/5-minute signed GET | Transient 512px JPEG curation preview; never a normal media-upload key and deleted on cancel/expiry cleanup. |
@@ -2496,6 +2510,24 @@ The durable application lease is five minutes. The client treats an unclaimed pe
 ### 4.1a `workflow-portrait-bridge`
 
 This `verify_jwt = false` internal function is not a browser API. It verifies raw-body timestamped HMAC and nonce before parsing a request, then exposes only `get_input`, `reserve_attempt`, `authorize_upload`, `record_upload_complete`, `publish`, `reconcile`, `fail`, and `retrigger_memories` for a private job. It does not grant Cloudflare a Supabase service-role key or generic database access.
+
+**Living-portrait operations** (`motion_*`; `20261105150000_portrait_motion.sql`, [plan](plans/living-portraits.md)). Same HMAC + nonce handling and required UUID `jobId`. For every motion operation except `motion_start`, `jobId` carries the portrait **version** id.
+
+| operation | request (besides `operation`, `jobId`) | response |
+|---|---|---|
+| `motion_start` | `jobId` = portrait **job** id | `{ started: true, versionId, motionToken }` or `{ started: false, outcome }`. Resolves `portrait_generation_jobs.portrait_version_id`, calls `claim_portrait_motion(version, false)`, deletes the returned `stale_motion_key` from R2 best-effort. |
+| `motion_get_input` | `motionToken` | `{ sourceKey, outputKey, prompt, checkPrompt, columns: 3, rows: 3, size: '1536x1536', model: 'gpt-image-2.6-flare', quality: 'medium', complexity: 'medium' }`; 409 `MOTION_SUPERSEDED` unless the token is the current pending claim of the still that is currently published. Prompts come from `_shared/prompts.ts` (`buildPortraitMotionPrompt`, `PORTRAIT_MOTION_CHECK_PROMPT`). |
+| `motion_record_usage` | `motionToken`, `aiCallId` (`motion:<token>:<n>` or `motion-check:<token>:<n>`), `aiOperation`: `'image' \| 'check'` (the request's own `operation` is the bridge operation; falls back to the aiCallId prefix and must agree with it when both are sent), `model` (`gpt-image-*` for image, `gpt-4o-mini` for check), `success`, `usage`, pricing fields as `record_usage` | `{ recorded: true }` (`{ recorded: false }` if the version is gone). Writes `record_ai_usage_event_detailed` for the version's family with its `user_id` as actor, operation `portrait_motion` / `portrait_motion_check`. |
+| `motion_publish` | `motionToken`, `outputKey`, `columns`, `rows` (integers 1-4) | `{ published, oldMotionKey }` (`publish_portrait_motion`). `published: false` means delete the uploaded object. |
+| `motion_fail` | `motionToken`, `errorCode` (optional, <= 100 chars) | `{ failed }` (`fail_portrait_motion`). |
+
+**Schema/RPCs.** `claim_portrait_motion(p_version_id uuid, p_force boolean default false)` returns `(outcome, motion_token, source_key, output_key, stale_motion_key)`; locks family (share) -> member (share) -> version (update). Outcomes: `not_eligible` (still not `ready`, version/member/family being deleted or in the account-deletion grace period), `already_ready`, `in_flight` (pending for the same still, started < 15 min ago; not overridden by `p_force`), `already_failed`, `claimed`. A claim always leaves `motion_key` null (a non-ready row holds no sheet) and returns any previous sheet as `stale_motion_key`, including on a forced reclaim of a ready one. `publish_portrait_motion(p_version_id, p_motion_token, p_output_key, p_columns smallint, p_rows smallint)` is a compare-and-set (token matches, status `pending`, `illustrated_profile_key = motion_source_key`, no `deletion_token`, key equals `<owner>/family/<member>/portraits/<version>/motion/<token>.webp`) returning `(published, old_motion_key)`. `fail_portrait_motion(p_version_id, p_motion_token, p_error_code)` marks a matching pending claim `failed` and returns a boolean (the error code is not stored). All three are `service_role` only. The operations `portrait_motion` / `portrait_motion_check` were added to `ai_usage_events_operation_check` as **telemetry only**: fair-use caps are computed from `ai_image_generation_requests`, never from the events ledger, so they cannot consume a family's pools.
+
+**Deletion/URL coverage.** `motion_key` is collected by `delete-portrait-version` (the sheet also lives under the version prefix that it lists), `delete-family-member`, and `hard-delete-expired-accounts` (collection and the "still referenced" checks), admitted by `resolveReferencedStorageKeys` (so `get-media-url` presigns the current sheet and only it), and version-managed in `delete-storage-object`.
+
+### 4.1a.1 `portrait-motion-backfill`
+
+`verify_jwt = false`; internal. Auth: `x-cron-secret` (`validateCronSecret`) **or** `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>` (exact match). **Request:** `{ "limit"?: 1-25 (default 10), "dryRun"?: boolean }`. Loads every member's usable portrait versions, resolves each member's **current** one with the same precedence as `src/utils/portrait-versions.ts` for today (UTC): latest dated <= today (newest on ties), else earliest future-dated, else newest undated. Keeps those without a ready sheet for their current still that are not `already_failed` / fresh `in_flight`, and drops families/members already past deletion so `eligible` always reaches 0. Unless `dryRun`, claims up to `limit` (`claim_portrait_motion(version, false)`), deletes any returned stale sheet best-effort, and HMAC-dispatches `{ versionId, motionToken }` to `CLOUDFLARE_PORTRAIT_WORKFLOW_URL` with `/dispatch/portrait` replaced by `/dispatch/portrait-motion` (signed with `CLOUDFLARE_PORTRAIT_DISPATCH_SECRET`, same headers as `dispatchPortraitWorkflow`; duplicate = idempotent). **Response:** counts only, `{ eligible, claimed, dispatched, failed }`. A claim whose dispatch fails stays pending and becomes eligible again after 15 minutes. Driven by `supabase/scripts/backfill-portrait-motion.ts` (`--dry-run`, `--batch N`, `--pause S`; loops until `eligible = 0`, stops after three batches that claim nothing).
 
 ### 4.1b `delete-portrait-version`
 

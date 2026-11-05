@@ -189,7 +189,8 @@ export async function resolveReferencedStorageKeys(
       memoryIds.add(entry.parsed.entityId);
     } else if (
       entry.parsed.kind === 'portrait_version_photo' ||
-      entry.parsed.kind === 'portrait_version_portrait'
+      entry.parsed.kind === 'portrait_version_portrait' ||
+      entry.parsed.kind === 'portrait_version_motion'
     ) {
       if (entry.parsed.portraitVersionId) {
         portraitVersionIds.add(entry.parsed.portraitVersionId);
@@ -238,13 +239,14 @@ export async function resolveReferencedStorageKeys(
     const { data } = await supabase
       .from('family_member_portrait_versions')
       .select(
-        'id, family_member_id, profile_picture_key, illustrated_profile_key, generation_output_key',
+        'id, family_member_id, profile_picture_key, illustrated_profile_key, generation_output_key, motion_key',
       )
       .in('id', [...portraitVersionIds]);
     for (const row of data ?? []) {
       if (row.profile_picture_key) referenced.add(row.profile_picture_key);
       if (row.illustrated_profile_key) referenced.add(row.illustrated_profile_key);
       if (row.generation_output_key) referenced.add(row.generation_output_key);
+      if (row.motion_key) referenced.add(row.motion_key);
     }
   }
 

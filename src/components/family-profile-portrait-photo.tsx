@@ -2,6 +2,7 @@ import { Image } from 'expo-image';
 import { ActivityIndicator, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { GeneratingVisualOverlay } from '@/components/generating-visual-overlay';
+import { LivingPortraitOverlay } from '@/components/living-portrait-overlay';
 import { colors, fonts } from '@/constants/theme';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import type { FamilyMember } from '@/services/family-members';
@@ -12,6 +13,7 @@ import {
   type IllustratedProfileStatus,
 } from '@/utils/family-members';
 import { mediaImageSource } from '@/utils/media-image-source';
+import { getPortraitMotion } from '@/utils/portrait-motion';
 
 export type FamilyProfilePortraitMember = Pick<
   FamilyMember,
@@ -20,7 +22,9 @@ export type FamilyProfilePortraitMember = Pick<
   | 'illustrated_profile_key'
   | 'illustrated_profile_status'
   | 'updated_at'
-> & Partial<Pick<FamilyMember, 'avatarImageKey' | 'avatarStatus' | 'avatarUpdatedAt'>>;
+> & Partial<
+  Pick<FamilyMember, 'avatarImageKey' | 'avatarStatus' | 'avatarUpdatedAt' | 'resolvedPortraitVersion'>
+>;
 
 interface FamilyProfilePortraitPhotoProps {
   member: FamilyProfilePortraitMember;
@@ -34,6 +38,13 @@ interface FamilyProfilePortraitPhotoProps {
   backgroundColor?: string;
   style?: StyleProp<ViewStyle>;
   accessibilityLabel?: string;
+  /**
+   * Opt-in living portrait (docs/plans/living-portraits.md): loops the
+   * generated frames over the ready illustrated portrait. Never over a local
+   * photo or the generating state. Only the profile header and Family tab
+   * cards ask for it.
+   */
+  animated?: boolean;
 }
 
 export function FamilyProfilePortraitPhoto({
@@ -46,6 +57,7 @@ export function FamilyProfilePortraitPhoto({
   backgroundColor = colors.surface,
   style,
   accessibilityLabel,
+  animated = false,
 }: FamilyProfilePortraitPhotoProps) {
   const status = (
     'avatarStatus' in member
@@ -63,6 +75,18 @@ export function FamilyProfilePortraitPhoto({
   const sparkleSize = width >= 96 ? 28 : width >= 72 ? 22 : 18;
   const compact = width < 96;
   const photoStyle = { width, height };
+  const resolvedVersion = member.resolvedPortraitVersion;
+  // The motion must be showing over the very still it was made from: the
+  // displayed key is the resolved version's published illustration, not the
+  // source photo a pending/failed portrait falls back to.
+  const motion = animated
+    && !localPhotoUri
+    && !showGeneratingOverlay
+    && status === 'ready'
+    && displayUri
+    && resolvedVersion?.illustrated_profile_key === remoteKey
+    ? getPortraitMotion(resolvedVersion)
+    : null;
 
   return (
     <View
@@ -95,6 +119,8 @@ export function FamilyProfilePortraitPhoto({
           </Text>
         </View>
       )}
+
+      {motion ? <LivingPortraitOverlay borderRadius={resolvedRadius} motion={motion} /> : null}
 
       {showGeneratingOverlay ? (
         <GeneratingVisualOverlay

@@ -537,6 +537,17 @@ Measured with `npm run eval:illustration -- --variant <model>[:<complexity>]`
 changing `complexity`; the Worker (`src/openai.ts`) and Edge
 (`_shared/openai.ts`) constants must stay in sync.
 
+**Streaming partial images was tested and rejected (2026-11-05).** A one-off
+spike sent the Worker's exact edit request with `stream=true` and
+`partial_images=2`. Across three real memories, OpenAI sent nothing, not even
+response headers, for 6–10s. Two runs got one partial (at 6.9s and 10.8s,
+0.8–1s after the headers), the third got none, and the final image followed
+2–4s later. Totals were 8.6–14.8s streamed vs 8.6–9.6s not streamed. Partials
+come back as ~2MB PNGs whatever `output_format` says, cost 100 extra output
+tokens each, and can show a different pose than the final. After the R2
+upload, Realtime and download needed to show one, it would land ~0–2s early
+at best. Re-run this before reconsidering, e.g. for a new model.
+
 ### Preparation latency (2026-11-05)
 
 The pre-dispatch work in `generate-illustration` (everything before the Worker

@@ -7,6 +7,12 @@
  *   npm run eval:portrait -- --member-id <uuid> --variants
  *   npm run eval:portrait -- --member-id <uuid> --variant character-sheet-abstraction --adult-prompt
  *   npm run eval:portrait -- --member-id <uuid> --variant old-memora-short-transfer
+ *   npm run eval:portrait -- --list-ready
+ *   npm run eval:portrait -- --member-id <uuid> --sprite [--motion living|wave] [--grid 3x2|3x3] [--size WxH] [--complexity high]
+ *
+ * `--sprite` is an animated-portrait spike: it sends the member's CURRENT
+ * ready portrait as the only reference and asks for a 6-frame 3x2 loop sheet
+ * at 1536x1024 (512px frames). Slice/encode the sheet locally (ffmpeg).
  *
  * Requires OPENAI_API_KEY + R2/Supabase vars in supabase/.env.local when using --member-id.
  */
@@ -16,6 +22,7 @@ import { describeAgeAtDate, isAdultAtDate } from '../functions/_shared/age.ts';
 import { capImageMaxEdge } from '../functions/_shared/image-bytes.ts';
 import { MAX_PORTRAIT_REFERENCE_EDGE } from '../functions/_shared/image-limits.ts';
 import {
+  decodeBase64ToBytes,
   editImageWithModel,
   FALLBACK_IMAGE_MODEL,
   PRIMARY_IMAGE_MODEL,
@@ -62,6 +69,12 @@ interface CliOptions {
   isAdult?: boolean;
   forceAdultPrompt?: boolean;
   outputDir: URL;
+  sprite: boolean;
+  listReady: boolean;
+  complexity: 'low' | 'medium' | 'high';
+  motion: 'living' | 'wave';
+  grid: '3x2' | '3x3';
+  size?: string;
 }
 
 function inferIsAdultFromAgeDescription(ageDescription: string): boolean {
@@ -135,6 +148,11 @@ function parseArgs(args: string[]): CliOptions {
     variants: false,
     ageDescription: 'young child',
     outputDir: defaultOutputDir,
+    sprite: false,
+    listReady: false,
+    complexity: 'medium',
+    motion: 'living',
+    grid: '3x2',
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -189,6 +207,28 @@ function parseArgs(args: string[]): CliOptions {
         break;
       case '--variant':
         options.variantLabel = next;
+        index += 1;
+        break;
+      case '--sprite':
+        options.sprite = true;
+        break;
+      case '--list-ready':
+        options.listReady = true;
+        break;
+      case '--grid':
+        options.grid = next === '3x3' ? '3x3' : '3x2';
+        index += 1;
+        break;
+      case '--size':
+        options.size = next;
+        index += 1;
+        break;
+      case '--motion':
+        options.motion = next === 'wave' ? 'wave' : 'living';
+        index += 1;
+        break;
+      case '--complexity':
+        options.complexity = next as CliOptions['complexity'];
         index += 1;
         break;
       default:
@@ -379,7 +419,138 @@ async function runVariant(
   return portraitPath;
 }
 
+const FRAME_WORDS: Record<number, string> = { 6: 'sixth', 9: 'ninth' };
+
+const livingSpritePrompt = (cols: number, rows: number) => [
+  'Create a single animation sprite sheet for a seamless looping living portrait of the character in the reference',
+  'image, like a gently enchanted painted portrait that quietly comes alive.',
+  'Keep this exact character in every frame: same face, hair, skin tone, outfit, proportions and illustration style',
+  'as the reference. It must clearly be the same person throughout.',
+  'The motion is subtle and calm: the character breathes softly, tilts their head a few degrees to one side and',
+  'slowly back, blinks once, and their expression warms from a soft smile to a slightly bigger smile and back.',
+  'No waving, no hand or arm gestures; hands stay where they are in the reference.',
+  `Exactly ${cols * rows} sequential frames arranged in a precise ${cols}-column by ${rows}-row grid,`,
+  'read left-to-right then top-to-bottom. Every panel has identical dimensions.',
+  'Fixed camera: identical framing and head size in every panel; the head moves only slightly.',
+  'Same background as the reference in every panel, and the background does not change or move.',
+  `Small incremental changes between frames; the ${FRAME_WORDS[cols * rows] ?? 'last'} frame transitions smoothly`,
+  'back to the first.',
+  'No motion lines, no added sparkles, no captions, no words, no numbers, no logos, no speech bubbles,',
+  'no panel labels, no borders, no gutters.',
+].join(' ');
+
+const WAVE_SPRITE_PROMPT = [
+  'Create a single animation sprite sheet for a seamless looping GIF of the character in the reference image.',
+  'Keep this exact character in every frame: same face, hair, skin tone, outfit, proportions and illustration style',
+  'as the reference. It must clearly be the same person throughout.',
+  'The sequence: the character looks at the viewer, blinks, breaks into a warm smile, gives a small friendly wave',
+  'with one hand, then lowers the hand and settles back to the starting pose.',
+  'Exactly 6 sequential frames arranged in a precise 3-column by 2-row grid, read left-to-right then top-to-bottom.',
+  'Every panel has identical dimensions.',
+  'Fixed camera: identical framing, head position and head size in every panel; only the face and the waving arm move.',
+  'Same plain soft background as the reference in every panel.',
+  'Clear incremental motion; the sixth frame transitions smoothly toward the first.',
+  'No captions, no words, no numbers, no logos, no speech bubbles, no panel labels, no borders, no gutters.',
+].join(' ');
+
+async function listReadyMembers(): Promise<void> {
+  const supabase = await createAuthedClient();
+  const { data, error } = await supabase
+    .from('family_members')
+    .select('id, name, date_of_birth')
+    .eq('illustrated_profile_status', 'ready')
+    .not('illustrated_profile_key', 'is', null)
+    .order('date_of_birth', { ascending: false });
+  if (error) throw new Error(error.message);
+  const today = new Date().toISOString().slice(0, 10);
+  for (const member of data ?? []) {
+    const age = member.date_of_birth ? describeAgeAtDate(member.date_of_birth, today) : 'age unknown';
+    console.log(`${member.id}  ${member.name} (${age})`);
+  }
+}
+
+async function runSpriteSheet(
+  memberId: string,
+  complexity: CliOptions['complexity'],
+  motion: CliOptions['motion'],
+  grid: string,
+  sizeOverride: string | undefined,
+  outputDir: URL,
+): Promise<void> {
+  const [cols, rows] = grid.split('x').map(Number);
+  const size = sizeOverride ?? `${cols * 512}x${rows * 512}`;
+  const prompt = motion === 'wave' ? WAVE_SPRITE_PROMPT : livingSpritePrompt(cols, rows);
+  const supabase = await createAuthedClient();
+  const { data: member, error } = await supabase
+    .from('family_members')
+    .select('id, name, illustrated_profile_key')
+    .eq('id', memberId)
+    .maybeSingle();
+  if (error || !member?.illustrated_profile_key) {
+    throw new Error(error?.message ?? 'Member has no ready portrait');
+  }
+  const portraitBytes = await getObjectBytes(member.illustrated_profile_key);
+
+  const form = new FormData();
+  form.set('model', PRIMARY_IMAGE_MODEL);
+  form.set('prompt', prompt);
+  form.set('size', size);
+  form.set('quality', 'medium');
+  form.set('complexity', complexity);
+  form.set('output_format', 'png');
+  form.append('image[]', new Blob([portraitBytes as Uint8Array<ArrayBuffer>], { type: 'image/webp' }), 'reference-1-portrait.webp');
+
+  const label = member.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  console.log(`→ [sprite ${label}] ${PRIMARY_IMAGE_MODEL} complexity ${complexity}...`);
+  const started = Date.now();
+  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${Deno.env.get('OPENAI_API_KEY')}` },
+    body: form,
+  });
+  const elapsedMs = Date.now() - started;
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`sprite edit failed (${response.status}) after ${elapsedMs}ms: ${body.slice(0, 300)}`);
+  }
+  const payload = await response.json();
+  const base64 = payload.data?.[0]?.b64_json;
+  if (typeof base64 !== 'string') throw new Error('sprite edit returned no image');
+
+  const runDir = new URL(`${new Date().toISOString().replace(/[:.]/g, '-')}-sprite-${label}-${motion}-${grid}/`, outputDir);
+  await Deno.mkdir(runDir, { recursive: true });
+  await Deno.writeFile(new URL('sheet.png', runDir), decodeBase64ToBytes(base64));
+  await Deno.writeFile(new URL('reference-portrait.webp', runDir), portraitBytes);
+  await Deno.writeFile(new URL('meta.json', runDir), new TextEncoder().encode(JSON.stringify({
+    memberId, model: PRIMARY_IMAGE_MODEL, complexity, grid, size, elapsedMs,
+    usage: payload.usage ?? null, motion, prompt, createdAt: new Date().toISOString(),
+  }, null, 2)));
+  console.log(`  ✓ ${(elapsedMs / 1000).toFixed(1)}s → ${runDir.pathname}sheet.png`);
+}
+
 const options = parseArgs(Deno.args);
+
+if (options.listReady) {
+  await listReadyMembers();
+  Deno.exit(0);
+}
+
+if (options.sprite) {
+  if (!options.memberId) {
+    console.error('--sprite needs --member-id <uuid>');
+    Deno.exit(1);
+  }
+  await Deno.mkdir(options.outputDir, { recursive: true });
+  await runSpriteSheet(
+    options.memberId,
+    options.complexity,
+    options.motion,
+    options.grid,
+    options.size,
+    options.outputDir,
+  );
+  Deno.exit(0);
+}
 
 if (!options.memberId && !options.photoPath) {
   console.error('Provide --member-id <uuid> or --photo <path>');

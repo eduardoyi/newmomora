@@ -173,6 +173,7 @@ function bridgeAndOpenAiFetch(
       });
       case 'fail': return Response.json({ failed: true, outputKey: null, deleteOutput: false });
       case 'retrigger_memories': return Response.json({ requested: true });
+      case 'motion_start': return Response.json({ started: false, outcome: 'not_eligible' });
       default: throw new Error('unexpected bridge operation');
     }
   });
@@ -360,7 +361,8 @@ describe('portrait Workflow', () => {
     );
     expect(setup.portraits.delete).toHaveBeenCalledWith(setup.workflowJob.oldPortraitKey);
     expect(operations.map((operation) => operation.operation)).toEqual([
-      'get_input', 'reserve_attempt', 'record_usage', 'authorize_upload', 'record_upload_complete', 'publish', 'retrigger_memories',
+      'get_input', 'reserve_attempt', 'record_usage', 'authorize_upload', 'record_upload_complete', 'publish', 'motion_start',
+      'retrigger_memories',
     ]);
     expect(operations.find((operation) => operation.operation === 'record_usage')).toMatchObject({
       usageRequestId: setup.workflowJob.usageRequestId, protocolVersion: 2,
@@ -512,7 +514,7 @@ describe('portrait Workflow', () => {
     expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-1.5' });
     expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('api.openai.com'))).toHaveLength(0);
     expect(operations.map((operation) => operation.operation)).toEqual([
-      'get_input', 'authorize_upload', 'record_upload_complete', 'publish', 'retrigger_memories',
+      'get_input', 'authorize_upload', 'record_upload_complete', 'publish', 'motion_start', 'retrigger_memories',
     ]);
   });
 
@@ -538,7 +540,7 @@ describe('portrait Workflow', () => {
     expect(result).toMatchObject({ status: 'ready' });
     expect(setup.portraits.put).not.toHaveBeenCalled();
     expect(operations.map((operation) => operation.operation)).toEqual([
-      'get_input', 'authorize_upload', 'record_upload_complete', 'publish', 'retrigger_memories',
+      'get_input', 'authorize_upload', 'record_upload_complete', 'publish', 'motion_start', 'retrigger_memories',
     ]);
   });
 
@@ -876,5 +878,104 @@ describe('portrait Workflow young dependent memory retrigger', () => {
     ]);
     expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.6-flare' });
     expect(retriggers).toHaveLength(2);
+  });
+});
+
+describe('portrait Workflow living-portrait trigger', () => {
+  const VERSION_ID = '50abcc52-5c0d-4b7b-86d4-1b3a0a661301';
+  const MOTION_TOKEN = '50abcc52-5c0d-4b7b-86d4-1b3a0a661302';
+  const started = () => Response.json({ started: true, versionId: VERSION_ID, motionToken: MOTION_TOKEN });
+
+  async function runWith(
+    create: ReturnType<typeof vi.fn>,
+    bridgeResponses: Partial<Record<string, Response[]>>,
+    openAiResponses?: Response[],
+  ) {
+    const setup = createEnvironment();
+    (setup.env as unknown as Record<string, unknown>).PORTRAIT_MOTION_WORKFLOW = { create };
+    const { fetchMock, operations } = bridgeAndOpenAiFetch(setup.workflowJob, { bridgeResponses, openAiResponses });
+    vi.stubGlobal('fetch', fetchMock);
+    const { step, events } = recordingStep();
+    const result = await workflowWithEnv(setup.env).run(
+      { payload: { jobId: JOB_ID } } as WorkflowEvent<{ jobId: string }>, step);
+    return { result, operations, events };
+  }
+
+  it('creates the motion instance after the still is published and before dependents are retriggered', async () => {
+    const create = vi.fn(async () => ({ id: `motion-${MOTION_TOKEN}` }));
+    const { result, operations, events } = await runWith(create, { motion_start: [started()] });
+
+    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.6-flare' });
+    expect(operations.find((operation) => operation.operation === 'motion_start')).toMatchObject({ jobId: JOB_ID });
+    const names = operations.map((operation) => operation.operation);
+    expect(names.indexOf('motion_start')).toBeLessThan(names.indexOf('retrigger_memories'));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      id: `motion-${MOTION_TOKEN}`,
+      params: { versionId: VERSION_ID, motionToken: MOTION_TOKEN },
+    }));
+    const stepNames = events.map((event) => event.name);
+    expect(stepNames.indexOf('start portrait motion')).toBeGreaterThan(stepNames.indexOf('publish portrait'));
+    expect(stepNames.indexOf('start portrait motion')).toBeLessThan(
+      stepNames.indexOf('retrigger portrait-dependent memories'),
+    );
+  });
+
+  it('does not create an instance when the claim is not started', async () => {
+    const create = vi.fn();
+    const { result } = await runWith(create, {
+      motion_start: [Response.json({ started: false, outcome: 'already_ready' })],
+    });
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a duplicate instance', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('Workflow instance already exists'));
+    const { result } = await runWith(create, { motion_start: [started()] });
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the ready result when motion_start fails', async () => {
+    const create = vi.fn();
+    const { result, operations } = await runWith(create, {
+      motion_start: [
+        new Response('unavailable', { status: 503 }),
+        new Response('unavailable', { status: 503 }),
+        new Response('unavailable', { status: 503 }),
+      ],
+    });
+    expect(result).toMatchObject({ status: 'ready', model: 'gpt-image-2.6-flare' });
+    expect(create).not.toHaveBeenCalled();
+    // The dependent-memory retrigger still runs after the failed motion start.
+    const names = operations.map((operation) => operation.operation);
+    expect(names.indexOf('retrigger_memories')).toBeGreaterThan(names.lastIndexOf('motion_start'));
+  });
+
+  it('keeps the ready result when instance creation keeps failing', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('workflow unavailable'));
+    const { result } = await runWith(create, { motion_start: [started()] });
+    expect(result).toMatchObject({ status: 'ready' });
+    expect(create).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not start motion when the portrait generation failed or was superseded', async () => {
+    const create = vi.fn();
+    const failed = await runWith(
+      create,
+      { motion_start: [started()] },
+      [Response.json({ error: { code: 'moderation_blocked' } }, { status: 400 })],
+    );
+    expect(failed.result).toMatchObject({ status: 'failed' });
+    expect(failed.operations.some((operation) => operation.operation === 'motion_start')).toBe(false);
+
+    const superseded = await runWith(create, {
+      motion_start: [started()],
+      publish: [Response.json({ published: false, oldPortraitKey: null, deleteOutput: true })],
+    });
+    expect(superseded.result).toMatchObject({ status: 'superseded' });
+    expect(superseded.operations.some((operation) => operation.operation === 'motion_start')).toBe(false);
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -445,3 +445,45 @@ export function buildTranscriptionPrompt(
 
   return `Transcribe this parenting journal voice memo. Family names that may appear: ${uniqueNames.join(', ')}.`;
 }
+
+// Living portraits (docs/plans/living-portraits.md). Ported verbatim from
+// `livingSpritePrompt` in supabase/scripts/eval-portrait.ts (the spike that
+// validated it): one image edit with the still as the only reference returns
+// a frame sheet that the app plays back as a quiet looping portrait.
+const MOTION_FRAME_WORDS: Record<number, string> = { 6: 'sixth', 9: 'ninth' };
+
+export function buildPortraitMotionPrompt(columns: number, rows: number): string {
+  return [
+    'Create a single animation sprite sheet for a seamless looping living portrait of the character in the reference',
+    'image, like a gently enchanted painted portrait that quietly comes alive.',
+    'Keep this exact character in every frame: same face, hair, skin tone, outfit, proportions and illustration style',
+    'as the reference. It must clearly be the same person throughout.',
+    'The motion is subtle and calm: the character breathes softly, tilts their head a few degrees to one side and',
+    'slowly back, blinks once, and their expression warms from a soft smile to a slightly bigger smile and back.',
+    'No waving, no hand or arm gestures; hands stay where they are in the reference.',
+    `Exactly ${columns * rows} sequential frames arranged in a precise ${columns}-column by ${rows}-row grid,`,
+    'read left-to-right then top-to-bottom. Every panel has identical dimensions.',
+    'Fixed camera: identical framing and head size in every panel; the head moves only slightly.',
+    'Same background as the reference in every panel, and the background does not change or move.',
+    `Small incremental changes between frames; the ${MOTION_FRAME_WORDS[columns * rows] ?? 'last'} frame transitions smoothly`,
+    'back to the first.',
+    'No motion lines, no added sparkles, no captions, no words, no numbers, no logos, no speech bubbles,',
+    'no panel labels, no borders, no gutters.',
+  ].join(' ');
+}
+
+// QA vision check for a generated motion sheet (gpt-4o-mini, JSON mode).
+// Image 1 = the still, image 2 = the sheet. Deliberately generic: no names,
+// ages or other family details are ever sent with it.
+export const PORTRAIT_MOTION_CHECK_PROMPT = [
+  'You are a strict quality checker for an animated character portrait.',
+  'Image 1 is the reference portrait. Image 2 is a sheet of nine animation frames of that character,',
+  'arranged in a 3-column by 3-row grid.',
+  'Answer these four questions about image 2 and reply with JSON only, in exactly this shape:',
+  '{"same_person": boolean, "equal_panels": boolean, "no_text_or_borders": boolean, "stable_framing": boolean}',
+  'same_person: true only if all nine panels clearly show the same person as image 1 (same face, hair, skin tone, outfit and illustration style).',
+  'equal_panels: true only if the sheet is a clean grid of nine equally sized panels with one frame in each.',
+  'no_text_or_borders: true only if there is no text, numbers, logos, labels, speech bubbles, borders or gutters between or inside panels.',
+  'stable_framing: true only if the camera, framing, head size and background are consistent across all nine panels.',
+  'Do not describe the person and do not output anything except the JSON object.',
+].join(' ');

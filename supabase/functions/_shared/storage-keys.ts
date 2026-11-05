@@ -64,6 +64,22 @@ export function buildPortraitVersionAttemptKey(
   return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/portrait/${attemptId}.${extension}`;
 }
 
+/**
+ * Living-portrait frame sheet (docs/plans/living-portraits.md). Always `.webp`
+ * (the Worker converts the provider PNG), keyed by the claim's motion token so
+ * a regenerated sheet never overwrites a published one. Must match
+ * `portrait_motion_output_key` in 20261105150000_portrait_motion.sql: the
+ * publish RPC rejects any other key.
+ */
+export function buildPortraitMotionKey(
+  userId: string,
+  familyMemberId: string,
+  portraitVersionId: string,
+  motionToken: string,
+): string {
+  return `${userId}/family/${familyMemberId}/portraits/${portraitVersionId}/motion/${motionToken}.webp`;
+}
+
 /** See `buildPortraitVersionAttemptKey`'s header comment -- same rationale
  * for the optional `extension` parameter (defaults to the requested webp
  * format; pass 'jpg' once the real returned bytes have been sniffed). */
@@ -219,6 +235,7 @@ export type StorageKeyKind =
   | 'family_portrait'
   | 'portrait_version_photo'
   | 'portrait_version_portrait'
+  | 'portrait_version_motion'
   | 'memory_media'
   | 'memory_illustration'
   | 'share_card';
@@ -233,6 +250,8 @@ export interface ParsedStorageKey {
   portraitVersionId?: string;
   /** Present for generated portrait attempt objects. */
   attemptId?: string;
+  /** Present for living-portrait frame sheets. */
+  motionToken?: string;
 }
 
 const FAMILY_MEMBER_PATTERN = /^([^/]+)\/family\/([^/]+)\/(photo|portrait)\.webp$/;
@@ -244,6 +263,9 @@ const PORTRAIT_VERSION_PHOTO_PATTERN =
 // under a `.jpg` key rather than a `.webp` key holding PNG bytes.
 const PORTRAIT_VERSION_PORTRAIT_PATTERN =
   /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/portrait\/([^/]+)\.(?:webp|jpg)$/i;
+// Living-portrait frame sheet: always `.webp` (buildPortraitMotionKey).
+const PORTRAIT_VERSION_MOTION_PATTERN =
+  /^([^/]+)\/family\/([^/]+)\/portraits\/([^/]+)\/motion\/([^/]+)\.webp$/i;
 const MEMORY_ILLUSTRATION_FULL_PATTERN =
   /^([^/]+)\/memories\/([^/]+)\/illustration\.webp$/;
 const MEMORY_ILLUSTRATION_VERSIONED_FULL_PATTERN =
@@ -312,6 +334,26 @@ export function parseStorageKey(objectKey: string): ParsedStorageKey | null {
       entityId,
       portraitVersionId,
       attemptId,
+    };
+  }
+
+  const portraitVersionMotionMatch = objectKey.match(PORTRAIT_VERSION_MOTION_PATTERN);
+  if (portraitVersionMotionMatch) {
+    const [, ownerUserId, entityId, portraitVersionId, motionToken] = portraitVersionMotionMatch;
+    if (
+      !UUID_PATTERN.test(ownerUserId) ||
+      !UUID_PATTERN.test(entityId) ||
+      !UUID_PATTERN.test(portraitVersionId) ||
+      !UUID_PATTERN.test(motionToken)
+    ) {
+      return null;
+    }
+    return {
+      kind: 'portrait_version_motion',
+      ownerUserId,
+      entityId,
+      portraitVersionId,
+      motionToken,
     };
   }
 

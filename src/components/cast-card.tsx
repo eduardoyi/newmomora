@@ -64,6 +64,9 @@ interface CastCardProps {
   subtitle?: string | null;
   /** This person is the signed-in account ("this is me"). */
   isMe?: boolean;
+  /** Living portrait loop over the ready portrait (docs/plans/living-portraits.md).
+   * Opt-in: only the Family tab and the member profile header pass it. */
+  animated?: boolean;
 }
 
 export function CastCard({
@@ -77,6 +80,7 @@ export function CastCard({
   canEdit = false,
   subtitle = null,
   isMe = false,
+  animated = false,
 }: CastCardProps) {
   const emo = emotionColors[memberTint(member)];
   const age = member.date_of_birth ? formatAgeFromDob(member.date_of_birth) : null;
@@ -113,6 +117,7 @@ export function CastCard({
         >
           <FamilyProfilePortraitPhoto
             accessibilityLabel={`${member.name} portrait`}
+            animated={animated}
             backgroundColor={emo.soft}
             borderRadius={0}
             height={120}

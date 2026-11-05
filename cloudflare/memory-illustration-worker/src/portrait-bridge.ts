@@ -6,6 +6,10 @@ import type {
   BridgePortraitReconcileResponse,
   BridgePortraitReserveAttemptResponse,
   BridgeAuthorizeUploadResponse,
+  BridgeMotionFailResponse,
+  BridgeMotionInput,
+  BridgeMotionPublishResponse,
+  BridgeMotionStartResponse,
   BridgeRecordUploadCompleteResponse,
   IllustrationModel,
   PortraitWorkflowJobInput,
@@ -58,7 +62,8 @@ function parseJob(value: unknown): PortraitWorkflowJobInput {
 async function callPortraitBridge<T>(
   env: Env,
   operation: 'get_input' | 'reserve_attempt' | 'authorize_upload' | 'record_upload_complete' |
-    'publish' | 'fail' | 'reconcile' | 'retrigger_memories' | 'record_usage',
+    'publish' | 'fail' | 'reconcile' | 'retrigger_memories' | 'record_usage' |
+    'motion_start' | 'motion_get_input' | 'motion_record_usage' | 'motion_publish' | 'motion_fail',
   payload: Record<string, unknown>,
 ): Promise<T> {
   return await callBridgeAt<T>(
@@ -234,4 +239,97 @@ export async function retriggerPortraitDependentMemories(env: Env, jobId: string
     value <= MAX_RETRIGGER_RETRY_AFTER_MS
     ? value
     : null;
+}
+
+// ── Living-portrait motion ────────────────────────────────────────────────
+// Same bridge URL/secret/signing as the portrait operations above. For every
+// motion_* operation except motion_start, `jobId` carries the portrait
+// VERSION id (the bridge contract reuses the required UUID field).
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MOTION_MODELS: ReadonlySet<string> = new Set([
+  'gpt-image-2.6-flare', 'gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5',
+]);
+const MOTION_LEVELS: ReadonlySet<string> = new Set(['low', 'medium', 'high']);
+
+/** `jobId` is the portrait job id; the bridge resolves its version and claims motion. */
+export async function startPortraitMotion(env: Env, portraitJobId: string): Promise<BridgeMotionStartResponse> {
+  const response = await callPortraitBridge<unknown>(env, 'motion_start', { jobId: portraitJobId });
+  if (!isRecord(response) || typeof response.started !== 'boolean') return invalidBridgeResponse();
+  if (response.started) {
+    if (typeof response.versionId !== 'string' || !UUID_PATTERN.test(response.versionId) ||
+      typeof response.motionToken !== 'string' || !UUID_PATTERN.test(response.motionToken)) {
+      return invalidBridgeResponse();
+    }
+    return { started: true, versionId: response.versionId, motionToken: response.motionToken };
+  }
+  return { started: false, outcome: typeof response.outcome === 'string' ? response.outcome : 'unknown' };
+}
+
+export async function getMotionInput(
+  env: Env,
+  versionId: string,
+  motionToken: string,
+): Promise<BridgeMotionInput> {
+  const response = await callPortraitBridge<unknown>(env, 'motion_get_input', { jobId: versionId, motionToken });
+  if (!isRecord(response) ||
+    typeof response.sourceKey !== 'string' || !response.sourceKey ||
+    typeof response.outputKey !== 'string' || !response.outputKey ||
+    typeof response.prompt !== 'string' || !response.prompt ||
+    typeof response.checkPrompt !== 'string' || !response.checkPrompt ||
+    !Number.isInteger(response.columns) || (response.columns as number) < 1 || (response.columns as number) > 4 ||
+    !Number.isInteger(response.rows) || (response.rows as number) < 1 || (response.rows as number) > 4 ||
+    typeof response.size !== 'string' || !/^\d{3,4}x\d{3,4}$/.test(response.size) ||
+    typeof response.model !== 'string' || !MOTION_MODELS.has(response.model) ||
+    typeof response.quality !== 'string' || !MOTION_LEVELS.has(response.quality) ||
+    typeof response.complexity !== 'string' || !MOTION_LEVELS.has(response.complexity)) {
+    return invalidBridgeResponse();
+  }
+  return {
+    sourceKey: response.sourceKey,
+    outputKey: response.outputKey,
+    prompt: response.prompt,
+    checkPrompt: response.checkPrompt,
+    columns: response.columns as number,
+    rows: response.rows as number,
+    size: response.size,
+    model: response.model as IllustrationModel,
+    quality: response.quality as BridgeMotionInput['quality'],
+    complexity: response.complexity as BridgeMotionInput['complexity'],
+  };
+}
+
+export async function recordMotionUsage(env: Env, payload: Record<string, unknown>): Promise<void> {
+  await callPortraitBridge<unknown>(env, 'motion_record_usage', payload);
+}
+
+export async function publishMotion(
+  env: Env,
+  versionId: string,
+  motionToken: string,
+  outputKey: string,
+  columns: number,
+  rows: number,
+): Promise<BridgeMotionPublishResponse> {
+  const response = await callPortraitBridge<unknown>(env, 'motion_publish', {
+    jobId: versionId, motionToken, outputKey, columns, rows,
+  });
+  if (!isRecord(response) || typeof response.published !== 'boolean' ||
+    (response.oldMotionKey !== undefined && !isNullableString(response.oldMotionKey))) {
+    return invalidBridgeResponse();
+  }
+  return { published: response.published, oldMotionKey: (response.oldMotionKey as string | null | undefined) ?? null };
+}
+
+export async function failMotion(
+  env: Env,
+  versionId: string,
+  motionToken: string,
+  errorCode: string,
+): Promise<BridgeMotionFailResponse> {
+  const response = await callPortraitBridge<unknown>(env, 'motion_fail', {
+    jobId: versionId, motionToken, errorCode: errorCode.slice(0, 100),
+  });
+  if (!isRecord(response) || typeof response.failed !== 'boolean') return invalidBridgeResponse();
+  return { failed: response.failed };
 }

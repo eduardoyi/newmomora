@@ -100,7 +100,7 @@ export async function handleDeleteFamilyMember(
 
   const { data: versions, error: versionsError } = await supabase
     .from('family_member_portrait_versions')
-    .select('profile_picture_key, illustrated_profile_key, generation_output_key')
+    .select('profile_picture_key, illustrated_profile_key, generation_output_key, motion_key')
     .eq('family_member_id', member.id);
   if (versionsError) {
     console.error('delete-family-member portrait lookup failed', member.id, versionsError.message);
@@ -127,6 +127,7 @@ export async function handleDeleteFamilyMember(
     for (const version of versions ?? []) {
       if (version.illustrated_profile_key) keys.push(version.illustrated_profile_key);
       if (version.generation_output_key) keys.push(version.generation_output_key);
+      if (version.motion_key) keys.push(version.motion_key);
       const prefix = version.profile_picture_key.slice(0, -'photo.jpg'.length);
       keys.push(...(await dependencies.listObjectKeys(prefix)));
     }

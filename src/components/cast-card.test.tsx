@@ -34,6 +34,14 @@ const incompleteMember = {
 };
 
 describe('CastCard', () => {
+  it('keeps the portrait still unless the surface opts into animation', () => {
+    const still = render(<CastCard member={member} />);
+    expect(still.UNSAFE_getByType('FamilyProfilePortraitPhoto' as never).props.animated).toBe(false);
+
+    const living = render(<CastCard animated member={member} />);
+    expect(living.UNSAFE_getByType('FamilyProfilePortraitPhoto' as never).props.animated).toBe(true);
+  });
+
   it('opens a ready portrait when its portrait area is pressed', () => {
     const onPortraitPress = jest.fn();
     const { getByTestId } = render(

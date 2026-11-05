@@ -3,6 +3,9 @@ import {
   signedPortraitMemoryRetriggerHeaders,
   type PortraitMemoryRetriggerRequest,
 } from '../_shared/portrait-memory-retrigger.ts';
+import { buildPortraitMotionPrompt, PORTRAIT_MOTION_CHECK_PROMPT } from '../_shared/prompts.ts';
+import { deleteObject } from '../_shared/r2.ts';
+import { buildPortraitMotionKey, parseStorageKey } from '../_shared/storage-keys.ts';
 import { createServiceClient } from '../_shared/supabase-admin.ts';
 import { serveWithSentry } from '../_shared/sentry.ts';
 
@@ -24,7 +27,12 @@ type BridgeOperation =
   | 'fail'
   | 'reconcile'
   | 'retrigger_memories'
-  | 'record_usage';
+  | 'record_usage'
+  | 'motion_start'
+  | 'motion_get_input'
+  | 'motion_record_usage'
+  | 'motion_publish'
+  | 'motion_fail';
 
 interface BridgeRequest {
   operation: BridgeOperation;
@@ -45,7 +53,14 @@ interface BridgeRequest {
   costBasis?: 'provider_usage' | 'unpriced';
   costIsComplete?: boolean;
   estimatedCostUsd?: number;
-  aiOperation?: 'image_generation';
+  aiOperation?: 'image_generation' | 'image' | 'check';
+  // Living-portrait (motion_*) operations. NOTE the request's `operation` field
+  // is the bridge operation, so motion_record_usage carries the call kind as
+  // `aiOperation: 'image' | 'check'` (like record_usage); the aiCallId prefix
+  // is the fallback and, when both are present, must agree.
+  motionToken?: string;
+  columns?: number;
+  rows?: number;
 }
 
 interface PortraitWorkflowJobInputRow {
@@ -76,12 +91,22 @@ interface TerminalJobRow {
 export interface WorkflowPortraitBridgeDependencies {
   createServiceClient: typeof createServiceClient;
   fetch: typeof fetch;
+  deleteObject: typeof deleteObject;
 }
 
 const DEFAULT_DEPENDENCIES: WorkflowPortraitBridgeDependencies = {
   createServiceClient,
   fetch: (...args: Parameters<typeof fetch>) => fetch(...args),
+  deleteObject,
 };
+
+// Living portraits: the sheet contract the Worker generates against.
+const MOTION_COLUMNS = 3;
+const MOTION_ROWS = 3;
+const MOTION_SIZE = '1536x1536';
+const MOTION_IMAGE_MODELS = new Set(['gpt-image-2.6-flare', 'gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5']);
+const MOTION_CHECK_MODEL = 'gpt-4o-mini';
+const MOTION_ATTEMPT_PATTERN = '[1-9][0-9]?';
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -390,6 +415,46 @@ async function retriggerAffectedMemories(
   return { requested: memoryIds.length, retryAfterMs: computeRetriggerRetryAfterMs(youngCreatedAts) };
 }
 
+/**
+ * Validates a motion_record_usage request and returns the ledger operation, or
+ * null when it is malformed. The call kind comes from the aiCallId prefix
+ * (`motion:<token>:<n>` image, `motion-check:<token>:<n>` vision check);
+ * `aiOperation` ('image' | 'check'), when sent, must agree with it.
+ */
+export function getPortraitMotionUsageOperation(
+  body: BridgeRequest,
+): 'portrait_motion' | 'portrait_motion_check' | null {
+  if (typeof body.motionToken !== 'string' || !UUID_PATTERN.test(body.motionToken) ||
+    typeof body.aiCallId !== 'string' || typeof body.success !== 'boolean') return null;
+  const token = body.motionToken.toLowerCase();
+  const imageCall = new RegExp(`^motion:${token}:${MOTION_ATTEMPT_PATTERN}$`).test(body.aiCallId.toLowerCase());
+  const checkCall = new RegExp(`^motion-check:${token}:${MOTION_ATTEMPT_PATTERN}$`).test(body.aiCallId.toLowerCase());
+  const kind = imageCall ? 'image' : checkCall ? 'check' : null;
+  if (!kind || (body.aiOperation !== undefined && body.aiOperation !== kind)) return null;
+  if (typeof body.model !== 'string' ||
+    (kind === 'image' ? !MOTION_IMAGE_MODELS.has(body.model) : body.model !== MOTION_CHECK_MODEL)) return null;
+  if ((body.billingStatus !== undefined && body.billingStatus !== 'known' && body.billingStatus !== 'unknown') ||
+    (body.pricingVersion !== undefined && (typeof body.pricingVersion !== 'string' || body.pricingVersion.length > 100)) ||
+    (body.costBasis !== undefined && body.costBasis !== 'provider_usage' && body.costBasis !== 'unpriced') ||
+    (body.costIsComplete !== undefined && typeof body.costIsComplete !== 'boolean') ||
+    (body.estimatedCostUsd !== undefined && body.estimatedCostUsd !== null && !isNonNegativeNumber(body.estimatedCostUsd))) {
+    return null;
+  }
+  return kind === 'image' ? 'portrait_motion' : 'portrait_motion_check';
+}
+
+function motionProviderUsage(body: BridgeRequest): Record<string, number | string> {
+  const usage = allowlistedUsage(body.usage);
+  return {
+    ...(body.provider === 'primary' || body.provider === 'fallback' ? { provider: body.provider } : {}),
+    ...(usage?.inputTextTokens !== undefined ? { input_text_tokens: usage.inputTextTokens } : {}),
+    ...(usage?.inputImageTokens !== undefined ? { input_image_tokens: usage.inputImageTokens } : {}),
+    ...(usage?.inputCachedTokens !== undefined ? { cached_input_tokens: usage.inputCachedTokens } : {}),
+    ...(usage?.outputTextTokens !== undefined ? { output_text_tokens: usage.outputTextTokens } : {}),
+    ...(usage?.outputImageTokens !== undefined ? { output_image_tokens: usage.outputImageTokens } : {}),
+  };
+}
+
 export async function handleWorkflowPortraitBridge(
   req: Request,
   dependencyOverrides: Partial<WorkflowPortraitBridgeDependencies> = {},
@@ -410,6 +475,7 @@ export async function handleWorkflowPortraitBridge(
   const operations = new Set<BridgeOperation>([
     'get_input', 'reserve_attempt', 'authorize_upload', 'record_upload_complete',
     'publish', 'fail', 'reconcile', 'retrigger_memories', 'record_usage',
+    'motion_start', 'motion_get_input', 'motion_record_usage', 'motion_publish', 'motion_fail',
   ]);
   if (!body || typeof body.jobId !== 'string' || !UUID_PATTERN.test(body.jobId) ||
     !operations.has(body.operation)) {
@@ -654,6 +720,133 @@ export async function handleWorkflowPortraitBridge(
         // `retryAfterMs` is additive: non-null only when pending dependent
         // memories were younger than the retrigger floor. Old workers ignore it.
         return jsonResponse({ requested, retryAfterMs });
+      }
+      case 'motion_start': {
+        // jobId is the portrait JOB id; resolve its version, then claim motion.
+        const { data: job, error } = await supabase
+          .from('portrait_generation_jobs')
+          .select('portrait_version_id')
+          .eq('id', body.jobId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!job) return errorResponse('Job not found', 404, 'JOB_NOT_FOUND');
+        const { data, error: claimError } = await supabase.rpc('claim_portrait_motion', {
+          p_version_id: job.portrait_version_id,
+          p_force: false,
+        });
+        if (claimError) throw claimError;
+        const claim = (Array.isArray(data) ? data[0] : data) as {
+          outcome?: string;
+          motion_token?: string | null;
+          stale_motion_key?: string | null;
+        } | undefined;
+        if (claim?.outcome !== 'claimed' || typeof claim.motion_token !== 'string') {
+          return jsonResponse({ started: false, outcome: claim?.outcome ?? 'not_eligible' });
+        }
+        // Best-effort: an orphaned sheet is harmless (never referenced), a
+        // failed delete must not fail the claim that already happened.
+        const staleKey = claim.stale_motion_key;
+        if (typeof staleKey === 'string' &&
+          parseStorageKey(staleKey)?.kind === 'portrait_version_motion') {
+          try {
+            await dependencies.deleteObject(staleKey);
+          } catch {
+            console.error('workflow portrait bridge stale motion delete failed', job.portrait_version_id);
+          }
+        }
+        return jsonResponse({
+          started: true,
+          versionId: job.portrait_version_id,
+          motionToken: claim.motion_token,
+        });
+      }
+      case 'motion_get_input': {
+        if (typeof body.motionToken !== 'string' || !UUID_PATTERN.test(body.motionToken)) {
+          return errorResponse('motionToken is required', 400, 'validation_error');
+        }
+        const { data: version, error } = await supabase
+          .from('family_member_portrait_versions')
+          .select('id, family_member_id, profile_picture_key, illustrated_profile_key, deletion_token, motion_status, motion_token, motion_source_key')
+          .eq('id', body.jobId)
+          .maybeSingle();
+        if (error) throw error;
+        const owner = version?.profile_picture_key?.split('/')[0];
+        if (!version || !owner || version.motion_status !== 'pending' ||
+          version.motion_token !== body.motionToken.toLowerCase() || version.deletion_token ||
+          !version.illustrated_profile_key ||
+          version.illustrated_profile_key !== version.motion_source_key) {
+          return errorResponse('Motion claim is no longer current', 409, 'MOTION_SUPERSEDED');
+        }
+        return jsonResponse({
+          sourceKey: version.motion_source_key,
+          outputKey: buildPortraitMotionKey(owner, version.family_member_id, version.id, version.motion_token),
+          prompt: buildPortraitMotionPrompt(MOTION_COLUMNS, MOTION_ROWS),
+          checkPrompt: PORTRAIT_MOTION_CHECK_PROMPT,
+          columns: MOTION_COLUMNS,
+          rows: MOTION_ROWS,
+          size: MOTION_SIZE,
+          model: 'gpt-image-2.6-flare',
+          quality: 'medium',
+          complexity: 'medium',
+        });
+      }
+      case 'motion_record_usage': {
+        const ledgerOperation = getPortraitMotionUsageOperation(body);
+        if (!ledgerOperation) return errorResponse('Invalid usage event', 400, 'validation_error');
+        const { data: version, error: versionError } = await supabase
+          .from('family_member_portrait_versions')
+          .select('family_id, user_id')
+          .eq('id', body.jobId)
+          .maybeSingle();
+        if (versionError) throw versionError;
+        // A deleted version has no family to attribute the (telemetry-only) cost to.
+        if (!version) return jsonResponse({ recorded: false });
+        const { error } = await supabase.rpc('record_ai_usage_event_detailed', {
+          p_ai_call_id: body.aiCallId, p_usage_request_id: null, p_family_id: version.family_id, p_actor_user_id: version.user_id,
+          p_operation: ledgerOperation, p_model: body.model, p_success: body.success, p_provider_usage: motionProviderUsage(body),
+          p_estimated_cost_usd: body.estimatedCostUsd ?? null, p_cost_basis: body.costBasis ?? 'unpriced',
+          p_billing_status: body.billingStatus ?? 'unknown', p_cost_is_complete: body.costIsComplete ?? false,
+          p_pricing_version: body.pricingVersion ?? null,
+        });
+        if (error) throw error;
+        return jsonResponse({ recorded: true });
+      }
+      case 'motion_publish': {
+        if (typeof body.motionToken !== 'string' || !UUID_PATTERN.test(body.motionToken) ||
+          typeof body.outputKey !== 'string' || !body.outputKey || body.outputKey.length > 512 ||
+          !Number.isInteger(body.columns) || body.columns! < 1 || body.columns! > 4 ||
+          !Number.isInteger(body.rows) || body.rows! < 1 || body.rows! > 4) {
+          return errorResponse('motionToken, outputKey, columns and rows are required', 400, 'validation_error');
+        }
+        const { data, error } = await supabase.rpc('publish_portrait_motion', {
+          p_version_id: body.jobId,
+          p_motion_token: body.motionToken,
+          p_output_key: body.outputKey,
+          p_columns: body.columns,
+          p_rows: body.rows,
+        });
+        if (error) throw error;
+        const outcome = (Array.isArray(data) ? data[0] : data) as {
+          published?: boolean;
+          old_motion_key?: string | null;
+        } | undefined;
+        return jsonResponse({
+          published: outcome?.published === true,
+          oldMotionKey: outcome?.published === true ? outcome.old_motion_key ?? null : null,
+        });
+      }
+      case 'motion_fail': {
+        if (typeof body.motionToken !== 'string' || !UUID_PATTERN.test(body.motionToken) ||
+          (body.errorCode !== undefined && (typeof body.errorCode !== 'string' || body.errorCode.length > 100))) {
+          return errorResponse('Invalid motion failure', 400, 'validation_error');
+        }
+        const { data, error } = await supabase.rpc('fail_portrait_motion', {
+          p_version_id: body.jobId,
+          p_motion_token: body.motionToken,
+          p_error_code: body.errorCode ?? 'MOTION_FAILED',
+        });
+        if (error) throw error;
+        return jsonResponse({ failed: data === true });
       }
     }
   } catch {

@@ -591,3 +591,310 @@ Deno.test('portrait bridge keeps nonce replay rejection and does not wait for th
     assertEquals(hanging.calls.sweeps, 1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Living portraits: motion_* operations (docs/plans/living-portraits.md)
+// ---------------------------------------------------------------------------
+
+const MOTION_VERSION_ID = '66666666-6666-4666-8666-666666666666';
+const MOTION_MEMBER_ID = '77777777-7777-4777-8777-777777777777';
+const MOTION_OWNER_ID = '55555555-5555-4555-8555-555555555555';
+const MOTION_TOKEN = '88888888-8888-4888-8888-888888888888';
+const MOTION_OUTPUT_KEY =
+  `${MOTION_OWNER_ID}/family/${MOTION_MEMBER_ID}/portraits/${MOTION_VERSION_ID}/motion/${MOTION_TOKEN}.webp`;
+const MOTION_STALE_KEY =
+  `${MOTION_OWNER_ID}/family/${MOTION_MEMBER_ID}/portraits/${MOTION_VERSION_ID}/motion/99999999-9999-4999-8999-999999999999.webp`;
+
+function createMotionClient(input: {
+  claimRows?: Array<Record<string, unknown>>;
+  versionOverrides?: Record<string, unknown>;
+  noVersion?: boolean;
+  noJob?: boolean;
+  publishRows?: Array<Record<string, unknown>>;
+  failResult?: boolean;
+} = {}) {
+  const calls = { rpc: [] as Array<{ name: string; args: Record<string, unknown> }> };
+  const version = {
+    id: MOTION_VERSION_ID,
+    family_id: '44444444-4444-4444-8444-444444444444',
+    user_id: MOTION_OWNER_ID,
+    family_member_id: MOTION_MEMBER_ID,
+    profile_picture_key: `${MOTION_OWNER_ID}/family/${MOTION_MEMBER_ID}/portraits/${MOTION_VERSION_ID}/photo.jpg`,
+    illustrated_profile_key: 'still/current.webp',
+    deletion_token: null,
+    motion_status: 'pending',
+    motion_token: MOTION_TOKEN,
+    motion_source_key: 'still/current.webp',
+    ...input.versionOverrides,
+  };
+  return {
+    calls,
+    client: {
+      from(table: string) {
+        if (table === 'portrait_generation_workflow_bridge_nonces') {
+          return {
+            insert: async () => ({ data: null, error: null }),
+            delete: () => ({ lt: async () => ({ error: null }) }),
+          };
+        }
+        const select = {
+          eq: () => select,
+          maybeSingle: async () => {
+            if (table === 'portrait_generation_jobs') {
+              return { data: input.noJob ? null : { portrait_version_id: MOTION_VERSION_ID }, error: null };
+            }
+            if (table === 'family_member_portrait_versions') {
+              return { data: input.noVersion ? null : version, error: null };
+            }
+            throw new Error(`Unexpected table ${table}`);
+          },
+        };
+        return { select: () => select };
+      },
+      rpc: async (name: string, args: Record<string, unknown> = {}) => {
+        calls.rpc.push({ name, args });
+        if (name === 'claim_portrait_motion') {
+          return { data: input.claimRows ?? [{ outcome: 'claimed', motion_token: MOTION_TOKEN, stale_motion_key: null }], error: null };
+        }
+        if (name === 'publish_portrait_motion') {
+          return { data: input.publishRows ?? [{ published: true, old_motion_key: null }], error: null };
+        }
+        if (name === 'fail_portrait_motion') return { data: input.failResult ?? true, error: null };
+        if (name === 'record_ai_usage_event_detailed') return { data: true, error: null };
+        throw new Error(`Unexpected RPC ${name}`);
+      },
+    },
+  };
+}
+
+async function motionCall(
+  body: Record<string, unknown>,
+  client: ReturnType<typeof createMotionClient>,
+  extra: { deleteObject?: (key: string) => Promise<void> } = {},
+): Promise<Response> {
+  let response: Response | undefined;
+  await withBridgeEnv(async () => {
+    response = await handleWorkflowPortraitBridge(
+      await signedRequest(body, crypto.randomUUID()),
+      {
+        createServiceClient: () => client.client as never,
+        deleteObject: extra.deleteObject ?? (async () => {}),
+      },
+    );
+  });
+  return response!;
+}
+
+Deno.test('motion_start claims motion for the job\'s version and returns the token', async () => {
+  const client = createMotionClient();
+  const response = await motionCall({ operation: 'motion_start', jobId: JOB_ID }, client);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { started: true, versionId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN });
+  assertEquals(client.calls.rpc, [{ name: 'claim_portrait_motion', args: { p_version_id: MOTION_VERSION_ID, p_force: false } }]);
+});
+
+Deno.test('motion_start reports non-claimed outcomes without starting', async () => {
+  for (const outcome of ['not_eligible', 'already_ready', 'in_flight', 'already_failed']) {
+    const client = createMotionClient({ claimRows: [{ outcome, motion_token: null, stale_motion_key: null }] });
+    const response = await motionCall({ operation: 'motion_start', jobId: JOB_ID }, client);
+    assertEquals(await response.json(), { started: false, outcome });
+  }
+});
+
+Deno.test('motion_start 404s for an unknown portrait job', async () => {
+  const client = createMotionClient({ noJob: true });
+  const response = await motionCall({ operation: 'motion_start', jobId: JOB_ID }, client);
+  assertEquals(response.status, 404);
+  assertEquals(client.calls.rpc.length, 0);
+});
+
+Deno.test('motion_start deletes the stale sheet best-effort and survives a delete failure', async () => {
+  const deleted: string[] = [];
+  const claimRows = [{ outcome: 'claimed', motion_token: MOTION_TOKEN, stale_motion_key: MOTION_STALE_KEY }];
+  const ok = await motionCall(
+    { operation: 'motion_start', jobId: JOB_ID },
+    createMotionClient({ claimRows }),
+    { deleteObject: async (key) => { deleted.push(key); } },
+  );
+  assertEquals((await ok.json()).started, true);
+  assertEquals(deleted, [MOTION_STALE_KEY]);
+
+  const failing = await motionCall(
+    { operation: 'motion_start', jobId: JOB_ID },
+    createMotionClient({ claimRows }),
+    { deleteObject: async () => { throw new Error('r2 down'); } },
+  );
+  assertEquals(failing.status, 200);
+  assertEquals((await failing.json()).started, true);
+});
+
+Deno.test('motion_start never deletes a stale key that is not a motion sheet', async () => {
+  const deleted: string[] = [];
+  const response = await motionCall(
+    { operation: 'motion_start', jobId: JOB_ID },
+    createMotionClient({ claimRows: [{ outcome: 'claimed', motion_token: MOTION_TOKEN, stale_motion_key: 'still/current.webp' }] }),
+    { deleteObject: async (key) => { deleted.push(key); } },
+  );
+  assertEquals(response.status, 200);
+  assertEquals(deleted, []);
+});
+
+Deno.test('motion_get_input returns the sheet contract for the current pending claim', async () => {
+  const response = await motionCall(
+    { operation: 'motion_get_input', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN },
+    createMotionClient(),
+  );
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body.sourceKey, 'still/current.webp');
+  assertEquals(body.outputKey, MOTION_OUTPUT_KEY);
+  assertEquals(
+    [body.columns, body.rows, body.size, body.model, body.quality, body.complexity],
+    [3, 3, '1536x1536', 'gpt-image-2.6-flare', 'medium', 'medium'],
+  );
+  assertEquals(body.prompt.includes('Exactly 9 sequential frames arranged in a precise 3-column by 3-row grid'), true);
+  assertEquals(body.prompt.includes('the ninth frame transitions smoothly'), true);
+  assertEquals(body.checkPrompt.includes('same_person'), true);
+});
+
+Deno.test('motion_get_input is 409 MOTION_SUPERSEDED unless the token is the current pending claim', async () => {
+  const cases: Array<Record<string, unknown>> = [
+    { motion_token: '99999999-9999-4999-8999-999999999999' },
+    { motion_status: 'ready' },
+    { motion_status: 'failed' },
+    { motion_source_key: 'still/older.webp' },
+    { deletion_token: '11111111-1111-4111-8111-111111111111' },
+  ];
+  for (const versionOverrides of cases) {
+    const response = await motionCall(
+      { operation: 'motion_get_input', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN },
+      createMotionClient({ versionOverrides }),
+    );
+    assertEquals(response.status, 409);
+    assertEquals((await response.json()).code, 'MOTION_SUPERSEDED');
+  }
+  const missing = await motionCall(
+    { operation: 'motion_get_input', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN },
+    createMotionClient({ noVersion: true }),
+  );
+  assertEquals(missing.status, 409);
+  const invalid = await motionCall(
+    { operation: 'motion_get_input', jobId: MOTION_VERSION_ID, motionToken: 'not-a-uuid' },
+    createMotionClient(),
+  );
+  assertEquals(invalid.status, 400);
+});
+
+Deno.test('motion_record_usage writes telemetry-only operations attributed to the version family', async () => {
+  const base = {
+    jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, success: true,
+    billingStatus: 'known', costBasis: 'provider_usage', costIsComplete: true,
+    pricingVersion: 'gpt-image-2.6-2026-11', estimatedCostUsd: 0.072,
+    usage: { inputTextTokens: 300, inputImageTokens: 991, outputImageTokens: 2073, ignored: 'x' },
+  };
+  const image = createMotionClient();
+  const imageResponse = await motionCall(
+    { ...base, operation: 'motion_record_usage', aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', aiOperation: 'image' },
+    image,
+  );
+  assertEquals(await imageResponse.json(), { recorded: true });
+  assertEquals(image.calls.rpc.length, 1);
+  const imageArgs = image.calls.rpc[0].args;
+  assertEquals(image.calls.rpc[0].name, 'record_ai_usage_event_detailed');
+  assertEquals(imageArgs.p_operation, 'portrait_motion');
+  assertEquals(imageArgs.p_family_id, '44444444-4444-4444-8444-444444444444');
+  assertEquals(imageArgs.p_actor_user_id, MOTION_OWNER_ID);
+  assertEquals(imageArgs.p_usage_request_id, null);
+  assertEquals(imageArgs.p_provider_usage, { input_text_tokens: 300, input_image_tokens: 991, output_image_tokens: 2073 });
+  assertEquals(imageArgs.p_estimated_cost_usd, 0.072);
+
+  const check = createMotionClient();
+  const checkResponse = await motionCall(
+    { ...base, operation: 'motion_record_usage', aiCallId: `motion-check:${MOTION_TOKEN}:2`, model: 'gpt-4o-mini', estimatedCostUsd: 0.001, usage: { inputTextTokens: 900, outputTextTokens: 20 } },
+    check,
+  );
+  assertEquals(await checkResponse.json(), { recorded: true });
+  assertEquals(check.calls.rpc[0].args.p_operation, 'portrait_motion_check');
+});
+
+Deno.test('motion_record_usage rejects mismatched call ids, kinds and models', async () => {
+  const base = { operation: 'motion_record_usage', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, success: true };
+  const bad: Array<Record<string, unknown>> = [
+    { aiCallId: `motion:${'99999999-9999-4999-8999-999999999999'}:1`, model: 'gpt-image-2.6-flare' },
+    { aiCallId: `portrait:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare' },
+    { aiCallId: `motion:${MOTION_TOKEN}:0`, model: 'gpt-image-2.6-flare' },
+    { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-4o-mini' },
+    { aiCallId: `motion-check:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare' },
+    { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', aiOperation: 'check' },
+    { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', estimatedCostUsd: -1 },
+    { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', success: 'yes' },
+  ];
+  for (const extra of bad) {
+    const client = createMotionClient();
+    const response = await motionCall({ ...base, ...extra }, client);
+    assertEquals(response.status, 400, JSON.stringify(extra));
+    assertEquals(client.calls.rpc.length, 0);
+  }
+});
+
+Deno.test('motion_record_usage is a no-op for a deleted version', async () => {
+  const client = createMotionClient({ noVersion: true });
+  const response = await motionCall(
+    { operation: 'motion_record_usage', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, success: true, aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare' },
+    client,
+  );
+  assertEquals(await response.json(), { recorded: false });
+  assertEquals(client.calls.rpc.length, 0);
+});
+
+Deno.test('motion_publish passes the CAS arguments through and maps the outcome', async () => {
+  const body = { operation: 'motion_publish', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, outputKey: MOTION_OUTPUT_KEY, columns: 3, rows: 3 };
+  const published = createMotionClient({ publishRows: [{ published: true, old_motion_key: 'old/sheet.webp' }] });
+  const response = await motionCall(body, published);
+  assertEquals(await response.json(), { published: true, oldMotionKey: 'old/sheet.webp' });
+  assertEquals(published.calls.rpc[0], {
+    name: 'publish_portrait_motion',
+    args: {
+      p_version_id: MOTION_VERSION_ID, p_motion_token: MOTION_TOKEN, p_output_key: MOTION_OUTPUT_KEY,
+      p_columns: 3, p_rows: 3,
+    },
+  });
+  const superseded = createMotionClient({ publishRows: [{ published: false, old_motion_key: null }] });
+  assertEquals(await (await motionCall(body, superseded)).json(), { published: false, oldMotionKey: null });
+});
+
+Deno.test('motion_publish validates the token, key and grid before touching the database', async () => {
+  const base = { operation: 'motion_publish', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, outputKey: MOTION_OUTPUT_KEY, columns: 3, rows: 3 };
+  const bad: Array<Record<string, unknown>> = [
+    { motionToken: 'nope' }, { outputKey: '' }, { outputKey: 7 },
+    { columns: 0 }, { columns: 5 }, { rows: 2.5 }, { rows: undefined },
+  ];
+  for (const extra of bad) {
+    const client = createMotionClient();
+    const response = await motionCall({ ...base, ...extra }, client);
+    assertEquals(response.status, 400, JSON.stringify(extra));
+    assertEquals(client.calls.rpc.length, 0);
+  }
+});
+
+Deno.test('motion_fail maps the RPC result and validates the error code', async () => {
+  const body = { operation: 'motion_fail', jobId: MOTION_VERSION_ID, motionToken: MOTION_TOKEN, errorCode: 'QA_FAILED' };
+  const failed = createMotionClient();
+  assertEquals(await (await motionCall(body, failed)).json(), { failed: true });
+  assertEquals(failed.calls.rpc[0], {
+    name: 'fail_portrait_motion',
+    args: { p_version_id: MOTION_VERSION_ID, p_motion_token: MOTION_TOKEN, p_error_code: 'QA_FAILED' },
+  });
+  assertEquals(await (await motionCall(body, createMotionClient({ failResult: false }))).json(), { failed: false });
+  const defaulted = createMotionClient();
+  await motionCall({ ...body, errorCode: undefined }, defaulted);
+  assertEquals(defaulted.calls.rpc[0].args.p_error_code, 'MOTION_FAILED');
+  const tooLong = createMotionClient();
+  assertEquals((await motionCall({ ...body, errorCode: 'x'.repeat(101) }, tooLong)).status, 400);
+  assertEquals((await motionCall({ ...body, motionToken: 'nope' }, createMotionClient())).status, 400);
+});
+
+Deno.test('portrait bridge keeps rejecting unknown operations after adding motion operations', async () => {
+  const response = await motionCall({ operation: 'motion_destroy', jobId: MOTION_VERSION_ID }, createMotionClient());
+  assertEquals(response.status, 400);
+});

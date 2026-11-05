@@ -1,4 +1,5 @@
-import { fireEvent, render } from '@testing-library/react-native';
+import { act, fireEvent, render } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -104,6 +105,7 @@ const failedVersion = {
 describe('family member portrait entry', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
     mockedUseFamily.mockReturnValue({ role: 'manager' } as ReturnType<typeof useFamily>);
     mockedUseFamilyMembers.mockReturnValue({
       members: [{
@@ -171,6 +173,43 @@ describe('family member portrait entry', () => {
 
     fireEvent.press(getByTestId('family-member-portrait-history'));
     expect(mockPush).toHaveBeenCalledWith('/(app)/family/member-1/portraits');
+  });
+
+  it('animates the header portrait only when the sheet was made from the current still', async () => {
+    const withMotion = {
+      ...currentVersion,
+      motion_status: 'ready' as const,
+      motion_key: 'version/current-motion.webp',
+      motion_source_key: currentVersion.illustrated_profile_key,
+      motion_columns: 3,
+      motion_rows: 3,
+    };
+    const base = mockedUseFamilyMembers();
+    const renderProfile = (version: typeof withMotion) => {
+      mockedUseFamilyMembers.mockReturnValue({
+        ...base,
+        members: [{ ...base.members[0], resolvedPortraitVersion: version }],
+      } as ReturnType<typeof useFamilyMembers>);
+      return render(
+        <SafeAreaProvider
+          initialMetrics={{
+            frame: { height: 844, width: 390, x: 0, y: 0 },
+            insets: { bottom: 34, left: 0, right: 0, top: 47 },
+          }}
+        >
+          <ViewFamilyMemberScreen />
+        </SafeAreaProvider>,
+      );
+    };
+
+    const living = renderProfile(withMotion);
+    await act(async () => {});
+    expect(living.getByTestId('living-portrait-overlay', { includeHiddenElements: true })).toBeTruthy();
+    living.unmount();
+
+    const stale = renderProfile({ ...withMotion, motion_source_key: 'version/older.webp' });
+    await act(async () => {});
+    expect(stale.queryByTestId('living-portrait-overlay', { includeHiddenElements: true })).toBeNull();
   });
 
   it('shows a persistent "See {name}\'s keepsakes" row that opens that child\'s keepsakes (docs/plans/timeline-calendar-keepsakes.md C5)', () => {

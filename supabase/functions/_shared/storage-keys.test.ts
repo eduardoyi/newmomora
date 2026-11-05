@@ -2,6 +2,7 @@ import { assertEquals } from 'jsr:@std/assert@1';
 import {
   buildFamilyPhotoKey,
   buildMemoryIllustrationKey,
+  buildPortraitMotionKey,
   buildPortraitVersionAttemptKey,
   buildPortraitVersionPhotoKey,
   buildMemoryMediaAssetKey,
@@ -236,4 +237,32 @@ Deno.test('isDeletableUserObjectKey accepts known user object patterns', () => {
     true,
   );
   assertEquals(isDeletableUserObjectKey(`${USER_ID}/unknown/path.jpg`, USER_ID), false);
+});
+
+// Living portraits (docs/plans/living-portraits.md): the frame sheet lives under
+// the version prefix and must authorize via the portrait-version referenced-key
+// check (get-media-url) and be version-managed (delete-storage-object).
+Deno.test('buildPortraitMotionKey and parseStorageKey round-trip a living-portrait sheet', () => {
+  const key = buildPortraitMotionKey(USER_ID, MEMBER_ID, VERSION_ID, GENERATION_ID);
+  assertEquals(key, `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/motion/${GENERATION_ID}.webp`);
+  assertEquals(parseStorageKey(key), {
+    kind: 'portrait_version_motion',
+    ownerUserId: USER_ID,
+    entityId: MEMBER_ID,
+    portraitVersionId: VERSION_ID,
+    motionToken: GENERATION_ID,
+  });
+});
+
+Deno.test('parseStorageKey rejects malformed living-portrait sheet keys', () => {
+  const base = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/motion`;
+  assertEquals(parseStorageKey(`${base}/not-a-uuid.webp`), null);
+  assertEquals(parseStorageKey(`${base}/${GENERATION_ID}.jpg`), null);
+  assertEquals(parseStorageKey(`${base}/${GENERATION_ID}.webp.bak`), null);
+  assertEquals(parseStorageKey(`${USER_ID}/family/${MEMBER_ID}/portraits/not-a-uuid/motion/${GENERATION_ID}.webp`), null);
+});
+
+Deno.test('a living-portrait sheet is never an uploadable key', () => {
+  const key = buildPortraitMotionKey(USER_ID, MEMBER_ID, VERSION_ID, GENERATION_ID);
+  assertEquals(isAllowedUploadKey(key, USER_ID), false);
 });

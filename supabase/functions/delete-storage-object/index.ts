@@ -63,7 +63,9 @@ export async function handleDeleteStorageObject(req: Request): Promise<Response>
   const referenced = await resolveReferencedStorageKeys(serviceClient, [resolved]);
   const isVersionSource = resolved.parsed?.kind === 'portrait_version_photo';
   const isVersionManaged =
-    isVersionSource || resolved.parsed?.kind === 'portrait_version_portrait';
+    isVersionSource ||
+    resolved.parsed?.kind === 'portrait_version_portrait' ||
+    resolved.parsed?.kind === 'portrait_version_motion';
 
   // Version rows are deleted only through delete-portrait-version, which
   // removes the complete prefix and preserves last-usable invariants. This

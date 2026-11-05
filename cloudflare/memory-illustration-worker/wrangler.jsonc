@@ -60,6 +60,11 @@
       "class_name": "PortraitGenerationWorkflow"
     },
     {
+      "binding": "PORTRAIT_MOTION_WORKFLOW",
+      "name": "momora-portrait-motion",
+      "class_name": "PortraitMotionWorkflow"
+    },
+    {
       "binding": "GALLERY_IMPORT_WORKFLOW",
       "name": "momora-gallery-import",
       "class_name": "GalleryImportWorkflow"
@@ -119,6 +124,11 @@
           "binding": "PORTRAIT_GENERATION_WORKFLOW",
           "name": "momora-portrait-generation-staging",
           "class_name": "PortraitGenerationWorkflow"
+        },
+        {
+          "binding": "PORTRAIT_MOTION_WORKFLOW",
+          "name": "momora-portrait-motion-staging",
+          "class_name": "PortraitMotionWorkflow"
         },
         {
           "binding": "GALLERY_IMPORT_WORKFLOW",

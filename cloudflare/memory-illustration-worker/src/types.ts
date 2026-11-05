@@ -18,6 +18,11 @@ export type BridgeOperation =
   | 'reserve_gallery_attempt'
   | 'record_gallery_usage'
   | 'mark_gallery_attempt_ambiguous'
+  | 'motion_start'
+  | 'motion_get_input'
+  | 'motion_record_usage'
+  | 'motion_publish'
+  | 'motion_fail'
   | 'publish_gallery_cluster_result'
   | 'fail_gallery_chunk'
   | 'fail_gallery_cluster'
@@ -295,4 +300,51 @@ export interface BridgePortraitFailResponse {
 export interface PortraitLoadedReferences {
   style: LoadedReference;
   source: LoadedReference;
+}
+
+/**
+ * Living-portrait motion. The dispatch payload carries only opaque ids; the
+ * still's key, prompts and output key come from the bridge inside the
+ * sensitive generation step.
+ */
+export interface PortraitMotionDispatchPayload {
+  versionId: string;
+  motionToken: string;
+}
+
+export type BridgeMotionStartResponse =
+  | { started: true; versionId: string; motionToken: string }
+  | { started: false; outcome: string };
+
+export interface BridgeMotionInput {
+  sourceKey: string;
+  outputKey: string;
+  prompt: string;
+  checkPrompt: string;
+  columns: number;
+  rows: number;
+  size: string;
+  model: IllustrationModel;
+  quality: 'low' | 'medium' | 'high';
+  complexity: 'low' | 'medium' | 'high';
+}
+
+export interface BridgeMotionPublishResponse {
+  published: boolean;
+  oldMotionKey: string | null;
+}
+
+export interface BridgeMotionFailResponse {
+  failed: boolean;
+}
+
+export interface MotionGenerationResult {
+  outputKey: string;
+  columns: number;
+  rows: number;
+}
+
+export interface MotionCheckResult {
+  passed: boolean;
+  usage: VisionUsage | null;
 }

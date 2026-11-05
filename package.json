@@ -35,6 +35,7 @@
     "backfill:video-posters": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-video-posters.ts",
     "backfill:share-cards": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-share-cards.ts",
     "backfill:portrait-reencode": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-portrait-reencode.ts",
+    "backfill:portrait-motion": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-portrait-motion.ts",
     "backfill:audio-waveforms": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-audio-waveforms.ts",
     "backfill:memory-analysis": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/backfill-memory-analysis.ts",
     "reset:gallery-import": "npx --yes deno run --allow-all --node-modules-dir=none --env-file=supabase/.env.local --env-file=.env.local supabase/scripts/reset-gallery-import.ts",

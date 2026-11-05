@@ -105,6 +105,22 @@ function stubFamilyMembers(members: FamilyMember[]) {
   } as unknown as ReturnType<typeof useFamilyMembers>);
 }
 
+describe('FamilyScreen living portraits', () => {
+  it('asks every cast card portrait to animate', () => {
+    mockedUseContentSafety.mockReturnValue(
+      contentSafetyStub as unknown as ReturnType<typeof useContentSafety>,
+    );
+    mockedUseFamily.mockReturnValue({ role: 'owner' } as ReturnType<typeof useFamily>);
+    stubFamilyMembers([completeKid]);
+
+    const { UNSAFE_getAllByType } = renderScreen();
+    const photos = UNSAFE_getAllByType('FamilyProfilePortraitPhoto' as never);
+
+    expect(photos.length).toBeGreaterThan(0);
+    for (const photo of photos) expect(photo.props.animated).toBe(true);
+  });
+});
+
 describe('FamilyScreen routing for incomplete profiles', () => {
   beforeEach(() => {
     jest.clearAllMocks();

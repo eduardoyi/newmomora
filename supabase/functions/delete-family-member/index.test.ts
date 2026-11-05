@@ -27,6 +27,7 @@ function dependencies(
     storageError?: boolean;
     fenceCalls?: Array<{ name: string; args: Record<string, unknown> }>;
     filmPrefixes?: string[];
+    motionKey?: string;
   } = {},
 ) {
   const member = {
@@ -65,7 +66,7 @@ function dependencies(
         select: () => ({
           eq: async () => options.portraitLookupError
             ? ({ data: null, error: { message: 'lookup failed' } })
-            : ({ data: [{ profile_picture_key: VERSION_PHOTO }], error: null }),
+            : ({ data: [{ profile_picture_key: VERSION_PHOTO, motion_key: options.motionKey ?? null }], error: null }),
         }),
       };
     },
@@ -125,6 +126,18 @@ Deno.test('delete-family-member removes legacy and every version-prefix object b
     `delete:${prefix}portrait/55555555-5555-4555-8555-555555555555.webp`,
     'delete-row',
   ]);
+});
+
+Deno.test('delete-family-member deletes a version\'s living-portrait sheet by key before the row', async () => {
+  const calls: string[] = [];
+  const motionKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/motion/66666666-6666-4666-8666-666666666666.webp`;
+  const response = await handleDeleteFamilyMember(
+    request(),
+    dependencies('manager', calls, { motionKey }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes(`delete:${motionKey}`), true);
+  assertEquals(calls.indexOf(`delete:${motionKey}`) < calls.indexOf('delete-row'), true);
 });
 
 Deno.test('delete-family-member keeps the row and storage when portrait enumeration fails', async () => {

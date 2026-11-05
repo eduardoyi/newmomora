@@ -1274,6 +1274,15 @@ export type Database = {
           id: string
           illustrated_profile_key: string | null
           illustrated_profile_status: string
+          motion_attempts: number
+          motion_columns: number | null
+          motion_key: string | null
+          motion_rows: number | null
+          motion_source_key: string | null
+          motion_started_at: string | null
+          motion_status: string | null
+          motion_token: string | null
+          motion_updated_at: string | null
           profile_picture_key: string
           reference_date: string | null
           updated_at: string
@@ -1300,6 +1309,15 @@ export type Database = {
           id: string
           illustrated_profile_key?: string | null
           illustrated_profile_status?: string
+          motion_attempts?: number
+          motion_columns?: number | null
+          motion_key?: string | null
+          motion_rows?: number | null
+          motion_source_key?: string | null
+          motion_started_at?: string | null
+          motion_status?: string | null
+          motion_token?: string | null
+          motion_updated_at?: string | null
           profile_picture_key: string
           reference_date?: string | null
           updated_at?: string
@@ -1326,6 +1344,15 @@ export type Database = {
           id?: string
           illustrated_profile_key?: string | null
           illustrated_profile_status?: string
+          motion_attempts?: number
+          motion_columns?: number | null
+          motion_key?: string | null
+          motion_rows?: number | null
+          motion_source_key?: string | null
+          motion_started_at?: string | null
+          motion_status?: string | null
+          motion_token?: string | null
+          motion_updated_at?: string | null
           profile_picture_key?: string
           reference_date?: string | null
           updated_at?: string
@@ -4555,6 +4582,16 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_portrait_motion: {
+        Args: { p_force?: boolean; p_version_id: string }
+        Returns: {
+          motion_token: string
+          outcome: string
+          output_key: string
+          source_key: string
+          stale_motion_key: string
+        }[]
+      }
       claim_relationship_suggestion_run: {
         Args: { p_family_id: string }
         Returns: {
@@ -4930,6 +4967,14 @@ export type Database = {
           output_key: string
           terminal_status: string
         }[]
+      }
+      fail_portrait_motion: {
+        Args: {
+          p_error_code: string
+          p_motion_token: string
+          p_version_id: string
+        }
+        Returns: boolean
       }
       fail_relationship_suggestion_run: {
         Args: { p_family_id: string }
@@ -5417,6 +5462,15 @@ export type Database = {
         Args: { p_now?: string; p_owner_user_id: string }
         Returns: boolean
       }
+      portrait_motion_output_key: {
+        Args: {
+          p_family_member_id: string
+          p_motion_token: string
+          p_profile_picture_key: string
+          p_version_id: string
+        }
+        Returns: string
+      }
       promote_ai_image_preparation:
         | {
             Args: {
@@ -5463,6 +5517,19 @@ export type Database = {
         Returns: {
           already_published: boolean
           old_key: string
+          published: boolean
+        }[]
+      }
+      publish_portrait_motion: {
+        Args: {
+          p_columns: number
+          p_motion_token: string
+          p_output_key: string
+          p_rows: number
+          p_version_id: string
+        }
+        Returns: {
+          old_motion_key: string
           published: boolean
         }[]
       }

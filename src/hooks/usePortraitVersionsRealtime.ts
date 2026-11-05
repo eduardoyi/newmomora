@@ -14,13 +14,28 @@ import { shouldPollPortraitVersions } from '@/utils/portrait-versions';
 // channel is NOT SUBSCRIBED.
 //
 // The payload is used ONLY as a signal (plus the non-sensitive status column
-// to detect a terminal transition). Row data is never patched into the cache:
+// to detect a terminal transition, and the motion_status/motion_key pair to
+// detect a living-portrait sheet landing). Row data is never patched into the cache:
 // the table also carries generation_token / generation_output_key /
 // deletion_token, and the refetched `select *` stays the single source of
 // truth for the row shape.
 
 function isTerminal(status: FamilyMemberPortraitVersion['illustrated_profile_status'] | undefined): boolean {
   return status === 'ready' || status === 'failed';
+}
+
+// A living-portrait sheet landing (or being replaced/cleared) changes the
+// resolved version's motion fields, which family-members consumers read, so it
+// gets the same fan-out as a still turning ready. Null-normalised on both
+// sides: a cached row from before the motion columns has them undefined.
+function didMotionChange(
+  row: Partial<FamilyMemberPortraitVersion>,
+  previous: FamilyMemberPortraitVersion | undefined,
+): boolean {
+  if (row.motion_status === 'ready' && row.motion_status !== (previous?.motion_status ?? null)) {
+    return true;
+  }
+  return row.motion_key !== undefined && row.motion_key !== (previous?.motion_key ?? null);
 }
 
 /**
@@ -64,10 +79,11 @@ export function usePortraitVersionsRealtime(familyId: string | null | undefined)
           }
 
           const cached = queryClient.getQueryData<FamilyMemberPortraitVersion[]>(queryKey);
-          const previousStatus = cached?.find((version) => version.id === row.id)?.illustrated_profile_status;
+          const previous = cached?.find((version) => version.id === row.id);
+          const previousStatus = previous?.illustrated_profile_status;
           const status = row.illustrated_profile_status;
 
-          if (isTerminal(status) && status !== previousStatus) {
+          if ((isTerminal(status) && status !== previousStatus) || didMotionChange(row, previous)) {
             // Same fan-out generatePortraitVersion's .finally performs:
             // refresh the timeline, family members (current portrait) and
             // memories (illustrations embed the portrait).

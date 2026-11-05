@@ -69,7 +69,7 @@ export interface ResolvedR2Output {
 
 const WEBP_QUALITY = 85;
 
-async function reencodeToWebp(env: Env, bytes: ArrayBuffer): Promise<ArrayBuffer> {
+export async function reencodeToWebp(env: Env, bytes: ArrayBuffer): Promise<ArrayBuffer> {
   const transformed = await env.IMAGES
     .input(new Blob([bytes]).stream())
     .output({ format: 'image/webp', quality: WEBP_QUALITY });

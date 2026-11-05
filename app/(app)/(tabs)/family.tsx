@@ -196,6 +196,7 @@ export default function FamilyScreen() {
                 return (
                   <View key={member.id} testID={`family-cast-card-${member.id}`}>
                     <CastCard
+                      animated
                       canEdit={canEdit}
                       isMe={relationships.myMemberId === member.id}
                       isPortraitHidden={isPortraitHidden}

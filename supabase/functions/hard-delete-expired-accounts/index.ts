@@ -88,7 +88,7 @@ export async function collectFamilyStorageKeys(
 
   const { data: portraitVersions, error: portraitVersionsError } = await supabase
     .from('family_member_portrait_versions')
-    .select('profile_picture_key, illustrated_profile_key, generation_output_key')
+    .select('profile_picture_key, illustrated_profile_key, generation_output_key, motion_key')
     .eq('family_id', familyId);
   if (portraitVersionsError) {
     throw new Error(`Portrait version storage lookup failed: ${portraitVersionsError.message}`);
@@ -98,6 +98,7 @@ export async function collectFamilyStorageKeys(
     if (version.profile_picture_key) keys.push(version.profile_picture_key);
     if (version.illustrated_profile_key) keys.push(version.illustrated_profile_key);
     if (version.generation_output_key) keys.push(version.generation_output_key);
+    if (version.motion_key) keys.push(version.motion_key);
   }
 
   // A durable job can own bytes that are not yet pointed to by its memory or
@@ -347,6 +348,7 @@ export async function resolveReferencedKeys(
     versionPhotoRows,
     versionPortraitRows,
     versionAttemptRows,
+    versionMotionRows,
     memoryJobOutputRows,
     portraitJobOutputRows,
   ] = await Promise.all([
@@ -374,6 +376,10 @@ export async function resolveReferencedKeys(
       .select('generation_output_key')
       .in('generation_output_key', keys),
     supabase
+      .from('family_member_portrait_versions')
+      .select('motion_key')
+      .in('motion_key', keys),
+    supabase
       .from('memory_illustration_jobs')
       .select('output_key')
       .in('output_key', keys),
@@ -395,6 +401,7 @@ export async function resolveReferencedKeys(
     versionPhotoRows,
     versionPortraitRows,
     versionAttemptRows,
+    versionMotionRows,
     memoryJobOutputRows,
     portraitJobOutputRows,
   ].find((result) => result.error)?.error;
@@ -434,6 +441,9 @@ export async function resolveReferencedKeys(
   }
   for (const row of versionAttemptRows.data ?? []) {
     if (row.generation_output_key) referenced.add(row.generation_output_key);
+  }
+  for (const row of versionMotionRows.data ?? []) {
+    if (row.motion_key) referenced.add(row.motion_key);
   }
   for (const row of memoryJobOutputRows.data ?? []) {
     if (row.output_key) referenced.add(row.output_key);

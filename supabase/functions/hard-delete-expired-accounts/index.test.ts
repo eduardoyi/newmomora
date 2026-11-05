@@ -388,6 +388,7 @@ function fakeSupabaseForCollect(options: {
     profile_picture_key: string;
     illustrated_profile_key: string | null;
     generation_output_key: string | null;
+    motion_key?: string | null;
   }>;
   memoryJobs?: Array<{ output_key: string | null }>;
   portraitJobs?: Array<{ output_key: string | null }>;
@@ -522,6 +523,21 @@ Deno.test(
     ].sort());
   },
 );
+
+Deno.test('collectFamilyStorageKeys includes a version\'s living-portrait sheet key', async () => {
+  const motionKey = `${OWNER_ID}/family/member-1/portraits/version-1/motion/66666666-6666-4666-8666-666666666666.webp`;
+  const supabase = fakeSupabaseForCollect({
+    memories: [], mediaAssets: [], members: [],
+    portraitVersions: [{
+      profile_picture_key: `${OWNER_ID}/family/member-1/portraits/version-1/photo.jpg`,
+      illustrated_profile_key: null,
+      generation_output_key: null,
+      motion_key: motionKey,
+    }],
+  });
+  const keys = await collectFamilyStorageKeys(supabase as never, FAMILY_ID);
+  assertEquals(keys.includes(motionKey), true);
+});
 
 Deno.test('collectFamilyStorageKeys includes transient gallery previews and unfinalized approval originals', async () => {
   const supabase = fakeSupabaseForCollect({
@@ -744,6 +760,7 @@ function fakeSupabaseForReferenced(referencedByTable: {
   version_profile_picture_key?: string[];
   version_illustrated_profile_key?: string[];
   generation_output_key?: string[];
+  motion_key?: string[];
   memory_job_output_key?: string[];
   portrait_job_output_key?: string[];
   errorTable?: string;
@@ -819,13 +836,16 @@ function fakeSupabaseForReferenced(referencedByTable: {
               const sourceField = col as
                 | 'profile_picture_key'
                 | 'illustrated_profile_key'
-                | 'generation_output_key';
+                | 'generation_output_key'
+                | 'motion_key';
               const fixtureField =
                 sourceField === 'profile_picture_key'
                   ? 'version_profile_picture_key'
                   : sourceField === 'illustrated_profile_key'
                     ? 'version_illustrated_profile_key'
-                    : 'generation_output_key';
+                    : sourceField === 'motion_key'
+                      ? 'motion_key'
+                      : 'generation_output_key';
               return {
                 data: keys
                   .filter((key) => (referencedByTable[fixtureField] ?? []).includes(key))
@@ -993,6 +1013,17 @@ Deno.test('resolveReferencedKeys retains legacy, version, and durable job output
   ]);
 
   assertEquals(referenced.size, 10);
+});
+
+Deno.test('resolveReferencedKeys retains a live living-portrait sheet and sweeps a stale one', async () => {
+  const liveKey = 'a/family/1/portraits/2/motion/6.webp';
+  const staleKey = 'a/family/1/portraits/2/motion/7.webp';
+  const supabase = fakeSupabaseForReferenced({ motion_key: [liveKey] });
+
+  const referenced = await resolveReferencedKeys(supabase as never, [liveKey, staleKey]);
+
+  assertEquals(referenced.has(liveKey), true);
+  assertEquals(referenced.has(staleKey), false);
 });
 
 Deno.test('resolveReferencedKeys returns an empty set for an empty key list without querying', async () => {

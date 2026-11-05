@@ -60,7 +60,7 @@ function isoDate(value: unknown): string | null {
   return date;
 }
 
-function parseUsage(value: unknown): VisionUsage | null {
+export function parseUsage(value: unknown): VisionUsage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   const positive = (item: unknown) => typeof item === 'number' && Number.isSafeInteger(item) && item >= 0 ? item : null;

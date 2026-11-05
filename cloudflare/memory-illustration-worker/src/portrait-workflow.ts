@@ -14,11 +14,13 @@ import {
   reservePortraitAttempt,
   reservePortraitAttemptV1,
   retriggerPortraitDependentMemories,
+  startPortraitMotion,
 } from './portrait-bridge';
 import { PortraitReferenceError, loadPortraitReferences } from './portrait-references';
 import { resolveOutputBytesForR2 } from './image-output';
 import { editPortraitImageWithUsage, ImageProviderError } from './openai';
 import { IMAGE_PRICING_VERSION, priceImageUsage } from './pricing';
+import { isDuplicateWorkflowError } from './workflow-errors';
 import {
   confirmExistingUploadWithLease,
   hasAmbiguousUploadOutput,
@@ -356,6 +358,45 @@ async function retriggerDependentMemories(
   }
 }
 
+const MOTION_CREATE_ATTEMPTS = 3;
+
+/**
+ * A freshly published still starts its living-portrait loop (right after publication bookkeeping, ahead of the dependent-memory retrigger). Best effort and
+ * silent: the still is already `ready`, so no failure here may change the
+ * run's result. The claim (bridge) and the instance create share one step with
+ * retries disabled -- a step retry would re-claim and find the claim in flight
+ * -- so the create is retried inline. A lost claim is picked up by the backfill.
+ */
+async function startPortraitMotionBestEffort(env: Env, step: WorkflowStep, jobId: string): Promise<void> {
+  try {
+    await step.do(
+      'start portrait motion',
+      { retries: { limit: 0, delay: '1 second' }, timeout: '30 seconds', sensitive: 'output' },
+      async () => {
+        const claim = await callBridgeWithRetry(() => startPortraitMotion(env, jobId));
+        if (!claim.started) return { started: false };
+        for (let attempt = 1; attempt <= MOTION_CREATE_ATTEMPTS; attempt += 1) {
+          try {
+            await env.PORTRAIT_MOTION_WORKFLOW.create({
+              id: `motion-${claim.motionToken}`,
+              params: { versionId: claim.versionId, motionToken: claim.motionToken },
+              retention: { successRetention: '1 day', errorRetention: '1 day' },
+            });
+            break;
+          } catch (error) {
+            if (isDuplicateWorkflowError(error)) break;
+            if (attempt === MOTION_CREATE_ATTEMPTS) throw error;
+            await new Promise<void>((resolve) => setTimeout(resolve, 200 * attempt));
+          }
+        }
+        return { started: true };
+      },
+    );
+  } catch {
+    // Motion is an optional layer over a published still.
+  }
+}
+
 export class PortraitGenerationWorkflow extends WorkflowEntrypoint<Env, WorkflowDispatchPayload> {
   async run(event: Readonly<WorkflowEvent<WorkflowDispatchPayload>>, step: WorkflowStep) {
     const { jobId } = event.payload;
@@ -436,6 +477,9 @@ export class PortraitGenerationWorkflow extends WorkflowEntrypoint<Env, Workflow
       });
     }
 
+    // Before the retrigger: that step may sleep ~30s for young dependent
+    // memories, which must not delay the living portrait.
+    await startPortraitMotionBestEffort(this.env, step, jobId);
     await retriggerDependentMemories(this.env, step, jobId);
     return { jobId, status: 'ready', model: generation.model };
   }

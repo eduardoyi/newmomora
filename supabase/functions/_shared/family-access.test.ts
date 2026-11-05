@@ -11,6 +11,7 @@ import {
   buildMemoryIllustrationKey,
   buildMemoryMediaAssetKey,
   buildMemoryMediaKey,
+  buildPortraitMotionKey,
   buildPortraitVersionAttemptKey,
   buildPortraitVersionPhotoKey,
   buildShareCardKey,
@@ -570,4 +571,57 @@ Deno.test('resolveStorageKeyFamilyIds batches one query per entity type across m
 
   assertEquals(memoriesQueryCount, 1);
   assertEquals(familyMembersQueryCount, 1);
+});
+
+// Living portraits: get-media-url authorizes the sheet only while the version
+// row still points at it (motion_key), exactly like the still.
+Deno.test('resolveReferencedStorageKeys admits only the version row\'s current motion_key', async () => {
+  const currentToken = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const staleToken = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const currentKey = buildPortraitMotionKey(OWNER_ID, MEMBER_ID, VERSION_ID, currentToken);
+  const staleKey = buildPortraitMotionKey(OWNER_ID, MEMBER_ID, VERSION_ID, staleToken);
+  const supabase = {
+    from(table: string) {
+      if (table !== 'family_member_portrait_versions') throw new Error(`Unexpected table ${table}`);
+      return {
+        select: () => ({
+          in: async () => ({
+            data: [{
+              id: VERSION_ID,
+              family_member_id: MEMBER_ID,
+              profile_picture_key: buildPortraitVersionPhotoKey(OWNER_ID, MEMBER_ID, VERSION_ID),
+              illustrated_profile_key: 'still.webp',
+              generation_output_key: null,
+              motion_key: currentKey,
+            }],
+            error: null,
+          }),
+        }),
+      };
+    },
+  };
+  const resolvedKeys = [currentKey, staleKey].map((objectKey) => ({
+    objectKey,
+    parsed: parseStorageKey(objectKey),
+    familyId: FAMILY_A,
+  }));
+
+  const referenced = await resolveReferencedStorageKeys(supabase as never, resolvedKeys);
+
+  assertEquals(referenced.has(currentKey), true);
+  assertEquals(referenced.has(staleKey), false);
+});
+
+Deno.test('resolveStorageKeyFamilyIds resolves a living-portrait sheet via the member row', async () => {
+  const key = buildPortraitMotionKey(OWNER_ID, MEMBER_ID, VERSION_ID, ILLUSTRATION_GENERATION_ID);
+  const supabase = fakeSupabase({
+    families: [],
+    memberships: [],
+    familyMembers: [{ id: MEMBER_ID, family_id: FAMILY_A }],
+  });
+
+  const [resolved] = await resolveStorageKeyFamilyIds(supabase as never, [key]);
+
+  assertEquals(resolved.parsed?.kind, 'portrait_version_motion');
+  assertEquals(resolved.familyId, FAMILY_A);
 });

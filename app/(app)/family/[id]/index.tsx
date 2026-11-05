@@ -413,6 +413,7 @@ export default function ViewFamilyMemberScreen() {
           />
         ) : (
           <CastCard
+            animated
             isMe={relationships.myMemberId === member.id}
             isPortraitHidden={isPortraitHidden}
             member={member}

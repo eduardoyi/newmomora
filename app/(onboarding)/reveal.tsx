@@ -34,6 +34,7 @@ import Heart from 'lucide-react-native/icons/heart';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { LivingPortraitOverlay } from '@/components/living-portrait-overlay';
 import { OnbBirthdayAsk } from '@/components/onboarding/onb-birthday-ask';
 import { OnbButton } from '@/components/onboarding/onb-button';
 import { OnbShell } from '@/components/onboarding/onb-shell';
@@ -47,11 +48,14 @@ import { hasNoPortraitYet } from '@/utils/family-members';
 import { isGalleryImportFeatureEnabled } from '@/utils/gallery-import-flags';
 import { isOnboardingKid } from '@/utils/family-relationships';
 import { mediaImageSource } from '@/utils/media-image-source';
+import { getPortraitMotion, type PortraitMotion } from '@/utils/portrait-motion';
 
 interface LoadedPortraitImageProps {
   name: string;
   portraitKey: string | null;
   portraitUrl: string;
+  /** Living-portrait loop laid over the still once its sheet has loaded. */
+  motion: PortraitMotion | null;
 }
 
 /**
@@ -60,22 +64,25 @@ interface LoadedPortraitImageProps {
  * gives Maestro a selector only after Expo Image has decoded the current
  * portrait.
  */
-function LoadedPortraitImage({ name, portraitKey, portraitUrl }: LoadedPortraitImageProps) {
+function LoadedPortraitImage({ name, portraitKey, portraitUrl, motion }: LoadedPortraitImageProps) {
   const [hasLoaded, setHasLoaded] = useState(false);
 
   return (
-    <Image
-      accessibilityLabel={`${name}'s finished portrait`}
-      contentFit="cover"
-      onLoad={() => setHasLoaded(true)}
-      source={mediaImageSource(portraitUrl, portraitKey)}
-      style={styles.cardImage}
-      testID={
-        hasLoaded
-          ? 'onb-reveal-portrait-image-loaded'
-          : 'onb-reveal-portrait-image-loading'
-      }
-    />
+    <>
+      <Image
+        accessibilityLabel={`${name}'s finished portrait`}
+        contentFit="cover"
+        onLoad={() => setHasLoaded(true)}
+        source={mediaImageSource(portraitUrl, portraitKey)}
+        style={styles.cardImage}
+        testID={
+          hasLoaded
+            ? 'onb-reveal-portrait-image-loaded'
+            : 'onb-reveal-portrait-image-loading'
+        }
+      />
+      {motion ? <LivingPortraitOverlay motion={motion} /> : null}
+    </>
   );
 }
 
@@ -108,6 +115,10 @@ export default function OnboardingRevealScreen() {
   const portraitKey = member?.resolvedPortraitVersion?.illustrated_profile_key ?? null;
   const portraitCacheVersion = member?.avatarUpdatedAt ?? member?.updated_at;
   const { url: portraitUrl } = useMediaUrl(portraitKey, portraitCacheVersion);
+  // Only over the ready still it was made from (getPortraitMotion checks the source key).
+  const portraitMotion = member?.resolvedPortraitVersion?.illustrated_profile_status === 'ready'
+    ? getPortraitMotion(member.resolvedPortraitVersion)
+    : null;
 
   // Defensive escape: a stray deep link or stale nav-stack entry with no/
   // unresolved memberId has nothing to reveal. Never trap the user on a
@@ -240,6 +251,7 @@ export default function OnboardingRevealScreen() {
             {portraitUrl ? (
               <LoadedPortraitImage
                 key={portraitUrl}
+                motion={portraitMotion}
                 name={name}
                 portraitKey={portraitKey}
                 portraitUrl={portraitUrl}

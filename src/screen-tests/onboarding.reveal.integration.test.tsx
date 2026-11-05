@@ -9,6 +9,7 @@
 // the optional birthday ask (2026-10-02): shown only for a kid with no date
 // of birth, saved the moment a date is picked.
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { AccessibilityInfo } from 'react-native';
 import type { ReactNode } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -84,6 +85,78 @@ function renderScreen() {
     </SafeAreaProvider>,
   );
 }
+
+jest.mock('@/components/living-portrait-overlay', () => ({
+  LivingPortraitOverlay: ({ motion }: { motion: { key: string } }) => {
+    const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
+    return <Text testID="living-portrait-overlay">{motion.key}</Text>;
+  },
+}));
+
+const LILA_WITH_MOTION = {
+  ...LILA_MEMBER,
+  resolvedPortraitVersion: {
+    illustrated_profile_key: 'portraits/lila.webp',
+    illustrated_profile_status: 'ready',
+    motion_status: 'ready',
+    motion_key: 'portraits/lila-motion.webp',
+    motion_source_key: 'portraits/lila.webp',
+    motion_columns: 3,
+    motion_rows: 3,
+  },
+};
+
+describe('OnboardingRevealScreen living portrait', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedUseLocalSearchParams.mockReturnValue({ memberId: 'member-lila' });
+    mockedUseMediaUrl.mockReturnValue({ url: 'https://example.com/lila-portrait.webp', isLoading: false, isError: false });
+    jest.spyOn(AccessibilityInfo, 'isReduceMotionEnabled').mockResolvedValue(false);
+  });
+
+  it('lays the loop over the revealed portrait and keeps the still selector', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [LILA_WITH_MOTION],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+
+    const { getByTestId } = renderScreen();
+    await act(async () => {});
+
+    expect(getByTestId('living-portrait-overlay').props.children).toBe('portraits/lila-motion.webp');
+    expect(getByTestId('onb-reveal-portrait-image-loading')).toBeTruthy();
+  });
+
+  it('shows the still alone when the sheet was made from a different portrait', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [{
+        ...LILA_WITH_MOTION,
+        resolvedPortraitVersion: {
+          ...LILA_WITH_MOTION.resolvedPortraitVersion,
+          motion_source_key: 'portraits/older.webp',
+        },
+      }],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+
+    const { queryByTestId } = renderScreen();
+    await act(async () => {});
+
+    expect(queryByTestId('living-portrait-overlay')).toBeNull();
+  });
+
+  it('shows the still alone while no sheet exists yet', async () => {
+    mockedUseFamilyMembers.mockReturnValue({
+      members: [LILA_MEMBER],
+      isLoading: false,
+    } as unknown as ReturnType<typeof useFamilyMembers>);
+
+    const { queryByTestId } = renderScreen();
+    await act(async () => {});
+
+    expect(queryByTestId('living-portrait-overlay')).toBeNull();
+  });
+});
 
 describe('OnboardingRevealScreen (S17)', () => {
   beforeEach(() => {

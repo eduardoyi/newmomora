@@ -10,6 +10,8 @@ Age-aware profile-photo and character-portrait history for each person in a fami
 
 A family member can have many immutable source-photo/AI-portrait pairs over time. This preserves how a person looked at different ages and lets memory generation, regeneration, timeline cards, and memory-detail chips use the portrait appropriate to the memory date.
 
+Each ready version can also carry an animated "living portrait" sheet derived from its still (`motion_*` columns); only the current version's loop is shown. See [living-portraits.md](living-portraits.md).
+
 `family_members` remains the person/profile table. `family_member_portrait_versions` is its one-to-many visual history; it does not replace the member row.
 
 ## User-facing behavior

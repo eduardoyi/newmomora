@@ -20,6 +20,7 @@ function dependencies(options: {
   role?: 'owner' | 'manager' | 'viewer' | null;
   sourceKey?: string;
   claimError?: { message: string } | null;
+  motionKey?: string | null;
   listedKeys?: string[];
   calls?: string[];
 }) {
@@ -30,6 +31,7 @@ function dependencies(options: {
     family_member_id: MEMBER_ID,
     profile_picture_key: options.sourceKey ?? SOURCE_KEY,
     deletion_token: null,
+    motion_key: options.motionKey ?? null,
   };
   const client = {
     from: () => ({
@@ -126,4 +128,27 @@ Deno.test('delete-portrait-version deletes the complete prefix before finalizing
 
 Deno.test('WP-SEC: the real default wiring uses the anonymous-rejecting auth chokepoint, not the permissive one', () => {
   assertStrictEquals(DEFAULT_DEPENDENCIES.getAuthenticatedUser, getAuthenticatedNonAnonymousUser);
+});
+
+Deno.test('delete-portrait-version removes the living-portrait sheet with the rest of the prefix, once', async () => {
+  const calls: string[] = [];
+  const motionKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/motion/66666666-6666-4666-8666-666666666666.webp`;
+  const response = await handleDeletePortraitVersion(
+    request(),
+    dependencies({ listedKeys: [SOURCE_KEY, motionKey], motionKey, calls }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls.filter((call) => call === `delete:${motionKey}`).length, 1);
+  assertEquals(calls.indexOf(`delete:${motionKey}`) < calls.indexOf('finish_family_member_portrait_deletion'), true);
+});
+
+Deno.test('delete-portrait-version still deletes a published sheet the listing missed', async () => {
+  const calls: string[] = [];
+  const motionKey = `${USER_ID}/family/${MEMBER_ID}/portraits/${VERSION_ID}/motion/66666666-6666-4666-8666-666666666666.webp`;
+  const response = await handleDeletePortraitVersion(
+    request(),
+    dependencies({ listedKeys: [SOURCE_KEY], motionKey, calls }),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(calls.includes(`delete:${motionKey}`), true);
 });
