@@ -1,6 +1,10 @@
 import type { IllustrationModel, ImageProviderResult, ImageUsage, LoadedReference } from './types';
 
 const OPENAI_IMAGE_EDITS_URL = 'https://api.openai.com/v1/images/edits';
+// The API defaults 2.6 to `high` planning. On real memories `medium` was ~1s
+// faster than `high` with no visible quality loss (2026-11-04 eval); keep in
+// sync with supabase/functions/_shared/openai.ts.
+const GPT_IMAGE_2_6_COMPLEXITY = 'medium';
 
 export class ImageProviderError extends Error {
   constructor(
@@ -67,6 +71,9 @@ export async function editImageWithUsage(
   form.set('output_compression', '85');
   if (quality) {
     form.set('quality', quality);
+  }
+  if (model === 'gpt-image-2.6-flare') {
+    form.set('complexity', GPT_IMAGE_2_6_COMPLEXITY);
   }
   if (model === 'gpt-image-1.5' && references.length > 1) {
     form.set('input_fidelity', 'high');

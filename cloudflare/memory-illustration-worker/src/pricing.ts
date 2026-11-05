@@ -1,6 +1,6 @@
 import type { IllustrationModel, ImageUsage } from './types';
 
-export const IMAGE_PRICING_VERSION = 'openai-image-2026-09-08';
+export const IMAGE_PRICING_VERSION = 'openai-image-2026-11-04';
 
 const USD_PER_MILLION_TOKENS: Record<IllustrationModel, {
   inputText: number;
@@ -9,6 +9,7 @@ const USD_PER_MILLION_TOKENS: Record<IllustrationModel, {
   outputImage: number;
 }> = {
   'gpt-image-2': { inputText: 5, inputImage: 8, outputText: 30, outputImage: 30 },
+  'gpt-image-2.6-flare': { inputText: 5, inputImage: 8, outputText: 0, outputImage: 30 },
   'gpt-image-2.5-flare': { inputText: 5, inputImage: 8, outputText: 0, outputImage: 30 },
   'gpt-image-1.5': { inputText: 5, inputImage: 8, outputText: 10, outputImage: 32 },
 };
@@ -32,7 +33,7 @@ export function priceImageUsage(model: IllustrationModel, usage: ImageUsage | nu
     return { costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
   }
   // Flare cache rates depend on modality, which this aggregate does not expose.
-  if (model === 'gpt-image-2.5-flare' && usage.inputCachedTokens! > 0) {
+  if ((model === 'gpt-image-2.6-flare' || model === 'gpt-image-2.5-flare') && usage.inputCachedTokens! > 0) {
     return { costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
   }
   const rates = USD_PER_MILLION_TOKENS[model];

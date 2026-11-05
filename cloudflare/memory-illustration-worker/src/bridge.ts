@@ -5,6 +5,7 @@ import type {
   BridgeOperation,
   BridgeReserveAttemptResponse,
   BridgeRecordUploadCompleteResponse,
+  IllustrationModel,
 } from './types';
 
 export class BridgeError extends Error {
@@ -74,7 +75,7 @@ export async function reserveMemoryProviderAttempt(
     jobId: string;
     usageRequestId: string;
     provider: 'primary' | 'fallback';
-    model: 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5';
+    model: IllustrationModel;
     attemptNumber: number;
     aiCallId: string;
   },
@@ -92,7 +93,7 @@ export async function reserveMemoryProviderAttemptV1(
   payload: {
     jobId: string;
     provider: 'primary' | 'fallback';
-    model: 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5';
+    model: IllustrationModel;
     attemptNumber: number;
   },
 ): Promise<boolean> {

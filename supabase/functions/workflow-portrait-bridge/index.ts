@@ -206,7 +206,7 @@ function detailedProviderUsage(body: BridgeRequest): Record<string, number | str
 
 function isValidUsageEvent(body: BridgeRequest): boolean {
   const validModel = body.provider === 'primary'
-    ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+    ? body.model === 'gpt-image-2.6-flare' || body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
     : body.model === 'gpt-image-1.5';
   return (body.provider === 'primary' || body.provider === 'fallback') && validModel &&
     body.attemptNumber === 1 && typeof body.aiCallId === 'string' && body.aiCallId.length <= 200 &&
@@ -383,7 +383,7 @@ export async function handleWorkflowPortraitBridge(
       }
       case 'reserve_attempt': {
         const validModel = body.provider === 'primary'
-          ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+          ? body.model === 'gpt-image-2.6-flare' || body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
           : body.model === 'gpt-image-1.5';
         if ((body.provider !== 'primary' && body.provider !== 'fallback') ||
           !validModel || body.attemptNumber !== 1) {
@@ -491,7 +491,7 @@ export async function handleWorkflowPortraitBridge(
         return jsonResponse({ completed: Boolean(data) });
       }
       case 'publish': {
-        if ((body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
+        if ((body.model !== 'gpt-image-2.6-flare' && body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
           typeof body.outputKey !== 'string' || !body.outputKey) {
           return errorResponse('model and outputKey are required', 400, 'validation_error');
         }
@@ -534,7 +534,7 @@ export async function handleWorkflowPortraitBridge(
         });
       }
       case 'reconcile': {
-        if ((body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
+        if ((body.model !== 'gpt-image-2.6-flare' && body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') ||
           typeof body.outputKey !== 'string' || !body.outputKey) {
           return errorResponse('outputKey and model are required', 400, 'validation_error');
         }

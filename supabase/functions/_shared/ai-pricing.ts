@@ -23,7 +23,7 @@ export interface PricedAiUsage {
 
 const LEGACY_PRICING_VERSION = 'openai-2026-07-27';
 
-type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-6-sol' | 'gpt-6.1-sol' | 'gpt-6-luna';
+type KnownModel = 'gpt-4o-mini' | 'gpt-4o-mini-transcribe' | 'gpt-image-2.6-flare' | 'gpt-image-2.5-flare' | 'gpt-image-2' | 'gpt-image-1.5' | 'gpt-6-sol' | 'gpt-6.1-sol' | 'gpt-6-luna';
 
 const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   inputText: number;
@@ -36,6 +36,7 @@ const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   // silently edit them after deployment; add a new version instead.
   'gpt-4o-mini': { inputText: 0.15, inputImage: 0.15, cachedInput: 0.075, outputText: 0.60, outputImage: 0.60 },
   'gpt-image-2': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 30, outputImage: 30 },
+  'gpt-image-2.6-flare': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 0, outputImage: 30 },
   'gpt-image-2.5-flare': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 0, outputImage: 30 },
   'gpt-image-1.5': { inputText: 5, inputImage: 8, cachedInput: 8, outputText: 10, outputImage: 32 },
   // Year Film quote pick / claim + frame checks (pricing version openai-2026-09-28).
@@ -120,7 +121,9 @@ export function priceOpenAiUsage(
     return { dimensions, billingStatus: 'known', pricingVersion: AUDIO_CHAT_PRICING_VERSION, costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd };
   }
 
-  const pricingVersion = model === 'gpt-image-2.5-flare'
+  const pricingVersion = model === 'gpt-image-2.6-flare'
+    ? 'openai-2026-11-04'
+    : model === 'gpt-image-2.5-flare'
     ? 'openai-2026-09-08'
     : model === 'gpt-6.1-sol'
     ? 'openai-2026-09-29'
@@ -161,7 +164,7 @@ export function priceOpenAiUsage(
   // A price is complete only when every billable dimension for this model's
   // response shape is known. Missing image dimensions are zero for chat; the
   // inverse is not true for image generation, whose usage must be itemized.
-  const isImage = model === 'gpt-image-2.5-flare' || model === 'gpt-image-2' || model === 'gpt-image-1.5';
+  const isImage = model === 'gpt-image-2.6-flare' || model === 'gpt-image-2.5-flare' || model === 'gpt-image-2' || model === 'gpt-image-1.5';
   const required = isImage
     ? ['input_text_tokens', 'input_image_tokens', 'cached_input_tokens', 'output_text_tokens', 'output_image_tokens'] as const
     : ['input_text_tokens', 'output_text_tokens'] as const;
@@ -170,7 +173,7 @@ export function priceOpenAiUsage(
   }
 
   // Aggregate cached tokens do not identify text versus image cache pricing.
-  if (model === 'gpt-image-2.5-flare' && (dimensions.cached_input_tokens ?? 0) > 0) {
+  if ((model === 'gpt-image-2.6-flare' || model === 'gpt-image-2.5-flare') && (dimensions.cached_input_tokens ?? 0) > 0) {
     return { dimensions, billingStatus: 'known', pricingVersion, costBasis: 'provider_usage', costIsComplete: false, estimatedCostUsd: null };
   }
 

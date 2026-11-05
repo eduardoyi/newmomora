@@ -36,10 +36,12 @@ export async function loadPortraitReferences(
   sourcePhotoKey: string,
   styleReferenceKey: string,
 ): Promise<PortraitLoadedReferences> {
-  const styleBytes = await loadAndResizeReference(env.STYLE_REFERENCES, env, styleReferenceKey);
+  // Load both at once; the style check still wins when both are missing.
+  const [styleBytes, sourceBytes] = await Promise.all([
+    loadAndResizeReference(env.STYLE_REFERENCES, env, styleReferenceKey),
+    loadAndResizeReference(env.PROFILE_PICTURES, env, sourcePhotoKey),
+  ]);
   if (!styleBytes) throw new PortraitReferenceError('STYLE_REFERENCE_UNAVAILABLE');
-
-  const sourceBytes = await loadAndResizeReference(env.PROFILE_PICTURES, env, sourcePhotoKey);
   if (!sourceBytes) throw new PortraitReferenceError('SOURCE_REFERENCE_UNAVAILABLE');
 
   const style: LoadedReference = { description: 'The canonical Momora illustration style.', bytes: styleBytes };

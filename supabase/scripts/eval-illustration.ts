@@ -8,6 +8,11 @@
  *   npm run eval:illustration -- --memory-id <uuid> --memory-id <uuid>
  *   npm run eval:illustration -- --search "meltdown" --limit 5
  *   npm run eval:illustration -- --search "fever" --model gpt-image-1.5
+ *   npm run eval:illustration -- --memory-id <uuid> \
+ *     --variant gpt-image-2.5-flare --variant gpt-image-2.6-flare:high --variant gpt-image-2.6-flare:low
+ *
+ * Every variant renders the same prompt (one safety rewrite per memory) at
+ * `--quality` (default medium, as in production) and prints its latency.
  *
  * Requires OPENAI_API_KEY + R2/Supabase vars in supabase/.env.local.
  * DB/OpenAI env access is not available in every environment this script
@@ -33,19 +38,48 @@ import {
   DEFAULT_ILLUSTRATION_STYLE_TOKEN,
   getStyleDescription,
 } from '../functions/_shared/styles.ts';
-import { chatJson, editImageWithModel, PRIMARY_IMAGE_MODEL } from '../functions/_shared/openai.ts';
+import {
+  chatJson,
+  editImageWithModel,
+  PRIMARY_IMAGE_MODEL,
+  type OpenAiImageComplexity,
+  type OpenAiImageQuality,
+} from '../functions/_shared/openai.ts';
 import { getObjectBytes } from '../functions/_shared/r2.ts';
 
 const ALLOWED_EXPRESSION_STYLES = new Set(['comedic', 'tender', 'neutral']);
 type ExpressionStyle = 'comedic' | 'tender' | 'neutral';
+
+interface ImageVariant {
+  model: string;
+  complexity?: OpenAiImageComplexity;
+}
 
 interface CliOptions {
   memoryIds: string[];
   search?: string;
   limit: number;
   model: string;
+  /** `--variant model[:complexity]`, repeatable: A/B several from one prompt. */
+  variants: ImageVariant[];
+  quality: OpenAiImageQuality;
   outputDir: URL;
   listEmotions: boolean;
+}
+
+const IMAGE_COMPLEXITIES = new Set(['low', 'medium', 'high']);
+
+function parseVariant(value: string): ImageVariant {
+  const [model, complexity] = value.split(':');
+  if (complexity !== undefined && !IMAGE_COMPLEXITIES.has(complexity)) {
+    console.error(`Invalid complexity in --variant ${value} (use low|medium|high)`);
+    Deno.exit(1);
+  }
+  return { model, ...(complexity ? { complexity: complexity as OpenAiImageComplexity } : {}) };
+}
+
+function variantLabel(variant: ImageVariant): string {
+  return variant.complexity ? `${variant.model}-${variant.complexity}` : variant.model;
 }
 
 interface EvalMemoryRow {
@@ -70,6 +104,9 @@ function parseArgs(args: string[]): CliOptions {
     memoryIds: [],
     limit: 3,
     model: PRIMARY_IMAGE_MODEL,
+    variants: [],
+    // Production (worker + Edge Function) always asks for medium.
+    quality: 'medium',
     outputDir: defaultOutputDir,
     listEmotions: false,
   };
@@ -93,6 +130,14 @@ function parseArgs(args: string[]): CliOptions {
         break;
       case '--model':
         options.model = next;
+        index += 1;
+        break;
+      case '--variant':
+        options.variants.push(parseVariant(next));
+        index += 1;
+        break;
+      case '--quality':
+        options.quality = next as OpenAiImageQuality;
         index += 1;
         break;
       case '--output-dir':
@@ -268,15 +313,15 @@ async function writeEvalArtifacts(
   runId: string,
   slug: string,
   prompt: string,
-  scenePngBytes: Uint8Array | null,
+  scenes: Array<{ fileName: string; bytes: Uint8Array | null }>,
   previousBytes: Uint8Array | null,
   meta: Record<string, unknown>,
 ): Promise<string> {
   const runDir = new URL(`${runId}-${slug}/`, outputDir);
   await Deno.mkdir(runDir, { recursive: true });
 
-  if (scenePngBytes) {
-    await Deno.writeFile(new URL('scene.png', runDir), scenePngBytes);
+  for (const scene of scenes) {
+    if (scene.bytes) await Deno.writeFile(new URL(scene.fileName, runDir), scene.bytes);
   }
 
   await Deno.writeFile(new URL('prompt.txt', runDir), new TextEncoder().encode(prompt));
@@ -296,7 +341,8 @@ async function writeEvalArtifacts(
 async function evalMemory(
   supabase: Awaited<ReturnType<typeof createAuthedClient>>,
   memory: EvalMemoryRow,
-  model: string,
+  variants: ImageVariant[],
+  quality: OpenAiImageQuality,
   outputDir: URL,
   runId: string,
 ): Promise<void> {
@@ -370,12 +416,25 @@ async function evalMemory(
     expressionStyle,
   });
 
-  const imageStarted = Date.now();
-  const sceneBytes = await editImageWithModel(prompt, referenceImages, model);
-  timings.imageGenerationMs = Date.now() - imageStarted;
-
-  if (!sceneBytes) {
-    console.error(`  ✗ image edit failed`);
+  // Every variant renders the SAME prompt so the A/B isolates the model and
+  // complexity, not the nondeterministic safety rewrite.
+  const scenes: Array<{ fileName: string; bytes: Uint8Array | null }> = [];
+  for (const variant of variants) {
+    const label = variantLabel(variant);
+    const imageStarted = Date.now();
+    let sceneBytes: Uint8Array | null = null;
+    try {
+      sceneBytes = await editImageWithModel(prompt, referenceImages, variant.model, {
+        quality,
+        ...(variant.complexity ? { complexity: variant.complexity } : {}),
+      });
+    } catch (error) {
+      console.error(`  ✗ ${label} failed:`, error instanceof Error ? error.message : 'unknown');
+    }
+    const elapsedMs = Date.now() - imageStarted;
+    timings[variants.length === 1 ? 'imageGenerationMs' : `imageGenerationMs:${label}`] = elapsedMs;
+    console.log(`  ${sceneBytes ? '✓' : '✗'} ${label}: ${(elapsedMs / 1000).toFixed(1)}s`);
+    scenes.push({ fileName: variants.length === 1 ? 'scene.png' : `scene-${label}.png`, bytes: sceneBytes });
   }
 
   let previousBytes: Uint8Array | null = null;
@@ -396,7 +455,9 @@ async function evalMemory(
     emotion: memory.emotion,
     expressionStyle,
     safeDescription,
-    model,
+    variants,
+    quality,
+    referenceCount: referenceImages.length,
     createdAt: new Date().toISOString(),
     timings,
     hadPreviousIllustration: Boolean(memory.illustration_key),
@@ -407,7 +468,7 @@ async function evalMemory(
     runId,
     slug,
     prompt,
-    sceneBytes,
+    scenes,
     previousBytes,
     meta,
   );
@@ -466,10 +527,11 @@ if (memories.length === 0) {
 }
 
 console.log(`Eval run ${runId} — ${memories.length} memor${memories.length === 1 ? 'y' : 'ies'}`);
-console.log(`Model: ${options.model}`);
+const variants = options.variants.length > 0 ? options.variants : [{ model: options.model }];
+console.log(`Variants: ${variants.map(variantLabel).join(', ')} (quality ${options.quality})`);
 
 for (const memory of memories) {
-  await evalMemory(supabase, memory, options.model, options.outputDir, runId);
+  await evalMemory(supabase, memory, variants, options.quality, options.outputDir, runId);
 }
 
 console.log(`\nDone. Output under ${options.outputDir.pathname}`);

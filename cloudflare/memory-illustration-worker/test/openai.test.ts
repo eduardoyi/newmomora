@@ -40,7 +40,7 @@ describe('OpenAI error classification', () => {
       { error: { code: 'moderation_blocked' } },
       { status: 400 },
     )));
-    await expect(editImage(fakeEnv, 'gpt-image-2.5-flare', 'safe prompt', references, undefined, new AbortController().signal))
+    await expect(editImage(fakeEnv, 'gpt-image-2.6-flare', 'safe prompt', references, undefined, new AbortController().signal))
       .rejects.toMatchObject({ code: 'MODERATION_BLOCKED', retryable: false });
   });
 
@@ -62,9 +62,20 @@ describe('OpenAI error classification', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('asks GPT Image 2.6 for medium complexity and never sends it to older models', async () => {
+    const complexities: Array<FormDataEntryValue | null> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      complexities.push((init?.body as FormData).get('complexity'));
+      return Response.json({ data: [{ b64_json: 'AQI=' }] });
+    }));
+    await editImage(fakeEnv, 'gpt-image-2.6-flare', 'safe prompt', references, 'medium', new AbortController().signal);
+    await editImage(fakeEnv, 'gpt-image-1.5', 'safe prompt', references, 'medium', new AbortController().signal);
+    expect(complexities).toEqual(['medium', null]);
+  });
+
   it('classifies malformed 200 responses as retryable instead of terminal', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{not-json', { status: 200 })));
-    await expect(editImage(fakeEnv, 'gpt-image-2.5-flare', 'safe prompt', references, undefined, new AbortController().signal))
+    await expect(editImage(fakeEnv, 'gpt-image-2.6-flare', 'safe prompt', references, undefined, new AbortController().signal))
       .rejects.toMatchObject({ code: 'OPENAI_MALFORMED_RESPONSE', retryable: true });
   });
 });
@@ -75,5 +86,7 @@ describe('Flare pricing', () => {
     const usage = { inputTextTokens: 10, inputImageTokens: 20, inputCachedTokens: 0, outputTextTokens: 0, outputImageTokens: 5 };
     expect(priceImageUsage('gpt-image-2.5-flare', usage)).toEqual({ costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.00036 });
     expect(priceImageUsage('gpt-image-2.5-flare', { ...usage, inputCachedTokens: 3 })).toMatchObject({ costIsComplete: false, estimatedCostUsd: null });
+    expect(priceImageUsage('gpt-image-2.6-flare', usage)).toEqual({ costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.00036 });
+    expect(priceImageUsage('gpt-image-2.6-flare', { ...usage, inputCachedTokens: 3 })).toMatchObject({ costIsComplete: false, estimatedCostUsd: null });
   });
 });

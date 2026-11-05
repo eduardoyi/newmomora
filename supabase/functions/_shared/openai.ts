@@ -1,8 +1,12 @@
 const DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
-const PRIMARY_IMAGE_MODEL = 'gpt-image-2.5-flare';
+const PRIMARY_IMAGE_MODEL = 'gpt-image-2.6-flare';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1.5';
 const MODELS_SUPPORTING_INPUT_FIDELITY = new Set([FALLBACK_IMAGE_MODEL]);
+// The API defaults 2.6 to `high` planning. On real memories `medium` was ~1s
+// faster than `high` with no visible quality loss (2026-11-04 eval); keep in
+// sync with the Cloudflare worker's src/openai.ts.
+const GPT_IMAGE_2_6_DEFAULT_COMPLEXITY = 'medium';
 import { normalizeOpenAiUsage, priceOpenAiUsage } from './ai-pricing.ts';
 
 export type AiUsageOperation =
@@ -122,6 +126,11 @@ function recordUsage(context: AiUsageContext | undefined, input: {
 
 export type OpenAiImageQuality = 'low' | 'medium' | 'high' | 'auto';
 export type OpenAiImageOutputFormat = 'jpeg' | 'png' | 'webp';
+export type OpenAiImageComplexity = 'low' | 'medium' | 'high';
+
+function imageComplexity(model: string, requested: OpenAiImageComplexity | undefined): OpenAiImageComplexity | undefined {
+  return requested ?? (model === PRIMARY_IMAGE_MODEL ? GPT_IMAGE_2_6_DEFAULT_COMPLEXITY : undefined);
+}
 
 export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {
   /**
@@ -130,6 +139,11 @@ export interface OpenAiImageRequestOptions extends OpenAiRequestOptions {
    * multi-character edit.
    */
   quality?: OpenAiImageQuality;
+  /**
+   * GPT Image 2.6 planning effort. Defaults to medium for the 2.6 primary
+   * (the API's own default is `high`); never sent to older models unless set.
+   */
+  complexity?: OpenAiImageComplexity;
   /** Match the persisted object format instead of storing PNG bytes as .webp. */
   outputFormat?: OpenAiImageOutputFormat;
   outputCompression?: number;
@@ -439,6 +453,7 @@ async function generateImageWithModel(
     model,
     attemptNumber: 1,
   });
+  const complexity = imageComplexity(model, options.complexity);
   const response = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
     headers: {
@@ -450,6 +465,7 @@ async function generateImageWithModel(
       prompt,
       size: '1024x1024',
       ...(options.quality ? { quality: options.quality } : {}),
+      ...(complexity ? { complexity } : {}),
       ...(options.outputFormat ? { output_format: options.outputFormat } : {}),
       ...(options.outputCompression !== undefined
         ? { output_compression: options.outputCompression }
@@ -529,6 +545,10 @@ async function editImagesWithModel(
   formData.append('size', '1024x1024');
   if (options.quality) {
     formData.append('quality', options.quality);
+  }
+  const complexity = imageComplexity(model, options.complexity);
+  if (complexity) {
+    formData.append('complexity', complexity);
   }
   if (options.outputFormat) {
     formData.append('output_format', options.outputFormat);

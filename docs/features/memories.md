@@ -419,7 +419,7 @@ portrait-migration blueprint behind this implementation.
   discard a valid result. A legacy manual regenerate may reuse an active job
   until the 5:30 window; this temporary compatibility behavior avoids
   unrequested duplicate paid jobs.
-- Model policy is `gpt-image-2.5-flare` primary then sequential `gpt-image-1.5`
+- Model policy is `gpt-image-2.6-flare` primary then sequential `gpt-image-1.5`
   fallback. One/two references omit `quality`; three or more use `medium`.
   The previous 55-second parallel hedge is intentionally removed. Multi-
   reference fallback uses high input fidelity. Portrait fallback also uses
@@ -516,3 +516,23 @@ Validation: Worker `test/workflow.integration.test.ts`,
 Edge `_shared/openai.test.ts`, `_shared/ai-pricing.test.ts`, and both
 `workflow-*-bridge/index.test.ts`; database
 `supabase/tests/portrait_generation_workflow.sql`.
+
+### GPT Image 2.6 Flare rollout (2026-11-04)
+
+The primary image model is now `gpt-image-2.6-flare`, requested with
+`complexity: medium` (the API defaults 2.6 to `high`; `complexity` is only
+sent to 2.6). Prompts, reference order, `quality: medium`, size, output format
+and the `gpt-image-1.5` fallback are unchanged; token prices match 2.5 Flare
+(pricing versions `openai-2026-11-04` Edge / `openai-image-2026-11-04` Worker).
+Same deploy order as the Flare rollout: migration
+`20261104130000_allow_image_2_6_portrait_publication.sql`, then both Workflow
+bridges, then the legacy generation functions and the Worker. Bridges and
+portrait publication keep accepting `gpt-image-2.5-flare` and `gpt-image-2`
+for in-flight jobs and rollback. No client release is required.
+
+Measured with `npm run eval:illustration -- --variant <model>[:<complexity>]`
+(same prompt per variant, quality medium) on two real memories: 2.5 Flare
+13.2s / 14.0s; 2.6 high 12.2s / 10.0s; 2.6 medium 10.5s / 9.7s; 2.6 low
+10.1s / 11.1s. Quality was visually equivalent. Re-run that A/B before
+changing `complexity`; the Worker (`src/openai.ts`) and Edge
+(`_shared/openai.ts`) constants must stay in sync.

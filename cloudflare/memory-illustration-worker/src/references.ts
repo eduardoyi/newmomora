@@ -24,20 +24,18 @@ export async function loadIllustrationReferences(
   env: Env,
   candidates: ReferenceCandidate[],
 ): Promise<LoadedReference[]> {
-  const references: LoadedReference[] = [];
-
-  for (const candidate of candidates) {
+  // Members load concurrently (each is an R2 read plus an Images transform);
+  // the result keeps candidate order because it maps reference indexes in the
+  // prompt.
+  const loaded = await Promise.all(candidates.map(async (candidate): Promise<LoadedReference | null> => {
     const portrait = candidate.portraitKey
       ? await loadAndResizeReference(env.CHARACTER_PORTRAITS, env, candidate.portraitKey)
       : null;
     const bytes = portrait ?? (candidate.profileKey
       ? await loadAndResizeReference(env.PROFILE_PICTURES, env, candidate.profileKey)
       : null);
+    return bytes ? { description: candidate.description, bytes } : null;
+  }));
 
-    if (bytes) {
-      references.push({ description: candidate.description, bytes });
-    }
-  }
-
-  return references;
+  return loaded.filter((reference): reference is LoadedReference => reference !== null);
 }

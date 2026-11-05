@@ -105,3 +105,11 @@ Deno.test('gpt-audio voice checks price audio and text tokens separately', async
   const mini = priceOpenAiUsage('gpt-audio-mini', { input_text_tokens: 200, output_text_tokens: 40 }, { audioInputTokens: 60 });
   assertEquals(Math.round((mini.estimatedCostUsd ?? 0) * 1e6), 816);
 });
+
+Deno.test('prices GPT Image 2.6 Flare under its own pricing version', () => {
+  const dimensions = { input_text_tokens: 10, input_image_tokens: 20, cached_input_tokens: 0, output_text_tokens: 0, output_image_tokens: 5 };
+  const priced = priceOpenAiUsage('gpt-image-2.6-flare', dimensions);
+  assertEquals(priced.estimatedCostUsd, 0.00036);
+  assertEquals(priced.pricingVersion, 'openai-2026-11-04');
+  assertEquals(priceOpenAiUsage('gpt-image-2.6-flare', { ...dimensions, cached_input_tokens: 3 }).costIsComplete, false);
+});

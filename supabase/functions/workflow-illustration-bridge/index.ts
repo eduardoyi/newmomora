@@ -193,7 +193,7 @@ function detailedProviderUsage(body: BridgeRequest): Record<string, number | str
 
 function isValidUsageEvent(body: BridgeRequest, maxPrimaryAttempt: number): boolean {
   const validModel = body.provider === 'primary'
-    ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+    ? body.model === 'gpt-image-2.6-flare' || body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
     : body.model === 'gpt-image-1.5';
   return (body.provider === 'primary' || body.provider === 'fallback') &&
     validModel &&
@@ -328,7 +328,7 @@ export async function handleWorkflowIllustrationBridge(
       }
       case 'reserve_attempt': {
         const validModel = body.provider === 'primary'
-          ? body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
+          ? body.model === 'gpt-image-2.6-flare' || body.model === 'gpt-image-2.5-flare' || body.model === 'gpt-image-2'
           : body.model === 'gpt-image-1.5';
         const maxAttemptNumber = body.provider === 'primary' ? 2 : 1;
         if ((body.provider !== 'primary' && body.provider !== 'fallback') || !validModel ||
@@ -462,7 +462,7 @@ export async function handleWorkflowIllustrationBridge(
       }
       case 'publish': {
         if (typeof body.model !== 'string' || typeof body.outputKey !== 'string' || !body.outputKey) return errorResponse('model and outputKey are required', 400, 'validation_error');
-        if (body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') return errorResponse('Invalid model', 400, 'validation_error');
+        if (body.model !== 'gpt-image-2.6-flare' && body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5') return errorResponse('Invalid model', 400, 'validation_error');
         const { data: job, error: jobError } = await supabase
           .from('memory_illustration_jobs')
           .select('output_key')
@@ -506,7 +506,7 @@ export async function handleWorkflowIllustrationBridge(
       }
       case 'reconcile': {
         if (typeof body.outputKey !== 'string' ||
-          (body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5')) {
+          (body.model !== 'gpt-image-2.6-flare' && body.model !== 'gpt-image-2.5-flare' && body.model !== 'gpt-image-2' && body.model !== 'gpt-image-1.5')) {
           return errorResponse('outputKey and model are required', 400, 'validation_error');
         }
         const { data, error } = await supabase
