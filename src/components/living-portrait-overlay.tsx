@@ -10,6 +10,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { colors } from '@/constants/theme';
 import { useReduceMotion } from '@/hooks/use-reduce-motion';
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 import { mediaImageSource } from '@/utils/media-image-source';
@@ -57,6 +58,8 @@ interface LivingPortraitFramesProps {
   motion: PortraitMotion;
   url: string;
   borderRadius?: number;
+  onReady: () => void;
+  onFailed: () => void;
 }
 
 interface FrameSize {
@@ -65,7 +68,7 @@ interface FrameSize {
 }
 
 /** Keyed by URL at the call site so a re-signed/replaced sheet starts hidden again. */
-function LivingPortraitFrames({ motion, url, borderRadius }: LivingPortraitFramesProps) {
+function LivingPortraitFrames({ motion, url, borderRadius, onReady, onFailed }: LivingPortraitFramesProps) {
   const { columns, rows } = motion;
   const frameCount = columns * rows;
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -126,7 +129,11 @@ function LivingPortraitFrames({ motion, url, borderRadius }: LivingPortraitFrame
         <Animated.View style={[sheetSize, sheetStyle]} testID="living-portrait-strip">
           <Image
             contentFit="fill"
-            onLoad={() => setHasLoaded(true)}
+            onError={onFailed}
+            onLoad={() => {
+              setHasLoaded(true);
+              onReady();
+            }}
             source={mediaImageSource(url, motion.key)}
             style={sheetSize}
             testID="living-portrait-sheet"
@@ -137,23 +144,66 @@ function LivingPortraitFrames({ motion, url, borderRadius }: LivingPortraitFrame
   );
 }
 
+/** How long the still stays covered while the loop signs/loads before it is shown instead. */
+export const LIVING_PORTRAIT_COVER_TIMEOUT_MS = 1500;
+
 interface LivingPortraitOverlayProps {
   motion: PortraitMotion;
   borderRadius?: number;
+  /** Opaque fill hiding the still while the loop loads: the surface's own background. */
+  coverColor?: string;
 }
 
 /**
  * Absolute-fill layer to render on top of an existing portrait still, inside a
- * box that already clips/rounds it. Renders nothing under Reduce Motion or
- * until the sheet has a signed URL; stays invisible until its image decodes.
+ * box that already clips/rounds it. Renders nothing under Reduce Motion.
+ *
+ * The generated frames are framed ~15-20% tighter than the still, so showing
+ * the still and then the loop reads as a zoom. Instead the loop's own first
+ * frame is the resting image: the still underneath is covered until the sheet
+ * has decoded, and only shown if the loop fails or takes longer than
+ * LIVING_PORTRAIT_COVER_TIMEOUT_MS.
  */
-export function LivingPortraitOverlay({ motion, borderRadius }: LivingPortraitOverlayProps) {
+export function LivingPortraitOverlay({ motion, borderRadius, coverColor = colors.surface }: LivingPortraitOverlayProps) {
   const reduceMotion = useReduceMotion();
   // Sheet objects are immutable per key, so the key is its own cache version.
-  const { url } = useMediaUrl(reduceMotion ? null : motion.key, motion.key);
+  const { url, isError } = useMediaUrl(reduceMotion ? null : motion.key, motion.key);
+  const [isReady, setIsReady] = useState(false);
+  const [showStill, setShowStill] = useState(false);
 
-  if (reduceMotion || !url) return null;
-  return <LivingPortraitFrames borderRadius={borderRadius} key={url} motion={motion} url={url} />;
+  useEffect(() => {
+    if (reduceMotion || isReady) return undefined;
+    const timeout = setTimeout(() => setShowStill(true), LIVING_PORTRAIT_COVER_TIMEOUT_MS);
+    return () => clearTimeout(timeout);
+  }, [isReady, motion.key, reduceMotion]);
+
+  // Once the still has been revealed it stays for this mount: switching to a
+  // late loop would bring the zoom jump back.
+  if (reduceMotion || (!isReady && (showStill || isError))) return null;
+  const isCovering = !isReady;
+  return (
+    <>
+      {isCovering ? (
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          style={[styles.window, { backgroundColor: coverColor, borderRadius }]}
+          testID="living-portrait-cover"
+        />
+      ) : null}
+      {url ? (
+        <LivingPortraitFrames
+          borderRadius={borderRadius}
+          key={url}
+          motion={motion}
+          onFailed={() => setShowStill(true)}
+          onReady={() => setIsReady(true)}
+          url={url}
+        />
+      ) : null}
+    </>
+  );
 }
 
 const styles = StyleSheet.create({

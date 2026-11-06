@@ -81,7 +81,7 @@ function LoadedPortraitImage({ name, portraitKey, portraitUrl, motion }: LoadedP
             : 'onb-reveal-portrait-image-loading'
         }
       />
-      {motion ? <LivingPortraitOverlay motion={motion} /> : null}
+      {motion ? <LivingPortraitOverlay coverColor={colors.white} motion={motion} /> : null}
     </>
   );
 }

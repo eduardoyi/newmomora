@@ -120,7 +120,9 @@ export function FamilyProfilePortraitPhoto({
         </View>
       )}
 
-      {motion ? <LivingPortraitOverlay borderRadius={resolvedRadius} motion={motion} /> : null}
+      {motion ? (
+        <LivingPortraitOverlay borderRadius={resolvedRadius} coverColor={backgroundColor} motion={motion} />
+      ) : null}
 
       {showGeneratingOverlay ? (
         <GeneratingVisualOverlay

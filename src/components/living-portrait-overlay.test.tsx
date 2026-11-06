@@ -3,6 +3,7 @@ import { AccessibilityInfo, AppState, StyleSheet } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 
 import {
+  LIVING_PORTRAIT_COVER_TIMEOUT_MS,
   LIVING_PORTRAIT_FRAME_MS,
   LIVING_PORTRAIT_HOLD_MS,
   LivingPortraitOverlay,
@@ -12,9 +13,9 @@ import {
 import { useMediaUrl } from '@/hooks/useMediaUrls';
 
 jest.mock('expo-image', () => ({
-  Image: ({ onLoad, source, testID }: { onLoad?: () => void; source?: unknown; testID?: string }) => {
+  Image: ({ onError, onLoad, source, testID }: { onError?: () => void; onLoad?: () => void; source?: unknown; testID?: string }) => {
     const { Text } = jest.requireActual<typeof import('react-native')>('react-native');
-    return <Text onPress={onLoad} testID={testID}>{JSON.stringify(source)}</Text>;
+    return <Text onError={onError} onPress={onLoad} testID={testID}>{JSON.stringify(source)}</Text>;
   },
 }));
 
@@ -155,15 +156,59 @@ describe('LivingPortraitOverlay', () => {
 
     expect(queryByTestId('living-portrait-overlay')).toBeNull();
     expect(queryByTestId('living-portrait-sheet')).toBeNull();
+    expect(queryByTestId('living-portrait-cover')).toBeNull();
     expect(mockedUseMediaUrl).toHaveBeenLastCalledWith(null, motion.key);
   });
 
-  it('renders nothing until the sheet URL is signed', async () => {
+  it('covers the still while the sheet URL is being signed', async () => {
     mockedUseMediaUrl.mockReturnValue({ url: undefined, isLoading: true, isError: false });
-    const { queryByTestId } = render(<LivingPortraitOverlay motion={motion} />);
+    const { getByTestId, queryByTestId } = render(<LivingPortraitOverlay coverColor="#123456" motion={motion} />);
     await act(async () => {});
 
     expect(queryByTestId('living-portrait-overlay')).toBeNull();
+    expect(StyleSheet.flatten(getByTestId('living-portrait-cover').props.style).backgroundColor).toBe('#123456');
+  });
+
+  it('lifts the cover once the loop has decoded, so its first frame is the resting image', async () => {
+    const { getByTestId, queryByTestId } = render(<LivingPortraitOverlay motion={motion} />);
+    await act(async () => {});
+    expect(getByTestId('living-portrait-cover')).toBeTruthy();
+
+    layOut(getByTestId);
+    act(() => getByTestId('living-portrait-sheet').props.onPress());
+
+    expect(queryByTestId('living-portrait-cover')).toBeNull();
+    expect(StyleSheet.flatten(getByTestId('living-portrait-overlay').props.style).opacity).toBe(1);
+  });
+
+  it('shows the still (and no late loop) when the sheet takes too long', async () => {
+    jest.useFakeTimers();
+    try {
+      const { getByTestId, queryByTestId } = render(<LivingPortraitOverlay motion={motion} />);
+      await act(async () => {});
+      layOut(getByTestId);
+
+      act(() => jest.advanceTimersByTime(LIVING_PORTRAIT_COVER_TIMEOUT_MS));
+
+      expect(queryByTestId('living-portrait-cover')).toBeNull();
+      expect(queryByTestId('living-portrait-overlay')).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows the still when the sheet fails to load or sign', async () => {
+    const { getByTestId, queryByTestId, rerender } = render(<LivingPortraitOverlay motion={motion} />);
+    await act(async () => {});
+    layOut(getByTestId);
+    act(() => getByTestId('living-portrait-sheet').props.onError());
+    expect(queryByTestId('living-portrait-cover')).toBeNull();
+    expect(queryByTestId('living-portrait-overlay')).toBeNull();
+
+    mockedUseMediaUrl.mockReturnValue({ url: undefined, isLoading: false, isError: true });
+    rerender(<LivingPortraitOverlay motion={{ ...motion, key: 'other/motion.webp' }} />);
+    await act(async () => {});
+    expect(queryByTestId('living-portrait-cover')).toBeNull();
   });
 
   it('rests the loop while the app is backgrounded', async () => {

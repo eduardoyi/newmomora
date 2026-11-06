@@ -39,6 +39,8 @@ const MAX_ZOOM_SCALE = 4;
 const DOUBLE_TAP_ZOOM_SCALE = 2;
 const ZOOM_ANIMATION_MS = 180;
 
+const VIEWER_BACKGROUND = '#211C24';
+
 function clampValue(value: number, min: number, max: number) {
   'worklet';
   return Math.min(Math.max(value, min), max);
@@ -416,7 +418,7 @@ function ZoomableImage({
             // contain-fitted still is a full-width square centred in the page.
             <View pointerEvents="none" style={styles.motionCenter}>
               <View style={styles.motionSquare}>
-                <LivingPortraitOverlay motion={motion} />
+                <LivingPortraitOverlay coverColor={VIEWER_BACKGROUND} motion={motion} />
               </View>
             </View>
           ) : null}
@@ -558,7 +560,7 @@ export function FullScreenMediaViewer({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#211C24',
+    backgroundColor: VIEWER_BACKGROUND,
     flex: 1,
   },
   pageWrap: {
