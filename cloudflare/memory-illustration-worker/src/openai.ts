@@ -143,7 +143,10 @@ export async function editImageWithUsage(
     form.set('input_fidelity', 'high');
   }
   for (const [index, reference] of references.entries()) {
-    form.append('image[]', new Blob([reference.bytes], { type: 'image/webp' }), `reference-${index + 1}.webp`);
+    // Usually Images-resized webp; the original png/jpeg when resizing failed.
+    const format = sniffImageFormat(new Uint8Array(reference.bytes)) ?? 'webp';
+    const extension = format === 'jpeg' ? 'jpg' : format;
+    form.append('image[]', new Blob([reference.bytes], { type: `image/${format}` }), `reference-${index + 1}.${extension}`);
   }
 
   return await sendImageEdit(env, form, signal);

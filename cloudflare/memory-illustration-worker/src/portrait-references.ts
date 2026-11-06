@@ -1,29 +1,9 @@
+import { loadAndResizeReference } from './references';
 import type { LoadedReference, PortraitLoadedReferences } from './types';
-
-const MAX_REFERENCE_EDGE = 1024;
 
 export class PortraitReferenceError extends Error {
   constructor(public readonly code: 'SOURCE_REFERENCE_UNAVAILABLE' | 'STYLE_REFERENCE_UNAVAILABLE') {
     super(code);
-  }
-}
-
-async function loadAndResizeReference(
-  bucket: R2Bucket,
-  env: Env,
-  key: string,
-): Promise<ArrayBuffer | null> {
-  try {
-    const object = await bucket.get(key);
-    if (!object?.body) return null;
-
-    const transformed = await env.IMAGES
-      .input(object.body)
-      .transform({ width: MAX_REFERENCE_EDGE, height: MAX_REFERENCE_EDGE, fit: 'scale-down' })
-      .output({ format: 'image/webp', quality: 85 });
-    return await new Response(transformed.image()).arrayBuffer();
-  } catch {
-    return null;
   }
 }
 

@@ -71,4 +71,30 @@ describe('reference loading', () => {
 
     expect((await pending).map((reference) => reference.description)).toEqual(['first', 'third']);
   });
+
+  it('uses the original image bytes when the Images binding fails, but not non-images', async () => {
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2];
+    const failingImages = {
+      input: () => ({
+        transform() { return this; },
+        output: async () => { throw new Error('IMAGES_TRANSFORM_ERROR 9523: Internal error.'); },
+      }),
+    };
+    const env = {
+      CHARACTER_PORTRAITS: { get: vi.fn(async (key: string) => ({ body: body(key === 'garbage.webp' ? [9, 9, 9] : png) })) },
+      PROFILE_PICTURES: { get: vi.fn(async () => null) },
+      IMAGES: failingImages,
+    } as unknown as Env;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const candidate = (memberId: string, portraitKey: string) => ({
+      memberId, description: memberId, portraitKey, portraitContentType: 'image/webp', profileKey: null, profileContentType: null,
+    });
+
+    const references = await loadIllustrationReferences(env, [candidate('ok', 'ok.webp'), candidate('bad', 'garbage.webp')]);
+
+    expect(references.map((reference) => reference.description)).toEqual(['ok']);
+    expect([...new Uint8Array(references[0].bytes)]).toEqual(png);
+    error.mockRestore();
+  });
 });
+

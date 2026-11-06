@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloud
 import { NonRetryableError } from 'cloudflare:workflows';
 
 import { BridgeError } from './bridge';
-import { reencodeToWebp, sniffImageFormat } from './image-output';
+import { resolveOutputBytesForR2, sniffImageFormat } from './image-output';
 import { checkMotionSheet, editMotionSheetWithUsage, ImageProviderError } from './openai';
 import {
   failMotion,
@@ -103,11 +103,19 @@ function queueMotionUsageBestEffort(
 }
 
 async function downscaleForQa(env: Env, bytes: ArrayBuffer): Promise<{ bytes: ArrayBuffer; contentType: string }> {
-  const transformed = await env.IMAGES
-    .input(new Blob([bytes]).stream())
-    .transform({ width: QA_MAX_EDGE, height: QA_MAX_EDGE, fit: 'scale-down' })
-    .output({ format: 'image/webp', quality: 85 });
-  return { bytes: await new Response(transformed.image()).arrayBuffer(), contentType: 'image/webp' };
+  try {
+    const transformed = await env.IMAGES
+      .input(new Blob([bytes]).stream())
+      .transform({ width: QA_MAX_EDGE, height: QA_MAX_EDGE, fit: 'scale-down' })
+      .output({ format: 'image/webp', quality: 85 });
+    return { bytes: await new Response(transformed.image()).arrayBuffer(), contentType: 'image/webp' };
+  } catch (error) {
+    // Downscaling only trims vision tokens: check the original when the
+    // Images binding is failing.
+    const format = sniffImageFormat(new Uint8Array(bytes));
+    if (!format) throw error;
+    return { bytes, contentType: `image/${format}` };
+  }
 }
 
 /**
@@ -204,17 +212,12 @@ export async function generateMotionSheetAndUpload(
   }
   if (!passingSheet) throw lastError;
 
-  let webp: ArrayBuffer;
+  // Fails open to the original png (truthful content type) when the Images
+  // binding cannot re-encode: a paid, QA-passed sheet is never thrown away.
+  const resolved = await resolveOutputBytesForR2(env, passingSheet);
   try {
-    webp = sniffImageFormat(new Uint8Array(passingSheet)) === 'webp'
-      ? passingSheet
-      : await reencodeToWebp(env, passingSheet);
-  } catch {
-    throw new NonRetryableError('MOTION_ENCODE_FAILED');
-  }
-  try {
-    const stored = await env.CHARACTER_PORTRAITS.put(input.outputKey, webp, {
-      httpMetadata: { contentType: 'image/webp' },
+    const stored = await env.CHARACTER_PORTRAITS.put(input.outputKey, resolved.bytes, {
+      httpMetadata: { contentType: resolved.contentType },
       customMetadata: { model: input.model },
     });
     if (!stored) throw new Error('R2_PUT_OUTCOME_AMBIGUOUS');

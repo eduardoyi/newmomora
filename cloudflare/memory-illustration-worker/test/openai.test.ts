@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   checkMotionSheet,
   editImage,
+  editImageWithUsage,
   editMotionSheetWithUsage,
   ImageProviderError,
   parseImageUsage,
@@ -95,6 +96,29 @@ describe('Flare pricing', () => {
     expect(priceImageUsage('gpt-image-2.5-flare', { ...usage, inputCachedTokens: 3 })).toMatchObject({ costIsComplete: false, estimatedCostUsd: null });
     expect(priceImageUsage('gpt-image-2.6-flare', usage)).toEqual({ costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.00036 });
     expect(priceImageUsage('gpt-image-2.6-flare', { ...usage, inputCachedTokens: 3 })).toMatchObject({ costIsComplete: false, estimatedCostUsd: null });
+  });
+});
+
+describe('reference uploads', () => {
+  it('labels each reference by its real format (resized webp, or the original png/jpeg fallback)', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ data: [{ b64_json: 'AQI=' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]).buffer;
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer;
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer;
+
+    await editImageWithUsage(fakeEnv, 'gpt-image-2.6-flare', 'p', [
+      { description: 'a', bytes: webp },
+      { description: 'b', bytes: png },
+      { description: 'c', bytes: jpeg },
+    ], undefined, new AbortController().signal);
+
+    const files = (fetchMock.mock.calls[0][1]?.body as FormData).getAll('image[]') as File[];
+    expect(files.map((file) => [file.type, file.name])).toEqual([
+      ['image/webp', 'reference-1.webp'],
+      ['image/png', 'reference-2.png'],
+      ['image/jpeg', 'reference-3.jpg'],
+    ]);
   });
 });
 

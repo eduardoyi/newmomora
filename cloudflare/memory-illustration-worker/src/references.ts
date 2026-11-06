@@ -1,22 +1,43 @@
+import { sniffImageFormat } from './image-output';
 import type { LoadedReference, ReferenceCandidate } from './types';
 
 const MAX_REFERENCE_EDGE = 1024;
+// OpenAI accepts up to 50MB per input image; stay well under it.
+const MAX_ORIGINAL_REFERENCE_BYTES = 20 * 1024 * 1024;
 
-async function loadAndResizeReference(bucket: R2Bucket, env: Env, key: string): Promise<ArrayBuffer | null> {
+/**
+ * Reads a reference from R2 and downsizes it via the Images binding. The
+ * resize is only an upload-size optimization, so when the binding fails
+ * (2026-11-06: IMAGES_TRANSFORM_ERROR 9523 on every call, which failed every
+ * new portrait) the original png/jpeg/webp bytes are used instead. Null only
+ * when the object is missing/unreadable or its bytes are not an image OpenAI
+ * accepts.
+ */
+export async function loadAndResizeReference(bucket: R2Bucket, env: Env, key: string): Promise<ArrayBuffer | null> {
+  let original: ArrayBuffer;
   try {
     const object = await bucket.get(key);
     if (!object?.body) {
       return null;
     }
+    original = await new Response(object.body).arrayBuffer();
+  } catch {
+    return null;
+  }
 
+  try {
     const transformed = await env.IMAGES
-      .input(object.body)
+      .input(new Blob([original]).stream())
       .transform({ width: MAX_REFERENCE_EDGE, height: MAX_REFERENCE_EDGE, fit: 'scale-down' })
       .output({ format: 'image/webp', quality: 85 });
     return await new Response(transformed.image()).arrayBuffer();
-  } catch {
-    // A single corrupt/missing reference must not prevent the other tagged members from rendering.
-    return null;
+  } catch (error) {
+    if (sniffImageFormat(new Uint8Array(original)) === null || original.byteLength > MAX_ORIGINAL_REFERENCE_BYTES) {
+      // A single corrupt reference must not prevent the other tagged members from rendering.
+      return null;
+    }
+    console.error('reference resize failed; using original bytes', error instanceof Error ? error.message : String(error));
+    return original;
   }
 }
 

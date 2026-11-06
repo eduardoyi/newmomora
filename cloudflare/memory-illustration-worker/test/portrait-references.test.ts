@@ -61,4 +61,27 @@ describe('portrait reference loading', () => {
     await expect(loadPortraitReferences(noSource, 'source.jpg', 'style.png'))
       .rejects.toMatchObject({ code: 'SOURCE_REFERENCE_UNAVAILABLE' });
   });
+
+  it('generates from the original references when the Images binding fails', async () => {
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1];
+    const jpeg = [0xff, 0xd8, 0xff, 0xe0, 2];
+    const env = {
+      STYLE_REFERENCES: { get: vi.fn(async () => ({ body: body(png) })) },
+      PROFILE_PICTURES: { get: vi.fn(async () => ({ body: body(jpeg) })) },
+      IMAGES: {
+        input: () => ({
+          transform() { return this; },
+          output: async () => { throw new Error('IMAGES_TRANSFORM_ERROR 9523: Internal error.'); },
+        }),
+      },
+    } as unknown as Env;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const references = await loadPortraitReferences(env, 'source.jpg', 'style.png');
+
+    expect([...new Uint8Array(references.style.bytes)]).toEqual(png);
+    expect([...new Uint8Array(references.source.bytes)]).toEqual(jpeg);
+    error.mockRestore();
+  });
 });
+
