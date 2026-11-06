@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
-import { AppState, StyleSheet, View } from 'react-native';
+import { AppState, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -59,13 +59,34 @@ interface LivingPortraitFramesProps {
   borderRadius?: number;
 }
 
+interface FrameSize {
+  width: number;
+  height: number;
+}
+
 /** Keyed by URL at the call site so a re-signed/replaced sheet starts hidden again. */
 function LivingPortraitFrames({ motion, url, borderRadius }: LivingPortraitFramesProps) {
   const { columns, rows } = motion;
   const frameCount = columns * rows;
   const [hasLoaded, setHasLoaded] = useState(false);
+  // The sheet is sized and moved in measured pixels, not percentages: on
+  // Android a percent-sized/-translated sheet briefly laid out at the box's own
+  // size (the whole grid shrunk into one frame) before filling it.
+  const [frameSize, setFrameSize] = useState<FrameSize | null>(null);
   const isAppActive = useIsAppActive();
   const elapsed = useSharedValue(0);
+  const frameWidth = useSharedValue(0);
+  const frameHeight = useSharedValue(0);
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    if (width <= 0 || height <= 0) return;
+    frameWidth.set(width);
+    frameHeight.set(height);
+    setFrameSize((current) => (
+      current && current.width === width && current.height === height ? current : { width, height }
+    ));
+  };
 
   useEffect(() => {
     // Paused (backgrounded) rests on frame 0, the still's own pose.
@@ -80,35 +101,38 @@ function LivingPortraitFrames({ motion, url, borderRadius }: LivingPortraitFrame
     const frame = livingPortraitFrameAt(elapsed.get(), frameCount);
     const column = frame % columns;
     const row = Math.floor(frame / columns);
-    // Percent translates are relative to the sheet itself (columns x rows boxes).
     return {
       transform: [
-        { translateX: `${-(column / columns) * 100}%` as const },
-        { translateY: `${-(row / rows) * 100}%` as const },
+        { translateX: -column * frameWidth.get() },
+        { translateY: -row * frameHeight.get() },
       ],
     };
   });
+
+  const sheetSize = frameSize
+    ? { width: columns * frameSize.width, height: rows * frameSize.height }
+    : null;
 
   return (
     <View
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
+      onLayout={handleLayout}
       pointerEvents="none"
-      style={[styles.window, { borderRadius, opacity: hasLoaded ? 1 : 0 }]}
+      style={[styles.window, { borderRadius, opacity: hasLoaded && sheetSize ? 1 : 0 }]}
       testID="living-portrait-overlay"
     >
-      <Animated.View
-        style={[{ width: `${columns * 100}%`, height: `${rows * 100}%` }, sheetStyle]}
-        testID="living-portrait-strip"
-      >
-        <Image
-          contentFit="fill"
-          onLoad={() => setHasLoaded(true)}
-          source={mediaImageSource(url, motion.key)}
-          style={styles.sheet}
-          testID="living-portrait-sheet"
-        />
-      </Animated.View>
+      {sheetSize ? (
+        <Animated.View style={[sheetSize, sheetStyle]} testID="living-portrait-strip">
+          <Image
+            contentFit="fill"
+            onLoad={() => setHasLoaded(true)}
+            source={mediaImageSource(url, motion.key)}
+            style={sheetSize}
+            testID="living-portrait-sheet"
+          />
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -136,9 +160,5 @@ const styles = StyleSheet.create({
   window: {
     ...StyleSheet.absoluteFill,
     overflow: 'hidden',
-  },
-  sheet: {
-    height: '100%',
-    width: '100%',
   },
 });

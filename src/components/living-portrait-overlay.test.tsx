@@ -1,4 +1,4 @@
-import { act, configure, render } from '@testing-library/react-native';
+import { act, configure, fireEvent, render } from '@testing-library/react-native';
 import { AccessibilityInfo, AppState, StyleSheet } from 'react-native';
 import * as Reanimated from 'react-native-reanimated';
 
@@ -27,6 +27,13 @@ configure({ defaultIncludeHiddenElements: true });
 
 const mockedUseMediaUrl = useMediaUrl as jest.MockedFunction<typeof useMediaUrl>;
 const motion = { key: 'u/family/m/portraits/v1/motion/t.webp', columns: 3, rows: 3 };
+
+// The sheet only mounts once its box has been measured.
+function layOut(getByTestId: (id: string) => unknown, width = 120, height = 120) {
+  act(() => {
+    fireEvent(getByTestId('living-portrait-overlay') as never, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width, height } } });
+  });
+}
 
 describe('livingPortraitFrameAt', () => {
   it('holds frame 0 for 800ms, then steps one frame per 150ms', () => {
@@ -78,6 +85,7 @@ describe('LivingPortraitOverlay', () => {
   it('signs the sheet key and pins the image cache to it', async () => {
     const { getByTestId } = render(<LivingPortraitOverlay motion={motion} />);
     await act(async () => {});
+    layOut(getByTestId);
 
     expect(mockedUseMediaUrl).toHaveBeenLastCalledWith(motion.key, motion.key);
     expect(getByTestId('living-portrait-sheet').props.children).toBe(
@@ -91,9 +99,21 @@ describe('LivingPortraitOverlay', () => {
 
     expect(StyleSheet.flatten(getByTestId('living-portrait-overlay').props.style).opacity).toBe(0);
 
+    layOut(getByTestId);
+    // Measured but not decoded yet: still hidden.
+    expect(StyleSheet.flatten(getByTestId('living-portrait-overlay').props.style).opacity).toBe(0);
+
     act(() => getByTestId('living-portrait-sheet').props.onPress());
 
     expect(StyleSheet.flatten(getByTestId('living-portrait-overlay').props.style).opacity).toBe(1);
+  });
+
+  it('does not mount the sheet before its box is measured', async () => {
+    const { queryByTestId } = render(<LivingPortraitOverlay motion={motion} />);
+    await act(async () => {});
+
+    expect(queryByTestId('living-portrait-strip')).toBeNull();
+    expect(queryByTestId('living-portrait-sheet')).toBeNull();
   });
 
   it('is not interactive and hidden from accessibility', async () => {
@@ -106,14 +126,15 @@ describe('LivingPortraitOverlay', () => {
     expect(overlay.props.importantForAccessibility).toBe('no-hide-descendants');
   });
 
-  it('sizes the sheet to columns x rows boxes and starts on the first frame', async () => {
+  it('sizes the sheet to columns x rows measured boxes in pixels and starts on the first frame', async () => {
     const { getByTestId } = render(<LivingPortraitOverlay motion={{ ...motion, columns: 2, rows: 4 }} />);
     await act(async () => {});
+    layOut(getByTestId, 90, 110);
 
-    const style = StyleSheet.flatten(getByTestId('living-portrait-strip').props.style);
-    expect(style.width).toBe('200%');
-    expect(style.height).toBe('400%');
-    expect(style.transform).toEqual([{ translateX: '0%' }, { translateY: '0%' }]);
+    const strip = StyleSheet.flatten(getByTestId('living-portrait-strip').props.style);
+    expect(strip.width).toBe(180);
+    expect(strip.height).toBe(440);
+    expect(strip.transform).toEqual([{ translateX: -0 }, { translateY: -0 }]);
   });
 
   it('plays a looping, non-interpolated timing once loaded', async () => {
@@ -121,6 +142,7 @@ describe('LivingPortraitOverlay', () => {
     withTiming.mockClear();
     const { getByTestId } = render(<LivingPortraitOverlay motion={motion} />);
     await act(async () => {});
+    layOut(getByTestId);
     act(() => getByTestId('living-portrait-sheet').props.onPress());
 
     expect(withTiming).toHaveBeenCalledWith(2000, expect.objectContaining({ duration: 2000 }));
@@ -155,6 +177,7 @@ describe('LivingPortraitOverlay', () => {
 
     const { getByTestId } = render(<LivingPortraitOverlay motion={motion} />);
     await act(async () => {});
+    layOut(getByTestId);
     act(() => getByTestId('living-portrait-sheet').props.onPress());
     expect(withTiming).toHaveBeenCalledTimes(1);
 
