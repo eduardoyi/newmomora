@@ -8,6 +8,7 @@ import {
   isFreshMatchingWorkflowJob,
 } from './index.ts';
 import { signedPortraitMemoryRetriggerHeaders } from '../_shared/portrait-memory-retrigger.ts';
+import { buildSceneWithCameraDirection } from '../_shared/prompts.ts';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';
@@ -1536,7 +1537,7 @@ Deno.test(
               calls.push(options.usageContext?.operation);
               return (options.usageContext?.operation === 'emotion_chat'
                 ? { emotion: 'joy' }
-                : { safeDescription: 'SAFE-SCENE-FOR-JOB', expressionStyle: 'comedic' }) as T;
+                : { safeDescription: 'SAFE-SCENE-FOR-JOB', expressionStyle: 'comedic', cameraDirection: 'CAMERA-FROM-THE-FLOOR' }) as T;
             },
             fetch: (async (_input, init) => {
               dispatched.push(String(init?.body));
@@ -1561,7 +1562,13 @@ Deno.test(
 
           assertEquals(calls, ['emotion_chat', 'safety_chat']);
           assertEquals(inserted.length, 1);
-          assertEquals(inserted[0].safe_scene_description, 'SAFE-SCENE-FOR-JOB');
+          // The camera director's pick rides in the job's scene text, so the
+          // worker renders it with no schema change.
+          assertEquals(
+            inserted[0].safe_scene_description,
+            buildSceneWithCameraDirection('SAFE-SCENE-FOR-JOB', 'CAMERA-FROM-THE-FLOOR'),
+          );
+          assertEquals(String(inserted[0].safe_scene_description).startsWith('SAFE-SCENE-FOR-JOB\nCamera and staging'), true);
           assertEquals(inserted[0].expression_style, 'comedic');
           assertEquals(inserted[0].style_description !== undefined, true);
           assertEquals(dispatched.length, 1);

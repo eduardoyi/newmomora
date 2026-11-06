@@ -161,7 +161,7 @@ The `{ext}` should reflect the actual format: `jpg`, `png`, `heic`, `webp`, `mp4
 | `upload-media` | Authenticated binary upload proxy for mobile media uploads | JWT |
 | `get-media-url` | Presign GET for display (same function as illustrations/portraits) | JWT |
 | `delete-storage-object` | Delete user-owned memory media (and rollback on failed create) | JWT |
-| `analyze-emotion` | Photo emotion + palette (`gpt-4o-mini` vision); optional caption | JWT |
+| `analyze-emotion` | Photo emotion + palette (`gpt-6-luna` vision); optional caption | JWT |
 | `replace_memory_media_assets` RPC | Transactionally replace ordered media assets and cover cache | JWT/RLS |
 
 **`get-upload-url` — allowed pattern for media memories:**
@@ -404,7 +404,7 @@ supabase test db supabase/tests/retained_media_preview_authorization.sql
 
 ### Video emotion (not implemented)
 
-Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-video-thumbnails` (or equivalent). Single `gpt-4o-mini` multimodal call with all frames + optional caption; same `EMOTION_PALETTES`, stale-write guard, hook trigger. No server-side ffmpeg.
+Client extracts **3 keyframes** (start / middle / end of ≤60s clip) via `expo-video-thumbnails` (or equivalent). Single `gpt-6-luna` multimodal call with all frames + optional caption; same `EMOTION_PALETTES`, stale-write guard, hook trigger. No server-side ffmpeg.
 
 ### MVP follow-ups
 

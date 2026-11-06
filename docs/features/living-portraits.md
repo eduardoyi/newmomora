@@ -37,7 +37,7 @@ flowchart LR
   Claim --> MW
   MW --> Input[bridge motion_get_input: prompt, keys]
   Input --> Edit[images/edits: still only → 3x3 sheet 1536²]
-  Edit --> QA[gpt-4o-mini QA: same person, equal panels, no text, stable]
+  Edit --> QA[gpt-6-luna QA: same person, equal panels, no text, stable]
   QA -- fail --> Edit
   QA -- pass --> R2[(WebP sheet in R2)]
   R2 --> Pub[bridge motion_publish CAS]

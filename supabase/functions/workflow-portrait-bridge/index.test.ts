@@ -815,6 +815,17 @@ Deno.test('motion_record_usage writes telemetry-only operations attributed to th
   );
   assertEquals(await checkResponse.json(), { recorded: true });
   assertEquals(check.calls.rpc[0].args.p_operation, 'portrait_motion_check');
+
+  // Rollout compatibility: a Worker still reporting gpt-4o-mini (above) and a
+  // Worker reporting gpt-6-luna are both accepted for the vision check.
+  const luna = createMotionClient();
+  const lunaResponse = await motionCall(
+    { ...base, operation: 'motion_record_usage', aiCallId: `motion-check:${MOTION_TOKEN}:3`, model: 'gpt-6-luna', pricingVersion: 'openai-2026-09-28', estimatedCostUsd: 0.0001, usage: { inputTextTokens: 900, outputTextTokens: 250 } },
+    luna,
+  );
+  assertEquals(await lunaResponse.json(), { recorded: true });
+  assertEquals(luna.calls.rpc[0].args.p_operation, 'portrait_motion_check');
+  assertEquals(luna.calls.rpc[0].args.p_pricing_version, 'openai-2026-09-28');
 });
 
 Deno.test('motion_record_usage rejects mismatched call ids, kinds and models', async () => {
@@ -825,6 +836,7 @@ Deno.test('motion_record_usage rejects mismatched call ids, kinds and models', a
     { aiCallId: `motion:${MOTION_TOKEN}:0`, model: 'gpt-image-2.6-flare' },
     { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-4o-mini' },
     { aiCallId: `motion-check:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare' },
+    { aiCallId: `motion-check:${MOTION_TOKEN}:1`, model: 'gpt-5-nano' },
     { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', aiOperation: 'check' },
     { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', estimatedCostUsd: -1 },
     { aiCallId: `motion:${MOTION_TOKEN}:1`, model: 'gpt-image-2.6-flare', success: 'yes' },

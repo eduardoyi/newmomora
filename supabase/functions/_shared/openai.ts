@@ -1,4 +1,14 @@
-const DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
+// Routine chat + vision calls (safety rewrite + camera direction, emotion,
+// memory analysis, voice cleanup, relationship suggestions). gpt-6-luna
+// rejects a non-default `temperature` unless reasoning is off, so these calls
+// send `reasoning_effort` instead (2026-11-06 switch from gpt-4o-mini).
+const DEFAULT_CHAT_MODEL = 'gpt-6-luna';
+const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'low';
+// Every Edge chat call sits on a path someone waits on (voice cleanup, the
+// illustration safety rewrite + camera director, emotion, analysis on save),
+// so they run on the Fast tier: ~40% lower latency at 2x the token price
+// (2026-11-06 benchmark). Background Worker calls stay on standard.
+const DEFAULT_SERVICE_TIER: ServiceTier = 'fast';
 const DEFAULT_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe';
 const PRIMARY_IMAGE_MODEL = 'gpt-image-2.6-flare';
 const FALLBACK_IMAGE_MODEL = 'gpt-image-1.5';
@@ -61,10 +71,18 @@ export function buildAiUsageLedgerAttribution(context: AiUsageContext): {
   };
 }
 
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+
 export interface OpenAiRequestOptions {
   signal?: AbortSignal;
   usageContext?: AiUsageContext;
+  /** Defaults to `low`; `none` is the fastest, `medium` the most deliberate. */
+  reasoningEffort?: ReasoningEffort;
+  /** Defaults to `fast`; `default` is the standard tier. */
+  serviceTier?: ServiceTier;
 }
+
+export type ServiceTier = 'default' | 'fast';
 
 /**
  * A rejected telemetry write is deliberately observed before it is detached.
@@ -91,7 +109,7 @@ export function assertAiUsageWriteSucceeded(result: { error: unknown }): void {
 
 /** Best-effort ledger write. It is intentionally detached from user work. */
 function recordUsage(context: AiUsageContext | undefined, input: {
-  aiCallId: string; model: string; success: boolean; usage?: unknown; knownAudioSeconds?: number;
+  aiCallId: string; model: string; success: boolean; usage?: unknown; knownAudioSeconds?: number; serviceTier?: unknown;
 }): void {
   if (!context) return;
   const rawUsage = input.usage && typeof input.usage === 'object' && !Array.isArray(input.usage)
@@ -101,7 +119,10 @@ function recordUsage(context: AiUsageContext | undefined, input: {
   const pricing = priceOpenAiUsage(
     input.model,
     normalizeOpenAiUsage(input.usage, input.knownAudioSeconds),
-    { audioDurationIsEstimate: input.knownAudioSeconds !== undefined && !hasProviderAudioDuration },
+    {
+      audioDurationIsEstimate: input.knownAudioSeconds !== undefined && !hasProviderAudioDuration,
+      serviceTier: typeof input.serviceTier === 'string' ? input.serviceTier : null,
+    },
   );
   const attribution = buildAiUsageLedgerAttribution(context);
   scheduleBestEffortUsageWrite(async () => {
@@ -220,7 +241,8 @@ export async function chatJson<T>(
     },
     body: JSON.stringify({
       model: DEFAULT_CHAT_MODEL,
-      temperature: 0.2,
+      reasoning_effort: options.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+      service_tier: options.serviceTier ?? DEFAULT_SERVICE_TIER,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
@@ -236,7 +258,7 @@ export async function chatJson<T>(
   }
 
   const payload = await response.json();
-  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage, serviceTier: payload.service_tier });
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== 'string') {
@@ -279,7 +301,8 @@ export async function chatJsonWithVision<T>(
     },
     body: JSON.stringify({
       model: DEFAULT_CHAT_MODEL,
-      temperature: 0.2,
+      reasoning_effort: options.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+      service_tier: options.serviceTier ?? DEFAULT_SERVICE_TIER,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
@@ -294,7 +317,7 @@ export async function chatJsonWithVision<T>(
   }
 
   const payload = await response.json();
-  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage, serviceTier: payload.service_tier });
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== 'string') {
@@ -370,7 +393,8 @@ export async function chatJsonWithVisionMulti<T>(
     },
     body: JSON.stringify({
       model: DEFAULT_CHAT_MODEL,
-      temperature: 0.2,
+      reasoning_effort: options.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+      service_tier: options.serviceTier ?? DEFAULT_SERVICE_TIER,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
@@ -386,7 +410,7 @@ export async function chatJsonWithVisionMulti<T>(
   }
 
   const payload = await response.json();
-  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage });
+  recordUsage(options.usageContext, { aiCallId, model: DEFAULT_CHAT_MODEL, success: true, usage: payload.usage, serviceTier: payload.service_tier });
   const content = payload.choices?.[0]?.message?.content;
 
   if (!content || typeof content !== 'string') {

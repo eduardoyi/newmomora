@@ -105,7 +105,9 @@ const MOTION_COLUMNS = 3;
 const MOTION_ROWS = 3;
 const MOTION_SIZE = '1536x1536';
 const MOTION_IMAGE_MODELS = new Set(['gpt-image-2.6-flare', 'gpt-image-2.5-flare', 'gpt-image-2', 'gpt-image-1.5']);
-const MOTION_CHECK_MODEL = 'gpt-4o-mini';
+// The Worker and this function deploy separately: accept the previous check
+// model alongside the current one so either deploy order stays valid.
+const MOTION_CHECK_MODELS = new Set(['gpt-6-luna', 'gpt-4o-mini']);
 const MOTION_ATTEMPT_PATTERN = '[1-9][0-9]?';
 
 function hex(bytes: ArrayBuffer): string {
@@ -432,7 +434,7 @@ export function getPortraitMotionUsageOperation(
   const kind = imageCall ? 'image' : checkCall ? 'check' : null;
   if (!kind || (body.aiOperation !== undefined && body.aiOperation !== kind)) return null;
   if (typeof body.model !== 'string' ||
-    (kind === 'image' ? !MOTION_IMAGE_MODELS.has(body.model) : body.model !== MOTION_CHECK_MODEL)) return null;
+    (kind === 'image' ? !MOTION_IMAGE_MODELS.has(body.model) : !MOTION_CHECK_MODELS.has(body.model))) return null;
   if ((body.billingStatus !== undefined && body.billingStatus !== 'known' && body.billingStatus !== 'unknown') ||
     (body.pricingVersion !== undefined && (typeof body.pricingVersion !== 'string' || body.pricingVersion.length > 100)) ||
     (body.costBasis !== undefined && body.costBasis !== 'provider_usage' && body.costBasis !== 'unpriced') ||

@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph openai [OpenAI]
         STT[gpt-4o-mini-transcribe]
-        LLM[gpt-4o-mini]
+        LLM[gpt-6-luna]
         Image[gpt-image-2]
     end
 
@@ -2517,7 +2517,7 @@ This `verify_jwt = false` internal function is not a browser API. It verifies ra
 |---|---|---|
 | `motion_start` | `jobId` = portrait **job** id | `{ started: true, versionId, motionToken }` or `{ started: false, outcome }`. Resolves `portrait_generation_jobs.portrait_version_id`, calls `claim_portrait_motion(version, false)`, deletes the returned `stale_motion_key` from R2 best-effort. |
 | `motion_get_input` | `motionToken` | `{ sourceKey, outputKey, prompt, checkPrompt, columns: 3, rows: 3, size: '1536x1536', model: 'gpt-image-2.6-flare', quality: 'medium', complexity: 'medium' }`; 409 `MOTION_SUPERSEDED` unless the token is the current pending claim of the still that is currently published. Prompts come from `_shared/prompts.ts` (`buildPortraitMotionPrompt`, `PORTRAIT_MOTION_CHECK_PROMPT`). |
-| `motion_record_usage` | `motionToken`, `aiCallId` (`motion:<token>:<n>` or `motion-check:<token>:<n>`), `aiOperation`: `'image' \| 'check'` (the request's own `operation` is the bridge operation; falls back to the aiCallId prefix and must agree with it when both are sent), `model` (`gpt-image-*` for image, `gpt-4o-mini` for check), `success`, `usage`, pricing fields as `record_usage` | `{ recorded: true }` (`{ recorded: false }` if the version is gone). Writes `record_ai_usage_event_detailed` for the version's family with its `user_id` as actor, operation `portrait_motion` / `portrait_motion_check`. |
+| `motion_record_usage` | `motionToken`, `aiCallId` (`motion:<token>:<n>` or `motion-check:<token>:<n>`), `aiOperation`: `'image' \| 'check'` (the request's own `operation` is the bridge operation; falls back to the aiCallId prefix and must agree with it when both are sent), `model` (`gpt-image-*` for image, `gpt-6-luna` for check; `gpt-4o-mini` still accepted during the 2026-11 rollout), `success`, `usage`, pricing fields as `record_usage` | `{ recorded: true }` (`{ recorded: false }` if the version is gone). Writes `record_ai_usage_event_detailed` for the version's family with its `user_id` as actor, operation `portrait_motion` / `portrait_motion_check`. |
 | `motion_publish` | `motionToken`, `outputKey`, `columns`, `rows` (integers 1-4) | `{ published, oldMotionKey }` (`publish_portrait_motion`). `published: false` means delete the uploaded object. |
 | `motion_fail` | `motionToken`, `errorCode` (optional, <= 100 chars) | `{ failed }` (`fail_portrait_motion`). |
 
@@ -2547,11 +2547,11 @@ This `verify_jwt = false` internal function is not a browser API. It verifies ra
 
 | `memory_type` | Text sent | Images sent | Model |
 |---------------|-----------|-------------|-------|
-| `text_illustration` | Non-empty `content` (`stripUrls`'d) | none | `gpt-4o-mini` chat |
-| `text_only` | Non-empty `content` (`stripUrls`'d) | none | `gpt-4o-mini` chat |
-| `media` | Optional caption (`content`) | Up to 4 `memory_media` rows by position — each prefers `preview_object_key` (photo preview **or video poster frame**, both JPEG); falls back to the original only for jpeg/png/webp; HEIC-with-no-preview and video-with-no-poster assets are skipped | `gpt-4o-mini` vision (multi-image) |
+| `text_illustration` | Non-empty `content` (`stripUrls`'d) | none | `gpt-6-luna` chat |
+| `text_only` | Non-empty `content` (`stripUrls`'d) | none | `gpt-6-luna` chat |
+| `media` | Optional caption (`content`) | Up to 4 `memory_media` rows by position — each prefers `preview_object_key` (photo preview **or video poster frame**, both JPEG); falls back to the original only for jpeg/png/webp; HEIC-with-no-preview and video-with-no-poster assets are skipped | `gpt-6-luna` vision (multi-image) |
 | `media` (no usable image and no caption) | — | — | `{ emotion: '', colorPalette: '', skipped: true }` |
-| `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | none | `gpt-4o-mini` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
+| `audio` | `content` (description) + `audio_transcript`, concatenated — either alone is enough | none | `gpt-6-luna` chat (2026-08-19, [audio-memories.md](./features/audio-memories.md)) |
 | `audio` (both empty) | — | — | `{ emotion: '', colorPalette: '', skipped: true }` — success-shaped, never an error (babble/silence with no typed caption) |
 
 **Artwork medium axis (2026-10-14, [artwork-scanning plan](./plans/artwork-scanning.md)).** For a `media` memory with `media_variant = 'artwork'` (the handler selects `media_variant`; `MemoryForAnalysis.mediaVariant`) the same single call gains an artwork addendum appended to the system prompt (non-artwork prompts are byte-identical, pinned by a hash test): the images are scans of a child's drawing, not a family event, and the model adds `medium` — one of `_shared/artwork-medium.ts`'s `ARTWORK_MEDIUMS` (`crayon`, `marker`, `colored pencil`, `pencil`, `watercolor`, `paint`, `chalk`, `pastel`, `collage`, `mixed media`; `mixed media` when pieces differ). `parseMemoryAnalysisModelOutput` reads it through the tolerant `normalizeArtworkMedium` (case, plurals, spelling variants, synonym map; unknown -> null). Only the first 4 pieces are seen, so a larger batch's medium reflects pieces 1-4. **Artwork-mode post-processing** ("depicted content is not a family event" — a drawn castle must not feed the holiday-card trips, book travel spreads, or film script) runs in `runMemoryAnalysis` before the write: `topics` forced to `['arts-crafts']` (model topics discarded; `topic_details` kept only for that topic), `labels` lowercased and prefixed `artwork` + the medium, `description` prefixed `a child's <medium|artwork> drawing of …`; milestones are unchanged (explicit-text-only still applies to the caption). The CAS write includes `artwork_medium` **only when the memory is artwork and the parsed medium is non-null** (the check constraint would reject it otherwise, and a flaky re-analysis never erases a good medium); `supabase/scripts/backfill-memory-analysis.ts` selects `media_variant` and passes it through the same helper.
@@ -2684,7 +2684,7 @@ that supply it remain valid.
 1. Validate the caller and reuse a fresh active job for automatic recovery and legacy requests. New `manual_regenerate` supersedes immediately; legacy clients that only send `forceRegenerate` may reuse the job until the 5:30 recovery window.
 2. For `initial` or `recovery` with no emotion, run the same emotion analysis with one retry before claiming. If both attempts fail, use Tender; this is intentionally server-owned so a client killed after save does not lose the palette-recovery path.
 3. Claim a new attempt with a UUID, set `illustration_generation_started_at`, preserve the key-aware portrait deferral/retrigger behavior, and create no job when deferring.
-4. Persist private job input after the safety rewrite and reference resolution. The jobs table has RLS but no client policies; only authorized service-side code accesses it.
+4. Persist private job input after the safety rewrite and reference resolution. The jobs table has RLS but no client policies; only authorized service-side code accesses it. The safety rewrite (gpt-6-luna) also acts as the camera director, returning `{safeDescription, expressionStyle, shotOptions, cameraDirection}`. `safe_scene_description` stores `buildSceneWithCameraDirection(safeDescription, cameraDirection)`: the description plus a `Camera and staging …:` line, or the description alone when no shot came back. The worker contract and job columns are unchanged ([illustration-camera-direction.md](./features/illustration-camera-direction.md)).
 5. Dispatch the deterministic Workflow instance ID. An existing instance ID is an idempotent successful 202, not an error.
 6. The Workflow fetches job input inside its generate-and-upload step; it returns no prompt, family data, or image bytes as Workflow step state. It checks the deterministic R2 key before an OpenAI call, then uploads the generated bytes directly to R2 in the same step.
 7. Primary model is `gpt-image-2.6-flare` (`complexity: medium`). Retryable primary failures may use sequential `gpt-image-1.5` fallback; `input_fidelity: high` is used for multi-reference fallback edits. One/two references omit `quality`; three or more explicitly use `medium`. The prior 55-second parallel hedge is removed to avoid duplicate paid work. Output is WebP compression 85. A moderation refusal maps to `MODERATION_BLOCKED` and never falls back.
@@ -2789,7 +2789,7 @@ Family mode:
 2. Build transcription prompt from the canonical names + nicknames.
 3. Call OpenAI `/v1/audio/transcriptions` (`gpt-4o-mini-transcribe`).
 4. Parse raw transcript for name/nickname matches → `mentionedMemberIds`.
-5. Call `gpt-4o-mini` for cleanup + self-reference detection + `description`
+5. Call `gpt-6-luna` for cleanup + self-reference detection + `description`
    generation — one call, `buildVoiceCleanupSystemPrompt({ includeDescription:
    true })`. `description` is server-sanitized (`sanitizeVoiceDescription`):
    trimmed, clamped to 120 chars, `''` when speech is unusable (silence,
@@ -3680,7 +3680,7 @@ The shared function handler (`_shared/gallery-import.ts`) owns request
 validation and is wrapped by each user endpoint. `GalleryImportWorkflow` is
 the third durable class in `cloudflare/memory-illustration-worker`: it fetches
 only private preview input through the bridge, validates real bytes, makes one
-schema-constrained `gpt-4o-mini` multi-image vision request per cluster, and
+schema-constrained `gpt-6-luna` multi-image vision request per cluster, and
 publishes a complete result idempotently. It may split a cluster into at most
 three groups and never merges clusters. Definite retryable responses can use
 the bounded attempt cap; network/timeout/disconnect outcomes are `ambiguous`
@@ -4039,7 +4039,7 @@ one run per family per 24h, or per 1h after a new member was added) ->
 `family_relationship_signals` (members, linked accounts, co-tag counts, <= 40
 short memory snippets; reported memories excluded) -> skip when every member
 is sorted and no memory arrived since the last run -> `chatJson`
-(gpt-4o-mini, usage operation `relationship_chat`; not capped -- chat is
+(gpt-6-luna, usage operation `relationship_chat`; not capped -- chat is
 ledger telemetry, the claim is the bound) -> pure validation
 (`_shared/family-relationship-suggestions.ts`: enum values, the family's own
 member refs only, role/side only where none is set yet, confidence >= 0.6,

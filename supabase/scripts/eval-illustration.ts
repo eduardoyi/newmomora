@@ -10,6 +10,23 @@
  *   npm run eval:illustration -- --search "fever" --model gpt-image-1.5
  *   npm run eval:illustration -- --memory-id <uuid> \
  *     --variant gpt-image-2.5-flare --variant gpt-image-2.6-flare:high --variant gpt-image-2.6-flare:low
+ *   npm run eval:illustration -- --list-recent 40
+ *   npm run eval:illustration -- --memory-id <uuid> \
+ *     --style-file styles/line-art.txt --style-file styles/riso.txt
+ *
+ * `--style-file` (repeatable) swaps the production "Illustration style" +
+ * "Color palette" block for the file's text (`{palette}` expands to the
+ * memory's emotion palette), so art directions A/B against the same scene.
+ * `@@ old => new` lines in the file patch the rest of the prompt literally.
+ * An `@image path` line appends that image as an extra (style) reference;
+ * `{styleRef}` in the text expands to its "reference image N" label.
+ *
+ * `--director N` adds a cinematographer pass after the safety rewrite: an LLM
+ * proposes N distinct shots (camera height, angle, distance, POV, staging
+ * idea) and every style renders once per shot, inserted as "Camera and
+ * staging:" after the Scene line. The director sees the original memory too.
+ * `--director-model model[:effort]` (repeatable) A/Bs director models on the
+ * same safety rewrite; `--shot "label: text"` renders hand-written shots.
  *
  * Every variant renders the same prompt (one safety rewrite per memory) at
  * `--quality` (default medium, as in production) and prints its latency.
@@ -30,6 +47,7 @@ import { resolveMemberIdsForIllustration } from '../functions/_shared/illustrati
 import {
   buildIllustrationPrompt,
   buildSafetySystemPrompt,
+  buildSceneWithCameraDirection,
   EMOTION_PALETTES,
   normalizeEmotion,
   type SafetyPromptMember,
@@ -44,6 +62,7 @@ import {
   PRIMARY_IMAGE_MODEL,
   type OpenAiImageComplexity,
   type OpenAiImageQuality,
+  type ReferenceImageInput,
 } from '../functions/_shared/openai.ts';
 import { getObjectBytes } from '../functions/_shared/r2.ts';
 
@@ -65,6 +84,93 @@ interface CliOptions {
   quality: OpenAiImageQuality;
   outputDir: URL;
   listEmotions: boolean;
+  /** `--list-recent N`: print recent illustrated memories and exit. */
+  listRecent: number;
+  styleFiles: string[];
+  /** `--director N`: render each style once per LLM-proposed shot. */
+  director: number;
+  /** `--shots-only`: print the director's shots and skip image generation. */
+  shotsOnly: boolean;
+  /** `--shot "label: text"`, repeatable: hand-written shots instead of the director. */
+  manualShots: DirectorShot[];
+  /** `--director-model model[:effort]`, repeatable: A/B director models on one safety rewrite. */
+  directorModels: DirectorModel[];
+}
+
+interface StyleOverride {
+  name: string;
+  text: string;
+  image?: ReferenceImageInput;
+}
+
+interface DirectorModel {
+  model: string;
+  effort?: string;
+}
+
+interface DirectorShot {
+  label: string;
+  shot: string;
+}
+
+/** Director pass uses a stronger reasoning model than production's chatJson default. */
+const DEFAULT_DIRECTOR_MODEL = 'gpt-5.4-mini';
+
+async function directorJson<T>(systemPrompt: string, userPrompt: string, model: DirectorModel): Promise<T> {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${Deno.env.get('OPENAI_API_KEY')}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: model.model,
+      ...(model.effort ? { reasoning_effort: model.effort } : {}),
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+  if (!response.ok) throw new Error(`director request failed: ${response.status}`);
+  const payload = await response.json();
+  return JSON.parse(payload.choices?.[0]?.message?.content ?? '{}') as T;
+}
+
+function buildDirectorSystemPrompt(count: number): string {
+  return [
+    'You are the cinematographer for the illustrations in a family memory journal.',
+    count === 1
+      ? 'Given a child-safe scene, choose the ONE way to stage it as a still image that makes this memory land best — as bold as the memory can justify.'
+      : `Given a child-safe scene, propose ${count} DISTINCT ways to stage it as one still image.`,
+    'The shot must be specific and drawable and make THIS memory\'s story or feeling land. Never a generic centered medium shot of the family smiling at the viewer.',
+    'Toolbox — mix freely, choose what serves the story:',
+    'Camera height and angle: worm\'s-eye from the floor looking up (a child towers like a giant), bird\'s-eye straight down (patterns of toys or laundry, a bed seen from the ceiling), high angle (smallness), low angle (heroism), tilted frame (chaos), eye level at the child\'s height (the child\'s world).',
+    'Distance: extreme wide (tiny figures in a big world), wide, medium, or an extreme close-up of one telling detail (small hands, a toe touching the water).',
+    'Point of view: from an object or place in the story (from inside a box, from the sky looking down), over-the-shoulder, or a listed parent\'s own POV with only their hands or arms in frame.',
+    'Framing devices: through a doorway, under a table, between crib bars, a reflection in a mirror, window or puddle, a shadow on a wall.',
+    'Imagination and scale: draw what the child believes as if it were real — a hug the wind carried away visibly floating in the sky, a cardboard box that is truly a bus on a road, a toddler "being a monster" towering over a toy city.',
+    'Sound and feeling made visible without words: a burp as a little puff, a song as drifting ripples, a tiny storm cloud over one cross child.',
+    'Timing: the instant just before or after the punchline. Placement: tiny figures in a corner with a huge empty sky, bold cropping.',
+    'Rules:',
+    'Only the people listed under People appear. Never add anyone else — no searcher, helper, bystander, or the hands of a parent who is not listed.',
+    'Never describe anyone\'s appearance (eyes, hair, glasses, skin, clothing colors); the portraits handle that. Describe position, pose, action, and expression only.',
+    'Every listed person stays recognizable, with faces readable.',
+    'Stay truthful to the memory and its emotional tone. Boldness follows expressionStyle: comedic → exaggerated, cartoon-bold camera; tender → intimate and unusual but calm; neutral or hard moments (sick, sad, tantrums, worry) → quiet, observational, honest, never a joke.',
+    'Bath scenes: the camera stays outside the tub, level with the rim; the child is seen from the chest up behind the tub wall, in bubbles, or wrapped in a towel. Never look down into the water at the child, never a close-up of bare skin. Changing and bedtime scenes: pajamas or a blanket.',
+    'Children in a car sit in their car seat in the back.',
+    count > 1
+      ? 'Make the options genuinely different: the first is the boldest idea the memory can justify, the second an unusual but realistic angle, the third a quiet observational frame. For hard moments all stay honest.'
+      : null,
+    'Examples of the boldness and literal physical detail wanted (they are NOT this memory; invent the equivalent):',
+    '(a) A toddler pretending to be a dinosaur next to her block tower: "The camera lies flat on the kitchen floor among the wooden blocks, lens pointing steeply up like a monster movie. The block tower looms in the foreground. The toddler TOWERS behind it, seen from below, arms up like claws mid-roar, gleeful face near the top edge."',
+    '(b) Siblings asleep together on a picnic blanket: "Straight top-down view from high above, no horizon. The checkered blanket is a flat pattern filling the frame; the two kids are small, curled toward each other in the lower-left third, each about a sixth of the frame."',
+    '(c) A child reading a book to a teddy bear: "The camera sits just behind the teddy bear\'s shoulder, its fuzzy ear soft in the foreground; the child faces it across the rug, holding the book open toward the bear, earnest and absorbed."',
+    'Be literal about the lens: say where the camera physically is, what fills the foreground, and how much of the frame each person takes.',
+    `Each shot: 1-3 sentences in English naming the camera position and angle, distance, where each person sits in the frame, and the one staging idea that makes it special.`,
+    'JSON only: {"shots":[{"label":"two-or-three-word-kebab-case","shot":"..."}]}',
+  ].filter((line): line is string => Boolean(line)).join(' ');
 }
 
 const IMAGE_COMPLEXITIES = new Set(['low', 'medium', 'high']);
@@ -109,6 +215,12 @@ function parseArgs(args: string[]): CliOptions {
     quality: 'medium',
     outputDir: defaultOutputDir,
     listEmotions: false,
+    listRecent: 0,
+    styleFiles: [],
+    director: 0,
+    shotsOnly: false,
+    manualShots: [],
+    directorModels: [],
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -146,6 +258,33 @@ function parseArgs(args: string[]): CliOptions {
         break;
       case '--list-emotions':
         options.listEmotions = true;
+        break;
+      case '--list-recent':
+        options.listRecent = Number(next) || 30;
+        index += 1;
+        break;
+      case '--style-file':
+        options.styleFiles.push(next);
+        index += 1;
+        break;
+      case '--shot': {
+        const [label, ...rest] = next.split(':');
+        options.manualShots.push({ label: `hand-${label.trim()}`, shot: rest.join(':').trim() });
+        index += 1;
+        break;
+      }
+      case '--director-model': {
+        const [model, effort] = next.split(':');
+        options.directorModels.push({ model, ...(effort ? { effort } : {}) });
+        index += 1;
+        break;
+      }
+      case '--shots-only':
+        options.shotsOnly = true;
+        break;
+      case '--director':
+        options.director = Number(next) || 3;
+        index += 1;
         break;
       default:
         break;
@@ -338,6 +477,32 @@ async function writeEvalArtifacts(
   return runDir.pathname;
 }
 
+/**
+ * Swap the production style block for a style file's text. Lines of the form
+ * `@@ old text => new text` are pulled out and applied as literal replacements
+ * to the whole prompt (e.g. to retarget "storybook figure" wording).
+ */
+function applyStyleOverride(
+  prompt: string,
+  productionStyleBlock: string,
+  styleText: string,
+  palette: string,
+  styleRefLabel: string,
+): string {
+  const replacements: Array<[string, string]> = [];
+  const body = styleText.split('\n').filter((line) => {
+    const match = line.match(/^@@ (.+?) => (.*)$/);
+    if (match) replacements.push([match[1], match[2]]);
+    return !match;
+  }).join('\n').trim().replaceAll('{palette}', palette).replaceAll('{styleRef}', styleRefLabel);
+  let result = prompt.replace(productionStyleBlock, body);
+  for (const [from, to] of replacements) {
+    if (!result.includes(from)) console.error(`  ⚠ style replacement not found: ${from.slice(0, 60)}`);
+    result = result.replaceAll(from, to);
+  }
+  return result;
+}
+
 async function evalMemory(
   supabase: Awaited<ReturnType<typeof createAuthedClient>>,
   memory: EvalMemoryRow,
@@ -345,6 +510,11 @@ async function evalMemory(
   quality: OpenAiImageQuality,
   outputDir: URL,
   runId: string,
+  styleOverrides: StyleOverride[],
+  director: number,
+  shotsOnly = false,
+  manualShots: DirectorShot[] = [],
+  directorModels: DirectorModel[] = [],
 ): Promise<void> {
   const slug = slugifyMemoryContent(memory.content);
   console.log(`\n→ [${memory.id}] ${slug}`);
@@ -384,7 +554,7 @@ async function evalMemory(
 
   const timings: Record<string, number> = {};
   const safetyStarted = Date.now();
-  const safety = await chatJson<{ safeDescription?: string; expressionStyle?: string }>(
+  const safety = await chatJson<{ safeDescription?: string; expressionStyle?: string; cameraDirection?: unknown }>(
     buildSafetySystemPrompt(safetyMembers),
     strippedContent,
   );
@@ -406,8 +576,16 @@ async function evalMemory(
     return;
   }
 
+  // Default runs match production: the safety call's own camera pick rides
+  // in the scene text. --director / --shot runs stage the plain scene instead.
+  const useProductionCamera = director === 0 && manualShots.length === 0;
+  if (useProductionCamera && typeof safety.cameraDirection === 'string') {
+    console.log(`  🎥 production: ${safety.cameraDirection}`);
+  }
   const prompt = buildIllustrationPrompt({
-    safeSceneDescription: safeDescription,
+    safeSceneDescription: useProductionCamera
+      ? buildSceneWithCameraDirection(safeDescription, safety.cameraDirection)
+      : safeDescription,
     characterReferences,
     colorPalette: resolvedPalette,
     memoryDate: memory.memory_date,
@@ -416,15 +594,78 @@ async function evalMemory(
     expressionStyle,
   });
 
+  let shots: DirectorShot[] = manualShots;
+  if (director > 0 && manualShots.length === 0) {
+    const cast = characterReferences.map((reference) => reference.description).join('; ');
+    const userPrompt = [
+      `Original memory (for story details only; stage the child-safe scene): ${strippedContent}`,
+      `Child-safe scene: ${safeDescription}`,
+      `People: ${cast}`,
+      `Emotion: ${normalizedEmotion ?? 'unknown'}; expressionStyle: ${expressionStyle}`,
+    ].join('\n');
+    const models = directorModels.length > 0 ? directorModels : [{ model: DEFAULT_DIRECTOR_MODEL, effort: 'low' }];
+    // One director call per model, in parallel; with several models each
+    // shot label is prefixed by its model so the A/B reads in file names.
+    const perModel = await Promise.all(models.map(async (model) => {
+      const started = Date.now();
+      try {
+        const directed = await directorJson<{ shots?: DirectorShot[] }>(
+          buildDirectorSystemPrompt(director),
+          userPrompt,
+          model,
+        );
+        timings[`directorMs:${model.model}`] = Date.now() - started;
+        return (directed.shots ?? [])
+          .filter((shot) => shot.label && shot.shot)
+          .slice(0, director)
+          .map((shot, index) => {
+            const slug = shot.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            const prefix = models.length > 1 ? `${model.model}-` : '';
+            return { label: `${prefix}${index + 1}-${slug}`, shot: shot.shot.trim() };
+          });
+      } catch (error) {
+        console.error(`  ✗ director ${model.model} failed:`, error instanceof Error ? error.message : 'unknown');
+        return [];
+      }
+    }));
+    shots = perModel.flat();
+    for (const shot of shots) console.log(`  🎥 ${shot.label}: ${shot.shot}`);
+  }
+  if (shotsOnly) return;
+
   // Every variant renders the SAME prompt so the A/B isolates the model and
   // complexity, not the nondeterministic safety rewrite.
-  const scenes: Array<{ fileName: string; bytes: Uint8Array | null }> = [];
-  for (const variant of variants) {
-    const label = variantLabel(variant);
+  const productionStyleBlock = `Illustration style: ${styleDescription}\nColor palette: ${resolvedPalette}`;
+  const sceneLine = `Scene: ${safeDescription}`;
+  const styled = styleOverrides.length > 0
+    ? styleOverrides.map((style) => ({
+      suffix: `-${style.name}`,
+      prompt: applyStyleOverride(
+        prompt,
+        productionStyleBlock,
+        style.text,
+        resolvedPalette,
+        `reference image ${referenceImages.length + 1}`,
+      ),
+      images: style.image ? [...referenceImages, style.image] : referenceImages,
+    }))
+    : [{ suffix: '', prompt, images: referenceImages }];
+  const prompts = shots.length > 0
+    ? styled.flatMap((entry) => shots.map((shot) => ({
+      ...entry,
+      suffix: `${entry.suffix}-${shot.label}`,
+      prompt: entry.prompt.replace(sceneLine, `Scene: ${buildSceneWithCameraDirection(safeDescription, shot.shot)}`),
+    })))
+    : styled;
+  const runs = prompts.flatMap((entry) => variants.map((variant) => ({ ...entry, variant })));
+  const single = runs.length === 1;
+  const scenes = (await Promise.all(runs.map(async (run) => {
+    const { variant } = run;
+    const label = `${variantLabel(variant)}${run.suffix}`;
     const imageStarted = Date.now();
     let sceneBytes: Uint8Array | null = null;
     try {
-      sceneBytes = await editImageWithModel(prompt, referenceImages, variant.model, {
+      sceneBytes = await editImageWithModel(run.prompt, run.images, variant.model, {
         quality,
         ...(variant.complexity ? { complexity: variant.complexity } : {}),
       });
@@ -432,10 +673,16 @@ async function evalMemory(
       console.error(`  ✗ ${label} failed:`, error instanceof Error ? error.message : 'unknown');
     }
     const elapsedMs = Date.now() - imageStarted;
-    timings[variants.length === 1 ? 'imageGenerationMs' : `imageGenerationMs:${label}`] = elapsedMs;
+    timings[single ? 'imageGenerationMs' : `imageGenerationMs:${label}`] = elapsedMs;
     console.log(`  ${sceneBytes ? '✓' : '✗'} ${label}: ${(elapsedMs / 1000).toFixed(1)}s`);
-    scenes.push({ fileName: variants.length === 1 ? 'scene.png' : `scene-${label}.png`, bytes: sceneBytes });
-  }
+    const files: Array<{ fileName: string; bytes: Uint8Array | null }> = [
+      { fileName: single ? 'scene.png' : `scene-${label}.png`, bytes: sceneBytes },
+    ];
+    if (run.suffix) {
+      files.push({ fileName: `prompt${run.suffix}.txt`, bytes: new TextEncoder().encode(run.prompt) });
+    }
+    return files;
+  }))).flat();
 
   let previousBytes: Uint8Array | null = null;
   if (memory.illustration_key) {
@@ -455,6 +702,8 @@ async function evalMemory(
     emotion: memory.emotion,
     expressionStyle,
     safeDescription,
+    productionCameraDirection: safety.cameraDirection ?? null,
+    shots,
     variants,
     quality,
     referenceCount: referenceImages.length,
@@ -477,6 +726,48 @@ async function evalMemory(
 }
 
 const options = parseArgs(Deno.args);
+
+if (options.listRecent > 0) {
+  const client = await createAuthedClient();
+  const { data, error } = await client
+    .from('memories')
+    .select('id, content, memory_date, emotion, illustration_key')
+    .eq('memory_type', 'text_illustration')
+    .not('illustration_key', 'is', null)
+    .order('memory_date', { ascending: false })
+    .limit(options.listRecent);
+
+  if (error) {
+    console.error(`Failed to list memories: ${error.message}`);
+    Deno.exit(1);
+  }
+
+  for (const row of data ?? []) {
+    const snippet = (row.content ?? '').replace(/\s+/g, ' ').slice(0, 140);
+    console.log(`${row.id}  ${row.memory_date}  ${(row.emotion ?? '-').padEnd(11)}  ${snippet}`);
+  }
+
+  Deno.exit(0);
+}
+
+const styleOverrides: StyleOverride[] = await Promise.all(options.styleFiles.map(async (path) => {
+  const lines = (await Deno.readTextFile(path)).split('\n');
+  const imagePath = lines.map((line) => line.match(/^@image (.+)$/)?.[1]).find(Boolean);
+  const extension = imagePath?.split('.').pop()?.toLowerCase();
+  return {
+    name: path.split('/').pop()!.replace(/\.[^.]+$/, ''),
+    text: lines.filter((line) => !line.startsWith('@image ')).join('\n').trim(),
+    ...(imagePath
+      ? {
+        image: {
+          bytes: await Deno.readFile(imagePath.trim()),
+          contentType: extension === 'png' ? 'image/png' : 'image/jpeg',
+          filename: `style-reference.${extension === 'png' ? 'png' : 'jpg'}`,
+        },
+      }
+      : {}),
+  };
+}));
 
 if (options.listEmotions) {
   const client = await createAuthedClient();
@@ -531,7 +822,19 @@ const variants = options.variants.length > 0 ? options.variants : [{ model: opti
 console.log(`Variants: ${variants.map(variantLabel).join(', ')} (quality ${options.quality})`);
 
 for (const memory of memories) {
-  await evalMemory(supabase, memory, variants, options.quality, options.outputDir, runId);
+  await evalMemory(
+    supabase,
+    memory,
+    variants,
+    options.quality,
+    options.outputDir,
+    runId,
+    styleOverrides,
+    options.director,
+    options.shotsOnly,
+    options.manualShots,
+    options.directorModels,
+  );
 }
 
 console.log(`\nDone. Output under ${options.outputDir.pathname}`);

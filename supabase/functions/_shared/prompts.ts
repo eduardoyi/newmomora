@@ -376,8 +376,49 @@ export function buildSafetySystemPrompt(members: Array<SafetyPromptMember> = [])
     'Never treat a nickname or pet name as a literal visual element — a nickname like "cheeky monkey" or "tiger" must never introduce an animal, object, or costume into the scene description.',
     'Also judge whether the memory is genuinely funny or mischievous (a dramatic toddler meltdown, a kid theatrically refusing food, a silly mishap) versus a warm/tender moment or anything harder or more neutral.',
     'expressionStyle must be exactly one of: "comedic" (genuinely funny or mischievous moments only), "tender" (warm, gentle, heartfelt moments), or "neutral" (everything else, including hard or difficult moments).',
-    'JSON only: {"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral"}',
+    ...CAMERA_DIRECTION_INSTRUCTIONS,
+    'JSON only: {"safeDescription":"...","expressionStyle":"comedic"|"tender"|"neutral","shotOptions":["bold ...","unusual ...","quiet ..."],"cameraDirection":"..."}',
   ].filter((line): line is string => Boolean(line)).join(' ');
+}
+
+/**
+ * Camera director (docs/features/illustration-camera-direction.md). The same
+ * safety-rewrite call also stages the picture: it drafts a bold, an unusual
+ * and a quiet shot, then picks one by mood. Without it the image model
+ * defaults to the same centered medium shot of smiling faces every time.
+ * Rules here mirror failures seen in the 2026-11-06 evals: added people,
+ * invented appearance, provider rejections of in-tub bath shots, kids in the
+ * front seat.
+ */
+const CAMERA_DIRECTION_INSTRUCTIONS = [
+  'Finally, act as the cinematographer and stage the scene as one still image. Draft three different shots in shotOptions: a bold one (the most surprising idea the memory can justify), an unusual but realistic angle, and a quiet observational frame. Then copy the text of the one that makes this memory land best into cameraDirection (the shot itself, without its label): funny or mischievous memories usually take the bold one; tender or wondrous ones the bold or unusual one; hard moments (sick, sad, tantrums, worry) the quiet one.',
+  'Toolbox: worm\'s-eye from the floor looking up (a child towers like a giant), straight down from the ceiling (toys or laundry as a pattern), high angle from a doorway, child\'s eye level, extreme wide with tiny figures, extreme close-up of one telling detail, the point of view of an object in the story, a listed parent\'s own view with only their hands in frame, over-the-shoulder, a reflection in a mirror, framing through a doorway or under a table, a tilted frame for chaos.',
+  'Make what the child imagines visible as if it were real (a hug the wind carried away floating in the sky as a little cloud, a cardboard box that is truly a bus on a road), and sounds or feelings visible without words (a burp as a little puff, a song as drifting ripples).',
+  'Example of the boldness and literal detail wanted (not this memory): a toddler pretending to be a dinosaur by her block tower → "The camera lies flat on the kitchen floor among the wooden blocks, lens pointing steeply up like a monster movie; the tower looms in the foreground and the toddler TOWERS behind it, arms up like claws mid-roar, gleeful face near the top edge."',
+  'Each shot is 1-3 sentences in English: where the camera physically is, what fills the foreground, how much of the frame each person takes, and the one staging idea.',
+  'Shot rules: only people the memory mentions, never anyone else (no helper, bystander, or searcher). Never describe anyone\'s appearance (eyes, hair, glasses, skin, clothing colors); describe position, pose, action and expression only. Every person stays recognizable with a readable face. Keep the emotional tone honest. A child in a bath scene is out of the water, in pajamas or wrapped in a towel. Children in a car sit in their car seat in the back. Everything stays child-safe.',
+];
+
+const CAMERA_DIRECTION_LEAD =
+  'Camera and staging (the most important composition instruction: follow it literally, even when the angle, distance or crop is extreme or unusual; never fall back to a centered medium shot): ';
+const MAX_CAMERA_DIRECTION_CHARS = 900;
+// The model sometimes keeps its draft label ("Unusual — Frame the moment…").
+const SHOT_LABEL_PREFIX = /^(bold|unusual|quiet)\b\s*(shot)?\s*[:—–-]\s*/i;
+
+/**
+ * Appends the safety call's chosen shot to the scene text. Both illustration
+ * backends store and render this one string (the Cloudflare job row's
+ * `safe_scene_description`), so the camera direction needs no extra column;
+ * a missing or blank shot leaves the scene exactly as before.
+ */
+export function buildSceneWithCameraDirection(
+  safeSceneDescription: string,
+  cameraDirection?: unknown,
+): string {
+  const shot = typeof cameraDirection === 'string'
+    ? cameraDirection.trim().replace(SHOT_LABEL_PREFIX, '').trim().slice(0, MAX_CAMERA_DIRECTION_CHARS)
+    : '';
+  return shot ? `${safeSceneDescription}\n${CAMERA_DIRECTION_LEAD}${shot}` : safeSceneDescription;
 }
 
 export interface VoiceCleanupMemberContext {
@@ -402,6 +443,7 @@ export function buildVoiceCleanupSystemPrompt(
   const lines = [
     'Clean up a voice transcript for a parenting journal entry.',
     'Fix grammar lightly, remove filler words, preserve meaning and names.',
+    'Never translate words the speaker said in another language (e.g. English words like "time out" in Spanish speech): keep them as spoken.',
     'Detect if the speaker refers to themselves as parent (I, me, my) → set mentionedUserSelf true.',
   ];
 

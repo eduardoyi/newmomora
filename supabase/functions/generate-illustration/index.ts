@@ -15,6 +15,7 @@ import {
 import {
   buildIllustrationPrompt,
   buildSafetySystemPrompt,
+  buildSceneWithCameraDirection,
   buildEmotionSystemPrompt,
   EMOTION_PALETTES,
   normalizeEmotion,
@@ -411,6 +412,8 @@ async function timed<T>(promise: PromiseLike<T>): Promise<{ value: T; durationMs
 interface SafetyRewriteResult {
   safeDescription?: string;
   expressionStyle?: string;
+  /** The camera director's chosen shot (see buildSceneWithCameraDirection). */
+  cameraDirection?: unknown;
 }
 
 function remainingPreFinalizationDeadlineMs(
@@ -638,7 +641,7 @@ export async function handleGenerateIllustration(
   // (the claim CAS pins p_expected_content). Every exit that does not consume
   // it aborts it via `discardSpeculativeSafety`. All of its promises are
   // `settle`d, so an abandoned or aborted call can never become an unhandled
-  // rejection; a wasted (cheap, gpt-4o-mini) call is the accepted worst case.
+  // rejection; a wasted (cheap, gpt-6-luna) call is the accepted worst case.
   let speculativeSafety: {
     controller: AbortController;
     strippedContent: string;
@@ -1181,6 +1184,9 @@ export async function handleGenerateIllustration(
     logGenerationPhase(memoryId, generationPhase, safetyPhaseStartedAt);
 
     const safeDescription = safety.safeDescription?.trim() || strippedContent.slice(0, 280);
+    // The scene the image model sees: the safe description plus the chosen
+    // camera direction, stored as one string for both backends.
+    const sceneDescription = buildSceneWithCameraDirection(safeDescription, safety.cameraDirection);
     const expressionStyle: ExpressionStyle = ALLOWED_EXPRESSION_STYLES.has(safety.expressionStyle ?? '')
       ? (safety.expressionStyle as ExpressionStyle)
       : 'neutral';
@@ -1237,7 +1243,7 @@ export async function handleGenerateIllustration(
         started_at: new Date().toISOString(),
         provider_deadline_at: new Date(Date.now() + CLOUD_FLARE_LEASE_MS).toISOString(),
         color_palette: resolvedPalette,
-        safe_scene_description: safeDescription,
+        safe_scene_description: sceneDescription,
         expression_style: expressionStyle,
         style_description: styleDescription,
         memory_date: memory.memory_date,
@@ -1280,7 +1286,7 @@ export async function handleGenerateIllustration(
     }
 
     const prompt = buildIllustrationPrompt({
-      safeSceneDescription: safeDescription,
+      safeSceneDescription: sceneDescription,
       characterReferences,
       colorPalette: resolvedPalette,
       emotion: memory.emotion,

@@ -184,7 +184,7 @@ describe('portrait motion Workflow', () => {
     expect(Array.from(new Uint8Array(await files[0].arrayBuffer()))).toEqual([9, 8, 7]);
 
     expect(checkBodies).toHaveLength(2);
-    expect(checkBodies[0]).toMatchObject({ model: 'gpt-4o-mini' });
+    expect(checkBodies[0]).toMatchObject({ model: 'gpt-6-luna' });
     const content = (checkBodies[0].messages as Array<{ content: unknown }>)[1].content as Array<Record<string, unknown>>;
     expect(content[0]).toMatchObject({ type: 'text', text: motionInput.checkPrompt });
     expect(content.filter((part) => part.type === 'image_url')).toHaveLength(2);
@@ -222,7 +222,8 @@ describe('portrait motion Workflow', () => {
       costIsComplete: true,
     });
     expect(usage.find((operation) => operation.aiCallId === `motion-check:${MOTION_TOKEN}:1`)).toMatchObject({
-      aiOperation: 'check', model: 'gpt-4o-mini', success: true, costIsComplete: true,
+      aiOperation: 'check', model: 'gpt-6-luna', success: true, costIsComplete: true,
+      pricingVersion: 'openai-2026-09-28',
       usage: { inputTextTokens: 1500, outputTextTokens: 20 },
     });
   });

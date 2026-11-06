@@ -49,7 +49,7 @@ flowchart LR
   Core --> Input[buildAnalysisInput: text and/or up to 4 images]
   Core --> Context[Structured context — date-context.ts]
   Core --> Prompt[buildMemoryAnalysisSystemPrompt]
-  Prompt --> OpenAI[gpt-4o-mini vision, one call]
+  Prompt --> OpenAI[gpt-6-luna vision, one call]
   OpenAI --> Parse[Parse + validate every axis in code]
   Parse --> Write[Guarded CAS update on memories]
   Parse --> Milestones[Upsert memory_milestones]

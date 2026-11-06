@@ -113,3 +113,16 @@ Deno.test('prices GPT Image 2.6 Flare under its own pricing version', () => {
   assertEquals(priced.pricingVersion, 'openai-2026-11-04');
   assertEquals(priceOpenAiUsage('gpt-image-2.6-flare', { ...dimensions, cached_input_tokens: 3 }).costIsComplete, false);
 });
+
+Deno.test('gpt-6-luna prices the fast tier at double the standard rates under its own version', () => {
+  const dimensions = { input_text_tokens: 1_000_000, output_text_tokens: 1_000_000 };
+  const standard = priceOpenAiUsage('gpt-6-luna', dimensions);
+  const fast = priceOpenAiUsage('gpt-6-luna', dimensions, { serviceTier: 'fast' });
+  const legacyName = priceOpenAiUsage('gpt-6-luna', dimensions, { serviceTier: 'priority' });
+
+  assertEquals([standard.estimatedCostUsd, standard.pricingVersion], [0.6, 'openai-2026-09-28']);
+  assertEquals([fast.estimatedCostUsd, fast.pricingVersion, fast.costIsComplete], [1.2, 'openai-2026-11-06-fast', true]);
+  assertEquals(legacyName.estimatedCostUsd, 1.2);
+  // A tier we have no fast rates for keeps its standard price.
+  assertEquals(priceOpenAiUsage('gpt-6-sol', dimensions, { serviceTier: 'fast' }).pricingVersion, 'openai-2026-09-28');
+});

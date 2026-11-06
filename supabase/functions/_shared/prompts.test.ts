@@ -7,6 +7,7 @@ import {
   buildMediaEmotionSystemPrompt,
   buildPortraitPrompt,
   buildSafetySystemPrompt,
+  buildSceneWithCameraDirection,
   EMOTION_EXPRESSIONS,
   EMOTION_PALETTES,
   normalizeEmotion,
@@ -309,4 +310,51 @@ Deno.test('buildEmotionVisionUserPrompt includes caption when provided', () => {
 
   const withoutCaption = buildEmotionVisionUserPrompt(null);
   assertEquals(withoutCaption.includes('photo only'), true);
+});
+
+Deno.test('buildSafetySystemPrompt asks for three drafted shots and one chosen cameraDirection', () => {
+  const prompt = buildSafetySystemPrompt([]);
+
+  assertEquals(prompt.includes('"shotOptions"'), true);
+  assertEquals(prompt.includes('"cameraDirection"'), true);
+  assertEquals(prompt.includes('hard moments (sick, sad, tantrums, worry) the quiet one'), true);
+  assertEquals(prompt.includes('A child in a bath scene is out of the water'), true);
+  assertEquals(prompt.includes('Never describe anyone\'s appearance'), true);
+});
+
+Deno.test('buildSceneWithCameraDirection appends the shot as the lead composition instruction', () => {
+  const scene = buildSceneWithCameraDirection('Enzo blows a kiss.', '  The camera sits at the tub rim.  ');
+
+  assertEquals(
+    scene,
+    'Enzo blows a kiss.\nCamera and staging (the most important composition instruction: follow it literally, even when the angle, distance or crop is extreme or unusual; never fall back to a centered medium shot): The camera sits at the tub rim.',
+  );
+});
+
+Deno.test('buildSceneWithCameraDirection leaves the scene unchanged without a usable shot', () => {
+  assertEquals(buildSceneWithCameraDirection('A quiet afternoon.'), 'A quiet afternoon.');
+  assertEquals(buildSceneWithCameraDirection('A quiet afternoon.', '   '), 'A quiet afternoon.');
+  assertEquals(buildSceneWithCameraDirection('A quiet afternoon.', { shot: 'x' }), 'A quiet afternoon.');
+});
+
+Deno.test('buildSceneWithCameraDirection caps a runaway shot', () => {
+  const scene = buildSceneWithCameraDirection('Scene.', 'x'.repeat(5000));
+
+  assertEquals(scene.endsWith('x'.repeat(900)), true);
+  assertEquals(scene.endsWith('x'.repeat(901)), false);
+});
+
+Deno.test('buildSceneWithCameraDirection drops a leaked draft label', () => {
+  assertEquals(
+    buildSceneWithCameraDirection('Scene.', 'Unusual — Frame the moment through the rearview mirror.').endsWith(': Frame the moment through the rearview mirror.'),
+    true,
+  );
+  assertEquals(
+    buildSceneWithCameraDirection('Scene.', 'Quiet shot: From the doorway.').endsWith(': From the doorway.'),
+    true,
+  );
+  assertEquals(
+    buildSceneWithCameraDirection('Scene.', 'Boldly the camera dives.').endsWith(': Boldly the camera dives.'),
+    true,
+  );
 });

@@ -46,6 +46,15 @@ const PER_MILLION_USD: Record<Exclude<KnownModel, 'gpt-4o-mini-transcribe'>, {
   'gpt-6.1-sol': { inputText: 2, inputImage: 2, cachedInput: 0.1, outputText: 10, outputImage: 10 },
 };
 
+// Fast tier (`service_tier: 'fast'`, formerly "priority"), per 1M tokens --
+// OpenAI pricing page Fast tab, read 2026-11-06. The page shows input/output
+// only; cached input is assumed to double like them. Versioned separately so
+// standard-tier rows keep their own version.
+const FAST_TIER_PRICING_VERSION = 'openai-2026-11-06-fast';
+const FAST_TIER_PER_MILLION_USD: Partial<Record<KnownModel, typeof PER_MILLION_USD[keyof typeof PER_MILLION_USD]>> = {
+  'gpt-6-luna': { inputText: 0.2, inputImage: 0.2, cachedInput: 0.02, outputText: 1, outputImage: 1 },
+};
+
 const TRANSCRIBE_USD_PER_AUDIO_SECOND = 0.003 / 60;
 const TRANSCRIBE_INPUT_TEXT_USD_PER_MILLION = 1.25;
 const TRANSCRIBE_OUTPUT_TEXT_USD_PER_MILLION = 5;
@@ -104,7 +113,13 @@ const AUDIO_CHAT_USD_PER_MILLION: Record<string, { audioIn: number; audioOut: nu
 export function priceOpenAiUsage(
   model: string,
   dimensions: AiUsageDimensions,
-  options: { audioDurationIsEstimate?: boolean; audioInputTokens?: number; audioOutputTokens?: number } = {},
+  options: {
+    audioDurationIsEstimate?: boolean;
+    audioInputTokens?: number;
+    audioOutputTokens?: number;
+    /** The tier the provider reports it served (`response.service_tier`). */
+    serviceTier?: string | null;
+  } = {},
 ): PricedAiUsage {
   const audioRates = AUDIO_CHAT_USD_PER_MILLION[model];
   if (audioRates) {
@@ -121,7 +136,12 @@ export function priceOpenAiUsage(
     return { dimensions, billingStatus: 'known', pricingVersion: AUDIO_CHAT_PRICING_VERSION, costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd };
   }
 
-  const pricingVersion = model === 'gpt-image-2.6-flare'
+  const fastRates = options.serviceTier === 'fast' || options.serviceTier === 'priority'
+    ? FAST_TIER_PER_MILLION_USD[model as KnownModel]
+    : undefined;
+  const pricingVersion = fastRates
+    ? FAST_TIER_PRICING_VERSION
+    : model === 'gpt-image-2.6-flare'
     ? 'openai-2026-11-04'
     : model === 'gpt-image-2.5-flare'
     ? 'openai-2026-09-08'
@@ -156,7 +176,7 @@ export function priceOpenAiUsage(
     };
   }
 
-  const rates = PER_MILLION_USD[model as Exclude<KnownModel, 'gpt-4o-mini-transcribe'>];
+  const rates = fastRates ?? PER_MILLION_USD[model as Exclude<KnownModel, 'gpt-4o-mini-transcribe'>];
   if (!rates || !hasDimensions) {
     return { dimensions, billingStatus: hasDimensions ? 'known' : 'unknown', pricingVersion: rates ? pricingVersion : null, costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
   }

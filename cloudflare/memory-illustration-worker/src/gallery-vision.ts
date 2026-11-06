@@ -10,7 +10,7 @@ import type {
 import type { ValidatedGalleryPreview } from './gallery-preview-validation';
 
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
-const VISION_MODEL = 'gpt-4o-mini';
+const VISION_MODEL = 'gpt-6-luna';
 const MAX_CAPTION_LENGTH = 480;
 const MAX_GROUPS = 3;
 const MAX_ASSETS_PER_GROUP = 10;
@@ -256,7 +256,7 @@ export async function curateGalleryCluster(
       headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: VISION_MODEL,
-        temperature: 0.2,
+        reasoning_effort: 'low',
         response_format: { type: 'json_schema', json_schema: schema() },
         messages: [{ role: 'system', content: 'Follow the schema exactly. Never include commentary.' }, { role: 'user', content }],
       }),

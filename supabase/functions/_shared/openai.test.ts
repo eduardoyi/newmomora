@@ -601,3 +601,32 @@ Deno.test('generateImage asks the 2.6 primary for medium complexity and leaves t
     }
   }
 });
+
+Deno.test('chatJson sends gpt-6-luna on the fast tier with low reasoning effort and no temperature', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = Deno.env.get('OPENAI_API_KEY');
+  const bodies: Array<Record<string, unknown>> = [];
+
+  Deno.env.set('OPENAI_API_KEY', TEST_OPENAI_KEY);
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse((init as RequestInit).body as string));
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+
+  try {
+    await chatJson('system', 'user');
+    await chatJson('system', 'user', { reasoningEffort: 'none', serviceTier: 'default' });
+    await chatJsonWithVisionMulti('system', 'text', []);
+    assertEquals(bodies.map((body) => [body.model, body.reasoning_effort, body.service_tier, 'temperature' in body]), [
+      ['gpt-6-luna', 'low', 'fast', false],
+      ['gpt-6-luna', 'none', 'default', false],
+      ['gpt-6-luna', 'low', 'fast', false],
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) Deno.env.delete('OPENAI_API_KEY');
+    else Deno.env.set('OPENAI_API_KEY', originalKey);
+  }
+});

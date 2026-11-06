@@ -96,7 +96,7 @@ need to know who "I/me" is.
 flowchart LR
   Tab[Family tab focus] --> Fn[suggest-family-relationships]
   Fn -->|claim / signals / insert| DB[(Postgres)]
-  Fn --> AI[gpt-4o-mini]
+  Fn --> AI[gpt-6-luna]
   Sheet[Who's who sheet] -->|resolve_family_member_suggestions| DB
   Sheet -->|set_my_family_member| DB
   Edit[Add/Edit person] -->|family_members update| DB

@@ -32,7 +32,7 @@ const MAX_GENERATION_ATTEMPTS = 2;
 const EDIT_TIMEOUT_MS = 120_000;
 const QA_TIMEOUT_MS = 30_000;
 const QA_MAX_EDGE = 768;
-const QA_CHECK_MODEL = 'gpt-4o-mini';
+const QA_CHECK_MODEL = 'gpt-6-luna';
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,80}$/;
 
 function errorCode(error: unknown): string {

@@ -178,7 +178,7 @@ describe('motion sheet QA', () => {
     expect(parseMotionCheckVerdict(undefined)).toBe(false);
   });
 
-  it('posts the prompt then still and sheet to gpt-4o-mini with a strict schema, and returns usage', async () => {
+  it('posts the prompt then still and sheet to gpt-6-luna with a strict schema, and returns usage', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
       choices: [{ message: { content: JSON.stringify(all) } }],
       usage: { prompt_tokens: 1200, completion_tokens: 15, total_tokens: 1215 },
@@ -191,10 +191,14 @@ describe('motion sheet QA', () => {
     expect(String(fetchMock.mock.calls[0][0])).toBe('https://api.openai.com/v1/chat/completions');
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
       model: string;
+      temperature?: number;
+      reasoning_effort?: string;
       response_format: { json_schema: { strict: boolean; schema: { required: string[] } } };
       messages: Array<{ content: Array<{ type: string; text?: string; image_url?: { url: string } }> | string }>;
     };
-    expect(body.model).toBe('gpt-4o-mini');
+    expect(body.model).toBe('gpt-6-luna');
+    expect(body.reasoning_effort).toBe('low');
+    expect(body.temperature).toBeUndefined();
     expect(body.response_format.json_schema.strict).toBe(true);
     expect(body.response_format.json_schema.schema.required).toEqual(Object.keys(all));
     const parts = body.messages[1].content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
@@ -219,9 +223,9 @@ describe('motion sheet QA', () => {
       .rejects.toMatchObject({ retryable });
   });
 
-  it('prices gpt-4o-mini vision usage with the mirrored rates', () => {
+  it('prices gpt-6-luna vision usage with the mirrored rates', () => {
     expect(priceVisionUsage({ inputTokens: 1_000_000, outputTokens: 1_000_000, totalTokens: 2_000_000 })).toEqual({
-      costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.75,
+      costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: 0.6,
     });
     expect(priceVisionUsage(null)).toEqual({ costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null });
     expect(priceVisionUsage({ inputTokens: 5, outputTokens: null, totalTokens: null })).toMatchObject({

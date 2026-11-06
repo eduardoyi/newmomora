@@ -10,7 +10,7 @@ import type {
 
 const OPENAI_IMAGE_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
-const MOTION_CHECK_MODEL = 'gpt-4o-mini';
+const MOTION_CHECK_MODEL = 'gpt-6-luna';
 const MOTION_CHECK_KEYS = ['same_person', 'equal_panels', 'no_text_or_borders', 'stable_framing'] as const;
 // The API defaults 2.6 to `high` planning. On real memories `medium` was ~1s
 // faster than `high` with no visible quality loss (2026-11-04 eval); keep in
@@ -269,7 +269,7 @@ export async function checkMotionSheet(
       headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
       body: JSON.stringify({
         model: MOTION_CHECK_MODEL,
-        temperature: 0,
+        reasoning_effort: 'low',
         response_format: { type: 'json_schema', json_schema: motionCheckSchema() },
         messages: [
           { role: 'system', content: 'Follow the schema exactly. Never include commentary.' },

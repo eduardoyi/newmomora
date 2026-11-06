@@ -46,10 +46,11 @@ export function priceImageUsage(model: IllustrationModel, usage: ImageUsage | nu
   return { costBasis: 'provider_usage', costIsComplete: true, estimatedCostUsd: cost };
 }
 
-// Mirrors supabase/functions/_shared/ai-pricing.ts (gpt-4o-mini, legacy
-// version string). Text and image input share one rate for this model.
-export const VISION_PRICING_VERSION = 'openai-2026-07-27';
-const GPT_4O_MINI_USD_PER_MILLION = { input: 0.15, output: 0.60 };
+// Mirrors supabase/functions/_shared/ai-pricing.ts (gpt-6-luna, pricing
+// version openai-2026-09-28). Text and image input share one rate for this
+// model; completion tokens already include reasoning tokens.
+export const VISION_PRICING_VERSION = 'openai-2026-09-28';
+const GPT_6_LUNA_USD_PER_MILLION = { input: 0.1, output: 0.5 };
 
 export function priceVisionUsage(usage: VisionUsage | null): PricedImageUsage {
   if (!usage) return { costBasis: 'unpriced', costIsComplete: false, estimatedCostUsd: null };
@@ -60,8 +61,8 @@ export function priceVisionUsage(usage: VisionUsage | null): PricedImageUsage {
     costBasis: 'provider_usage',
     costIsComplete: true,
     estimatedCostUsd: (
-      usage.inputTokens * GPT_4O_MINI_USD_PER_MILLION.input +
-      usage.outputTokens * GPT_4O_MINI_USD_PER_MILLION.output
+      usage.inputTokens * GPT_6_LUNA_USD_PER_MILLION.input +
+      usage.outputTokens * GPT_6_LUNA_USD_PER_MILLION.output
     ) / 1_000_000,
   };
 }
