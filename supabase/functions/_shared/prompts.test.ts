@@ -358,3 +358,13 @@ Deno.test('buildSceneWithCameraDirection drops a leaked draft label', () => {
     true,
   );
 });
+
+Deno.test('buildSafetySystemPrompt keeps faces toward the camera and never draws speech', () => {
+  const prompt = buildSafetySystemPrompt([]);
+
+  assertEquals(prompt.includes('front or three-quarter view with both eyes visible'), true);
+  assertEquals(prompt.includes('no over-the-shoulder shots'), true);
+  assertEquals(prompt.includes('Never draw speech, sounds or voices as waves'), true);
+  assertEquals(prompt.includes('over-the-shoulder, a reflection'), false);
+  assertEquals(prompt.includes('a song as drifting ripples'), false);
+});

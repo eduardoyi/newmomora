@@ -52,6 +52,8 @@ No new columns. `memory_illustration_jobs.safe_scene_description` now holds the 
   - Never describe appearance: models invented eye color and glasses.
   - A child in a bath scene is out of the water: in-tub shots got OpenAI image 400s.
   - Kids sit in the back seat: renders put a toddler in the front seat.
+  - Everyone faces the camera with both eyes visible, with no over-the-shoulder or from-behind shots: production renders of a child seen from behind came out with distorted eyes and a hand growing from her stomach (2026-11-06).
+  - Never draw speech or sound as waves or symbols: the owner found them cluttered. This replaced an earlier "make sounds visible" idea.
   - Hard moments take the quiet shot.
 - The `Camera and staging` lead wording. Without "follow it literally… never fall back to a centered medium shot", GPT Image softens extreme angles back to a medium shot.
 
@@ -93,4 +95,5 @@ npm run eval:illustration -- --memory-id <uuid>
 
 | Date | Change |
 |------|--------|
+| 2026-11-07 | Production fix: faces toward camera, no over-the-shoulder, no drawn sound; car-seat rule must be stated in the shot |
 | 2026-11-06 | Initial implementation: director folded into the safety rewrite on gpt-6-luna; evals on 12–16 real memories (three rounds) |

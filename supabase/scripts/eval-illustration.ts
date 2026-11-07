@@ -519,7 +519,7 @@ async function evalMemory(
   const slug = slugifyMemoryContent(memory.content);
   console.log(`\n→ [${memory.id}] ${slug}`);
 
-  if (memory.memory_type !== 'text_illustration' || !memory.content?.trim()) {
+  if (!['text_illustration', 'text_only'].includes(memory.memory_type) || !memory.content?.trim()) {
     console.error(`  ✗ skipped: not a text_illustration memory with content`);
     return;
   }
@@ -731,8 +731,7 @@ if (options.listRecent > 0) {
   const client = await createAuthedClient();
   const { data, error } = await client
     .from('memories')
-    .select('id, content, memory_date, emotion, illustration_key')
-    .eq('memory_type', 'text_illustration')
+    .select('id, content, memory_date, emotion, illustration_key, memory_type')
     .not('illustration_key', 'is', null)
     .order('memory_date', { ascending: false })
     .limit(options.listRecent);
@@ -744,7 +743,7 @@ if (options.listRecent > 0) {
 
   for (const row of data ?? []) {
     const snippet = (row.content ?? '').replace(/\s+/g, ' ').slice(0, 140);
-    console.log(`${row.id}  ${row.memory_date}  ${(row.emotion ?? '-').padEnd(11)}  ${snippet}`);
+    console.log(`${row.id}  ${row.memory_date}  ${(row.emotion ?? '-').padEnd(11)}  ${row.memory_type.padEnd(17)}  ${snippet}`);
   }
 
   Deno.exit(0);
